@@ -1,0 +1,13 @@
+# @package _global_
+
+defaults:
+  - dataset: default
+  - model: default
+  - generation: default
+  - output: default
+  - system: default
+  - _self_
+
+# Main configuration
+criterion: both  # validity, redundancy, both, run_all
+verbose: false

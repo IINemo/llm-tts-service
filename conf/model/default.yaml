@@ -1,0 +1,4 @@
+# @package model
+
+model_path: "Qwen/Qwen3-1.7B"  # Base model for generation
+reasoneval_path: "GAIR/ReasonEval-7B"  # Path to ReasonEval model (7B or 34B)
