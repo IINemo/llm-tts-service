@@ -358,10 +358,9 @@ def run_separate_evaluations(
     dataset: Dataset,
     model: WhiteboxModel,
     reasoneval_model_path: str,
-    save_path_validity: str,
-    save_path_redundancy: str,
-    n: int = 10,
-    max_new_tokens: int = 350,
+    save_path: str,
+    n: int,
+    max_new_tokens: int,
     subset: Optional[int] = None,
     verbose: bool = True
 ):

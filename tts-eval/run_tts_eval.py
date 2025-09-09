@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Run direct online best-of-n evaluation with ReasonEval using separate validity and redundancy criteria
-"""
 
 import os
 import logging
@@ -10,21 +7,24 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from datasets import load_dataset
-from lm_polygraph import WhiteboxModel
 import traceback
-from online_bestofn.direct_online_bestofn_reasoneval_separate import (
+from pathlib import Path
+import hydra
+from hydra.core.hydra_config import HydraConfig
+from omegaconf import DictConfig, OmegaConf
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+from lm_polygraph import WhiteboxModel
+
+from llm_tts.strategies import (
     DirectOnlineBestOfNReasonEvalSeparate, 
     run_separate_evaluations
 )
-from online_bestofn.direct_online_bestofn import _is_correct_answer
-from utils import parse_ans
-from online_bestofn.deepseek_annotation import Annotator
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import hydra
-from omegaconf import DictConfig, OmegaConf
+from llm_tts import Annotator, _is_correct_answer
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("direct_online_bon_reasoneval_separate")
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def load_tokenizer(model_path: str):
@@ -37,8 +37,6 @@ def load_tokenizer(model_path: str):
 def load_model(model_path: str, device_map: str):
     model = AutoModelForCausalLM.from_pretrained(model_path, device_map=device_map, trust_remote_code=True)
     return model
-
-
 
 
 def load_prompt_template(prompt_file: str) -> str:
@@ -68,7 +66,6 @@ def prepare_dataset_with_prompts(dataset, prompt_template: str):
 def run_single_criterion(
     generator: DirectOnlineBestOfNReasonEvalSeparate,
     dataset,
-    criterion: str,
     save_path: str,
     subset_size: int,
     verbose: bool,
@@ -81,7 +78,7 @@ def run_single_criterion(
     """Run evaluation for a single criterion"""
     
     log.info(f"\n{'='*60}")
-    log.info(f"Running evaluation with {criterion} criterion")
+    log.info(f"Running evaluation")
     log.info(f"{'='*60}")
     
     # Load existing results if resuming
@@ -123,10 +120,10 @@ def run_single_criterion(
     
     # Phase 1: Generate trajectories (without checking correctness)
     log.info(f"\n{'='*60}")
-    log.info(f"Phase 1: Generating trajectories ({criterion})")
+    log.info(f"Phase 1: Generating trajectories")
     log.info(f"{'='*60}")
     
-    for i in tqdm(range(subset_size), desc=f"Generating trajectories ({criterion})"):
+    for i in tqdm(range(subset_size), desc=f"Generating trajectories"):
         # Skip if already processed
         if i in processed_indices:
             if verbose:
@@ -142,7 +139,7 @@ def run_single_criterion(
         
         try:
             # Generate trajectory
-            result = generator.generate_trajectory(sample["question"], criterion=criterion)
+            result = generator.generate_trajectory(sample["question"])
             
             # Extract generated answer (but don't check correctness yet)
             generated_text = result["trajectory"]
@@ -195,7 +192,7 @@ def run_single_criterion(
     
     # Phase 2: Check correctness for all results
     log.info(f"\n{'='*60}")
-    log.info(f"Phase 2: Checking correctness ({criterion})")
+    log.info(f"Phase 2: Checking correctness")
     log.info(f"{'='*60}")
     
     if correctness_mode == "exact_match":
@@ -288,7 +285,7 @@ def run_single_criterion(
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
     
-    log.info(f"\n{criterion.capitalize()}-based Evaluation Summary:")
+    log.info(f"\nSummary:")
     log.info(f"  - Correctness mode: {correctness_mode}")
     log.info(f"  - Total samples: {len(results)}")
     log.info(f"  - Completed: {completed} ({completed/len(results):.1%})")
@@ -318,81 +315,99 @@ def run_single_criterion(
     return results
 
 
-def main(args):
+def wandb_save_directory(directory_path):
+    import wandb
+
+    for file_name in os.listdir(directory_path):
+        full_path = os.path.join(directory_path, file_name)
+        if os.path.isfile(full_path):  # Make sure it's a file, not a directory
+            wandb.save(full_path)
+
+
+hydra_cfg_path = os.environ.get("HYDRA_CONFIG", None)
+hydra_cfg_dir = str(Path(hydra_cfg_path).parent) if hydra_cfg_path is not None else None
+hydra_cfg_name = str(Path(hydra_cfg_path).name) if hydra_cfg_path is not None else None
+
+
+@hydra.main(
+    version_base=None,
+    config_path=hydra_cfg_dir,
+    config_name=hydra_cfg_name,
+)
+def main(config):
     """Main evaluation function"""
     
     # Set random seeds
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
+    random.seed(config.seed)
+    np.random.seed(config.seed)
+    torch.manual_seed(config.seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed(args.seed)
-        torch.cuda.manual_seed_all(args.seed)
-    log.info(f"Set random seed to {args.seed}")
+        torch.cuda.manual_seed(config.seed)
+        torch.cuda.manual_seed_all(config.seed)
+    log.info(f"Set random seed to {config.seed}")
     
     # Extract dataset name and ReasonEval name for directory structure
-    dataset_name = args.dataset_path.split('/')[-1] if '/' in args.dataset_path else args.dataset_path
-    reasoneval_name = args.reasoneval_path.split('/')[-1] if '/' in args.reasoneval_path else args.reasoneval_path
+    dataset_name = config.dataset_path.split('/')[-1] if '/' in config.dataset_path else config.dataset_path
+    reasoneval_name = config.reasoneval_path.split('/')[-1] if '/' in config.reasoneval_path else config.reasoneval_path
     
     # Create save paths with directory structure
-    save_dir = os.path.join(args.save_dir, dataset_name)
+    save_dir = os.path.join(config.save_dir, dataset_name)
     os.makedirs(save_dir, exist_ok=True)
     
     save_path_validity = os.path.join(save_dir, f"{reasoneval_name}_validity.pt")
     
     # Load dataset
-    log.info(f"Loading dataset: {args.dataset_path} ({args.dataset_split})")
+    log.info(f"Loading dataset: {config.dataset_path} ({config.dataset_split})")
     dataset = load_dataset(
-        args.dataset_path, 
-        split=args.dataset_split,
-        cache_dir=args.hf_cache
+        config.dataset_path, 
+        split=config.dataset_split,
+        cache_dir=config.hf_cache
     )
     
     # Load model
-    log.info(f"Loading model: {args.model_path}")
-    tokenizer = load_tokenizer(args.model_path)
-    base_model = load_model(args.model_path, args.device)
+    log.info(f"Loading model: {config.model_path}")
+    tokenizer = load_tokenizer(config.model_path)
+    base_model = load_model(config.model_path, config.device)
     base_model.eval()
     model = WhiteboxModel(base_model, tokenizer)
     
     # Create generator
-    log.info(f"Using device {args.device} for base model, {args.reasoneval_device} for ReasonEval")
+    log.info(f"Using device {config.device} for base model, {config.reasoneval_device} for ReasonEval")
     
     # Determine batch size for generation
-    batch_size = args.batch_size if args.batch_size else args.n
-    if args.sequential_generation:
+    batch_size = config.batch_size if config.batch_size else config.n
+    if config.sequential_generation:
         batch_size = 1
         log.info("Using sequential generation (batch_size=1) to save memory")
-    elif batch_size < args.n:
+
+    elif batch_size < config.n:
         log.info(f"Using batch generation with batch_size={batch_size}")
     
     generator = DirectOnlineBestOfNReasonEvalSeparate(
         model=model,
-        reasoneval_model_path=args.reasoneval_path,
-        candidates_per_step=args.n,
-        max_steps=args.max_steps,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        device=args.device,
-        reasoneval_device=args.reasoneval_device,
-        verbose=args.verbose,
+        reasoneval_model_path=config.reasoneval_path,
+        candidates_per_step=config.n,
+        max_steps=config.max_steps,
+        max_new_tokens=config.max_new_tokens,
+        temperature=config.temperature,
+        device=config.device,
+        reasoneval_device=config.reasoneval_device,
+        verbose=config.verbose,
         generation_batch_size=batch_size
     )
     
     # Process dataset
-    subset_size = min(args.subset, len(dataset)) if args.subset else len(dataset)
+    subset_size = min(config.subset, len(dataset)) if config.subset else len(dataset)
     
     run_single_criterion(
         generator, dataset, "validity", 
-        save_path_validity, subset_size, args.verbose,
-        resume=args.resume,
-        correctness_mode=args.correctness_mode,
-        n_threads=args.n_threads,
-        annotation_prompt_type=args.annotation_prompt_type,
-        prompt_file=args.prompt_file
+        save_path_validity, subset_size, config.verbose,
+        resume=config.resume,
+        correctness_mode=config.correctness_mode,
+        n_threads=config.n_threads,
+        annotation_prompt_type=config.annotation_prompt_type,
+        prompt_file=config.prompt_file
     )
 
 if __name__ == "__main__":
-    parser = get_parser()
-    args = parser.parse_args()
     main(args)
