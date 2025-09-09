@@ -3,16 +3,286 @@ Direct ReasonEval scorer that bypasses the stat calculator pipeline for efficien
 """
 
 import torch
+import torch.nn as nn
 from typing import List, Any, Tuple
 import logging
 from transformers import AutoTokenizer
 
-from lm_polygraph import WhiteboxModel
-from synthetic_dataset_generation.utils.steps_extractor import StepsExtractor
-from baselines.reasoneval import ReasonEval_7B, ReasonEval_34B
 from .base import UncertaintyBasedScorer
 
+from typing import Dict, List, Tuple
+from parse import parse
+import numpy as np
+
+from lm_polygraph import WhiteboxModel
+from lm_polygraph.stat_calculators.stat_calculator import StatCalculator
+from lm_polygraph.utils.model import Model, Claim
+from transformers import (
+    MistralModel, MistralPreTrainedModel,
+    LlamaModel, LlamaPreTrainedModel,
+    AutoTokenizer
+)
+from transformers.configuration_utils import PretrainedConfig
+
+import logging
+
 log = logging.getLogger(__name__)
+
+
+class StepsExtractor(StatCalculator):
+    def __init__(
+            self,
+            sent_separators: str = "\n",
+            skip_starts: list[str] = ['Reasoning Steps:', 'SOLUTION:', '<start of response>','<end of response>'],
+            progress_bar: bool = True,
+    ):
+        super().__init__()
+        self.sent_separators = sent_separators
+        self.skip_starts = skip_starts
+        self.progress_bar = progress_bar
+
+    @staticmethod
+    def meta_info() -> tuple[list[str], list[str]]:
+        return (
+            [
+                "claims",
+                "claim_texts_concatenated",
+                "claim_input_texts_concatenated",
+            ],
+            [
+                "greedy_texts",
+                "greedy_tokens",
+            ],
+        )
+
+    def __call__(
+            self,
+            dependencies: Dict[str, object],
+            texts: List[str],
+            model: WhiteboxModel,
+            *args,
+            **kwargs,
+    ) -> Dict[str, List]:
+        claims: list[list[Claim]] = []
+        claim_texts_concatenated: list[str] = []
+        claim_input_texts_concatenated: list[str] = []
+
+        data = zip(
+            texts,
+            dependencies["greedy_texts"],
+            dependencies["greedy_tokens"],
+        )
+        if self.progress_bar:
+            data = tqdm(data, total=len(texts), desc='Extracting steps')
+        for input_text, greedy_text, greedy_tokens in data:
+            steps: list[Claim] = self.split_to_steps(greedy_text, greedy_tokens, model.tokenizer)
+            claims.append(steps)
+            claim_texts_concatenated += [c.claim_text for c in steps]
+            claim_input_texts_concatenated += [input_text for c in steps]
+
+        return {
+            "claims": claims,
+            "claim_texts_concatenated": claim_texts_concatenated,
+            "claim_input_texts_concatenated": claim_input_texts_concatenated,
+        }
+
+    def filter_claim_texts(self, claim_text: str) -> bool:
+        claim_text = claim_text.strip()
+        return len(claim_text) > 0 and not any(claim_text.lower().startswith(b.lower()) for b in self.skip_starts)
+
+    def split_to_steps(
+            self,
+            text: str,
+            tokens: list[int],
+            tokenizer,
+    ) -> list[Claim]:
+        if not tokenizer.decode(tokens).startswith(text):
+            return []
+        prev_token_i, token_i = 0, 0
+        prev_text_i = 0
+        claims: list[Claim] = []
+        for text_i in range(len(text)):
+            if text[text_i] in self.sent_separators and self.filter_claim_texts(text[prev_text_i:text_i + 1]):
+                claims.append(Claim(
+                    claim_text=text[prev_text_i:text_i + 1].strip(),
+                    sentence=text[prev_text_i:text_i + 1],
+                    aligned_token_ids=list(range(prev_token_i, min(token_i + 1, len(tokens) - 1)))
+                ))
+            while token_i < len(tokens) and tokenizer.decode(tokens[:token_i + 1]) in text[:text_i + 1]:
+                token_i += 1
+            if text[text_i] in self.sent_separators:
+                prev_text_i = text_i + 1
+                prev_token_i = token_i
+        if self.filter_claim_texts(text[prev_text_i:]):
+            claims.append(Claim(
+                claim_text=text[prev_text_i:].strip(),
+                sentence=text[prev_text_i:],
+                aligned_token_ids=list(range(prev_token_i, min(token_i + 1, len(tokens) - 1)))
+            ))
+        return claims
+
+
+class ReasonEval_7B(MistralPreTrainedModel):
+    _keys_to_ignore_on_load_missing = ['lm_head.weight']
+
+    def __init__(self, config: PretrainedConfig) -> None:
+        super().__init__(config)
+        self.model = MistralModel(config)
+        self.score_head = nn.Linear(config.hidden_size, config.score_dimension, bias=config.use_bias)
+        self.post_init()
+
+    def forward(self, input_ids, attention_mask, position_ids=None, past_key_values=None,
+                inputs_embeds=None, use_cache=None, output_attentions=None,
+                output_hidden_states=None, return_dict=None):
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        hidden_states = outputs[0]
+        scores = self.score_head(hidden_states)
+        return scores
+
+
+class ReasonEval_34B(LlamaPreTrainedModel):
+    _keys_to_ignore_on_load_missing = ['lm_head.weight']
+
+    def __init__(self, config: PretrainedConfig) -> None:
+        super().__init__(config)
+        self.model = LlamaModel(config)
+        self.score_head = nn.Linear(config.hidden_size, config.score_dim, bias=config.bias)
+        self.post_init()
+
+    def forward(self, input_ids, attention_mask, position_ids=None, past_key_values=None,
+                inputs_embeds=None, use_cache=None, output_attentions=None,
+                output_hidden_states=None, return_dict=None):
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        hidden_states = outputs[0]
+        scores = self.score_head(hidden_states)
+        return scores
+
+
+class ReasonEvalStatCalculator(StatCalculator):
+    def __init__(
+            self,
+            prompt_path: str | None = None,
+            reasoneval_model_path: str = "GAIR/ReasonEval-7B",
+            device: str = "auto",
+            offload_to_cpu_between_calls: bool = False,
+    ):
+        super().__init__()
+        self.reasoneval_model_path = reasoneval_model_path
+        self.device = device
+        self.tokenizer = None
+        self.model = None
+        self.prompt = open(prompt_path, 'r').read() if prompt_path else "{q}"
+        self.offload_to_cpu_between_calls = offload_to_cpu_between_calls
+        if offload_to_cpu_between_calls:
+            self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+    @staticmethod
+    def meta_info() -> Tuple[List[str], List[str]]:
+        return ["reasoneval_scores"], ["claims"]
+
+    def init(self):
+        if self.model is not None:
+            return
+        device = "cpu" if self.offload_to_cpu_between_calls else self.device
+        log.info(f"Initializing {self.reasoneval_model_path} model on device={self.device}")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.reasoneval_model_path, device_map=device)
+        if self.reasoneval_model_path.endswith('7B'):
+            self.model = ReasonEval_7B.from_pretrained(self.reasoneval_model_path, device_map=device)
+            self.model_size = '7B'
+        elif self.reasoneval_model_path.endswith('34B'):
+            self.model = ReasonEval_34B.from_pretrained(self.reasoneval_model_path, device_map=device)
+            self.model_size = '34B'
+        else:
+            raise ValueError(f"Could not determine model size from path: {self.reasoneval_model_path}")
+
+    def get_step_level_scores(self, question, reasoning_steps) -> list[dict[str, float]]:
+        self.init()
+        PROMPT_FORMAT = "Question:\n{input}\nAnswer:\nLet's think step by step.\n"
+        step_separator = f"{self.tokenizer.pad_token}"
+        combined_steps = "".join(step.claim_text + step_separator for step in reasoning_steps)
+        prompt = PROMPT_FORMAT.format(input=question)
+        tokenized_result = self.tokenizer(prompt + step_separator + combined_steps)['input_ids']
+        separator_token_id = self.tokenizer(step_separator)['input_ids'][-1]
+
+        labeled_token_indices = []
+        adjusted_token_ids = []
+        separator_count = 0
+        for idx, token_id in enumerate(tokenized_result):
+            if token_id == separator_token_id:
+                labeled_token_indices.append(idx - 1 - separator_count)
+                separator_count += 1
+            else:
+                adjusted_token_ids.append(token_id)
+
+        if self.model_size == '7B':
+            adjusted_token_ids = [1] + adjusted_token_ids
+            adjusted_token_ids = torch.tensor([adjusted_token_ids])
+            labeled_token_indices = labeled_token_indices[2:]
+        elif self.model_size == '34B':
+            adjusted_token_ids = torch.tensor([adjusted_token_ids])
+            labeled_token_indices = labeled_token_indices[1:]
+        else:
+            raise ValueError(f"Invalid model size: {self.model_size}")
+
+        attention_mask = adjusted_token_ids.new_ones(adjusted_token_ids.size(), dtype=torch.bool)
+        adjusted_token_ids = adjusted_token_ids.to(self.model.device)
+        attention_mask = attention_mask.to(self.model.device)
+
+        with torch.no_grad():
+            reasoning_scores = self.model(adjusted_token_ids, attention_mask)[0, labeled_token_indices, :]
+            scores = torch.softmax(reasoning_scores, dim=-1).tolist()
+
+        step_level_validity_scores = [(score[1] + score[2]) for score in scores]
+        step_level_redundancy_scores = [score[1] for score in scores]
+        return [{'validity': v, 'redundancy': r} for v, r in
+                zip(step_level_validity_scores, step_level_redundancy_scores)]
+
+    def __call__(self, dependencies: Dict[str, np.array], texts: List[str], model: Model, max_new_tokens: int = 100,
+                 **kwargs) -> Dict[str, np.ndarray]:
+        self.init()
+        if self.offload_to_cpu_between_calls:
+            log.info(f"Uploading ReasonEval model to {self.device}...")
+            self.model = self.model.to(self.device)
+            log.info(f"Done.")
+        scores: list[list[dict]] = []
+        for input_text, claims in zip(texts, dependencies["claims"]):
+            question = parse(self.prompt, input_text).named['q']
+            r = self.get_step_level_scores(question, claims)
+            assert len(r) == len(claims)
+            scores.append(r)
+        if self.offload_to_cpu_between_calls:
+            log.info(f"Offloading ReasonEval model to cpu...")
+            self.model = self.model.cpu()
+            log.info(f"Done.")
+        return {"reasoneval_scores": scores}
 
 
 class DirectReasonEvalScorer(UncertaintyBasedScorer):
@@ -429,71 +699,3 @@ class DirectReasonEvalScorerSeparate(DirectReasonEvalScorer):
             redundancies.append(redundancy)
         
         return validities, redundancies
-
-
-class DirectReasonEvalScorerOptimized(DirectReasonEvalScorer):
-    """
-    Optimized version with better batching for multiple candidates.
-    
-    Additional optimizations:
-    1. Batch multiple candidates together when possible
-    2. Cache question extraction
-    3. Reuse tokenization results
-    """
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.question_cache = {}
-        self.max_cache_size = 100
-        
-    def compute_claim_uncertainties(
-        self,
-        trajectory: str,
-        candidates: List[str],
-        **kwargs
-    ) -> List[List[float]]:
-        """Compute uncertainties with optimized batching"""
-        
-        self.prepare_model()
-        
-        if not candidates:
-            return []
-        
-        # Get question (with caching)
-        trajectory_hash = hash(trajectory[:200])  # Hash prefix for stability
-        if trajectory_hash in self.question_cache:
-            question = self.question_cache[trajectory_hash]
-        else:
-            question = self._extract_question(trajectory)
-            # Cache with size limit
-            if len(self.question_cache) >= self.max_cache_size:
-                self.question_cache.pop(next(iter(self.question_cache)))
-            self.question_cache[trajectory_hash] = question
-        
-        # Process in batches for efficiency
-        all_uncertainties = []
-        for i in range(0, len(candidates), self.batch_size):
-            batch_candidates = candidates[i:i + self.batch_size]
-            batch_uncertainties = self._score_batch(question, trajectory, batch_candidates)
-            all_uncertainties.extend(batch_uncertainties)
-        
-        return all_uncertainties
-    
-    def _score_batch(
-        self,
-        question: str,
-        trajectory: str,
-        candidates: List[str]
-    ) -> List[List[float]]:
-        """Score a batch of candidates"""
-        # For now, fall back to individual scoring
-        # (ReasonEval batching would require careful handling of different claim counts)
-        uncertainties = []
-        for candidate in candidates:
-            uncertainties.append(self._score_single_candidate(question, trajectory, candidate))
-        return uncertainties
-    
-    def cleanup(self):
-        """Clean up resources including cache"""
-        self.question_cache.clear()
-        super().cleanup()

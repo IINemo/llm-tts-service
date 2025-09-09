@@ -170,11 +170,6 @@ class StepCandidateGenerator:
                 raw_text=raw_generated_text
             )
             candidates.append(candidate)
-            
-        # if verbose:
-        #     log.info(f"Generated {len(candidates)} candidates:")
-        #     for i, candidate in enumerate(candidates):
-        #         log.info(f"  {i}: '{candidate.text}'")
                 
         return candidates
         
