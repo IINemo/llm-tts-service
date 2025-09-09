@@ -3,9 +3,9 @@ Real-time step boundary detection during generation
 """
 
 import torch
-from typing import List, Dict, Optional
+from typing import List
+
 from transformers import StoppingCriteria
-import re
 
 
 class StepBoundaryDetector:

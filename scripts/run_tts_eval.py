@@ -198,8 +198,6 @@ def run_single_criterion(
     if "{question}" in prompt_template:
         prompt_template = prompt_template.replace("{question}", "{q}")
     
-    # print(f'Using prompt template:\n{prompt_template}')
-    # import pdb; pdb.set_trace()
     # Create annotator
     annotator = Annotator(
         prompt=prompt_template,
@@ -296,7 +294,6 @@ def wandb_save_directory(directory_path):
         full_path = os.path.join(directory_path, file_name)
         if os.path.isfile(full_path):  # Make sure it's a file, not a directory
             wandb.save(full_path)
-
 
 
 @hydra.main(
