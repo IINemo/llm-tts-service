@@ -1,6 +1,7 @@
 # @package dataset
 
 dataset_path: "gsm8k"  # Dataset to evaluate on (HuggingFace name or local path)
+dataset_config: "main"  # Dataset config name (required for some datasets like GSM8K)
 dataset_split: "test"  # Dataset split to use
 subset: null  # Only process first N samples from dataset (null for all)
 prompt_file: null  # Path to prompt template file (optional)

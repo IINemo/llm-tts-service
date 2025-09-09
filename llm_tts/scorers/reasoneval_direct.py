@@ -16,7 +16,8 @@ import numpy as np
 
 from lm_polygraph import WhiteboxModel
 from lm_polygraph.stat_calculators.stat_calculator import StatCalculator
-from lm_polygraph.utils.model import Model, Claim
+from lm_polygraph.utils.model import Model
+from lm_polygraph.stat_calculators.extract_claims import Claim
 from transformers import (
     MistralModel, MistralPreTrainedModel,
     LlamaModel, LlamaPreTrainedModel,

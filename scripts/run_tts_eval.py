@@ -18,9 +18,8 @@ from lm_polygraph import WhiteboxModel
 
 from llm_tts.strategies import (
     DirectOnlineBestOfNReasonEvalSeparate,
-    run_separate_evaluations,
 )
-from llm_tts import Annotator, _is_correct_answer
+from llm_tts.deepseek_annotator import DeepSeekAnnotator
 
 import logging
 
@@ -207,7 +206,7 @@ def run_evaluation(
         prompt_template = prompt_template.replace("{question}", "{q}")
 
     # Create annotator
-    annotator = Annotator(
+    annotator = DeepSeekAnnotator(
         prompt=prompt_template,
         n_threads=n_threads,
         cache_path="~/.cache",
@@ -313,12 +312,13 @@ def wandb_save_directory(directory_path):
 
 @hydra.main(
     version_base=None,
-    config_path=None,
-    config_name=None,
+    config_path="../config",
+    config_name="run_tts_eval",
 )
 def main(config):
     """Main evaluation function"""
 
+    print(config)
     output_dir = HydraConfig.get().runtime.output_dir
     log.info(f"Output directory: {output_dir}")
 
@@ -373,6 +373,7 @@ def main(config):
     )
     dataset = load_dataset(
         config.dataset.dataset_path,
+        config.dataset.dataset_config,
         split=config.dataset.dataset_split,
         cache_dir=config.system.hf_cache,
     )
