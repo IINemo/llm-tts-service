@@ -3,7 +3,7 @@ Candidate step generation system for online best-of-n
 """
 
 import torch
-from typing import List, Dict, Tuple, Optional
+from typing import List, Optional
 from transformers import StoppingCriteriaList
 import logging
 import time
@@ -12,7 +12,6 @@ from lm_polygraph import WhiteboxModel
 from .step_detection import (
     StepBoundaryDetector,
     BatchStepStoppingCriteria,
-    StepExtractionResult,
 )
 
 log = logging.getLogger(__name__)

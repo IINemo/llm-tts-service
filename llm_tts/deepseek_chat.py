@@ -2,9 +2,10 @@ import openai
 import os
 import sys
 import time
-import logging
 import diskcache as dc
 import threading
+
+import logging
 
 log = logging.getLogger()
 

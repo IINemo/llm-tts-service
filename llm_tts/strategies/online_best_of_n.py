@@ -247,7 +247,6 @@ class DirectOnlineBestOfNReasonEvalSeparate:
         
         # Aggregate scores
         answer_validity_scores = []
-        
         for validities in zip(all_validities):
             if validities and len(validities) > 0:
                 validity_score = float(sum(validities) / len(validities))
