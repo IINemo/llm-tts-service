@@ -1,5 +1,9 @@
 # @package output
 
+hydra:
+  run:
+    dir: ${save_dir}/eval/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
 save_dir: "./results"  # Directory to save results (will create validity/redundancy subdirs)
 resume: true  # Resume from existing save file
 correctness_mode: "exact_match"  # Method for checking answer correctness: exact_match, deepseek

@@ -8,7 +8,7 @@ from typing import List, Any, Tuple
 import logging
 from transformers import AutoTokenizer
 
-from .base import UncertaintyBasedScorer
+from .uncertainty_based_scorer import UncertaintyBasedScorer
 
 from typing import Dict, List, Tuple
 from parse import parse

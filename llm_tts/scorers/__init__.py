@@ -1,2 +1,2 @@
-from .base import UncertaintyBasedScorer
+from .uncertainty_based_scorer import UncertaintyBasedScorer
 from .reasoneval_direct import DirectReasonEvalScorerSeparate, DirectReasonEvalScorer
