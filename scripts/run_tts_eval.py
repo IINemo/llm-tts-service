@@ -177,7 +177,7 @@ def run_single_criterion(
                 "question": sample["question"],
                 "gold_answer": sample["answer"],
                 "error": str(e),
-                "criterion_used": criterion,
+                "criterion_used": "validity",
                 "completed": False
             })
         
@@ -208,8 +208,8 @@ def run_single_criterion(
                 
                 if verbose and i % 10 == 0:  # Log every 10th for less clutter
                     log.info(f"\nSample {result['index']}:")
-                    log.info(f"Generated answer: {parse_ans(result['generated_answer'])}")
-                    log.info(f"Gold answer: {parse_ans(result['gold_answer'])}")
+                    log.info(f"Generated answer: {result['generated_answer'][:100]}...")
+                    log.info(f"Gold answer: {result['gold_answer'][:100]}...")
                     log.info(f"Correct: {is_correct}")
             except Exception as e:
                 log.error(f"Error checking correctness for sample {result['index']}: {e}")
@@ -324,90 +324,107 @@ def wandb_save_directory(directory_path):
             wandb.save(full_path)
 
 
-hydra_cfg_path = os.environ.get("HYDRA_CONFIG", None)
-hydra_cfg_dir = str(Path(hydra_cfg_path).parent) if hydra_cfg_path is not None else None
-hydra_cfg_name = str(Path(hydra_cfg_path).name) if hydra_cfg_path is not None else None
-
 
 @hydra.main(
     version_base=None,
-    config_path=hydra_cfg_dir,
-    config_name=hydra_cfg_name,
+    config_path=None,
+    config_name=None,
 )
 def main(config):
     """Main evaluation function"""
     
+    output_dir = HydraConfig.get().runtime.output_dir
+    log.info(f"Output directory: {output_dir}")
+
+    # Setup wandb if configured
+    if getattr(config, 'report_to', None) == "wandb":
+        import wandb
+
+        wandb_cfg = OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
+        config_path_hydra = [
+            path["path"]
+            for path in HydraConfig.get().runtime.config_sources
+            if path["schema"] == "file"
+        ][0]
+        wandb_cfg["HYDRA_CONFIG"] = (
+            Path(config_path_hydra) / HydraConfig.get().job.config_name
+        )
+        os.environ["WANDB_DIR"] = str(Path(output_dir))
+        project = os.environ.get("WANDB_PROJECT", "llm-tts-eval")
+        wandb.init(project=project, dir=output_dir, config=wandb_cfg)
+        wandb_save_directory(Path(output_dir) / ".hydra")
+    
     # Set random seeds
-    random.seed(config.seed)
-    np.random.seed(config.seed)
-    torch.manual_seed(config.seed)
+    random.seed(config.system.seed)
+    np.random.seed(config.system.seed)
+    torch.manual_seed(config.system.seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed(config.seed)
-        torch.cuda.manual_seed_all(config.seed)
-    log.info(f"Set random seed to {config.seed}")
+        torch.cuda.manual_seed(config.system.seed)
+        torch.cuda.manual_seed_all(config.system.seed)
+    log.info(f"Set random seed to {config.system.seed}")
     
     # Extract dataset name and ReasonEval name for directory structure
-    dataset_name = config.dataset_path.split('/')[-1] if '/' in config.dataset_path else config.dataset_path
-    reasoneval_name = config.reasoneval_path.split('/')[-1] if '/' in config.reasoneval_path else config.reasoneval_path
+    dataset_name = config.dataset.dataset_path.split('/')[-1] if '/' in config.dataset.dataset_path else config.dataset.dataset_path
+    reasoneval_name = config.model.reasoneval_path.split('/')[-1] if '/' in config.model.reasoneval_path else config.model.reasoneval_path
     
     # Create save paths with directory structure
-    save_dir = os.path.join(config.save_dir, dataset_name)
+    save_dir = os.path.join(config.output.save_dir, dataset_name)
     os.makedirs(save_dir, exist_ok=True)
     
     save_path_validity = os.path.join(save_dir, f"{reasoneval_name}_validity.pt")
     
     # Load dataset
-    log.info(f"Loading dataset: {config.dataset_path} ({config.dataset_split})")
+    log.info(f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})")
     dataset = load_dataset(
-        config.dataset_path, 
-        split=config.dataset_split,
-        cache_dir=config.hf_cache
+        config.dataset.dataset_path, 
+        split=config.dataset.dataset_split,
+        cache_dir=config.system.hf_cache
     )
     
     # Load model
-    log.info(f"Loading model: {config.model_path}")
-    tokenizer = load_tokenizer(config.model_path)
-    base_model = load_model(config.model_path, config.device)
+    log.info(f"Loading model: {config.model.model_path}")
+    tokenizer = load_tokenizer(config.model.model_path)
+    base_model = load_model(config.model.model_path, config.system.device)
     base_model.eval()
     model = WhiteboxModel(base_model, tokenizer)
     
     # Create generator
-    log.info(f"Using device {config.device} for base model, {config.reasoneval_device} for ReasonEval")
+    log.info(f"Using device {config.system.device} for base model, {config.system.reasoneval_device} for ReasonEval")
     
     # Determine batch size for generation
-    batch_size = config.batch_size if config.batch_size else config.n
-    if config.sequential_generation:
+    batch_size = config.generation.batch_size if config.generation.batch_size else config.generation.n
+    if config.generation.sequential_generation:
         batch_size = 1
         log.info("Using sequential generation (batch_size=1) to save memory")
 
-    elif batch_size < config.n:
+    elif batch_size < config.generation.n:
         log.info(f"Using batch generation with batch_size={batch_size}")
     
     generator = DirectOnlineBestOfNReasonEvalSeparate(
         model=model,
-        reasoneval_model_path=config.reasoneval_path,
-        candidates_per_step=config.n,
-        max_steps=config.max_steps,
-        max_new_tokens=config.max_new_tokens,
-        temperature=config.temperature,
-        device=config.device,
-        reasoneval_device=config.reasoneval_device,
+        reasoneval_model_path=config.model.reasoneval_path,
+        candidates_per_step=config.generation.n,
+        max_steps=config.generation.max_steps,
+        max_new_tokens=config.generation.max_new_tokens,
+        temperature=config.generation.temperature,
+        device=config.system.device,
+        reasoneval_device=config.system.reasoneval_device,
         verbose=config.verbose,
         generation_batch_size=batch_size
     )
     
     # Process dataset
-    subset_size = min(config.subset, len(dataset)) if config.subset else len(dataset)
+    subset_size = min(config.dataset.subset, len(dataset)) if config.dataset.subset else len(dataset)
     
     run_single_criterion(
         generator, dataset, "validity", 
         save_path_validity, subset_size, config.verbose,
-        resume=config.resume,
-        correctness_mode=config.correctness_mode,
-        n_threads=config.n_threads,
-        annotation_prompt_type=config.annotation_prompt_type,
-        prompt_file=config.prompt_file
+        resume=config.output.resume,
+        correctness_mode=config.output.correctness_mode,
+        n_threads=config.output.n_threads,
+        annotation_prompt_type=config.output.annotation_prompt_type,
+        prompt_file=config.dataset.prompt_file
     )
 
 if __name__ == "__main__":
-    main(args)
+    main()
