@@ -2,11 +2,8 @@ import torch
 import logging
 from typing import List, Dict
 
-from lm_polygraph import WhiteboxModel
-
-from llm_tts.step_detection import StepBoundaryDetector
 from llm_tts.step_generation import StepCandidateGenerator
-from llm_tts.scorers.reasoneval_direct import DirectReasonEvalScorerSeparate
+from llm_tts.step_detection import StepBoundaryDetector
 
 log = logging.getLogger(__name__)
 
@@ -21,26 +18,22 @@ class DirectOnlineBestOfNReasonEvalSeparate:
     """
     
     def __init__(
-        self,
-        model: WhiteboxModel,
-        reasoneval_model_path: str,
+        self, 
+        model,
+        scorer,
         candidates_per_step: int = 10,
         max_steps: int = 20,
         max_new_tokens: int = 350,
         temperature: float = 0.7,
-        device: str = "cuda",
-        reasoneval_device: str = None,
-        verbose: bool = True,
         generation_batch_size: int = None
     ):
-        self.model = model
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
-        self.device = device
-        self.verbose = verbose
         self.generation_batch_size = generation_batch_size or candidates_per_step
+        self.model = model
+        self.scorer = scorer
         
         # Initialize components
         self.detector = StepBoundaryDetector(
@@ -54,15 +47,7 @@ class DirectOnlineBestOfNReasonEvalSeparate:
             detector=self.detector,
             candidates_per_step=candidates_per_step,
             temperature=temperature,
-            max_new_tokens=max_new_tokens,
-            device=device
-        )
-        
-        self.scorer = DirectReasonEvalScorerSeparate(
-            model=model,
-            reasoneval_model_path=reasoneval_model_path,
-            device=reasoneval_device if reasoneval_device else device,
-            batch_size=candidates_per_step
+            max_new_tokens=max_new_tokens
         )
     
     def generate_trajectory(self, prompt: str) -> Dict[str, any]:
@@ -93,8 +78,7 @@ class DirectOnlineBestOfNReasonEvalSeparate:
                 candidates = self._generate_candidates_in_batches(trajectory)
             else:
                 candidates = self.step_generator.generate_candidates(
-                    trajectory, 
-                    verbose=self.verbose
+                    trajectory
                 )
             
             if not candidates:
@@ -187,8 +171,7 @@ class DirectOnlineBestOfNReasonEvalSeparate:
                 
                 # Generate batch
                 batch_candidates = self.step_generator.generate_candidates(
-                    trajectory, 
-                    verbose=False  # Avoid too much logging
+                    trajectory
                 )
                 
                 if batch_candidates:
@@ -208,8 +191,8 @@ class DirectOnlineBestOfNReasonEvalSeparate:
         
         # Generate answer candidates (without step detection)
         inputs = self.model.tokenize([trajectory])
-        input_ids = inputs['input_ids'].to(self.device)
-        attention_mask = inputs['attention_mask'].to(self.device)
+        input_ids = inputs['input_ids'].to(self.model.device)
+        attention_mask = inputs['attention_mask'].to(self.model.device)
         
         # Generate answer candidates in batches if needed
         if self.generation_batch_size < self.candidates_per_step:
@@ -222,15 +205,15 @@ class DirectOnlineBestOfNReasonEvalSeparate:
                 batch_size = end_idx - start_idx
                 
                 with torch.no_grad():
-                    batch_outputs = self.model.model.generate(
+                    batch_outputs = self.step_generator.model.model.generate(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         max_new_tokens=1024,
                         do_sample=True,
                         temperature=self.temperature,
                         num_return_sequences=batch_size,
-                        pad_token_id=self.model.tokenizer.eos_token_id,
-                        eos_token_id=self.model.tokenizer.eos_token_id
+                        pad_token_id=self.step_generator.tokenizer.eos_token_id,
+                        eos_token_id=self.step_generator.tokenizer.eos_token_id
                     )
                     outputs.extend(batch_outputs)
                     
@@ -238,22 +221,22 @@ class DirectOnlineBestOfNReasonEvalSeparate:
                 torch.cuda.empty_cache()
         else:
             with torch.no_grad():
-                outputs = self.model.model.generate(
+                outputs = self.step_generator.model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=1024,
                     do_sample=True,
                     temperature=self.temperature,
                     num_return_sequences=self.candidates_per_step,
-                    pad_token_id=self.model.tokenizer.eos_token_id,
-                    eos_token_id=self.model.tokenizer.eos_token_id
+                    pad_token_id=self.step_generator.tokenizer.eos_token_id,
+                    eos_token_id=self.step_generator.tokenizer.eos_token_id
                 )
         
         # Extract answer candidates
         answer_candidates = []
         for seq in outputs:
             new_tokens = seq[input_ids.shape[1]:]
-            answer_text = self.model.tokenizer.decode(new_tokens, skip_special_tokens=True)
+            answer_text = self.step_generator.tokenizer.decode(new_tokens, skip_special_tokens=True)
             answer_candidates.append(answer_text)
         
         # Score answer candidates

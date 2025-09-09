@@ -10,3 +10,16 @@ defaults:
 
 # Main configuration
 verbose: false
+
+
+scorer:
+  type: reasoneval_direct
+  model_path: "GAIR/ReasonEval-7B"
+  device: cuda
+  batch_size: 10
+  
+
+strategy:
+  type: direct_online_best_of_n_reason_eval_separate
+  candidates_per_step: 10
+  max_steps: 20

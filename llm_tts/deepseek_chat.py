@@ -20,6 +20,7 @@ class DeepSeekChat:
     ):
         if api_key is None:
             api_key = os.environ.get("DEEPSEEK_API_KEY", None)
+            
         self.api_key = api_key
         self.api_base = api_base
         self.model = model

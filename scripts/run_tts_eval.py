@@ -11,7 +11,7 @@ import traceback
 from pathlib import Path
 import hydra
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from lm_polygraph import WhiteboxModel
@@ -20,6 +20,8 @@ from llm_tts.strategies import (
     DirectOnlineBestOfNReasonEvalSeparate,
 )
 from llm_tts.deepseek_annotator import DeepSeekAnnotator
+from llm_tts.scorers.reasoneval_direct import DirectReasonEvalScorerSeparate
+
 
 import logging
 
@@ -50,82 +52,112 @@ def load_prompt_template(prompt_file: str) -> str:
         return "Question: {question}\n\nLet's solve this step by step.\n\n"
 
 
-def prepare_dataset_with_prompts(dataset, prompt_template: str):
-    """Add prompts to dataset questions"""
+def load_existing_results(save_path: str, dataset):
+    log.info(f"Loading existing results from {save_path}")
 
-    def add_prompt(example):
-        # Format prompt with question
-        if "{question}" in prompt_template:
-            example["question"] = prompt_template.format(question=example["question"])
-        else:
-            example["question"] = prompt_template + example["question"]
-        return example
+    try:
+        results = torch.load(save_path)
+        processed_indices = {r["index"] for r in results}
+        log.info(f"Loaded {len(results)} existing results")
+        log.info(f"Already processed indices: {sorted(processed_indices)}")
 
-    return dataset.map(add_prompt)
+        # Validate all existing results match current dataset
+        log.info("Validating existing results against current dataset...")
+        for result in results:
+            idx = result["index"]
+            if idx < len(dataset):
+                sample = dataset[idx]
+                if (
+                    result["question"] != sample["question"]
+                    or result["gold_answer"] != sample["answer"]
+                ):
+                    raise ValueError(
+                        f"Sample mismatch at index {idx}!\n"
+                        f"Existing question: {result['question']}...\n"
+                        f"Current question: {sample['question']}...\n"
+                        f"Existing answer: {result['gold_answer']}\n"
+                        f"Current answer: {sample['answer']}\n"
+                        f"The saved results appear to be from a different dataset!"
+                    )
+        log.info("Validation passed - all existing results match current dataset")
+
+    except Exception as e:
+        if "Sample mismatch" in str(e):
+            raise  # Re-raise validation errors
+        log.warning(f"Failed to load existing results: {e}")
+        results = []
+        processed_indices = set()
+
+    return results, processed_indices
 
 
-def run_evaluation(
+def wandb_save_directory(directory_path):
+    import wandb
+
+    for file_name in os.listdir(directory_path):
+        full_path = os.path.join(directory_path, file_name)
+        if os.path.isfile(full_path):  # Make sure it's a file, not a directory
+            wandb.save(full_path)
+
+
+def set_random_seeds(seed):
+    log.info(f"Set random seed to {seed}")
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+
+def create_scorer(config, model):
+    if config.scorer.type == "reasoneval_direct":
+        scorer = DirectReasonEvalScorerSeparate(
+            model=model,
+            reasoneval_model_path=config.scorer.model_path,
+            device=config.scorer.device,
+            batch_size=config.scorer.batch_size,
+        )
+
+    elif config.scorer.type == "uncertainty":
+        raise NotImplementedError("Uncertainty scorer not implemented")
+
+    else:
+        raise ValueError(f"Scorer type {config.scorer.type} not supported")
+
+    return scorer
+
+
+def create_tts_strategy(config, model, scorer):
+    if config.strategy.type == "direct_online_best_of_n_reason_eval_separate":
+        generator = DirectOnlineBestOfNReasonEvalSeparate(
+            model=model,
+            scorer=scorer,
+            candidates_per_step=config.strategy.candidates_per_step,
+            max_steps=config.strategy.max_steps,
+            max_new_tokens=config.generation.max_new_tokens,
+            temperature=config.generation.temperature,
+            generation_batch_size=config.generation.batch_size,
+        )
+    else:
+        raise ValueError(f"Strategy type {config.strategy.type} not supported")
+
+    return generator
+
+
+def generate_trajectories(
+    results,
+    save_path,
     generator: DirectOnlineBestOfNReasonEvalSeparate,
     dataset,
-    save_path: str,
-    subset_size: int,
-    verbose: bool,
-    resume: bool = False,
-    correctness_mode: str = "exact_match",
-    n_threads: int = 1,
-    annotation_prompt_type: str = "non_unique",
-    prompt_file: str = None,
+    processed_indices: set,
 ):
-    """Run evaluation for a single criterion"""
-
-    log.info(f"\n{'='*60}")
-    log.info(f"Running evaluation")
-    log.info(f"{'='*60}")
-
-    # Load existing results if resuming
-    results = []
-    processed_indices = set()
-
-    if resume and os.path.exists(save_path):
-        log.info(f"Loading existing results from {save_path}")
-        try:
-            results = torch.load(save_path)
-            processed_indices = {r["index"] for r in results}
-            log.info(f"Loaded {len(results)} existing results")
-            log.info(f"Already processed indices: {sorted(processed_indices)}")
-
-            # Validate all existing results match current dataset
-            log.info("Validating existing results against current dataset...")
-            for result in results:
-                idx = result["index"]
-                if idx < len(dataset):
-                    sample = dataset[idx]
-                    if (
-                        result["question"] != sample["question"]
-                        or result["gold_answer"] != sample["answer"]
-                    ):
-                        raise ValueError(
-                            f"Sample mismatch at index {idx}!\n"
-                            f"Existing question: {result['question']}...\n"
-                            f"Current question: {sample['question']}...\n"
-                            f"Existing answer: {result['gold_answer']}\n"
-                            f"Current answer: {sample['answer']}\n"
-                            f"The saved results appear to be from a different dataset!"
-                        )
-            log.info("Validation passed - all existing results match current dataset")
-
-        except Exception as e:
-            if "Sample mismatch" in str(e):
-                raise  # Re-raise validation errors
-            log.warning(f"Failed to load existing results: {e}")
-            results = []
-            processed_indices = set()
-
     # Phase 1: Generate trajectories (without checking correctness)
     log.info(f"\n{'='*60}")
     log.info(f"Phase 1: Generating trajectories")
     log.info(f"{'='*60}")
 
+    subset_size = len(dataset)
     for i in tqdm(range(subset_size), desc=f"Generating trajectories"):
         # Skip if already processed
         if i in processed_indices:
@@ -185,13 +217,25 @@ def run_evaluation(
 
         # Save periodically
         if len(results) % 10 == 0:
-            torch.save(results, save_path)
-            log.info(f"Saved {len(results)} results to {save_path}")
+            save_path_file = Path(save_path) / f"results.pt"
+            torch.save(results, save_path_file)
+            log.info(f"Saved {len(results)} results to {save_path_file}")
 
     # Final save after generation
-    torch.save(results, save_path)
-    log.info(f"Final save after generation: {len(results)} results to {save_path}")
+    save_path_file = Path(save_path) / f"results.pt"
+    torch.save(results, save_path_file)
+    log.info(f"Final save after generation: {len(results)} results to {save_path_file}")
 
+    return results
+
+
+def evaluate_results(
+    results,
+    correctness_mode: str,
+    n_threads: int,
+    save_path: str,
+    prompt_file: str = None,
+):
     # Phase 2: Check correctness for all results
     log.info(f"\n{'='*60}")
     log.info(f"Phase 2: Checking correctness")
@@ -207,10 +251,7 @@ def run_evaluation(
 
     # Create annotator
     annotator = DeepSeekAnnotator(
-        prompt=prompt_template,
-        n_threads=n_threads,
-        cache_path="~/.cache",
-        annotation_prompt_type=annotation_prompt_type,
+        prompt=prompt_template, n_threads=n_threads, cache_path="~/.cache"
     )
 
     # Prepare data for batch processing
@@ -228,9 +269,7 @@ def run_evaluation(
             result_indices.append(i)
 
     if problems:
-        log.info(
-            f"Verifying {len(problems)} solutions with DeepSeek ({annotation_prompt_type} prompt)..."
-        )
+        log.info(f"Verifying {len(problems)} solutions with DeepSeek...")
 
         # Get annotations from DeepSeek
         try:
@@ -248,7 +287,7 @@ def run_evaluation(
                         annotation == 0
                     )  # 0 = correct, 1 = incorrect
 
-                if verbose and (idx - result_indices[0]) % 10 == 0:
+                if (idx - result_indices[0]) % 10 == 0:
                     log.info(f"\nSample {results[idx]['index']}:")
                     log.info(f"DeepSeek annotation: {annotation}")
                     log.info(f"Correct: {results[idx]['is_correct_deepseek']}")
@@ -260,8 +299,9 @@ def run_evaluation(
                 results[idx]["is_correct_deepseek"] = False
 
     # Final save with correctness results
-    torch.save(results, save_path)
-    log.info(f"Final save with correctness: {len(results)} results to {save_path}")
+    save_path_file = Path(save_path) / f"results.pt"
+    torch.save(results, save_path_file)
+    log.info(f"Final save with correctness: {len(results)} results to {save_path_file}")
 
     # Print summary
     # Use the appropriate correctness key based on the mode
@@ -284,41 +324,25 @@ def run_evaluation(
 
     # Average statistics
     all_validities = []
-    all_redundancies = []
     all_steps = []
-
     for r in results:
         if "validity_scores" in r and r["validity_scores"]:
             all_validities.extend(r["validity_scores"])
-            all_redundancies.extend(r["redundancy_scores"])
             all_steps.append(len(r["steps"]))
 
     log.info(f"\nStep Statistics:")
     log.info(f"  - Avg steps per trajectory: {np.mean(all_steps):.1f}")
     log.info(f"  - Avg validity score: {np.mean(all_validities):.3f}")
-    log.info(f"  - Avg redundancy score: {np.mean(all_redundancies):.3f}")
-
-    return results
-
-
-def wandb_save_directory(directory_path):
-    import wandb
-
-    for file_name in os.listdir(directory_path):
-        full_path = os.path.join(directory_path, file_name)
-        if os.path.isfile(full_path):  # Make sure it's a file, not a directory
-            wandb.save(full_path)
 
 
 @hydra.main(
     version_base=None,
-    config_path="../config",
-    config_name="run_tts_eval",
+    config_path=None,
+    config_name=None,
 )
 def main(config):
     """Main evaluation function"""
 
-    print(config)
     output_dir = HydraConfig.get().runtime.output_dir
     log.info(f"Output directory: {output_dir}")
 
@@ -341,31 +365,7 @@ def main(config):
         wandb_save_directory(Path(output_dir) / ".hydra")
 
     # Set random seeds
-    random.seed(config.system.seed)
-    np.random.seed(config.system.seed)
-    torch.manual_seed(config.system.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(config.system.seed)
-        torch.cuda.manual_seed_all(config.system.seed)
-    log.info(f"Set random seed to {config.system.seed}")
-
-    # Extract dataset name and ReasonEval name for directory structure
-    dataset_name = (
-        config.dataset.dataset_path.split("/")[-1]
-        if "/" in config.dataset.dataset_path
-        else config.dataset.dataset_path
-    )
-    reasoneval_name = (
-        config.model.reasoneval_path.split("/")[-1]
-        if "/" in config.model.reasoneval_path
-        else config.model.reasoneval_path
-    )
-
-    # Create save paths with directory structure
-    save_dir = os.path.join(config.output.save_dir, dataset_name)
-    os.makedirs(save_dir, exist_ok=True)
-
-    save_path_validity = os.path.join(save_dir, f"{reasoneval_name}_validity.pt")
+    set_random_seeds(config.system.seed)
 
     # Load dataset
     log.info(
@@ -377,6 +377,8 @@ def main(config):
         split=config.dataset.dataset_split,
         cache_dir=config.system.hf_cache,
     )
+    if config.dataset.subset:
+        dataset = dataset.select(range(min(config.dataset.subset, len(dataset))))
 
     # Load model
     log.info(f"Loading model: {config.model.model_path}")
@@ -385,55 +387,33 @@ def main(config):
     base_model.eval()
     model = WhiteboxModel(base_model, tokenizer)
 
-    # Create generator
-    log.info(
-        f"Using device {config.system.device} for base model, {config.system.reasoneval_device} for ReasonEval"
+    # Create scorer
+    scorer = create_scorer(config, model)
+
+    # Create tts strategy
+    generator = create_tts_strategy(config, model, scorer)
+
+    # Load existing results if resuming
+    if config.output.resume:
+        results, processed_indices = load_existing_results(
+            Path(output_dir) / "results.pt", dataset
+        )
+    else:
+        results = []
+        processed_indices = set()
+
+    # Generate trajectories
+    results = generate_trajectories(
+        results, output_dir, generator, dataset, processed_indices
     )
 
-    # Determine batch size for generation
-    batch_size = (
-        config.generation.batch_size
-        if config.generation.batch_size
-        else config.generation.n
-    )
-    if config.generation.sequential_generation:
-        batch_size = 1
-        log.info("Using sequential generation (batch_size=1) to save memory")
-
-    elif batch_size < config.generation.n:
-        log.info(f"Using batch generation with batch_size={batch_size}")
-
-    generator = DirectOnlineBestOfNReasonEvalSeparate(
-        model=model,
-        reasoneval_model_path=config.model.reasoneval_path,
-        candidates_per_step=config.generation.n,
-        max_steps=config.generation.max_steps,
-        max_new_tokens=config.generation.max_new_tokens,
-        temperature=config.generation.temperature,
-        device=config.system.device,
-        reasoneval_device=config.system.reasoneval_device,
-        verbose=config.verbose,
-        generation_batch_size=batch_size,
-    )
-
-    # Process dataset
-    subset_size = (
-        min(config.dataset.subset, len(dataset))
-        if config.dataset.subset
-        else len(dataset)
-    )
-
-    run_evaluation(
-        generator,
-        dataset,
-        save_path_validity,
-        subset_size,
-        config.verbose,
-        resume=config.output.resume,
+    # Evaluate results
+    evaluate_results(
+        results=results,
         correctness_mode=config.output.correctness_mode,
         n_threads=config.output.n_threads,
-        annotation_prompt_type=config.output.annotation_prompt_type,
         prompt_file=config.dataset.prompt_file,
+        save_path=output_dir,
     )
 
 

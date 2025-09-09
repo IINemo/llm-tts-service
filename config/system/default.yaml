@@ -1,6 +1,5 @@
 # @package system
 
 device: "cuda:0"  # Device to use for base model
-reasoneval_device: "cuda:0"  # Device to use for ReasonEval model
 seed: 42  # Random seed
 hf_cache: null  # HuggingFace cache directory
