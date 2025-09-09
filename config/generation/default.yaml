@@ -2,5 +2,5 @@
 
 temperature: 0.7  # Generation temperature
 max_new_tokens: 250  # Max tokens per step
-batch_size: null  # Batch size for candidate generation (null = same as n)
+batch_size: 1  # Batch size for candidate generation (null = same as n)
 sequential_generation: false  # Generate candidates one by one to save memory

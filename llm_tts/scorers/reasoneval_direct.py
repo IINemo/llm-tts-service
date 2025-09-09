@@ -87,6 +87,8 @@ class StepsExtractor(StatCalculator):
             steps: list[Claim] = self.split_to_steps(
                 greedy_text, greedy_tokens, model.tokenizer
             )
+            print("steps", steps)
+            print('==================')
             claims.append(steps)
             claim_texts_concatenated += [c.claim_text for c in steps]
             claim_input_texts_concatenated += [input_text for c in steps]
@@ -646,7 +648,7 @@ class DirectReasonEvalScorerSeparate(DirectReasonEvalScorer):
     This allows running separate evaluations for validity-based and redundancy-based selection.
     """
 
-    def compute_validity_redundancy_scores(
+    def score_candidates(
         self, trajectory: str, candidates: List[str], **kwargs
     ) -> Tuple[List[List[float]], List[List[float]]]:
         """
@@ -686,13 +688,15 @@ class DirectReasonEvalScorerSeparate(DirectReasonEvalScorer):
             # Clean up memory after each candidate
             torch.cuda.empty_cache()
 
-        return all_validities, all_redundancies
+        return all_validities
 
     def _score_single_candidate_separate(
         self, question: str, trajectory: str, candidate: str
     ) -> Tuple[List[float], List[float]]:
         """Score a single candidate and return validity/redundancy separately"""
 
+        print("===================")
+        print(candidate)
         # Extract claims from candidate
         try:
             candidate_tokens = self.model.tokenize([candidate])

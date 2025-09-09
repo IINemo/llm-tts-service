@@ -16,7 +16,7 @@ scorer:
   type: reasoneval_direct
   model_path: "GAIR/ReasonEval-7B"
   device: cuda
-  batch_size: 10
+  batch_size: 1
   
 
 strategy:

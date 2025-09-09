@@ -76,7 +76,6 @@ class StepCandidateGenerator:
         inputs = self.model.tokenize([trajectory])
         input_length = inputs["input_ids"].shape[1]
 
-        print(self.device)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         # Create stopping criteria for batch generation
@@ -260,7 +259,7 @@ class StepCandidateGenerator:
             valid_candidates.append(candidate)
 
         # If no valid candidates, return at least one
-        print(f"valid_candidates: {valid_candidates}")
+        log.info(f"valid_candidates: {valid_candidates}")
         if not valid_candidates and candidates:
             valid_candidates = [candidates[0]]
 

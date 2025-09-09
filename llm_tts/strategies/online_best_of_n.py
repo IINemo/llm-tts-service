@@ -1,9 +1,10 @@
 import torch
-import logging
 from typing import List, Dict
 
 from llm_tts.step_generation import StepCandidateGenerator
 from llm_tts.step_detection import StepBoundaryDetector
+
+import logging
 
 log = logging.getLogger(__name__)
 
@@ -11,21 +12,17 @@ log = logging.getLogger(__name__)
 class DirectOnlineBestOfNReasonEvalSeparate:
     """
     Online best-of-n using ReasonEval with separate validity and redundancy evaluations.
-    
-    This runs the evaluation twice:
-    1. Once selecting based on validity (higher validity = better)
-    2. Once selecting based on redundancy (lower redundancy = better)
     """
     
     def __init__(
         self, 
         model,
         scorer,
-        candidates_per_step: int = 10,
-        max_steps: int = 20,
-        max_new_tokens: int = 350,
-        temperature: float = 0.7,
-        generation_batch_size: int = None
+        candidates_per_step: int,
+        max_steps: int,
+        max_new_tokens: int,
+        temperature: float,
+        generation_batch_size: int
     ):
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
@@ -63,15 +60,13 @@ class DirectOnlineBestOfNReasonEvalSeparate:
                 - steps: List of selected steps
                 - completed: Whether trajectory reached completion
         """
+
         trajectory = prompt
         selected_steps = []
         validity_scores = []
-        redundancy_scores = []
         
         for step_num in range(self.max_steps):
             log.info(f"\n=== Step {step_num} ===")
-            
-            log.info(f"Generating candidates with temperature={self.temperature}")
 
             # Generate candidates in batches if needed
             if self.generation_batch_size < self.candidates_per_step:
@@ -85,25 +80,14 @@ class DirectOnlineBestOfNReasonEvalSeparate:
                 log.info("No candidates generated, stopping")
                 break
             
-            # Score candidates with ReasonEval
-            all_validities = self.scorer(
+            # Score candidates 
+            all_validities = self.scorer.score_candidates(
                 trajectory,
                 [c.text for c in candidates]
             )
             
             # Aggregate scores for each candidate
-            candidate_validity_scores = []
-            for validities in zip(all_validities):
-                # Compute mean validity
-                if validities and len(validities) > 0:
-                    if hasattr(validities, 'mean'):
-                        validity_score = float(validities.mean())
-                    else:
-                        validity_score = float(sum(validities) / len(validities))
-                else:
-                    validity_score = 0.5
-                    
-                candidate_validity_scores.append(validity_score)
+            candidate_validity_scores = self._aggregate_scores(all_validities)
             
             # Log all candidates
             log.info(f"Generated {len(candidates)} candidates:")
@@ -113,12 +97,7 @@ class DirectOnlineBestOfNReasonEvalSeparate:
                 log.info(f"  [{i}] Validity: {val_score:.3f} | Text: '{candidate.text}'")
             
             # Select best candidate 
-            # Higher validity is better
-            best_idx = max(range(len(candidate_validity_scores)), 
-                            key=lambda i: candidate_validity_scores[i])
-            
-            selected_candidate = candidates[best_idx]
-            
+            best_idx, selected_candidate = self._select_best_candidate(candidates, candidate_validity_scores)
             log.info(f"Selected candidate {best_idx}")
             log.info(f"Text: {selected_candidate.text}")
             
@@ -143,7 +122,6 @@ class DirectOnlineBestOfNReasonEvalSeparate:
             "trajectory": trajectory,
             "steps": selected_steps,
             "validity_scores": validity_scores,
-            "redundancy_scores": redundancy_scores,
             "completed": len(selected_steps) > 0
         }
     
@@ -173,7 +151,6 @@ class DirectOnlineBestOfNReasonEvalSeparate:
                 batch_candidates = self.step_generator.generate_candidates(
                     trajectory
                 )
-                
                 if batch_candidates:
                     all_candidates.extend(batch_candidates)
                     
@@ -186,15 +163,30 @@ class DirectOnlineBestOfNReasonEvalSeparate:
         
         return all_candidates
     
-    def _generate_final_answer(self, trajectory: str, criterion: str) -> tuple:
-        """Generate and select best final answer based on criterion"""
-        
-        # Generate answer candidates (without step detection)
-        inputs = self.model.tokenize([trajectory])
-        input_ids = inputs['input_ids'].to(self.model.device)
-        attention_mask = inputs['attention_mask'].to(self.model.device)
-        
-        # Generate answer candidates in batches if needed
+    def _aggregate_scores(self, all_validities) -> List[float]:
+        """Aggregate validity scores from multiple evaluations"""
+        scores = []
+        for validities in all_validities:
+            # Compute mean validity
+            if validities and len(validities) > 0:
+                if hasattr(validities, 'mean'):
+                    validity_score = float(validities.mean())
+                else:
+                    validity_score = float(sum(validities) / len(validities))
+            else:
+                validity_score = 0.5
+                
+            scores.append(validity_score)
+        return scores
+    
+    def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
+        """Select the best candidate based on scores"""
+        # Higher validity is better
+        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        return best_idx, candidates[best_idx]
+    
+    def _generate_answer_outputs(self, input_ids, attention_mask):
+        """Generate answer outputs in batches if needed"""
         if self.generation_batch_size < self.candidates_per_step:
             outputs = []
             num_batches = (self.candidates_per_step + self.generation_batch_size - 1) // self.generation_batch_size
@@ -208,7 +200,7 @@ class DirectOnlineBestOfNReasonEvalSeparate:
                     batch_outputs = self.step_generator.model.model.generate(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
-                        max_new_tokens=1024,
+                        max_new_tokens=self.max_new_tokens,
                         do_sample=True,
                         temperature=self.temperature,
                         num_return_sequences=batch_size,
@@ -224,20 +216,38 @@ class DirectOnlineBestOfNReasonEvalSeparate:
                 outputs = self.step_generator.model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
-                    max_new_tokens=1024,
+                    max_new_tokens=self.max_new_tokens,
                     do_sample=True,
                     temperature=self.temperature,
                     num_return_sequences=self.candidates_per_step,
                     pad_token_id=self.step_generator.tokenizer.eos_token_id,
                     eos_token_id=self.step_generator.tokenizer.eos_token_id
                 )
-        
-        # Extract answer candidates
+        return outputs
+    
+    def _extract_answer_candidates(self, outputs, input_ids):
+        """Extract answer candidates from model outputs"""
         answer_candidates = []
         for seq in outputs:
             new_tokens = seq[input_ids.shape[1]:]
             answer_text = self.step_generator.tokenizer.decode(new_tokens, skip_special_tokens=True)
             answer_candidates.append(answer_text)
+            
+        return answer_candidates
+    
+    def _generate_final_answer(self, trajectory: str) -> tuple:
+        """Generate and select best final answer based on criterion"""
+        
+        # Generate answer candidates (without step detection)
+        inputs = self.model.tokenize([trajectory])
+        input_ids = inputs['input_ids'].to(self.model.device)
+        attention_mask = inputs['attention_mask'].to(self.model.device)
+        
+        # Generate answer candidates in batches if needed
+        outputs = self._generate_answer_outputs(input_ids, attention_mask)
+        
+        # Extract answer candidates
+        answer_candidates = self._extract_answer_candidates(outputs, input_ids)
         
         # Score answer candidates
         all_validities = self.scorer.compute_scores(
@@ -246,22 +256,14 @@ class DirectOnlineBestOfNReasonEvalSeparate:
         )
         
         # Aggregate scores
-        answer_validity_scores = []
-        for validities in zip(all_validities):
-            if validities and len(validities) > 0:
-                validity_score = float(sum(validities) / len(validities))
-            else:
-                validity_score = 0.5
-                
-            answer_validity_scores.append(validity_score)
+        answer_validity_scores = self._aggregate_scores(all_validities)
         
         # Select best answer based on criterion
-        best_idx = max(range(len(answer_validity_scores)), 
-                        key=lambda i: answer_validity_scores[i])
+        best_idx, _ = self._select_best_candidate(answer_candidates, answer_validity_scores)
         
         log.info(f"Generated {len(answer_candidates)} answer candidates")
-        log.info(f"Selected answer {best_idx} based on {criterion}")
-        log.info(f"Validity: {answer_validity_scores[best_idx]:.3f}, ")
+        log.info(f"Selected answer {best_idx}")
+        log.info(f"Validity: {answer_validity_scores[best_idx]:.3f}")
         
         return answer_candidates[best_idx]
     
