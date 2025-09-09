@@ -126,16 +126,15 @@ def run_single_criterion(
     for i in tqdm(range(subset_size), desc=f"Generating trajectories"):
         # Skip if already processed
         if i in processed_indices:
-            if verbose:
-                log.info(f"Skipping sample {i} (already processed)")
+            log.info(f"Skipping sample {i} (already processed)")
+
             continue
             
         sample = dataset[i]
         
-        if verbose:
-            log.info(f"\n{'='*60}")
-            log.info(f"Sample {i+1}/{subset_size}")
-            log.info(f"Question: {sample['question'][:200]}...")
+        log.info(f"\n{'='*60}")
+        log.info(f"Sample {i+1}/{subset_size}")
+        log.info(f"Question: {sample['question'][:200]}...")
         
         try:
             # Generate trajectory
@@ -160,13 +159,9 @@ def run_single_criterion(
                 "completed": result["completed"]
             })
             
-            if verbose:
-                log.info(f"Generated: {generated_text}")
-                log.info(f"Num steps: {len(result['steps'])}")
-                if result['validity_scores']:
-                    log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
-                if result['redundancy_scores']:
-                    log.info(f"Avg redundancy: {np.mean(result['redundancy_scores']):.3f}")
+            log.info(f"Generated: {generated_text}")
+            log.info(f"Num steps: {len(result['steps'])}")
+            log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
             
         except Exception as e:
             log.error(f"Error processing sample {i}: {e}")
@@ -195,88 +190,68 @@ def run_single_criterion(
     log.info(f"Phase 2: Checking correctness")
     log.info(f"{'='*60}")
     
-    if correctness_mode == "exact_match":
-        # Use exact match checking
-        for i, result in enumerate(tqdm(results, desc=f"Checking correctness (exact match, {criterion})")):
-            # Skip if this result has an error or already has correctness checked
-            if "error" in result or "is_correct_exact_match" in result:
-                continue
-                
-            try:
-                is_correct = _is_correct_answer(result["generated_answer"], result["gold_answer"])
-                result["is_correct_exact_match"] = is_correct
-                
-                if verbose and i % 10 == 0:  # Log every 10th for less clutter
-                    log.info(f"\nSample {result['index']}:")
-                    log.info(f"Generated answer: {result['generated_answer'][:100]}...")
-                    log.info(f"Gold answer: {result['gold_answer'][:100]}...")
-                    log.info(f"Correct: {is_correct}")
-            except Exception as e:
-                log.error(f"Error checking correctness for sample {result['index']}: {e}")
-                result["is_correct_exact_match"] = False
-                
-    elif correctness_mode == "deepseek":
-        # Use DeepSeek verification
-        log.info(f"Using DeepSeek verification with {n_threads} threads")
+    # Use DeepSeek verification
+    log.info(f"Using DeepSeek verification with {n_threads} threads")
+    
+    # Load prompt template and ensure compatibility
+    prompt_template = load_prompt_template(prompt_file) if prompt_file else "{q}"
+    if "{question}" in prompt_template:
+        prompt_template = prompt_template.replace("{question}", "{q}")
+    
+    # print(f'Using prompt template:\n{prompt_template}')
+    # import pdb; pdb.set_trace()
+    # Create annotator
+    annotator = Annotator(
+        prompt=prompt_template,
+        n_threads=n_threads,
+        cache_path="~/.cache",
+        annotation_prompt_type=annotation_prompt_type
+    )
+    
+    # Prepare data for batch processing
+    problems = []
+    solutions = []
+    gold_answers = []
+    result_indices = []
+    
+    # always process all results, since we have deepseek cache.
+    for i, result in enumerate(results):
+        if "error" not in result:
+            problems.append(result["question"])
+            solutions.append(result["generated_answer"])
+            gold_answers.append(result["gold_answer"])
+            result_indices.append(i)
+    
+    if problems:
+        log.info(f"Verifying {len(problems)} solutions with DeepSeek ({annotation_prompt_type} prompt)...")
         
-        # Load prompt template and ensure compatibility
-        prompt_template = load_prompt_template(prompt_file) if prompt_file else "{q}"
-        if "{question}" in prompt_template:
-            prompt_template = prompt_template.replace("{question}", "{q}")
-        
-        # print(f'Using prompt template:\n{prompt_template}')
-        # import pdb; pdb.set_trace()
-        # Create annotator
-        annotator = Annotator(
-            prompt=prompt_template,
-            n_threads=n_threads,
-            cache_path="~/.cache",
-            annotation_prompt_type=annotation_prompt_type
-        )
-        
-        # Prepare data for batch processing
-        problems = []
-        solutions = []
-        gold_answers = []
-        result_indices = []
-        
-        # always process all results, since we have deepseek cache.
-        for i, result in enumerate(results):
-            if "error" not in result:
-                problems.append(result["question"])
-                solutions.append(result["generated_answer"])
-                gold_answers.append(result["gold_answer"])
-                result_indices.append(i)
-        
-        if problems:
-            log.info(f"Verifying {len(problems)} solutions with DeepSeek ({annotation_prompt_type} prompt)...")
+        # Get annotations from DeepSeek
+        try:
+            annotations = annotator(problems, solutions, gold_answers)
             
-            # Get annotations from DeepSeek
-            try:
-                annotations = annotator(problems, solutions, gold_answers)
-                
-                # Update results with correctness
-                for idx, annotation in zip(result_indices, annotations):
-                    if np.isnan(annotation):
-                        log.warning(f"DeepSeek returned unclear result for sample {results[idx]['index']}, marking as incorrect")
-                        results[idx]["is_correct_deepseek"] = False
-                    else:
-                        results[idx]["is_correct_deepseek"] = (annotation == 0)  # 0 = correct, 1 = incorrect
-                    
-                    if verbose and (idx - result_indices[0]) % 10 == 0:
-                        log.info(f"\nSample {results[idx]['index']}:")
-                        log.info(f"DeepSeek annotation: {annotation}")
-                        log.info(f"Correct: {results[idx]['is_correct_deepseek']}")
-                        
-            except Exception as e:
-                log.error(f"Error during DeepSeek verification: {e}")
-                # Fall back to marking all as incorrect
-                for idx in result_indices:
+            # Update results with correctness
+            for idx, annotation in zip(result_indices, annotations):
+                if np.isnan(annotation):
+                    log.warning(f"DeepSeek returned unclear result for sample {results[idx]['index']}, marking as incorrect")
                     results[idx]["is_correct_deepseek"] = False
+                else:
+                    results[idx]["is_correct_deepseek"] = (annotation == 0)  # 0 = correct, 1 = incorrect
+                
+                if verbose and (idx - result_indices[0]) % 10 == 0:
+                    log.info(f"\nSample {results[idx]['index']}:")
+                    log.info(f"DeepSeek annotation: {annotation}")
+                    log.info(f"Correct: {results[idx]['is_correct_deepseek']}")
+                    
+        except Exception as e:
+            log.error(f"Error during DeepSeek verification: {e}")
+            # Fall back to marking all as incorrect
+            for idx in result_indices:
+                results[idx]["is_correct_deepseek"] = False
     
     # Final save with correctness results
     torch.save(results, save_path)
     log.info(f"Final save with correctness: {len(results)} results to {save_path}")
+    
     
     # Print summary
     # Use the appropriate correctness key based on the mode
@@ -306,11 +281,10 @@ def run_single_criterion(
             all_redundancies.extend(r["redundancy_scores"])
             all_steps.append(len(r["steps"]))
     
-    if all_validities:
-        log.info(f"\nStep Statistics:")
-        log.info(f"  - Avg steps per trajectory: {np.mean(all_steps):.1f}")
-        log.info(f"  - Avg validity score: {np.mean(all_validities):.3f}")
-        log.info(f"  - Avg redundancy score: {np.mean(all_redundancies):.3f}")
+    log.info(f"\nStep Statistics:")
+    log.info(f"  - Avg steps per trajectory: {np.mean(all_steps):.1f}")
+    log.info(f"  - Avg validity score: {np.mean(all_validities):.3f}")
+    log.info(f"  - Avg redundancy score: {np.mean(all_redundancies):.3f}")
     
     return results
 

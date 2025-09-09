@@ -10,9 +10,9 @@ from tqdm import tqdm
 from datasets import Dataset
 from lm_polygraph import WhiteboxModel
 
-from llm_tts.step_detections import StepBoundaryDetector
-from online_bestofn.step_generation import StepCandidateGenerator
-from online_bestofn.scorers.reasoneval_direct import DirectReasonEvalScorerSeparate
+from llm_tts.step_detection import StepBoundaryDetector
+from llm_tts.step_generation import StepCandidateGenerator
+from llm_tts.scorers.reasoneval_direct import DirectReasonEvalScorerSeparate
 from online_bestofn.direct_online_bestofn import _is_correct_answer
 
 log = logging.getLogger(__name__)
