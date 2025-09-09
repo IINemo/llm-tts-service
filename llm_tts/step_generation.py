@@ -61,7 +61,7 @@ class StepCandidateGenerator:
         self.top_p = top_p
         self.top_k = top_k
         self.max_new_tokens = max_new_tokens
-        self.device = model.device
+        self.device = model.device()
 
     def generate_candidates(
         self, trajectory: str, verbose: bool = False
@@ -77,6 +77,7 @@ class StepCandidateGenerator:
         inputs = self.model.tokenize([trajectory])
         input_length = inputs["input_ids"].shape[1]
 
+        print(self.device)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         # Create stopping criteria for batch generation

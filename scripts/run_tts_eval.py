@@ -6,7 +6,7 @@ import random
 import numpy as np
 import torch
 from tqdm import tqdm
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 import traceback
 from pathlib import Path
 import hydra
@@ -130,7 +130,7 @@ def create_scorer(config, model):
 
 def create_tts_strategy(config, model, scorer):
     if config.strategy.type == "direct_online_best_of_n_reason_eval_separate":
-        generator = DirectOnlineBestOfNReasonEvalSeparate(
+        strategy = DirectOnlineBestOfNReasonEvalSeparate(
             model=model,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
@@ -139,23 +139,26 @@ def create_tts_strategy(config, model, scorer):
             temperature=config.generation.temperature,
             generation_batch_size=config.generation.batch_size,
         )
+
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
 
-    return generator
+    return strategy
 
 
 def generate_trajectories(
     results,
     save_path,
-    generator: DirectOnlineBestOfNReasonEvalSeparate,
-    dataset,
+    strategy: DirectOnlineBestOfNReasonEvalSeparate,
+    dataset: Dataset,
     processed_indices: set,
 ):
     # Phase 1: Generate trajectories (without checking correctness)
     log.info(f"\n{'='*60}")
     log.info(f"Phase 1: Generating trajectories")
     log.info(f"{'='*60}")
+
+    save_path_file = Path(save_path) / f"results.pt"
 
     subset_size = len(dataset)
     for i in tqdm(range(subset_size), desc=f"Generating trajectories"):
@@ -173,7 +176,7 @@ def generate_trajectories(
 
         try:
             # Generate trajectory
-            result = generator.generate_trajectory(sample["question"])
+            result = strategy.generate_trajectory(sample["question"])
 
             # Extract generated answer (but don't check correctness yet)
             generated_text = result["trajectory"]
@@ -217,12 +220,10 @@ def generate_trajectories(
 
         # Save periodically
         if len(results) % 10 == 0:
-            save_path_file = Path(save_path) / f"results.pt"
             torch.save(results, save_path_file)
             log.info(f"Saved {len(results)} results to {save_path_file}")
 
     # Final save after generation
-    save_path_file = Path(save_path) / f"results.pt"
     torch.save(results, save_path_file)
     log.info(f"Final save after generation: {len(results)} results to {save_path_file}")
 
@@ -251,7 +252,9 @@ def evaluate_results(
 
     # Create annotator
     annotator = DeepSeekAnnotator(
-        prompt=prompt_template, n_threads=n_threads, cache_path="~/.cache"
+        prompt=prompt_template,
+        n_threads=n_threads,
+        cache_path=os.path.expanduser("~/.cache"),
     )
 
     # Prepare data for batch processing
@@ -404,7 +407,11 @@ def main(config):
 
     # Generate trajectories
     results = generate_trajectories(
-        results, output_dir, generator, dataset, processed_indices
+        results=results,
+        save_path=output_dir,
+        strategy=generator,
+        dataset=dataset,
+        processed_indices=processed_indices,
     )
 
     # Evaluate results
