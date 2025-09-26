@@ -1,0 +1,22 @@
+# @package _global_
+
+defaults:
+  - dataset: gsm8k
+  - provider: openrouter/default
+  - strategy: default
+  - prompts: default
+
+output:
+  out_path: uncert_api_results.jsonl
+
+system:
+  seed: 0
+
+# Step marker patterns configured in main YAML
+# Use "{n}" placeholder for the next step number. The detector will also
+# add relaxed and whitespace-prefixed variants internally.
+step_marker_patterns:
+  - "## Step {n}:"
+  - "Step {n}:"
+  - "- Step {n}:"
+

@@ -1,0 +1,18 @@
+# @package step_markers
+
+model_patterns:
+  - model_regex: "meta-llama/.+"
+    patterns:
+      - "## Step "
+      - "Step "
+
+  - model_regex: "deepseek-ai/.+"
+    patterns:
+      - "Step "
+      - "- Step "
+
+  - model_regex: ".*"
+    patterns:
+      - "Step {n}:"
+
+

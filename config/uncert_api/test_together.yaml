@@ -1,0 +1,35 @@
+# @package _global_
+
+defaults:
+  - dataset: gsm8k
+  - provider: together/default  
+  - step_markers: default
+  - strategy: test_minimal
+
+dataset:
+  subset_frac: 0.001
+
+provider:
+  type: together
+  model: meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
+ 
+prompt_paths:
+  gsm8k:
+    base: config/prompts/uncert_base_prompt.txt
+    cot: config/prompts/uncert_cot_short_prompt.txt
+  
+strategy:
+  candidates_per_step: 3
+  max_steps: 20
+  max_new_tokens: 256
+  temperature: 0.0
+  uncertainty_metric: pd
+  uncertainty_threshold: 0.2
+  uncertainty_top_k: 2
+
+output:
+  out_path: test_together_result.jsonl
+
+system:
+  seed: 42
+

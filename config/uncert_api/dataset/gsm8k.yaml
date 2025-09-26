@@ -1,0 +1,8 @@
+# @package dataset
+
+name: gsm8k
+subset_frac: 0.05
+hf_path: gsm8k
+hf_config: main
+split: test
+

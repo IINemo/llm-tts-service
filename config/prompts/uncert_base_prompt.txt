@@ -1,0 +1,4 @@
+Question: {q}
+Provide the answer in the form '<Answer>: <text>'.
+
+## Step 1:

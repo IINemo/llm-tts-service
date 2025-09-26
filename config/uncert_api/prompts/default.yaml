@@ -1,0 +1,11 @@
+# @package prompts
+
+gsm8k:
+  base_template_path: config/prompts/gsm8k_base_prompt.txt
+  cot_template_path: config/prompts/gsm8k_cot_prompt.txt
+
+hotpotqa:
+  base_template_path: config/prompts/hotpotqa_base_prompt.txt
+  cot_template_path: config/prompts/hotpotqa_cot_prompt.txt
+
+
