@@ -2,6 +2,6 @@ Use the following passages to answer the question. Cite facts as you go.
 - {context}
 
 Question: {q}
-Let's solve this step by step. Think first, then provide the final answer in the form '<Answer>: <text>'.
+Let's solve this step by step. Provide the final answer in the form '<Answer>: <text>'.
 
 ## Step 1:
