@@ -123,31 +123,6 @@ class StepBoundaryDetector:
         return step_text
 
 
-class OnlineStepStoppingCriteria(StoppingCriteria):
-    """Stopping criteria for online step generation"""
-    
-    def __init__(
-        self, 
-        tokenizer,
-        start_length: int,
-        detector: StepBoundaryDetector
-    ):
-        self.tokenizer = tokenizer
-        self.start_length = start_length
-        self.detector = detector
-        
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> bool:
-        """Check if generation should stop for current step"""
-        # Get generated tokens since start
-        generated_ids = input_ids[0][self.start_length:]
-        generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
-        
-        return self.detector.is_step_complete(
-            generated_text, 
-            token_count=len(generated_ids)
-        )
-
-
 class BatchStepStoppingCriteria(StoppingCriteria):
     """Stopping criteria for batch step generation"""
     
@@ -180,21 +155,3 @@ class BatchStepStoppingCriteria(StoppingCriteria):
                     
         # Stop when all sequences are finished
         return all(self.finished)
-
-
-class StepExtractionResult:
-    """Result of step extraction from generation"""
-    
-    def __init__(
-        self,
-        step_text: str,
-        is_complete: bool,
-        is_trajectory_complete: bool,
-        token_ids: List[int],
-        raw_text: str
-    ):
-        self.step_text = step_text
-        self.is_complete = is_complete
-        self.is_trajectory_complete = is_trajectory_complete  
-        self.token_ids = token_ids
-        self.raw_text = raw_text

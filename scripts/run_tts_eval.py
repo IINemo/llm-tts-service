@@ -17,7 +17,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from lm_polygraph import WhiteboxModel
 
 from llm_tts.strategies import (
-    DirectOnlineBestOfNReasonEvalSeparate,
+    OnlineBestOfN,
 )
 from llm_tts.deepseek_annotator import DeepSeekAnnotator
 from llm_tts.scorers.reasoneval_direct import DirectReasonEvalScorerSeparate
@@ -130,7 +130,7 @@ def create_scorer(config, model):
 
 def create_tts_strategy(config, model, scorer):
     if config.strategy.type == "direct_online_best_of_n_reason_eval_separate":
-        strategy = DirectOnlineBestOfNReasonEvalSeparate(
+        strategy = OnlineBestOfN(
             model=model,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
@@ -149,7 +149,7 @@ def create_tts_strategy(config, model, scorer):
 def generate_trajectories(
     results,
     save_path,
-    strategy: DirectOnlineBestOfNReasonEvalSeparate,
+    strategy: OnlineBestOfN,
     dataset: Dataset,
     processed_indices: set,
 ):
@@ -193,8 +193,6 @@ def generate_trajectories(
                     "generated_answer": generated_text,
                     "steps": result["steps"],
                     "validity_scores": result["validity_scores"],
-                    "redundancy_scores": result["redundancy_scores"],
-                    "criterion_used": result["criterion_used"],
                     "completed": result["completed"],
                 }
             )

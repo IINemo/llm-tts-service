@@ -62,15 +62,10 @@ class StepCandidateGenerator:
         self.max_new_tokens = max_new_tokens
         self.device = model.device()
 
-    def generate_candidates(
-        self, trajectory: str, verbose: bool = False
-    ) -> List[StepCandidate]:
+    def generate_candidates(self, trajectory: str) -> List[StepCandidate]:
         """Generate N candidate next steps from current trajectory"""
 
-        if verbose:
-            log.info(
-                f"Generating {self.candidates_per_step} candidates from trajectory"
-            )
+        log.info(f"Generating {self.candidates_per_step} candidates from trajectory")
 
         # Tokenize current trajectory
         inputs = self.model.tokenize([trajectory])
@@ -103,16 +98,15 @@ class StepCandidateGenerator:
                 "eos_token_id": self.model.tokenizer.eos_token_id,
             }
 
-            if verbose:
-                log.info(
-                    f"Generation params: do_sample={gen_params['do_sample']}, temp={gen_params['temperature']}, top_p={gen_params['top_p']}, num_return_sequences={gen_params['num_return_sequences']}"
-                )
-                log.info(
-                    f"Model generation_parameters.do_sample: {self.model.generation_parameters.do_sample}"
-                )
-                log.info(
-                    f"Model generation_parameters.temperature: {self.model.generation_parameters.temperature}"
-                )
+            log.info(
+                f"Generation params: do_sample={gen_params['do_sample']}, temp={gen_params['temperature']}, top_p={gen_params['top_p']}, num_return_sequences={gen_params['num_return_sequences']}"
+            )
+            log.info(
+                f"Model generation_parameters.do_sample: {self.model.generation_parameters.do_sample}"
+            )
+            log.info(
+                f"Model generation_parameters.temperature: {self.model.generation_parameters.temperature}"
+            )
 
             # Override model's default generation parameters to ensure sampling
             old_do_sample = self.model.generation_parameters.do_sample
@@ -125,10 +119,9 @@ class StepCandidateGenerator:
             self.model.generation_parameters.top_p = self.top_p
             self.model.generation_parameters.top_k = self.top_k
 
-            if verbose:
-                log.info(
-                    f"After override - do_sample: {self.model.generation_parameters.do_sample}, temp: {self.model.generation_parameters.temperature}"
-                )
+            log.info(
+                f"After override - do_sample: {self.model.generation_parameters.do_sample}, temp: {self.model.generation_parameters.temperature}"
+            )
 
             with torch.no_grad():
                 outputs = self.model.generate(**inputs, **gen_params)
@@ -140,8 +133,8 @@ class StepCandidateGenerator:
             self.model.generation_parameters.top_k = old_top_k
 
             generation_time = time.time() - start_time
-            if verbose:
-                log.info(f"Generated candidates in {generation_time:.2f}s")
+
+            log.info(f"Generated candidates in {generation_time:.2f}s")
 
         except torch.OutOfMemoryError as e:
             log.error(f"CUDA OOM during candidate generation: {e}")
@@ -186,81 +179,3 @@ class StepCandidateGenerator:
             candidates.append(candidate)
 
         return candidates
-
-    def _generate_single_candidate(
-        self, trajectory: str, verbose: bool = False
-    ) -> List[StepCandidate]:
-        """Fallback to single candidate generation on OOM"""
-        if verbose:
-            log.warning(
-                "Falling back to single candidate generation due to memory constraints"
-            )
-
-        inputs = self.model.tokenize([trajectory])
-        input_length = inputs["input_ids"].shape[1]
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=self.max_new_tokens,
-                do_sample=True,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k,
-                num_return_sequences=1,
-                pad_token_id=self.model.tokenizer.eos_token_id,
-                eos_token_id=self.model.tokenizer.eos_token_id,
-            )
-
-        new_tokens = outputs[0][input_length:]
-        # Decode with special tokens to preserve EOS detection
-        raw_text_with_special = self.model.tokenizer.decode(
-            new_tokens, skip_special_tokens=False
-        )
-        raw_text = self.model.tokenizer.decode(new_tokens, skip_special_tokens=True)
-        step_text = self.detector.extract_step_text(raw_text)
-
-        # Check if EOS token was reached
-        # import pdb; pdb.set_trace()
-        reached_eos = (
-            (new_tokens[-1].item() == self.model.tokenizer.eos_token_id)
-            if len(new_tokens) > 0
-            else False
-        )
-
-        candidate = StepCandidate(
-            text=step_text,
-            token_ids=new_tokens.tolist(),
-            is_complete=self.detector.is_step_complete(raw_text),
-            is_trajectory_complete=self.detector.is_trajectory_complete(
-                raw_text, reached_eos=reached_eos
-            ),
-            raw_text=raw_text,
-        )
-        # import pdb; pdb.set_trace()
-        return [candidate]
-
-    def filter_valid_candidates(
-        self, candidates: List[StepCandidate]
-    ) -> List[StepCandidate]:
-        """Filter out invalid or empty candidates"""
-        valid_candidates = []
-
-        for candidate in candidates:
-            # Skip empty or very short candidates
-            if len(candidate.text.strip()) < 3:
-                continue
-
-            # Skip candidates that are just punctuation or whitespace
-            if not any(c.isalnum() for c in candidate.text):
-                continue
-
-            valid_candidates.append(candidate)
-
-        # If no valid candidates, return at least one
-        log.info(f"valid_candidates: {valid_candidates}")
-        if not valid_candidates and candidates:
-            valid_candidates = [candidates[0]]
-
-        return valid_candidates

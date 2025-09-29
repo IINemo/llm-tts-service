@@ -15,7 +15,7 @@ verbose: false
 scorer:
   type: reasoneval_direct
   model_path: "GAIR/ReasonEval-7B"
-  device: cuda
+  device: cuda:1
   batch_size: 1
   
 

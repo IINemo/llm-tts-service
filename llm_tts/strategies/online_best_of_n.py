@@ -3,15 +3,16 @@ from typing import List, Dict
 
 from llm_tts.step_generation import StepCandidateGenerator
 from llm_tts.step_detection import StepBoundaryDetector
+from .strategy_base import StrategyBase
 
 import logging
 
 log = logging.getLogger(__name__)
 
 
-class DirectOnlineBestOfNReasonEvalSeparate:
+class OnlineBestOfN(StrategyBase):
     """
-    Online best-of-n using ReasonEval with separate validity and redundancy evaluations.
+    Greedy online best-of-n strategy.
     """
     
     def __init__(

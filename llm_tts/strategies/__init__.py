@@ -1,1 +1,1 @@
-from .online_best_of_n import DirectOnlineBestOfNReasonEvalSeparate
+from .online_best_of_n import OnlineBestOfN

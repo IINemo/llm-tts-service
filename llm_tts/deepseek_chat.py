@@ -77,7 +77,7 @@ class DeepSeekChat:
                 return openai.OpenAI(base_url=self.api_base, api_key=self.api_key).chat.completions.create(**chat_args)
             except Exception as e:
                 sleep_time = self.wait_times[i]
-                log.info(
+                log.warning(
                     f"Request failed with exception: {e}. Retry #{i}/5 after {sleep_time} seconds."
                 )
                 time.sleep(sleep_time)
