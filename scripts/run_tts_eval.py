@@ -19,7 +19,7 @@ from lm_polygraph import WhiteboxModel
 from llm_tts.strategies import (
     OnlineBestOfN,
 )
-from llm_tts.deepseek_annotator import DeepSeekAnnotator
+from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
 from llm_tts.scorers.reasoneval_direct import DirectReasonEvalScorerSeparate
 
 
@@ -84,6 +84,7 @@ def load_existing_results(save_path: str, dataset):
     except Exception as e:
         if "Sample mismatch" in str(e):
             raise  # Re-raise validation errors
+        
         log.warning(f"Failed to load existing results: {e}")
         results = []
         processed_indices = set()
@@ -229,29 +230,32 @@ def generate_trajectories(
 
 
 def evaluate_results(
+    config,
     results,
-    correctness_mode: str,
-    n_threads: int,
     save_path: str,
-    prompt_file: str = None,
 ):
+    correctness_mode=config.output.correctness_mode
+    prompt_file=config.dataset.prompt_file
+
     # Phase 2: Check correctness for all results
     log.info(f"\n{'='*60}")
     log.info(f"Phase 2: Checking correctness")
     log.info(f"{'='*60}")
 
     # Use DeepSeek verification
-    log.info(f"Using DeepSeek verification with {n_threads} threads")
+    log.info(f"Using DeepSeek verification with {config.evaluator.n_threads} threads")
 
     # Load prompt template and ensure compatibility
     prompt_template = load_prompt_template(prompt_file) if prompt_file else "{q}"
     if "{question}" in prompt_template:
         prompt_template = prompt_template.replace("{question}", "{q}")
 
-    # Create annotator
-    annotator = DeepSeekAnnotator(
+    # Create evaluator
+    evaluator = EvaluatorGoldStandard(
         prompt=prompt_template,
-        n_threads=n_threads,
+        base_url=config.evaluator.base_url,
+        model=config.evaluator.model,
+        n_threads=config.evaluator.n_threads,
         cache_path=os.path.expanduser("~/.cache"),
     )
 
@@ -274,7 +278,7 @@ def evaluate_results(
 
         # Get annotations from DeepSeek
         try:
-            annotations = annotator(problems, solutions, gold_answers)
+            annotations = evaluator(problems, solutions, gold_answers)
 
             # Update results with correctness
             for idx, annotation in zip(result_indices, annotations):
@@ -414,10 +418,8 @@ def main(config):
 
     # Evaluate results
     evaluate_results(
+        config=config,
         results=results,
-        correctness_mode=config.output.correctness_mode,
-        n_threads=config.output.n_threads,
-        prompt_file=config.dataset.prompt_file,
         save_path=output_dir,
     )
 

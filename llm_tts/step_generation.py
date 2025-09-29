@@ -7,8 +7,10 @@ from typing import List, Optional
 from transformers import StoppingCriteriaList
 import logging
 import time
+from dataclasses import dataclass
 
 from lm_polygraph import WhiteboxModel
+
 from .step_detection import (
     StepBoundaryDetector,
     BatchStepStoppingCriteria,
@@ -17,6 +19,7 @@ from .step_detection import (
 log = logging.getLogger(__name__)
 
 
+@dataclass
 class StepCandidate:
     """Represents a candidate next step in trajectory"""
 

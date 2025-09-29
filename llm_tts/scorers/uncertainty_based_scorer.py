@@ -1,9 +1,9 @@
-from .base import StepScorer, CandidateScore
+from .step_scorer_base import StepScorerBase, CandidateScore
 from typing import List
 from abc import abstractmethod
 
 
-class UncertaintyBasedScorer(StepScorer):
+class UncertaintyBasedScorer(StepScorerBase):
     """Base class for uncertainty-based step scoring (lower uncertainty = higher score)"""
 
     def __init__(self, name: str, invert_scores: bool = True):

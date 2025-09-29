@@ -17,9 +17,13 @@ scorer:
   model_path: "GAIR/ReasonEval-7B"
   device: cuda:1
   batch_size: 1
-  
+
+evaluator:
+  base_url: https://api.deepseek.com/v1
+  model: deepseek-reasoner
+  n_threads: 1
 
 strategy:
   type: direct_online_best_of_n_reason_eval_separate
-  candidates_per_step: 10
-  max_steps: 20
+  candidates_per_step: 3
+  max_steps: 3
