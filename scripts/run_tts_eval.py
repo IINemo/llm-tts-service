@@ -234,7 +234,6 @@ def evaluate_results(
     results,
     save_path: str,
 ):
-    correctness_mode=config.output.correctness_mode
     prompt_file=config.dataset.prompt_file
 
     # Phase 2: Check correctness for all results
@@ -286,22 +285,22 @@ def evaluate_results(
                     log.warning(
                         f"DeepSeek returned unclear result for sample {results[idx]['index']}, marking as incorrect"
                     )
-                    results[idx]["is_correct_deepseek"] = False
+                    results[idx]["is_correct"] = False
                 else:
-                    results[idx]["is_correct_deepseek"] = (
+                    results[idx]["is_correct"] = (
                         annotation == 0
                     )  # 0 = correct, 1 = incorrect
 
                 if (idx - result_indices[0]) % 10 == 0:
                     log.info(f"\nSample {results[idx]['index']}:")
                     log.info(f"DeepSeek annotation: {annotation}")
-                    log.info(f"Correct: {results[idx]['is_correct_deepseek']}")
+                    log.info(f"Correct: {results[idx]['is_correct']}")
 
         except Exception as e:
             log.error(f"Error during DeepSeek verification: {e}")
             # Fall back to marking all as incorrect
             for idx in result_indices:
-                results[idx]["is_correct_deepseek"] = False
+                results[idx]["is_correct"] = False
 
     # Final save with correctness results
     save_path_file = Path(save_path) / f"results.pt"
@@ -309,18 +308,15 @@ def evaluate_results(
     log.info(f"Final save with correctness: {len(results)} results to {save_path_file}")
 
     # Print summary
-    # Use the appropriate correctness key based on the mode
-    correctness_key = f"is_correct_{correctness_mode}"
-    correct = sum(r.get(correctness_key, False) for r in results)
+    correct = sum(r.get("is_correct", False) for r in results)
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
 
     log.info(f"\nSummary:")
-    log.info(f"  - Correctness mode: {correctness_mode}")
     log.info(f"  - Total samples: {len(results)}")
     log.info(f"  - Completed: {completed} ({completed/len(results):.1%})")
     log.info(
-        f"  - Correct ({correctness_mode}): {correct} ({correct/len(results):.1%})"
+        f"  - Correct: {correct} ({correct/len(results):.1%})"
     )
     log.info(f"  - Errors: {errors}")
 
