@@ -17,7 +17,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from lm_polygraph import WhiteboxModel
 
 from llm_tts.strategies import (
-    OnlineBestOfN,
+    StrategyOnlineBestOfN,
 )
 from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
 from llm_tts.scorers.reasoneval_direct import DirectReasonEvalScorerSeparate
@@ -131,7 +131,7 @@ def create_scorer(config, model):
 
 def create_tts_strategy(config, model, scorer):
     if config.strategy.type == "direct_online_best_of_n_reason_eval_separate":
-        strategy = OnlineBestOfN(
+        strategy = StrategyOnlineBestOfN(
             model=model,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
@@ -150,7 +150,7 @@ def create_tts_strategy(config, model, scorer):
 def generate_trajectories(
     results,
     save_path,
-    strategy: OnlineBestOfN,
+    strategy: StrategyOnlineBestOfN,
     dataset: Dataset,
     processed_indices: set,
 ):

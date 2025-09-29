@@ -10,7 +10,7 @@ import logging
 log = logging.getLogger(__name__)
 
 
-class OnlineBestOfN(StrategyBase):
+class StrategyOnlineBestOfN(StrategyBase):
     """
     Greedy online best-of-n strategy.
     """

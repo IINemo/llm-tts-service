@@ -1,1 +1,2 @@
-from .online_best_of_n import OnlineBestOfN
+from .strategy_base import StrategyBase
+from .strategy_online_best_of_n import StrategyOnlineBestOfN
