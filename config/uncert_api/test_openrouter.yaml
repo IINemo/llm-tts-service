@@ -10,6 +10,7 @@ dataset:
 provider:
   type: openrouter
   model: deepseek/deepseek-r1-0528-qwen3-8b
+  api_key: "OPENROUTER_API_KEY"
  
 prompt_paths:
   gsm8k:

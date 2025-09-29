@@ -12,6 +12,7 @@ dataset:
 provider:
   type: together
   model: meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
+  api_key: "TOGETHER_API_KEY"
  
 prompt_paths:
   gsm8k:
