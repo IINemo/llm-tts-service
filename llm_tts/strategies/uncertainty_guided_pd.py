@@ -3,7 +3,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from llm_tts.step_generation import StepCandidateGenerator, StepCandidate
-from llm_tts.step_detection import StepBoundaryDetector, BatchStepStoppingCriteria
+from llm_tts.step_detection import uncert_detector, BatchStepStoppingCriteria
 
 import logging
 log = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ class UncertaintyGuidedCoT_PD:
         else:
             self.uncertainty_threshold = uncertainty_threshold
 
-        self.detector = StepBoundaryDetector(
+        self.detector = uncert_detector(
             max_tokens_per_step=max_new_tokens,
         )
 
@@ -96,23 +96,41 @@ class UncertaintyGuidedCoT_PD:
             log_trajectory = trajectory.replace('\n', '\\n')
             log.info(f"Trajectory: {log_trajectory}")
 
-            # 1) Generate step(s) and compute uncertainty from the last token's top_logprobs
-            # Stop at the NEXT step header and at the explicit answer tag
+            # 1) Probe uncertainty BEFORE deciding how many paths to generate
+            #    Use a single-token top-k distribution to estimate PD uncertainty.
             stop_markers = self._build_stop_variants(step_num)
-            # stop_markers = []
-            # log.info(f"Stop markers: {stop_markers}")
-            
+            try:
+                probe = self.api_client.generate_one_with_top_logprobs(
+                    prompt=trajectory,
+                    temperature=0.0,
+                    top_k=max(5, self.uncertainty_top_k),
+                )
+                token_probs_last = probe.get("top_logprobs", {}) or {}
+                pd_info = self._compute_pd_uncertainty(trajectory, token_to_prob=token_probs_last)
+            except Exception:
+                # Fallback if probing not available: assume high uncertainty to enable CoT
+                token_probs_last = {}
+                pd_info = {"uncertainty": 1.0, "p1": 0.0, "p2": 0.0, "confidence_gap": 0.0}
+            uncertainties.append(pd_info)
+            uncertainty = pd_info["uncertainty"]
+            used_cot = bool(uncertainty > self.uncertainty_threshold)
+
+            # Decide branching parameters
+            n_for_gen = self.candidates_per_step if used_cot else 1
+            # Ensure sampling when branching to CoT even if configured temperature is 0
+            temp_for_gen = (self.temperature if used_cot and self.temperature > 0 else (0.0 if not used_cot else 0.7))
+
+            # 2) Generate step(s) according to the chosen branch
             raw_outputs = self.api_client.generate_texts_with_logprobs(
                 prompt=trajectory,
-                n=(self.candidates_per_step if self.temperature > 0 else 1),
-                temperature=(self.temperature if self.temperature > 0 else 0.0),
+                n=n_for_gen,
+                temperature=temp_for_gen,
                 max_new_tokens=self.max_new_tokens,
                 top_k=max(5, self.uncertainty_top_k),
                 stop=stop_markers,
             )
 
-            # If single path was produced due to low temperature, still compute uncertainty
-            # from the last token BEFORE the stop boundary; else we branch using path confidences.
+            # Prepare helper data from first path for greedy branch
             token_probs_last = {}
             first_cut_text = None
             first_last_top = None
@@ -127,11 +145,6 @@ class UncertaintyGuidedCoT_PD:
                             lp = ent.get('logprob') if isinstance(ent, dict) else getattr(ent, 'logprob', None)
                             if tok is not None and lp is not None:
                                 token_probs_last[tok] = math.exp(lp)
-
-            pd_info = self._compute_pd_uncertainty(trajectory, token_to_prob=token_probs_last) if token_probs_last else {"uncertainty": 1.0, "p1": 0.0, "p2": 0.0, "confidence_gap": 0.0}
-            uncertainties.append(pd_info)
-            uncertainty = pd_info["uncertainty"]
-            used_cot = bool(uncertainty > self.uncertainty_threshold)
 
             if used_cot:
                 # 2.2) Multi-path: compute confidence per path and select max
@@ -371,7 +384,7 @@ class UncertaintyGuidedCoT_PD:
 
     def _format_step_header(self, n: int) -> str:
         try:
-            return (self.step_header_template or "## Step {n}: ").replace("{n}", str(n))
+            return (self.step_header_template or "#Step {n}: ").replace("{n}", str(n))
         except Exception:
             return f"Step {n}:"
 

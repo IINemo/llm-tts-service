@@ -14,7 +14,7 @@ from llm_tts.openrouter_chat import OpenRouterChat
 from llm_tts.together_chat import TogetherChatCompat
 from llm_tts.strategies.uncertainty_guided_pd import UncertaintyGuidedCoT_PD
 from llm_tts.scorers.base import StepScorer, CandidateScore
-from llm_tts.step_detection import StepBoundaryDetector
+from llm_tts.step_detection import StepBoundaryDetector, uncert_detector
 
 import logging
 
@@ -99,7 +99,7 @@ def extract_answer_text(output: str, prompt_prefix: str = "") -> str:
         return ""
     text = output[len(prompt_prefix):] if prompt_prefix and output.startswith(prompt_prefix) else output
     # Build patterns from detector (default) and add capitalized variants
-    det = StepBoundaryDetector()
+    det = uncert_detector()
     pats = list(det.answer_patterns)
     # Ensure canonical capitalized tags are also covered for slicing length
     pats.extend(["<Answer>:", "\n<Answer>:", "Answer:", "\nAnswer:"])
@@ -232,14 +232,15 @@ def run_eval(cfg: DictConfig):
         raise ValueError("Must specify 'provider' configuration group")
     provider_type = (cfg.provider.type or "").strip().lower()
     provider_model = cfg.provider.model
+    provider_api_key = getattr(cfg.provider, 'api_key', None)
     if provider_type == "together":
         print(f"Using Together.ai with model: {provider_model}")
-        client = TogetherChatCompat(model=provider_model)
+        client = TogetherChatCompat(model=provider_model, api_key=provider_api_key)
         client_type = "together"
     elif provider_type == "openrouter":
         print(f"Using OpenRouter with model: {provider_model}")
         api_base = getattr(cfg.provider, 'api_base', "https://openrouter.ai/api/v1")
-        client = OpenRouterChat(model=provider_model, api_key=None, api_base=api_base)
+        client = OpenRouterChat(model=provider_model, api_key=provider_api_key, api_base=api_base)
         client_type = "openrouter"
     else:
         raise ValueError("provider.type must be one of: openrouter, together")
@@ -395,14 +396,15 @@ def main(cfg: DictConfig):
     if not hasattr(cfg, 'provider'):
         raise RuntimeError("Must specify 'provider' configuration")
     ptype = (cfg.provider.type or "").strip().lower()
-    if ptype == "together":
-        if not os.environ.get("TOGETHER_API_KEY"):
-            raise RuntimeError("Please set TOGETHER_API_KEY in environment")
-    elif ptype == "openrouter":
-        if not os.environ.get("OPENROUTER_API_KEY"):
-            raise RuntimeError("Please set OPENROUTER_API_KEY in environment")
-    else:
+    if ptype not in ("together", "openrouter"):
         raise RuntimeError("provider.type must be one of: openrouter, together")
+    # Allow api_key to be provided via YAML or environment
+    if ptype == "together":
+        if not (getattr(cfg.provider, 'api_key', None) or os.environ.get("TOGETHER_API_KEY")):
+            raise RuntimeError("Provide Together API key via provider.api_key or TOGETHER_API_KEY env var")
+    elif ptype == "openrouter":
+        if not (getattr(cfg.provider, 'api_key', None) or os.environ.get("OPENROUTER_API_KEY")):
+            raise RuntimeError("Provide OpenRouter API key via provider.api_key or OPENROUTER_API_KEY env var")
     
     return run_eval(cfg)
 
