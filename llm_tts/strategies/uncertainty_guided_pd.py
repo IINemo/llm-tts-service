@@ -107,10 +107,8 @@ class UncertaintyGuidedCoT_PD:
                 )
                 token_probs_last = probe.get("top_logprobs", {}) or {}
                 pd_info = self._compute_pd_uncertainty(trajectory, token_to_prob=token_probs_last)
-            except Exception:
-                # Fallback if probing not available: assume high uncertainty to enable CoT
-                token_probs_last = {}
-                pd_info = {"uncertainty": 1.0, "p1": 0.0, "p2": 0.0, "confidence_gap": 0.0}
+            except Exception as e:
+                raise f"Uncertainty probe failed: {e}"
             uncertainties.append(pd_info)
             uncertainty = pd_info["uncertainty"]
             used_cot = bool(uncertainty > self.uncertainty_threshold)
@@ -384,9 +382,18 @@ class UncertaintyGuidedCoT_PD:
 
     def _format_step_header(self, n: int) -> str:
         try:
-            return (self.step_header_template or "#Step {n}: ").replace("{n}", str(n))
+            # Prefer configured step marker patterns; use the first as the canonical formatter
+            if self.step_marker_patterns and isinstance(self.step_marker_patterns, (list, tuple)):
+                base = self.step_marker_patterns[0] if len(self.step_marker_patterns) > 0 else "Step {n}:"
+                if "{n}" in base:
+                    return base.replace("{n}", str(n))
+                # If no placeholder is present, append the number sensibly
+                # Ensure trailing colon if the base ends with a word character
+                suffix = ":" if base and base[-1].isalnum() else ""
+                return f"{base} {n}{suffix}"
         except Exception:
-            return f"Step {n}:"
+            pass
+        return f"Step {n}:"
 
     def _compute_entropy_uncertainty(self, trajectory: str, token_to_prob: Optional[Dict[str, float]] = None) -> Dict[str, float]:
         """
