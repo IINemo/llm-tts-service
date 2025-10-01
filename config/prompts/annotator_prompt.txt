@@ -1,0 +1,5 @@
+You will be given a <Problem> and its proposed <Solution>. Assess whether the solution is correct.
+<Problem>: {q}
+<Solution>: {a}
+
+Reply with '<Grade>: Correct' or '<Grade>: Incorrect' only.
