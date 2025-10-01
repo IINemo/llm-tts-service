@@ -172,4 +172,5 @@ tmp/
 temp/
 outputs/
 
-
+*.zip
+*.bst
