@@ -129,6 +129,29 @@ def create_scorer(config, model):
     return scorer
 
 
+def create_model(config):
+    if config.model.type == "local":
+        log.info(f"Loading model: {config.model.model_path}")
+        tokenizer = load_tokenizer(config.model.model_path)
+        base_model = load_model(config.model.model_path, config.system.device)
+        base_model.eval()
+        model = WhiteboxModel(base_model, tokenizer)
+
+    elif config.model.type == "openai_api":
+        log.info(f"Using OpenAI API model: {config.model.model_path}")
+        model = BlackboxModel.from_openai(
+            openai_api_key=os.environ.get("OPENAI_API_KEY"),
+            model_path=config.model.model_path,
+            supports_logprobs=config.model.supports_logprobs,
+            generation_parameters=config.model.generation_parameters,
+            
+        )
+    else:
+        raise ValueError(f"Model type {config.model.type} not supported")
+
+    return model
+
+
 def create_tts_strategy(config, model, scorer):
     if config.strategy.type == "direct_online_best_of_n_reason_eval_separate":
         strategy = StrategyOnlineBestOfN(
