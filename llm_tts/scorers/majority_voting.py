@@ -2,17 +2,17 @@
 Majority voting scorer for self-consistency reasoning
 """
 
-from typing import List, Dict, Any
+from typing import List
 from collections import Counter
 import logging
 import re
 
-from .base import StepScorer, CandidateScore
+from .step_scorer_base import StepScorerBase, CandidateScore
 
 log = logging.getLogger(__name__)
 
 
-class MajorityVotingScorer(StepScorer):
+class MajorityVotingScorer(StepScorerBase):
     """
     Scorer that implements majority voting for self-consistency.
     Scores candidates based on how frequently their final answers appear
@@ -114,7 +114,7 @@ class MajorityVotingScorer(StepScorer):
         return detailed_scores
 
 
-class ChainMajorityVotingScorer(StepScorer):
+class ChainMajorityVotingScorer(StepScorerBase):
     """
     Alternative majority voting scorer that works on complete reasoning chains
     rather than individual steps. Better suited for self-consistency evaluation.
