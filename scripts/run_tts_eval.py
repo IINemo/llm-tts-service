@@ -6,12 +6,12 @@ import random
 import numpy as np
 import torch
 from tqdm import tqdm
-from datasets import load_dataset, Dataset
 import traceback
 from pathlib import Path
 import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
+from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from lm_polygraph import WhiteboxModel
