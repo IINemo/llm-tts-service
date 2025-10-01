@@ -7,7 +7,7 @@ defaults:
   - strategy: test_minimal
 
 dataset:
-  subset_frac: 0.04
+  subset_frac: 0.002
 
 run:
   methods: ['base', 'uncert']
@@ -19,7 +19,7 @@ base_generation:
 
 provider:
   type: together
-  api_key: "API_KEY"
+  api_key: "TOGETHER_API_KEY"
 
 model:
 # model: meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
@@ -38,18 +38,19 @@ strategy:
   candidates_per_step: 3
   max_steps: 30
   max_new_tokens: 256
-  temperature: 0.0
+  temperature: 0.7
   uncertainty_metric: pd
   uncertainty_threshold: 0.3
   uncertainty_top_k: 2
 
 verification:
-  enabled: false
-  type: deepseek
-  model: deepseek-reasoner
-  api_key: "DEEPSEEK_API_KEY"
-  n_threads: 8
-  cache_path: ~/.cache
+  enabled: true
+  model: deepseek-ai/DeepSeek-V3.1
+  n: 1
+  temperature: 1.0
+  max_new_tokens: 256
+  stop: ["<|endoftext|>"]
+  prompt_template_path: config/prompts/annotator_prompt.txt
 
 system:
   seed: 42

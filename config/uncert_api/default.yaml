@@ -20,3 +20,11 @@ step_marker_patterns:
   - "Step {n}:"
   - "- Step {n}:"
 
+verification:
+  enabled: false
+  model: null          # fallback to model.model_name when null
+  n: 1
+  temperature: 1.0
+  max_new_tokens: 256
+  stop: ["<|endoftext|>"]
+  prompt_template_path: null
