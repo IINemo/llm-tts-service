@@ -7,29 +7,49 @@ defaults:
   - strategy: test_minimal
 
 dataset:
-  subset_frac: 0.001
+  subset_frac: 0.04
+
+run:
+  methods: ['base', 'uncert']
+
+base_generation:
+  temperature: 0.0
+  max_new_tokens: 1024
+  n: 1
 
 provider:
   type: together
-  model: meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
-  api_key: "TOGETHER_API_KEY"
+  api_key: "API_KEY"
+
+model:
+# model: meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
+  model_name: Qwen/Qwen2.5-7B-Instruct-Turbo
+  eos_token: <|endoftext|>
+
+output:
+  run_id: test_50_newUncert_v2
  
 prompt_paths:
   gsm8k:
-    base: config/prompts/uncert_base_prompt.txt
+    base: config/prompts/uncert_cot_short_prompt.txt
     cot: config/prompts/uncert_cot_short_prompt.txt
   
 strategy:
   candidates_per_step: 3
-  max_steps: 20
+  max_steps: 30
   max_new_tokens: 256
   temperature: 0.0
   uncertainty_metric: pd
-  uncertainty_threshold: 0.2
+  uncertainty_threshold: 0.3
   uncertainty_top_k: 2
 
-output:
-  out_path: test_together_result.jsonl
+verification:
+  enabled: false
+  type: deepseek
+  model: deepseek-reasoner
+  api_key: "DEEPSEEK_API_KEY"
+  n_threads: 8
+  cache_path: ~/.cache
 
 system:
   seed: 42
