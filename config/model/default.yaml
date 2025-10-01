@@ -1,3 +1,4 @@
 # @package model
 
+type: "local"
 model_path: "Qwen/Qwen3-8B"  # Base model for generation
