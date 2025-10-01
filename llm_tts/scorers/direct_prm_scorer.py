@@ -216,10 +216,6 @@ class DirectPRMScorer(StepScorerRewardBase):
         if not candidates:
             return []
         
-        # Extract question from trajectory
-        #question = self._extract_question(chat)
-
-        
         # Score all candidates
         all_rewards = []
         
@@ -235,35 +231,6 @@ class DirectPRMScorer(StepScorerRewardBase):
             torch.cuda.empty_cache()
         
         return all_rewards
-    
-    # def _extract_question(self, trajectory: str) -> str:
-    #     """Extract the original question from the trajectory"""
-    #     # Look for common patterns that indicate end of question
-    #     end_patterns = [
-    #         "Reasoning Steps:",
-    #         "Solution:",
-    #         "Answer:",
-    #         "\n\n",
-    #         "- Step"
-    #     ]
-        
-    #     question = trajectory
-    #     for pattern in end_patterns:
-    #         if pattern in trajectory:
-    #             parts = trajectory.split(pattern)
-    #             if parts[0].strip():
-    #                 question = parts[0].strip()
-    #                 break
-        
-    #     # Remove any system prompts if present
-    #     if "<|im_start|>" in question:
-    #         # Extract content between user tags
-    #         start = question.find("<|im_start|>user")
-    #         end = question.find("<|im_end|>", start)
-    #         if start != -1 and end != -1:
-    #             question = question[start+len("<|im_start|>user"):end].strip()
-        
-    #     return question
     
     def _score_single_candidate(
         self, 
@@ -352,4 +319,3 @@ class DirectPRMScorer(StepScorerRewardBase):
             all_scores.append(scores)
             
         return all_scores
-
