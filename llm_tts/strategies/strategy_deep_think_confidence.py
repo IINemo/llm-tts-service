@@ -15,11 +15,12 @@ from ..confidence_scoring import (
     HybridConfidenceScorer,
     score_trace_from_token_data
 )
+from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 
 
-class DeepThinkConfidenceStrategy:
+class StrategyDeepThinkConfidence(StrategyBase):
     """
     DeepConf strategy that uses confidence signals to filter reasoning traces
     and perform weighted voting for improved accuracy and efficiency.
@@ -537,7 +538,7 @@ def create_deepconf_strategy(
     filtering_percentage: float = 0.7,
     confidence_metric: str = "avg_confidence",
     **kwargs
-) -> DeepThinkConfidenceStrategy:
+) -> StrategyDeepThinkConfidence:
     """
     Factory function to create a DeepConf strategy.
 
@@ -551,7 +552,7 @@ def create_deepconf_strategy(
     Returns:
         DeepThinkConfidenceStrategy instance
     """
-    return DeepThinkConfidenceStrategy(
+    return StrategyDeepThinkConfidence(
         model=model,
         num_paths=num_paths,
         filtering_percentage=filtering_percentage,

@@ -10,6 +10,8 @@ import numpy as np
 from typing import List, Dict, Any, Optional
 from collections import Counter
 
+from .strategy_base import StrategyBase
+
 log = logging.getLogger(__name__)
 
 
@@ -130,7 +132,7 @@ def weighted_majority_vote(answers: List[str], weights: List[float]) -> Optional
     return max(answer_weights.keys(), key=lambda x: answer_weights[x])
 
 
-class DeepConfStrategy:
+class StrategyDeepConf(StrategyBase):
     """
     DeepConf strategy - based on Facebook Research's implementation.
 
