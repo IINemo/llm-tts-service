@@ -524,9 +524,24 @@ def run_eval(cfg: DictConfig):
                     uncert_problems.append(q)
                     uncert_solutions.append(u.get("answer", ""))
 
+            # Compute gold answers if available (supports gsm8k and hotpotqa)
+            base_gold = []
+            uncert_gold = []
+            if ds_cfg.name.lower() == "gsm8k":
+                # gold is embedded in dataset object
+                for idx in base_indices:
+                    base_gold.append(gold_answer_gsm8k(ds[results[idx]["index"]].get("answer", "")))
+                for idx in uncert_indices:
+                    uncert_gold.append(gold_answer_gsm8k(ds[results[idx]["index"]].get("answer", "")))
+            elif ds_cfg.name.lower() == "hotpotqa":
+                for idx in base_indices:
+                    base_gold.append((ds[results[idx]["index"]].get("answer", "") or "").strip())
+                for idx in uncert_indices:
+                    uncert_gold.append((ds[results[idx]["index"]].get("answer", "") or "").strip())
+
             # Annotate base
             if base_problems:
-                base_annotations = annotator.verify_batch_with_texts(base_problems, base_solutions)
+                base_annotations = annotator.verify_batch_with_texts(base_problems, base_solutions, base_gold)
                 for rec_idx, ann in zip(base_indices, base_annotations):
                     is_ok = bool(ann.get("is_correct")) if ann and ann.get("is_correct") is not None else False
                     results[rec_idx].setdefault("base", {})["is_correct_verifier"] = bool(is_ok)
@@ -535,7 +550,7 @@ def run_eval(cfg: DictConfig):
 
             # Annotate uncert
             if uncert_problems:
-                uncert_annotations = annotator.verify_batch_with_texts(uncert_problems, uncert_solutions)
+                uncert_annotations = annotator.verify_batch_with_texts(uncert_problems, uncert_solutions, uncert_gold)
                 for rec_idx, ann in zip(uncert_indices, uncert_annotations):
                     is_ok = bool(ann.get("is_correct")) if ann and ann.get("is_correct") is not None else False
                     results[rec_idx].setdefault("uncert", {})["is_correct_verifier"] = bool(is_ok)

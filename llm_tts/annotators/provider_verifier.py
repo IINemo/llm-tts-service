@@ -30,13 +30,14 @@ class ProviderVerifier:
         self._grade_re = re.compile(r"<\s*grade\s*>\s*:\s*(correct|incorrect)", re.IGNORECASE)
         self._word_re = re.compile(r"\b(correct|incorrect)\b", re.IGNORECASE)
 
-    def _render_prompt(self, question: str, solution: str) -> str:
+    def _render_prompt(self, question: str, solution: str, gold_answer: str = None) -> str:
         # Support multiple variable names for convenience
         return self.prompt_template.format(
             question=question,
-            q=question,
+            answer=solution,
+            problem=question,
             solution=solution,
-            a=solution,
+            gold_answer=gold_answer,
         )
 
     def _parse_is_correct(self, text: str) -> Optional[bool]:
@@ -53,10 +54,10 @@ class ProviderVerifier:
             return label == "correct"
         return None
 
-    def verify_batch(self, problems: List[str], solutions: List[str]) -> List[Optional[bool]]:
+    def verify_batch(self, problems: List[str], solutions: List[str], gold_answers: List[str]) -> List[Optional[bool]]:
         outputs: List[Optional[bool]] = []
-        for q, s in zip(problems, solutions):
-            prompt = self._render_prompt(q or "", s or "")
+        for q, s, g in zip(problems, solutions, gold_answers):
+            prompt = self._render_prompt(q or "", s or "", g)
             texts = self.client.generate_texts(
                 prompt,
                 n=self.n,
@@ -68,13 +69,13 @@ class ProviderVerifier:
             outputs.append(self._parse_is_correct(first))
         return outputs
 
-    def verify_batch_with_texts(self, problems: List[str], solutions: List[str]):
+    def verify_batch_with_texts(self, problems: List[str], solutions: List[str], gold_answers: List[str] = None):
         """
         Returns list of dicts: {"is_correct": Optional[bool], "texts": List[str]}
         """
         outputs = []
-        for q, s in zip(problems, solutions):
-            prompt = self._render_prompt(q or "", s or "")
+        for q, s, g in zip(problems, solutions, gold_answers):
+            prompt = self._render_prompt(q or "", s or "", g)
             texts = self.client.generate_texts(
                 prompt,
                 n=self.n,
