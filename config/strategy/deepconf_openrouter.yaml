@@ -1,0 +1,26 @@
+# DeepConf strategy configuration with OpenRouter for real token probabilities
+
+type: deep_think_confidence
+
+# Generation parameters
+num_paths: 3  # Number of reasoning paths to generate
+max_new_tokens: 200  # Maximum tokens per path
+temperature: 0.7  # Sampling temperature for diversity
+
+# DeepConf confidence parameters
+confidence_threshold: 0.3  # Minimum confidence for trace acceptance
+filtering_percentage: 0.7  # Keep top 70% of traces (η parameter from paper)
+confidence_metric: avg_confidence  # Which confidence metric to use for filtering
+
+# Available metrics: avg_confidence, bottom_10_confidence, bottom_20_confidence, group_confidence_16, group_confidence_32, group_confidence_64
+
+# Warmup phase (from DeepConf paper)
+warmup_traces: 16  # Number of initial traces for threshold calibration (Ninit)
+use_warmup_threshold: true  # Whether to use warmup-based threshold calibration
+
+# Mode
+mode: offline  # "offline" or "online"
+
+# Early termination
+early_termination: false
+early_termination_threshold: 0.2

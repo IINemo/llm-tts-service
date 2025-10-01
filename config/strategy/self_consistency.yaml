@@ -1,0 +1,16 @@
+# @package strategy
+
+type: self_consistency
+num_paths: 10                # Number of reasoning paths to generate
+max_new_tokens: 512          # Max tokens per reasoning path
+temperature: 0.7             # Sampling temperature for diversity
+generation_batch_size: 5     # Batch size for generation (null = all at once)
+
+# Scorer configuration for majority voting
+scorer:
+  type: chain_majority_voting
+  answer_extraction_patterns:
+    - "Answer:\\s*(.+?)(?:\\n|\\.|\\$)"
+    - "The answer is\\s*(.+?)(?:\\n|\\.|\\$)"
+    - "Therefore,?\\s*(.+?)(?:\\n|\\.|\\$)"
+    - "<Answer>:\\s*(.+?)(?:\\n|$)"

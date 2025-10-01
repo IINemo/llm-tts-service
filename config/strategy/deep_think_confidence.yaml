@@ -1,0 +1,47 @@
+# @package strategy
+
+type: deep_think_confidence
+num_paths: 10                     # Number of reasoning paths to generate
+max_new_tokens: 512               # Max tokens per reasoning path
+temperature: 0.7                  # Sampling temperature for diversity
+
+# DeepConf-specific parameters
+filtering_percentage: 0.7         # Keep top 70% of traces (η parameter from paper)
+confidence_threshold: 0.3         # Minimum confidence for trace acceptance
+confidence_metric: "avg_confidence"  # Which confidence metric to use
+mode: "offline"                   # "offline" or "online" mode
+
+# Advanced parameters
+early_termination: false          # Enable early termination during generation
+early_termination_threshold: 0.2  # Confidence threshold for early termination
+
+# Warmup phase parameters (from DeepConf paper)
+warmup_traces: 16                 # Number of initial traces for threshold calibration (Ninit)
+use_warmup_threshold: true        # Whether to use warmup-based threshold calibration
+
+# Available confidence metrics (ALL metrics from DeepConf paper):
+
+# Token-level confidence metrics:
+# - "avg_confidence": Average trace confidence (Cavg) - DEFAULT
+# - "bottom_5_confidence": Bottom 5% token confidence
+# - "bottom_10_confidence": Bottom 10% token confidence
+# - "bottom_20_confidence": Bottom 20% token confidence
+# - "tail_confidence": Confidence in last 2048 tokens (Ctail)
+# - "head_confidence": Confidence in first portion of tokens
+
+# Group confidence metrics (sliding windows):
+# - "group_confidence": Lowest group confidence (2048 window, default)
+# - "group_confidence_512": Lowest group confidence (512 window)
+# - "group_confidence_1024": Lowest group confidence (1024 window)
+# - "group_confidence_2048": Lowest group confidence (2048 window)
+# - "lowest_group_confidence": Minimum group confidence (Cleast)
+
+# Bottom percent group confidences:
+# - "bottom_10_group_confidence": Bottom 10% of group confidences (2048 window)
+# - "bottom_10_group_confidence_512": Bottom 10% of group confidences (512 window)
+# - "bottom_10_group_confidence_1024": Bottom 10% of group confidences (1024 window)
+# - "bottom_10_group_confidence_2048": Bottom 10% of group confidences (2048 window)
+
+# API-only confidence metrics:
+# - "reasoning_quality": Quality of reasoning structure (API only)
+# - "answer_confidence": Confidence in the final answer (API only)
