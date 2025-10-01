@@ -1,7 +1,7 @@
 import torch
 from typing import List, Dict
 
-from llm_tts.step_generation import StepCandidateGenerator
+from llm_tts.step_candidate_generator import StepCandidateGenerator
 from llm_tts.step_detection import StepBoundaryDetector
 from .strategy_base import StrategyBase
 
