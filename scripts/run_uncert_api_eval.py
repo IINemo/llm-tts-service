@@ -3,10 +3,14 @@ import os
 import re
 import random
 import json
+import uuid
+import sys
+import subprocess
+from datetime import datetime
 from typing import List, Dict
 
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, ListConfig
 from hydra.utils import to_absolute_path
 from datasets import load_dataset
 
@@ -15,6 +19,7 @@ from llm_tts.together_chat import TogetherChatCompat
 from llm_tts.strategies.uncertainty_guided_pd import UncertaintyGuidedCoT_PD
 from llm_tts.scorers.base import StepScorer, CandidateScore
 from llm_tts.step_detection import StepBoundaryDetector, uncert_detector
+from llm_tts.deepseek_annotator import DeepSeekAnnotator
 
 import logging
 
@@ -117,7 +122,16 @@ def extract_answer_text(output: str, prompt_prefix: str = "") -> str:
         return ""
     tail = text[last_idx + len(last_pat):].lstrip()
     m = re.search(r"-?\d+(?:\.\d+)?", tail)
-    return m.group(0).strip() if m else tail.splitlines()[0].strip()
+    if m:
+        return m.group(0).strip()
+    # If no numeric match, return the first non-empty line if present
+    if not tail:
+        return ""
+    lines = tail.splitlines()
+    if not lines:
+        return ""
+    first = lines[0].strip()
+    return first
 
 
 def gold_answer_gsm8k(answer_field: str) -> str:
@@ -226,13 +240,20 @@ def run_eval(cfg: DictConfig):
             return f"Question: {question}\n\n## Step 1: "
     ds_cfg = cfg.dataset
     st_cfg = cfg.strategy
+    
+    # Base generation configuration (overrides for greedy/base runs)
+    base_temp = cfg.base_generation.get('temperature', 0.0)
+    base_max_new_tokens = cfg.base_generation.get('max_new_tokens', st_cfg.max_new_tokens)
+    base_n = cfg.base_generation.get('n', 1)
+    base_stop = list(cfg.base_generation.get('stop', ["<|endoftext|>"]))
 
     # Unified provider selection
     if not hasattr(cfg, 'provider'):
         raise ValueError("Must specify 'provider' configuration group")
     provider_type = (cfg.provider.type or "").strip().lower()
-    provider_model = cfg.provider.model
+    provider_model = cfg.model.model_name
     provider_api_key = getattr(cfg.provider, 'api_key', None)
+    
     if provider_type == "together":
         print(f"Using Together.ai with model: {provider_model}")
         client = TogetherChatCompat(model=provider_model, api_key=provider_api_key)
@@ -244,31 +265,32 @@ def run_eval(cfg: DictConfig):
         client_type = "openrouter"
     else:
         raise ValueError("provider.type must be one of: openrouter, together")
-
-    # Resolve step header markers
-    # 1) Prefer explicit top-level list: cfg.step_marker_patterns
-    # 2) Else, support legacy mapping: cfg.step_markers.model_patterns (if defined in main YAML)
-    # 3) Else, fall back to robust defaults
+    
+    # Resolve step header markers with precedence:
+    # 1) Explicit in main YAML under strategy.step_marker_patterns
+    # 2) From Hydra group step_markers.model_patterns (matching provider model)
+    # 3) Hardcoded defaults
     step_marker_patterns = None
-    # Case 1: explicit list on top-level
-    if hasattr(cfg, 'step_marker_patterns') and isinstance(cfg.step_marker_patterns, (list, tuple)):
-        step_marker_patterns = list(cfg.step_marker_patterns)
-    # Case 2: legacy per-model mapping
+    if hasattr(cfg, 'strategy') and hasattr(cfg.strategy, 'step_marker_patterns') and cfg.strategy.step_marker_patterns:
+        try:
+            step_marker_patterns = list(cfg.strategy.step_marker_patterns)
+        except Exception:
+            step_marker_patterns = cfg.strategy.step_marker_patterns
     elif hasattr(cfg, 'step_markers') and hasattr(cfg.step_markers, 'model_patterns'):
         model_name = provider_model
-        for mp in cfg.step_markers.model_patterns:
-            patt = mp.get('model_regex') if isinstance(mp, dict) else None
-            if patt:
-                try:
-                    import re as _re
-                    if _re.match(patt, model_name):
-                        pats = mp.get('patterns', [])
-                        if pats:
-                            step_marker_patterns = pats
-                            break
-                except Exception:
-                    pass
-    # Case 3: defaults
+        try:
+            for mp in cfg.step_markers.model_patterns:
+                patt = mp.get('model_regex') if isinstance(mp, dict) else None
+                if not patt:
+                    continue
+                import re as _re
+                if _re.match(patt, model_name):
+                    pats = mp.get('patterns', [])
+                    if pats:
+                        step_marker_patterns = pats
+                        break
+        except Exception:
+            pass
     if not step_marker_patterns:
         step_marker_patterns = [
             "## Step {n}:",
@@ -292,103 +314,252 @@ def run_eval(cfg: DictConfig):
         # Pass the appropriate client based on configuration
         together_client=client if client_type == "together" else None,
         openrouter_client=client if client_type == "openrouter" else None,
+        eos_token=cfg.model.eos_token,
     )
+
+    # Decide which methods to run based solely on Hydra config: run.methods
+    run_cfg = getattr(cfg, 'run', None)
+    if run_cfg is None or not hasattr(run_cfg, 'methods'):
+        raise ValueError("Missing 'run.methods' in config. Allowed values: ['base', 'uncert'] or a list of them.")
+    methods_field = getattr(run_cfg, 'methods')
+    
+    if isinstance(methods_field, str):
+        selected_methods = [methods_field]
+    elif isinstance(methods_field, (list, tuple, ListConfig)):
+        selected_methods = list(methods_field)
+    else:
+        raise ValueError("'run.methods' must be a string or list of strings: ['base', 'uncert']")
+    
+    normalized = [str(m).strip().lower() for m in selected_methods]
+    allowed = {"base", "uncert"}
+    invalid = [m for m in normalized if m not in allowed]
+    
+    if invalid:
+        raise ValueError(f"Invalid run.methods values: {invalid}. Allowed: {sorted(allowed)}")
+    
+    do_base = "base" in normalized
+    do_uncert = "uncert" in normalized
+    
+    if not do_base and not do_uncert:
+        raise ValueError("No run methods selected. Set run.methods: [base, uncert]")
+
+    # Prepare output path once per run and create JSONL file
+    model_name = (cfg.model.model_name or "model").strip()
+    model_name_safe = re.sub(r"[^A-Za-z0-9._-]+", "_", model_name)
+    dataset_name = getattr(cfg.dataset, 'name', 'dataset') or 'dataset'
+    dataset_name = str(dataset_name).strip()
+    dataset_name_safe = re.sub(r"[^A-Za-z0-9._-]+", "_", dataset_name)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = getattr(getattr(cfg, 'output', {}), 'run_id', None)
+    if not run_id:
+        run_id = uuid.uuid4().hex[:8]
+    run_id_safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(run_id))
+
+    out_dir = os.path.join("results", model_name_safe, dataset_name_safe)
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{timestamp}_{run_id_safe}.jsonl")
+    # Truncate or create the file at the start of the run
+    with open(out_path, "w", encoding="utf-8"):
+        pass
+    saved_count = 0
 
     if ds_cfg.name.lower() == "gsm8k":
         ds = load_dataset(ds_cfg.hf_path, ds_cfg.hf_config, split=ds_cfg.split)
         idxs = sample_indices(len(ds), ds_cfg.subset_frac)
         problem_type = "math"
         results: List[Dict] = []
-        gen = UncertaintyGuidedCoT_PD(problem_type=problem_type, **strategy_kwargs)
+        gen = UncertaintyGuidedCoT_PD(problem_type=problem_type, **strategy_kwargs) if do_uncert else None
         
-        for i in idxs:
-            log.info(f"\n=== GSM8K Task {i+1} ===")
+        for count, i in enumerate(idxs):
+            log.info(f"\n === Task {count+1} / {len(idxs)} ===")
+            log.info(f"=== GSM8K Task {i+1} ===")
             q = ds[i]["question"]
-            # Base greedy completion (no reasoning headers)
-            base_p = render_base_prompt("gsm8k", q)
-            base_texts = client.generate_texts(base_p, n=1, temperature=0.0, max_new_tokens=st_cfg.max_new_tokens)
-            base_gen = base_texts[0] if base_texts else ""
-            base_ans = extract_answer_text(base_gen)
-            base_ok = check_correctness("gsm8k", ds[i], base_ans)
-
-            # Uncertainty-guided reasoning (CoT)
-            prompt = render_cot_prompt("gsm8k", q)
-            out = gen.generate_trajectory(prompt)
-            rg_traj = out.get("trajectory", "")
-            # Strip the prompt prefix so parsing does not see instruction examples
-            rg_tail = rg_traj[len(prompt):] if rg_traj.startswith(prompt) else rg_traj
-            rg_ans = extract_answer_text(rg_tail)
-            rg_ok = check_correctness("gsm8k", ds[i], rg_ans)
-
-            results.append({
+            rec = {
                 "index": i,
                 "question": q,
-                "base": {
+            }
+            # Base greedy completion (no reasoning headers)
+            if do_base:
+                base_p = render_base_prompt("gsm8k", q)
+                base_texts = client.generate_texts(base_p, n=base_n, temperature=base_temp, max_new_tokens=base_max_new_tokens, stop=base_stop)
+                base_gen = base_texts[0] if base_texts else ""
+                base_ans = extract_answer_text(base_gen)
+                base_ok = check_correctness("gsm8k", ds[i], base_ans)
+                rec["base"] = {
                     "prompt": base_p,
                     "completion": base_gen,
                     "answer": base_ans,
                     "correct": base_ok,
-                },
-                "uncert": {
+                }
+            # Uncertainty-guided reasoning (CoT)
+            if do_uncert and gen is not None:
+                prompt = render_cot_prompt("gsm8k", q)
+                out = gen.generate_trajectory(prompt)
+                rg_traj = out.get("trajectory", "")
+                # Strip the prompt prefix so parsing does not see instruction examples
+                rg_tail = rg_traj[len(prompt):] if rg_traj.startswith(prompt) else rg_traj
+                rg_ans = extract_answer_text(rg_tail)
+                rg_ok = check_correctness("gsm8k", ds[i], rg_ans)
+                rec["uncert"] = {
                     "trajectory": rg_traj,
                     "steps": out.get("steps", []),
                     "uncertainties": out.get("uncertainties", []),
                     "decision_trace": out.get("decision_trace", []),
                     "answer": rg_ans,
                     "correct": rg_ok,
-                },
-            })
+                }
+            results.append(rec)
+            with open(out_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            saved_count += 1
     
     elif ds_cfg.name.lower() == "hotpotqa":
         ds = load_dataset(ds_cfg.hf_path, ds_cfg.hf_config, split=ds_cfg.split)
         idxs = sample_indices(len(ds), ds_cfg.subset_frac)
         problem_type = "qa"
         results = []
-        gen = UncertaintyGuidedCoT_PD(problem_type=problem_type, **strategy_kwargs)
+        gen = UncertaintyGuidedCoT_PD(problem_type=problem_type, **strategy_kwargs) if do_uncert else None
         for i in idxs:
             q = ds[i]["question"]
             ctx = ds[i]["context"]
-            # Base greedy completion
-            base_p = render_base_prompt("hotpotqa", q, ctx)
-            base_texts = client.generate_texts(base_p, n=1, temperature=0.0, max_new_tokens=st_cfg.max_new_tokens)
-            base_gen = base_texts[0] if base_texts else ""
-            base_ans = extract_answer_text(base_gen)
-            base_ok = check_correctness("hotpotqa", ds[i], base_ans)
-
-            # Uncertainty-guided reasoning
-            prompt = render_cot_prompt("hotpotqa", q, ctx)
-            out = gen.generate_trajectory(prompt)
-            rg_traj = out.get("trajectory", "")
-            rg_tail = rg_traj[len(prompt):] if rg_traj.startswith(prompt) else rg_traj
-            rg_ans = extract_answer_text(rg_tail)
-            rg_ok = check_correctness("hotpotqa", ds[i], rg_ans)
-
-            results.append({
+            rec = {
                 "index": i,
                 "question": q,
-                "base": {
+            }
+            # Base greedy completion
+            if do_base:
+                base_p = render_base_prompt("hotpotqa", q, ctx)
+                base_texts = client.generate_texts(base_p, n=base_n, temperature=base_temp, max_new_tokens=base_max_new_tokens)
+                base_gen = base_texts[0] if base_texts else ""
+                base_ans = extract_answer_text(base_gen)
+                base_ok = check_correctness("hotpotqa", ds[i], base_ans)
+                rec["base"] = {
                     "prompt": base_p,
                     "completion": base_gen,
                     "answer": base_ans,
                     "correct": base_ok,
-                },
-                "uncert": {
+                }
+            # Uncertainty-guided reasoning
+            if do_uncert and gen is not None:
+                prompt = render_cot_prompt("hotpotqa", q, ctx)
+                out = gen.generate_trajectory(prompt)
+                rg_traj = out.get("trajectory", "")
+                rg_tail = rg_traj[len(prompt):] if rg_traj.startswith(prompt) else rg_traj
+                rg_ans = extract_answer_text(rg_tail)
+                rg_ok = check_correctness("hotpotqa", ds[i], rg_ans)
+                rec["uncert"] = {
                     "trajectory": rg_traj,
                     "steps": out.get("steps", []),
                     "uncertainties": out.get("uncertainties", []),
                     "decision_trace": out.get("decision_trace", []),
                     "answer": rg_ans,
                     "correct": rg_ok,
-                },
-            })
+                }
+            results.append(rec)
+            with open(out_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            saved_count += 1
     else:
         raise ValueError("dataset_name must be one of: gsm8k, hotpotqa")
 
-    os.makedirs(os.path.dirname(cfg.output.out_path) or ".", exist_ok=True)
-    with open(cfg.output.out_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+    print(f"Saved {saved_count} results to {out_path}")
+    
+    # Also write a human-readable pretty JSON snapshot in the end
+    pretty_path = out_path.replace('.jsonl', '_pretty.json')
+    try:
+        with open(pretty_path, 'w', encoding='utf-8') as f:
+            json.dump(results, f, ensure_ascii=False, indent=2)
+        print(f"Pretty snapshot written to {pretty_path}")
+    except Exception:
+        pass
 
-    print(f"Saved {len(results)} results to {cfg.output.out_path}")
+    # Auto-run analysis for GSM8K results
+    try:
+        if ds_cfg.name.lower() == "gsm8k":
+            analyze_script = to_absolute_path("scripts/analyze_gsm8k.py")
+            tracks = []
+            if 'do_base' in locals() and do_base:
+                tracks.append("base")
+            if 'do_uncert' in locals() and do_uncert:
+                tracks.append("uncert")
+            cmd = [sys.executable, analyze_script, "--input", out_path]
+            if tracks:
+                cmd.extend(["--tracks", *tracks])
+            print("Running GSM8K analysis")
+            subprocess.run(cmd, check=False)
+    except Exception as e:
+        print(f"Failed to run analysis automatically: {e}")
+
+    # Optional DeepSeek-based correctness post-processing
+    try:
+        ver_cfg = getattr(cfg, 'verification', None)
+        if ver_cfg and str(getattr(ver_cfg, 'type', 'deepseek')).lower() == 'deepseek' and bool(getattr(ver_cfg, 'enabled', False)):
+            print("Running DeepSeek verification on generated answers")
+            prompt_template = "{q}"
+            n_threads = int(getattr(ver_cfg, 'n_threads', 8))
+            model = getattr(ver_cfg, 'model', 'deepseek-reasoner')
+            api_key = getattr(ver_cfg, 'api_key', None)
+            cache_path = os.path.expanduser(getattr(ver_cfg, 'cache_path', "~/.cache"))
+
+            annotator = DeepSeekAnnotator(
+                prompt=prompt_template,
+                n_threads=n_threads,
+                cache_path=cache_path,
+                model=model,
+                api_key=api_key,
+            )
+
+            # Collect base and uncert tracks separately for annotation
+            base_indices = []
+            base_problems = []
+            base_solutions = []
+            uncert_indices = []
+            uncert_problems = []
+            uncert_solutions = []
+
+            for idx, rec in enumerate(results):
+                q = rec.get("question", "")
+                b = rec.get("base")
+                if isinstance(b, dict) and 'answer' in b:
+                    base_indices.append(idx)
+                    base_problems.append(q)
+                    base_solutions.append(b.get("answer", ""))
+                u = rec.get("uncert")
+                if isinstance(u, dict) and 'answer' in u:
+                    uncert_indices.append(idx)
+                    uncert_problems.append(q)
+                    uncert_solutions.append(u.get("answer", ""))
+
+            # Annotate base
+            if base_problems:
+                base_annotations = annotator(base_problems, base_solutions)
+                for rec_idx, ann in zip(base_indices, base_annotations):
+                    # 0 = correct, 1 = incorrect, NaN -> treat as incorrect
+                    is_nan = not (ann == ann)
+                    is_ok = (ann == 0) and (not is_nan)
+                    results[rec_idx].setdefault("base", {})["is_correct_deepseek"] = bool(is_ok)
+
+            # Annotate uncert
+            if uncert_problems:
+                uncert_annotations = annotator(uncert_problems, uncert_solutions)
+                for rec_idx, ann in zip(uncert_indices, uncert_annotations):
+                    is_nan = not (ann == ann)
+                    is_ok = (ann == 0) and (not is_nan)
+                    results[rec_idx].setdefault("uncert", {})["is_correct_deepseek"] = bool(is_ok)
+
+            # Rewrite JSONL and pretty JSON with the new fields
+            try:
+                with open(out_path, "w", encoding="utf-8") as f:
+                    for rec in results:
+                        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                with open(pretty_path, 'w', encoding='utf-8') as f:
+                    json.dump(results, f, ensure_ascii=False, indent=2)
+                print("DeepSeek verification results written to output files")
+            except Exception as e:
+                print(f"Failed to write DeepSeek verification results: {e}")
+    except Exception as e:
+        print(f"DeepSeek verification step failed: {e}")
 
 
 @hydra.main(version_base=None, config_path="../config/uncert_api", config_name="default")

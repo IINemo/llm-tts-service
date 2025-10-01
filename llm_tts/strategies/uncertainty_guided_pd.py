@@ -28,6 +28,7 @@ class UncertaintyGuidedCoT_PD:
         uncertainty_top_k: Optional[int] = None,
         step_header_template: Optional[str] = None,
         step_marker_patterns: Optional[List[str]] = None,
+        eos_token: Optional[str] = None,
     ):
         self.model = model
         self.scorer = scorer
@@ -42,21 +43,10 @@ class UncertaintyGuidedCoT_PD:
         self.generation_batch_size = generation_batch_size or candidates_per_step
         self.problem_type = problem_type.lower()
         self.uncertainty_metric = (uncertainty_metric or "pd").lower()
-        self.uncertainty_top_k = int(uncertainty_top_k) if uncertainty_top_k is not None else 2
-        # self.step_header_template = step_header_template or "## Step {n}"
+        self.uncertainty_top_k = int(uncertainty_top_k) if uncertainty_top_k is not None else None
         self.step_marker_patterns = step_marker_patterns
-        # Optional regex, used only if caller formats prompts with explicit headers.
-        # try:
-        #     placeholder = "{n}"
-        #     if placeholder in self.step_header_template:
-        #         parts = self.step_header_template.split(placeholder)
-        #         esc0 = re.escape(parts[0])
-        #         esc1 = re.escape(parts[1]) if len(parts) > 1 else ""
-        #         self.step_header_re = re.compile(rf"{esc0}\s*\d+{esc1}")
-        #     else:
-        #         self.step_header_re = re.compile(re.escape(self.step_header_template))
-        # except Exception:
-        #     self.step_header_re = None
+        self.eos_token = eos_token
+        
         
         if uncertainty_threshold is None:
             if self.uncertainty_metric == "entropy":
@@ -103,9 +93,36 @@ class UncertaintyGuidedCoT_PD:
                 probe = self.api_client.generate_one_with_top_logprobs(
                     prompt=trajectory,
                     temperature=0.0,
-                    top_k=max(5, self.uncertainty_top_k),
+                    top_k=self.uncertainty_top_k,
                 )
-                token_probs_last = probe.get("top_logprobs", {}) or {}
+
+                top = probe.get("top_logprobs", {}) or {}
+                # Build token->prob dict robustly: handle dict of probs, dict of logprobs, or list of {token, logprob}
+                token_probs_last = {}
+                if isinstance(top, dict):
+                    # values may be probabilities (0..1) or logprobs (<=0)
+                    for tok, v in top.items():
+                        if v is None:
+                            continue
+                        if isinstance(v, (int, float)):
+                            if v <= 0:                # looks like logprob
+                                token_probs_last[tok] = math.exp(v)
+                            elif 0.0 <= v <= 1.0:     # already a probability
+                                token_probs_last[tok] = float(v)
+                            else:
+                                # unexpected, clamp
+                                token_probs_last[tok] = max(0.0, min(1.0, float(v)))
+                elif isinstance(top, list):
+                    # list entries like {'token':..., 'logprob': ...}
+                    for ent in top:
+                        tok = ent.get("token") if isinstance(ent, dict) else getattr(ent, "token", None)
+                        lp = ent.get("logprob") if isinstance(ent, dict) else getattr(ent, "logprob", None)
+                        if tok is None or lp is None:
+                            continue
+                        token_probs_last[tok] = math.exp(lp)
+                else:
+                    token_probs_last = {}
+
                 pd_info = self._compute_pd_uncertainty(trajectory, token_to_prob=token_probs_last)
             except Exception as e:
                 raise f"Uncertainty probe failed: {e}"
@@ -124,7 +141,7 @@ class UncertaintyGuidedCoT_PD:
                 n=n_for_gen,
                 temperature=temp_for_gen,
                 max_new_tokens=self.max_new_tokens,
-                top_k=max(5, self.uncertainty_top_k),
+                top_k=self.uncertainty_top_k,
                 stop=stop_markers,
             )
 
@@ -307,6 +324,9 @@ class UncertaintyGuidedCoT_PD:
         # Build from configured patterns to be robust across models.
         # We stop at the NEXT step header number (e.g., generating Step N should stop at Step N+1).
         next_headers = [p.replace("{n}", str(step_num + 2)) for p in self.step_marker_patterns]
+        if self.eos_token:
+            next_headers.append(self.eos_token)
+        
         variants: List[str] = []
         bases = list(next_headers)
         # Add relaxed header forms (preserve the explicit number to avoid zero-length cuts)
@@ -330,19 +350,11 @@ class UncertaintyGuidedCoT_PD:
                 ])
         # Prepend whitespace/newlines variants
         prefixes = ["", "\n", "\n\n", " ", "\t"]
-        for b in bases:
-            for p in prefixes:
-                variants.append(p + b)
+        variants += [p + b for p in prefixes for b in bases]
         # Answer tag variants
-        for a in ["<Answer>:", "\n<Answer>:", "\n\n<Answer>:", " Answer:", "\nAnswer:"]:
-            variants.append(a)
-        # Deduplicate while preserving order
-        seen = set()
-        uniq: List[str] = []
-        for v in variants:
-            if v not in seen:
-                uniq.append(v)
-                seen.add(v)
+        variants += ["<Answer>:", "\n<Answer>:", "\n\n<Answer>:", " Answer:", "\nAnswer:"]
+        
+        uniq = list(set(variants))
         return uniq
 
     def _truncate_generated_result(self, entry: Dict[str, any], stop_variants: List[str]) -> Tuple[str, Optional[any], Optional[int]]:
