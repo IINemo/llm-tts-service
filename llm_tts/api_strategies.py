@@ -5,7 +5,6 @@ These can be used when you only want to use API models without local model depen
 
 import logging
 from typing import List, Dict, Any, Optional
-import numpy as np
 from collections import Counter
 
 from .api_models import TogetherAIModel

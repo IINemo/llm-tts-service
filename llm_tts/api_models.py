@@ -7,7 +7,6 @@ import logging
 import time
 import requests
 from typing import List, Dict, Any, Optional
-import json
 
 # Load environment variables if dotenv is available
 try:
