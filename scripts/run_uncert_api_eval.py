@@ -360,6 +360,7 @@ def run_eval(cfg: DictConfig):
             rec = {
                 "index": i,
                 "question": q,
+                "gold_answer": gold_answer_gsm8k(ds[i]["answer"]) if "answer" in ds[i] else "",
             }
             # Base greedy completion (no reasoning headers)
             if do_base:
@@ -408,6 +409,7 @@ def run_eval(cfg: DictConfig):
             rec = {
                 "index": i,
                 "question": q,
+                "gold_answer": (ds[i].get("answer", "") or "").strip(),
             }
             # Base greedy completion
             if do_base:
