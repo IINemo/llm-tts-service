@@ -336,7 +336,6 @@ def analyze(records: List[Dict[str, Any]],
                 judge_accept_rate = (judge_accept / judge_total * 100.0)
                 judge_acc = (judge_vs_gold_correct / judge_vs_gold_total * 100.0) if judge_vs_gold_total else 0.0
                 print(f"  LLM judge acceptance rate: {judge_accept}/{judge_total} = {judge_accept_rate:.2f}%")
-                print(f"  LLM judge accuracy vs precomputed: {judge_vs_gold_correct}/{judge_vs_gold_total} = {judge_acc:.2f}%")
         else:
             print(f"  EM (vs gold): {em_correct}/{em_total} = {em_acc:.2f}%")
             if judge_total:
