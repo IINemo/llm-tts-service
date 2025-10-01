@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - dataset: small_gsm8k
+  - model: default
+  - generation: default
+  - output: default
+  - system: default
+  - strategy: chain_of_thought
+  - _self_
+
+# Chain-of-thought doesn't need a scorer
+scorer: null
+verbose: true
