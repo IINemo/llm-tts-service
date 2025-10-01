@@ -9,12 +9,10 @@ defaults:
   - _self_
 
 # Main configuration
-verbose: false
-
-
 scorer:
-  type: reasoneval_direct
-  model_path: "GAIR/ReasonEval-7B"
+  type: prm
+  #model_path: "GAIR/ReasonEval-7B"
+  model_path: "Qwen/Qwen2.5-Math-7B-PRM800K"
   device: cuda:1
   batch_size: 1
 

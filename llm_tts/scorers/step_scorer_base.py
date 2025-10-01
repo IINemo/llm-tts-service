@@ -60,13 +60,13 @@ class StepScorerBase(ABC):
 
     @abstractmethod
     def score_candidates_detailed(
-        self, trajectory: str, candidates: List[str], **kwargs
+        self, chat: List[Dict[str, str]], candidates: List[str], **kwargs
     ) -> List[CandidateScore]:
         """
         Score candidates with detailed information
 
         Args:
-            trajectory: Current trajectory text
+            chat: Current chat
             candidates: List of candidate next step texts
             **kwargs: Additional scoring parameters
 
@@ -77,7 +77,7 @@ class StepScorerBase(ABC):
 
     def score_candidates(
         self,
-        trajectory: str,
+        chat,
         candidates: List[str],
         aggregation: str = "mean",
         **kwargs,
@@ -94,9 +94,7 @@ class StepScorerBase(ABC):
         Returns:
             List of scores (higher = better) for each candidate
         """
-        detailed_scores = self.score_candidates_detailed(
-            trajectory, candidates, **kwargs
-        )
+        detailed_scores = self.score_candidates_detailed(chat, candidates, **kwargs)
         return [score.get_score(aggregation) for score in detailed_scores]
 
     @abstractmethod
@@ -110,4 +108,3 @@ class StepScorerBase(ABC):
 
     def __str__(self):
         return f"{self.__class__.__name__}({self.name})"
-

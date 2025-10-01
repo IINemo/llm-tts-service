@@ -14,13 +14,15 @@ from omegaconf import OmegaConf
 from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from lm_polygraph import WhiteboxModel
+from lm_polygraph import WhiteboxModel, BlackboxModel
 
 from llm_tts.strategies import (
     StrategyOnlineBestOfN,
 )
 from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
-from llm_tts.scorers.reasoneval_direct import DirectReasonEvalScorerSeparate
+from llm_tts.scorers.direct_prm_scorer import DirectPRMScorer
+from llm_tts.step_candidate_generator import StepCandidateGenerator
+from llm_tts.step_detection import StepBoundaryDetector
 
 
 import logging
@@ -30,8 +32,8 @@ log = logging.getLogger(__name__)
 
 def load_tokenizer(model_path: str):
     tokenizer = AutoTokenizer.from_pretrained(model_path)
-    tokenizer.chat_template = None
-    tokenizer.padding_side = "left"  # Fix padding side for decoder-only models
+    #tokenizer.chat_template = None
+    #tokenizer.padding_side = "left"  # Fix padding side for decoder-only models
     return tokenizer
 
 
@@ -49,7 +51,8 @@ def load_prompt_template(prompt_file: str) -> str:
             return f.read().strip()
     else:
         # Default prompt template for ReasonEval
-        return "Question: {question}\n\nLet's solve this step by step.\n\n"
+        #return "Question: {question}\n\nLet's solve this step by step.\n\n"
+        return ""
 
 
 def load_existing_results(save_path: str, dataset):
@@ -112,10 +115,10 @@ def set_random_seeds(seed):
 
 
 def create_scorer(config, model):
-    if config.scorer.type == "reasoneval_direct":
-        scorer = DirectReasonEvalScorerSeparate(
+    if config.scorer.type == "prm":
+        scorer = DirectPRMScorer(
             model=model,
-            reasoneval_model_path=config.scorer.model_path,
+            prm_model_path=config.scorer.model_path,
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
         )
@@ -137,25 +140,39 @@ def create_model(config):
         base_model.eval()
         model = WhiteboxModel(base_model, tokenizer)
 
+        detector = StepBoundaryDetector(
+            step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
+            answer_patterns=["<Answer>:", "\n<Answer>:"],
+            max_tokens_per_step=config.generation.max_new_tokens
+        )
+        step_generator = StepCandidateGenerator(
+            model=model,
+            detector=detector,
+            temperature=config.generation.temperature,
+            max_new_tokens=config.generation.max_new_tokens,
+            top_p=config.generation.top_p,
+            top_k=config.generation.top_k
+        )
+
     elif config.model.type == "openai_api":
         log.info(f"Using OpenAI API model: {config.model.model_path}")
         model = BlackboxModel.from_openai(
             openai_api_key=os.environ.get("OPENAI_API_KEY"),
             model_path=config.model.model_path,
             supports_logprobs=config.model.supports_logprobs,
-            generation_parameters=config.model.generation_parameters,
+            #generation_parameters=config.model.generation_parameters,
             
         )
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
-    return model
+    return model, step_generator
 
 
-def create_tts_strategy(config, model, scorer):
+def create_tts_strategy(config, step_generator, scorer):
     if config.strategy.type == "direct_online_best_of_n_reason_eval_separate":
         strategy = StrategyOnlineBestOfN(
-            model=model,
+            step_generator=step_generator,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
@@ -176,6 +193,7 @@ def generate_trajectories(
     strategy: StrategyOnlineBestOfN,
     dataset: Dataset,
     processed_indices: set,
+    prompt_template: str,
 ):
     # Phase 1: Generate trajectories (without checking correctness)
     log.info(f"\n{'='*60}")
@@ -189,30 +207,37 @@ def generate_trajectories(
         # Skip if already processed
         if i in processed_indices:
             log.info(f"Skipping sample {i} (already processed)")
-
             continue
 
-        sample = dataset[i]
+        instance = dataset[i]
 
         log.info(f"\n{'='*60}")
         log.info(f"Sample {i+1}/{subset_size}")
-        log.info(f"Question: {sample['question'][:200]}...")
+        log.info(f"Question: {instance['question'][:200]}...")
 
+        # Generate trajectory
+        if prompt_template:
+            request = prompt_template.format(question=instance["question"])
+        else:
+            request = [
+                {"role": "system", "content": ""},
+                {"role": "user",   "content": instance["question"]}
+            ]
+        
         try:
-            # Generate trajectory
-            result = strategy.generate_trajectory(sample["question"])
+            result = strategy.generate_trajectory(request)
 
             # Extract generated answer (but don't check correctness yet)
             generated_text = result["trajectory"]
-            if sample["question"] in generated_text:
-                generated_text = generated_text.replace(sample["question"], "").strip()
+            if instance["question"] in generated_text:
+                generated_text = generated_text.replace(instance["question"], "").strip()
 
             # Store result WITHOUT correctness check
             results.append(
                 {
                     "index": i,
-                    "question": sample["question"],
-                    "gold_answer": sample["answer"],
+                    "question": instance["question"],
+                    "gold_answer": instance["answer"],
                     "generated_trajectory": result["trajectory"],
                     "generated_answer": generated_text,
                     "steps": result["steps"],
@@ -232,8 +257,8 @@ def generate_trajectories(
             results.append(
                 {
                     "index": i,
-                    "question": sample["question"],
-                    "gold_answer": sample["answer"],
+                    "question": instance["question"],
+                    "gold_answer": instance["answer"],
                     "error": str(e),
                     "criterion_used": "validity",
                     "completed": False,
@@ -257,8 +282,6 @@ def evaluate_results(
     results,
     save_path: str,
 ):
-    prompt_file=config.dataset.prompt_file
-
     # Phase 2: Check correctness for all results
     log.info(f"\n{'='*60}")
     log.info(f"Phase 2: Checking correctness")
@@ -268,7 +291,7 @@ def evaluate_results(
     log.info(f"Using DeepSeek verification with {config.evaluator.n_threads} threads")
 
     # Load prompt template and ensure compatibility
-    prompt_template = load_prompt_template(prompt_file) if prompt_file else "{q}"
+    prompt_template = load_prompt_template(config.dataset.prompt_file) if config.dataset.prompt_file else ""
     if "{question}" in prompt_template:
         prompt_template = prompt_template.replace("{question}", "{q}")
 
@@ -404,18 +427,17 @@ def main(config):
     if config.dataset.subset:
         dataset = dataset.select(range(min(config.dataset.subset, len(dataset))))
 
+    prompt_template = load_prompt_template(config.dataset.prompt_file) if config.dataset.prompt_file else ""
+
     # Load model
     log.info(f"Loading model: {config.model.model_path}")
-    tokenizer = load_tokenizer(config.model.model_path)
-    base_model = load_model(config.model.model_path, config.system.device)
-    base_model.eval()
-    model = WhiteboxModel(base_model, tokenizer)
+    model, step_generator = create_model(config)
 
     # Create scorer
     scorer = create_scorer(config, model)
 
     # Create tts strategy
-    generator = create_tts_strategy(config, model, scorer)
+    generator = create_tts_strategy(config=config, step_generator=step_generator, scorer=scorer)
 
     # Load existing results if resuming
     if config.output.resume:
@@ -433,6 +455,7 @@ def main(config):
         strategy=generator,
         dataset=dataset,
         processed_indices=processed_indices,
+        prompt_template=prompt_template
     )
 
     # Evaluate results
@@ -441,6 +464,8 @@ def main(config):
         results=results,
         save_path=output_dir,
     )
+
+
 
 
 if __name__ == "__main__":
