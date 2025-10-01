@@ -121,3 +121,104 @@ class StepBoundaryDetector:
                     break
                 
         return step_text
+
+
+class BatchStepStoppingCriteria(StoppingCriteria):
+    """Stopping criteria for batch step generation"""
+    
+    def __init__(
+        self,
+        tokenizer, 
+        start_length: int,
+        detector: StepBoundaryDetector,
+        batch_size: int
+    ):
+        self.tokenizer = tokenizer
+        self.start_length = start_length  
+        self.detector = detector
+        self.batch_size = batch_size
+        self.finished = [False] * batch_size
+        
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> bool:
+        """Check stopping criteria for entire batch"""
+        # Check each sequence in batch
+        for i in range(min(input_ids.shape[0], self.batch_size)):
+            if not self.finished[i]:
+                generated_ids = input_ids[i][self.start_length:]
+                generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+                
+                if self.detector.is_step_complete(
+                    generated_text,
+                    token_count=len(generated_ids)
+                ):
+                    self.finished[i] = True
+                    
+        # Stop when all sequences are finished
+        return all(self.finished)
+
+class UncertStepBoundaryDetector:
+    """Detector tuned for uncert-cot: no '- Step' stopping; modern answer matches."""
+    def __init__(
+        self,
+        step_patterns: List[str] = None,
+        answer_patterns: List[str] = None,
+        max_tokens_per_step: int = 250
+    ):
+        self.step_patterns = step_patterns or [
+            "\n**Step",
+            "\n## Step",
+            "<Answer>:",
+            "\n<Answer>:",
+            "\n\nAnswer:",
+            "\nFinal Answer:",
+            "\n\nThe answer is"
+        ]
+        # Modern/lowercase-friendly defaults
+        self.answer_patterns = answer_patterns or [
+            "<answer>:",
+            "\n<answer>:",
+            "final answer",
+            "answer:",
+            "answer is"
+        ]
+        self.max_tokens_per_step = max_tokens_per_step
+
+    def is_step_complete(self, generated_text: str, token_count: int = None) -> bool:
+        for pattern in self.answer_patterns:
+            if pattern in generated_text.lower():
+                return True
+        if token_count and token_count >= self.max_tokens_per_step:
+            return True
+        return False
+
+    def is_trajectory_complete(self, generated_text: str, reached_eos: bool = False) -> bool:
+        return self.contains_answer_pattern(generated_text)
+
+    def contains_answer_pattern(self, generated_text: str) -> bool:
+        text = generated_text.lower()
+        for pattern in self.answer_patterns:
+            if pattern in text:
+                return True
+        return False
+
+    def extract_step_text(self, generated_text: str) -> str:
+        step_text = generated_text.strip()
+        for pattern in self.answer_patterns:
+            pos = step_text.lower().find(pattern)
+            if pos != -1:
+                step_text = step_text[:pos].strip()
+                break
+        return step_text
+
+
+def uncert_detector(
+    step_patterns: List[str] = None,
+    answer_patterns: List[str] = None,
+    max_tokens_per_step: int = 250,
+):
+    """New factory for uncert-cot behavior."""
+    return UncertStepBoundaryDetector(
+        step_patterns=step_patterns,
+        answer_patterns=answer_patterns,
+        max_tokens_per_step=max_tokens_per_step,
+    )

@@ -13,11 +13,11 @@ class UncertaintyGuidedCoT_PD:
     def __init__(
         self,
         model,
-        scorer,
         candidates_per_step: int,
         max_steps: int,
         max_new_tokens: int,
         temperature: float,
+        scorer=None,
         generation_batch_size: Optional[int] = None,
         problem_type: str = "math",
         uncertainty_threshold: Optional[float] = None,
@@ -490,20 +490,38 @@ class UncertaintyGuidedCoT_PD:
 
     def _generate_final_answer(self, trajectory: str) -> Tuple[str, float]:
         """
-        Generate multiple answer candidates without step detection and select best via scorer.
-        Returns (best_answer_text, best_score).
+        Generate multiple answer candidates and select the one with the highest
+        confidence score based on average top-2 probability gap per token,
+        i.e., mean_t [ p1(t) - p2(t) ]. Returns (best_answer_text, best_confidence).
         """
         num = self.candidates_per_step
-        answer_candidates = self.api_client.generate_texts(
+        entries = self.api_client.generate_texts_with_logprobs(
             prompt=trajectory,
             n=num,
             temperature=self.temperature,
             max_new_tokens=self.max_new_tokens,
+            top_k=self.uncertainty_top_k,
         )
 
-        scores = self.scorer.score_candidates(trajectory, answer_candidates)
-        best_idx = max(range(len(scores)), key=lambda i: scores[i])
-        best = answer_candidates[best_idx] or ""
+        if not entries:
+            return "\n<Answer>:", 0.0
+
+        # get the confidence of the answer as in the paper
+        confidences: List[float] = []
+        texts: List[str] = []
+        for ent in entries:
+            raw_text = ent.get("text", "") or ""
+            texts.append(raw_text)
+            top_ls = ent.get("top_logprobs", []) or []
+            gaps: List[float] = []
+            for pos in top_ls:
+                p1, p2 = self._extract_top_two_probs(pos)
+                gaps.append(max(0.0, p1 - p2))
+            conf = float(sum(gaps) / len(gaps)) if gaps else 0.0
+            confidences.append(conf)
+
+        best_idx = max(range(len(texts)), key=lambda i: confidences[i])
+        best = texts[best_idx] or ""
 
         # Ensure explicit <Answer>: tag; if missing, try to extract a number and format
         low = best.lower()
@@ -513,14 +531,14 @@ class UncertaintyGuidedCoT_PD:
             if m:
                 best = f"\n<Answer>: {m.group(0)}"
             else:
-                # Fallback: leave a tag to be consistent
                 best = "\n<Answer>:"
 
-        return best, float(scores[best_idx])
+        return best, float(confidences[best_idx])
 
     def cleanup(self):
         try:
-            self.scorer.cleanup()
+            if self.scorer is not None:
+                self.scorer.cleanup()
         except Exception:
             pass
 

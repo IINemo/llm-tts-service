@@ -17,29 +17,11 @@ from datasets import load_dataset
 from llm_tts.openrouter_chat import OpenRouterChat
 from llm_tts.together_chat import TogetherChatCompat
 from llm_tts.strategies.uncertainty_guided_pd import UncertaintyGuidedCoT_PD
-from llm_tts.scorers.base import StepScorer, CandidateScore
 from llm_tts.step_detection import StepBoundaryDetector, uncert_detector
-from llm_tts.deepseek_annotator import DeepSeekAnnotator
+from llm_tts.annotators.provider_verifier import ProviderVerifier
 
 import logging
-
-
 log = logging.getLogger(__name__)
-
-class DummyScorer(StepScorer):
-    def __init__(self):
-        super().__init__(name="DummyScorer")
-
-    def score_candidates_detailed(self, trajectory: str, candidates: List[str], **kwargs):
-        detailed = []
-        for cand in candidates:
-            length = max(1, len(cand.strip()))
-            score = max(0.0, 1.0 - (length / 512.0))
-            detailed.append(CandidateScore(candidate_text=cand, claim_scores=[score], aggregate_scores={}))
-        return detailed
-
-    def prepare_model(self):
-        return
 
 
 def format_prompt_gsm8k(question: str) -> str:
@@ -300,7 +282,7 @@ def run_eval(cfg: DictConfig):
 
     strategy_kwargs = dict(
         model=None,
-        scorer=DummyScorer(),
+        scorer=None,
         candidates_per_step=st_cfg.candidates_per_step,
         max_steps=st_cfg.max_steps,
         max_new_tokens=st_cfg.max_new_tokens,
@@ -450,11 +432,11 @@ def run_eval(cfg: DictConfig):
                 rg_ok = check_correctness("hotpotqa", ds[i], rg_ans)
                 rec["uncert"] = {
                     "trajectory": rg_traj,
+                    "answer": rg_ans,
+                    "correct": rg_ok,
                     "steps": out.get("steps", []),
                     "uncertainties": out.get("uncertainties", []),
                     "decision_trace": out.get("decision_trace", []),
-                    "answer": rg_ans,
-                    "correct": rg_ok,
                 }
             results.append(rec)
             with open(out_path, "a", encoding="utf-8") as f:
@@ -474,40 +456,51 @@ def run_eval(cfg: DictConfig):
     except Exception:
         pass
 
-    # Auto-run analysis for GSM8K results
-    try:
-        if ds_cfg.name.lower() == "gsm8k":
-            analyze_script = to_absolute_path("scripts/analyze_gsm8k.py")
-            tracks = []
-            if 'do_base' in locals() and do_base:
-                tracks.append("base")
-            if 'do_uncert' in locals() and do_uncert:
-                tracks.append("uncert")
-            cmd = [sys.executable, analyze_script, "--input", out_path]
-            if tracks:
-                cmd.extend(["--tracks", *tracks])
-            print("Running GSM8K analysis")
-            subprocess.run(cmd, check=False)
-    except Exception as e:
-        print(f"Failed to run analysis automatically: {e}")
-
-    # Optional DeepSeek-based correctness post-processing
+    # Optional provider-based correctness post-processing (LLM as a judge)
     try:
         ver_cfg = getattr(cfg, 'verification', None)
-        if ver_cfg and str(getattr(ver_cfg, 'type', 'deepseek')).lower() == 'deepseek' and bool(getattr(ver_cfg, 'enabled', False)):
-            print("Running DeepSeek verification on generated answers")
-            prompt_template = "{q}"
-            n_threads = int(getattr(ver_cfg, 'n_threads', 8))
-            model = getattr(ver_cfg, 'model', 'deepseek-reasoner')
-            api_key = getattr(ver_cfg, 'api_key', None)
-            cache_path = os.path.expanduser(getattr(ver_cfg, 'cache_path', "~/.cache"))
+        if ver_cfg and bool(getattr(ver_cfg, 'enabled', False)):
+            print("\nRunning LLM as a judge verification")
 
-            annotator = DeepSeekAnnotator(
-                prompt=prompt_template,
-                n_threads=n_threads,
-                cache_path=cache_path,
-                model=model,
-                api_key=api_key,
+            
+            prompt_template_path = cfg.verification.get('prompt_template_path', None)
+            if prompt_template_path:
+                try:
+                    p = to_absolute_path(prompt_template_path)
+                    with open(p, 'r', encoding='utf-8') as f:
+                        prompt_template = f.read()
+                except Exception as e:
+                    raise RuntimeError(f"Failed to load verification prompt from {ver_cfg.prompt_template_path}: {e}")
+            if prompt_template is None:
+                prompt_template = (
+                    "You will be given a <Problem> and its proposed <Solution>.\n"
+                    "Assess whether the solution is correct.\n\n"
+                    "<Problem>: {q}\n\n<Solution>: {a}\n\n"
+                    "Reply with '<Grade>: Correct' or '<Grade>: Incorrect' only."
+                )
+
+            # Resolve verification generation params
+            ver_model = cfg.verification.get('model', None)
+            ver_temperature = float(cfg.verification.get('temperature', 1.0))
+            ver_max_new_tokens = int(cfg.verification.get('max_new_tokens', 256))
+            ver_n = int(cfg.verification.get('n', 1))
+            ver_stop = list(cfg.verification.get('stop', ["<|endoftext|>"]))
+
+            # Build verification client matching the provider family
+            if client_type == "together":
+                ver_client = TogetherChatCompat(model=ver_model, api_key=provider_api_key)
+            elif client_type == "openrouter":
+                ver_client = OpenRouterChat(model=ver_model, api_key=provider_api_key, api_base="https://openrouter.ai/api/v1")
+            else:
+                raise RuntimeError("Unsupported provider for verification")
+
+            annotator = ProviderVerifier(
+                client=ver_client,
+                prompt_template=prompt_template,
+                n=ver_n,
+                temperature=ver_temperature,
+                max_new_tokens=ver_max_new_tokens,
+                stop=ver_stop,
             )
 
             # Collect base and uncert tracks separately for annotation
@@ -533,20 +526,20 @@ def run_eval(cfg: DictConfig):
 
             # Annotate base
             if base_problems:
-                base_annotations = annotator(base_problems, base_solutions)
+                base_annotations = annotator.verify_batch_with_texts(base_problems, base_solutions)
                 for rec_idx, ann in zip(base_indices, base_annotations):
-                    # 0 = correct, 1 = incorrect, NaN -> treat as incorrect
-                    is_nan = not (ann == ann)
-                    is_ok = (ann == 0) and (not is_nan)
-                    results[rec_idx].setdefault("base", {})["is_correct_deepseek"] = bool(is_ok)
+                    is_ok = bool(ann.get("is_correct")) if ann and ann.get("is_correct") is not None else False
+                    results[rec_idx].setdefault("base", {})["is_correct_verifier"] = bool(is_ok)
+                    # Save full annotator completions
+                    results[rec_idx].setdefault("base", {})["annotator_completions"] = ann.get("texts", [])
 
             # Annotate uncert
             if uncert_problems:
-                uncert_annotations = annotator(uncert_problems, uncert_solutions)
+                uncert_annotations = annotator.verify_batch_with_texts(uncert_problems, uncert_solutions)
                 for rec_idx, ann in zip(uncert_indices, uncert_annotations):
-                    is_nan = not (ann == ann)
-                    is_ok = (ann == 0) and (not is_nan)
-                    results[rec_idx].setdefault("uncert", {})["is_correct_deepseek"] = bool(is_ok)
+                    is_ok = bool(ann.get("is_correct")) if ann and ann.get("is_correct") is not None else False
+                    results[rec_idx].setdefault("uncert", {})["is_correct_verifier"] = bool(is_ok)
+                    results[rec_idx].setdefault("uncert", {})["annotator_completions"] = ann.get("texts", [])
 
             # Rewrite JSONL and pretty JSON with the new fields
             try:
@@ -555,11 +548,28 @@ def run_eval(cfg: DictConfig):
                         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 with open(pretty_path, 'w', encoding='utf-8') as f:
                     json.dump(results, f, ensure_ascii=False, indent=2)
-                print("DeepSeek verification results written to output files")
+                print(f"Verification results written to output files: {out_path} and {pretty_path}")
             except Exception as e:
-                print(f"Failed to write DeepSeek verification results: {e}")
+                print(f"Failed to write verification results: {e}")
     except Exception as e:
-        print(f"DeepSeek verification step failed: {e}")
+        print(f"Verification step failed: {e}")
+
+    # Auto-run analysis for GSM8K results (after verification so it can use judge fields)
+    try:
+        if ds_cfg.name.lower() == "gsm8k":
+            analyze_script = to_absolute_path("scripts/analyze_gsm8k.py")
+            tracks = []
+            if 'do_base' in locals() and do_base:
+                tracks.append("base")
+            if 'do_uncert' in locals() and do_uncert:
+                tracks.append("uncert")
+            cmd = [sys.executable, analyze_script, "--input", out_path]
+            if tracks:
+                cmd.extend(["--tracks", *tracks])
+            print("\nRunning GSM8K analysis")
+            subprocess.run(cmd, check=False)
+    except Exception as e:
+        print(f"Failed to run analysis automatically: {e}")
 
 
 @hydra.main(version_base=None, config_path="../config/uncert_api", config_name="default")
