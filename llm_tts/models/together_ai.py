@@ -2,11 +2,12 @@
 Together AI model adapter.
 """
 
-import os
 import logging
+import os
 import time
+from typing import List, Optional
+
 import requests
-from typing import List, Dict, Any, Optional, Tuple
 
 from .base import BaseModel
 

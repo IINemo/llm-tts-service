@@ -3,11 +3,11 @@ Model factory for creating model instances from configuration.
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from .base import BaseModel
-from .together_ai import TogetherAIModel
 from .openrouter import OpenRouterModel
+from .together_ai import TogetherAIModel
 
 log = logging.getLogger(__name__)
 

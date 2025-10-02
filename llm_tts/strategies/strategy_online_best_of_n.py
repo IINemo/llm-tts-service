@@ -1,6 +1,8 @@
 import torch
 from typing import List, Dict
 import copy
+import logging
+
 
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
@@ -8,9 +10,8 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from .strategy_base import StrategyBase
 
-import logging
+from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 

@@ -1,7 +1,8 @@
-from dataclasses import dataclass
-from typing import List, Dict, Optional
-import torch
 from abc import abstractmethod
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+
+import torch
 
 
 @dataclass

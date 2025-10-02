@@ -2,12 +2,12 @@
 Majority voting scorer for self-consistency reasoning
 """
 
-from typing import List
-from collections import Counter
 import logging
 import re
+from collections import Counter
+from typing import List
 
-from .step_scorer_base import StepScorerBase, CandidateScore
+from .step_scorer_base import CandidateScore, StepScorerBase
 
 log = logging.getLogger(__name__)
 

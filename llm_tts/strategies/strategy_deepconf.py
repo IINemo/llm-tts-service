@@ -6,9 +6,9 @@ Adapted for OpenRouter API instead of vLLM.
 """
 
 import logging
+from typing import Any, Dict, List, Optional
+
 import numpy as np
-from typing import List, Dict, Any, Optional
-from collections import Counter
 
 from .strategy_base import StrategyBase
 
@@ -267,7 +267,7 @@ class StrategyDeepConf(StrategyBase):
 
         log.info(f"🏆 Selected answer: '{selected_answer}'")
         log.info(f"   Confidence: {confidence_score:.3f}")
-        log.info(f"   Vote distribution:")
+        log.info("   Vote distribution:")
         for ans, pct in sorted(
             vote_percentages.items(), key=lambda x: x[1], reverse=True
         ):
@@ -335,7 +335,8 @@ class StrategyDeepConf(StrategyBase):
                 traces.append(trace)
 
                 log.info(
-                    f"   Tokens: {len(token_data)}, Min conf: {min_conf:.3f}, Answer: {extracted_answer}"
+                    f"   Tokens: {len(token_data)}, Min conf: {min_conf:.3f}, "
+                    f"Answer: {extracted_answer}"
                 )
 
             except Exception as e:

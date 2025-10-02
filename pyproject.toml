@@ -31,18 +31,16 @@ dependencies = [
     "parse>=1.19.0",
     "hydra-core>=1.2.0",
     "omegaconf>=2.2.0",
-    "lm-polygraph>=0.0.1",  # Dev branch required as per README
+    # "lm-polygraph>=0.0.1",  # Installed separately via setup.sh (dev branch)
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "black>=22.0.0",
-    "isort>=5.10.0",
-    "flake8>=5.0.0",
-    "mypy>=0.991",
-    "pre-commit>=2.20.0",
+    "black>=24.0.0",
+    "isort>=5.13.0",
+    "flake8>=7.0.0",
+    "pre-commit>=3.0.0",
 ]
 
 docs = [
