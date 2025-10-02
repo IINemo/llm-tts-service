@@ -1,0 +1,7 @@
+# DeepConf strategy configuration
+
+type: deepconf
+budget: 8  # Number of reasoning traces to generate
+window_size: 2048  # Sliding window size for confidence computation
+filter_method: "top10"  # Options: "none", "top10", "threshold"
+confidence_threshold: null  # Only used if filter_method is "threshold"
