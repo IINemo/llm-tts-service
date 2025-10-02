@@ -30,7 +30,7 @@ class StrategySelfConsistency(StrategyBase):
         max_new_tokens: int = 512,
         temperature: float = 0.7,
         generation_batch_size: int = None,
-        scorer: Optional[Any] = None
+        scorer: Optional[Any] = None,
     ):
         """
         Initialize self-consistency strategy.
@@ -51,7 +51,7 @@ class StrategySelfConsistency(StrategyBase):
 
         # Use majority voting scorer by default
         self.scorer = scorer or ChainMajorityVotingScorer()
-        if hasattr(self.scorer, 'prepare_model'):
+        if hasattr(self.scorer, "prepare_model"):
             self.scorer.prepare_model()
 
     def generate_reasoning_paths(self, prompt: str) -> List[str]:
@@ -64,25 +64,27 @@ class StrategySelfConsistency(StrategyBase):
         Returns:
             List of complete reasoning paths (prompt + generated reasoning)
         """
-        log.info(f"Generating {self.num_paths} reasoning paths with temperature {self.temperature}")
+        log.info(
+            f"Generating {self.num_paths} reasoning paths with temperature {self.temperature}"
+        )
 
         all_paths = []
 
         # Check if this is an API model (has generate method directly)
-        if hasattr(self.model, 'api_model') or self.model.device == "api":
+        if hasattr(self.model, "api_model") or self.model.device == "api":
             log.info("Using API model for generation")
             # Use API model directly
             for i in range(self.num_paths):
                 log.info(f"Generating path {i+1}/{self.num_paths}")
 
                 try:
-                    if hasattr(self.model, 'generate'):
+                    if hasattr(self.model, "generate"):
                         # Direct API model
                         completions = self.model.generate(
                             prompt=prompt,
                             max_new_tokens=self.max_new_tokens,
                             temperature=self.temperature,
-                            num_return_sequences=1
+                            num_return_sequences=1,
                         )
                         generated_text = completions[0] if completions else ""
                     else:
@@ -91,7 +93,7 @@ class StrategySelfConsistency(StrategyBase):
                             prompt=prompt,
                             max_new_tokens=self.max_new_tokens,
                             temperature=self.temperature,
-                            num_return_sequences=1
+                            num_return_sequences=1,
                         )
                         generated_text = completions[0] if completions else ""
 
@@ -108,19 +110,25 @@ class StrategySelfConsistency(StrategyBase):
             # Use local model with batched generation
             log.info("Using local model for generation")
             # Generate in batches if needed to manage memory
-            num_batches = (self.num_paths + self.generation_batch_size - 1) // self.generation_batch_size
+            num_batches = (
+                self.num_paths + self.generation_batch_size - 1
+            ) // self.generation_batch_size
 
             for batch_idx in range(num_batches):
                 start_idx = batch_idx * self.generation_batch_size
-                end_idx = min((batch_idx + 1) * self.generation_batch_size, self.num_paths)
+                end_idx = min(
+                    (batch_idx + 1) * self.generation_batch_size, self.num_paths
+                )
                 batch_size = end_idx - start_idx
 
-                log.info(f"Generating batch {batch_idx + 1}/{num_batches} ({batch_size} paths)")
+                log.info(
+                    f"Generating batch {batch_idx + 1}/{num_batches} ({batch_size} paths)"
+                )
 
                 # Tokenize prompt
                 inputs = self.model.tokenize([prompt] * batch_size)
-                input_ids = inputs['input_ids'].to(self.model.device)
-                attention_mask = inputs['attention_mask'].to(self.model.device)
+                input_ids = inputs["input_ids"].to(self.model.device)
+                attention_mask = inputs["attention_mask"].to(self.model.device)
 
                 # Generate reasoning paths
                 with torch.no_grad():
@@ -134,7 +142,7 @@ class StrategySelfConsistency(StrategyBase):
                         pad_token_id=self.model.tokenizer.eos_token_id,
                         eos_token_id=self.model.tokenizer.eos_token_id,
                         repetition_penalty=1.1,  # Reduce repetition
-                        length_penalty=1.0
+                        length_penalty=1.0,
                     )
 
                 # Decode generated paths
@@ -142,8 +150,10 @@ class StrategySelfConsistency(StrategyBase):
                 for i in range(batch_size):
                     output_seq = outputs[i]
                     # Extract only the newly generated tokens
-                    new_tokens = output_seq[input_ids.shape[1]:]
-                    generated_text = self.model.tokenizer.decode(new_tokens, skip_special_tokens=True)
+                    new_tokens = output_seq[input_ids.shape[1] :]
+                    generated_text = self.model.tokenizer.decode(
+                        new_tokens, skip_special_tokens=True
+                    )
 
                     # Combine with original prompt to get full reasoning path
                     full_path = prompt + generated_text
@@ -179,7 +189,7 @@ class StrategySelfConsistency(StrategyBase):
                 "best_answer": "no_answer",
                 "consensus_score": 0.0,
                 "all_answers": [],
-                "answer_distribution": {}
+                "answer_distribution": {},
             }
 
         # Use the scorer to get consensus scores
@@ -198,9 +208,12 @@ class StrategySelfConsistency(StrategyBase):
 
         # Calculate answer distribution
         from collections import Counter
+
         answer_counts = Counter(all_answers)
 
-        log.info(f"Selected reasoning path {best_idx} with consensus score {best_score:.3f}")
+        log.info(
+            f"Selected reasoning path {best_idx} with consensus score {best_score:.3f}"
+        )
         log.info(f"Best answer: {best_answer}")
         log.info(f"Answer distribution: {dict(answer_counts)}")
 
@@ -211,7 +224,7 @@ class StrategySelfConsistency(StrategyBase):
             "all_answers": all_answers,
             "answer_distribution": dict(answer_counts),
             "all_paths": reasoning_paths,
-            "all_scores": scores
+            "all_scores": scores,
         }
 
     def generate_trajectory(self, prompt: str) -> Dict[str, Any]:
@@ -224,7 +237,7 @@ class StrategySelfConsistency(StrategyBase):
         Returns:
             Dictionary with trajectory information compatible with evaluation framework
         """
-        
+
         log.info(f"Starting self-consistency reasoning for prompt: {prompt[:100]}...")
 
         # Generate multiple reasoning paths
@@ -244,11 +257,11 @@ class StrategySelfConsistency(StrategyBase):
                 "consensus_score": result["consensus_score"],
                 "answer_distribution": result["answer_distribution"],
                 "all_answers": result["all_answers"],
-                "selected_answer": result["best_answer"]
-            }
+                "selected_answer": result["best_answer"],
+            },
         }
 
     def cleanup(self):
         """Clean up resources"""
-        if hasattr(self.scorer, 'cleanup'):
+        if hasattr(self.scorer, "cleanup"):
             self.scorer.cleanup()

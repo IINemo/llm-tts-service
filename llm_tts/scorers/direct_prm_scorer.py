@@ -142,41 +142,42 @@ class StepsExtractor(StatCalculator):
 class DirectPRMScorer(StepScorerRewardBase):
     """
     Direct PRM scorer that applies Process Reward Model without stat calculator pipeline.
-    
+
     This implementation:
     1. Extracts claims/steps from candidates
     2. Formats them for PRM evaluation
     3. Computes step rewards directly
     4. Returns reward scores (higher = better)
-    
+
     Much cleaner and more efficient than going through the full pipeline.
     """
-    
+
     def __init__(
         self,
         model: WhiteboxModel,
-        prm_model_path: str, #= "Qwen/Qwen2.5-Math-7B-PRM800K",
+        prm_model_path: str,  # = "Qwen/Qwen2.5-Math-7B-PRM800K",
         device: str = "cuda",
         batch_size: int = 8,
-        prompt_template: str = None
+        prompt_template: str = None,
     ):
         super().__init__("DirectPRM")
         self.model = model
         self.prm_model_path = prm_model_path
         self.device = device
         self.batch_size = batch_size
-        self.prompt_template = prompt_template or "Question: {q}\n\nLet's solve this step by step.\n\n"
+        self.prompt_template = (
+            prompt_template or "Question: {q}\n\nLet's solve this step by step.\n\n"
+        )
         self.prm_model = None
         self.prm_tokenizer = None
         self.steps_extractor = StepsExtractor(progress_bar=False)
-        
+
     def prepare_model(self):
         """Load PRM model and tokenizer"""
         if self.prm_model is None:
             log.info(f"Loading PRM model from {self.prm_model_path}")
             self.prm_tokenizer = AutoTokenizer.from_pretrained(
-                self.prm_model_path, 
-                trust_remote_code=True
+                self.prm_model_path, trust_remote_code=True
             )
             self.prm_model = AutoModel.from_pretrained(
                 self.prm_model_path,
@@ -184,7 +185,7 @@ class DirectPRMScorer(StepScorerRewardBase):
                 torch_dtype=torch.bfloat16,
                 trust_remote_code=True,
             ).eval()
-            
+
     def cleanup(self):
         """Free PRM model memory"""
         if self.prm_model is not None:
@@ -193,108 +194,107 @@ class DirectPRMScorer(StepScorerRewardBase):
             del self.prm_tokenizer
             self.prm_tokenizer = None
             torch.cuda.empty_cache()
-    
+
     def compute_claim_rewards(
-        self,
-        chat: List[Dict[str, str]],
-        candidates: List[str],
-        **kwargs
+        self, chat: List[Dict[str, str]], candidates: List[str], **kwargs
     ) -> List[List[float]]:
         """
         Compute reward scores for claims in each candidate.
-        
+
         Args:
             chat: Current chat
             candidates: List of candidate next steps
-            
+
         Returns:
             List of claim reward lists (one per candidate)
         """
         self.prepare_model()
-        
+
         if not candidates:
             return []
-        
+
         # Score all candidates
         all_rewards = []
-        
+
         for candidate in candidates:
             rewards = self._score_single_candidate(chat, candidate)
             all_rewards.append(rewards)
 
             # Clean up memory after each candidate
             torch.cuda.empty_cache()
-        
+
         return all_rewards
-    
+
     def _score_single_candidate(
-        self, 
-        chat: List[Dict[str, str]], 
-        candidate: str
+        self, chat: List[Dict[str, str]], candidate: str
     ) -> List[float]:
         """Score a single candidate using PRM"""
-        
+
         # Extract claims from candidate
-        candidate_tokens = self.prm_tokenizer(
-            candidate.text, return_tensors="pt"
-        )
-            
+        candidate_tokens = self.prm_tokenizer(candidate.text, return_tensors="pt")
+
         claims = self.steps_extractor.split_to_steps(
-            candidate.text,
-            candidate_tokens["input_ids"][0],
-            self.prm_tokenizer
+            candidate.text, candidate_tokens["input_ids"][0], self.prm_tokenizer
         )
-        
+
         if not claims:
             log.debug(f"No claims extracted from candidate: {candidate.text[:50]}...")
             return [0.0]
-        
+
         # Get PRM rewards
         rewards = self._compute_prm_rewards(chat, claims)
         return rewards if rewards else [0.0]
-    
-    def _compute_prm_rewards(self, chat: List[Dict[str, str]], claims: List[Any]) -> List[float]:
+
+    def _compute_prm_rewards(
+        self, chat: List[Dict[str, str]], claims: List[Any]
+    ) -> List[float]:
         """Compute PRM rewards for claims"""
-        
+
         if not claims:
             return []
-        
+
         # Format conversation for PRM
         question = chat[-1]["content"]
         log.info(f"Question: {question}")
         messages = [
-            {"role": "system", "content": "Please reason step by step, and put your final answer within \\boxed{}."},
+            {
+                "role": "system",
+                "content": "Please reason step by step, and put your final answer within \\boxed{}.",
+            },
             {"role": "user", "content": question},
-            {"role": "assistant", "content": "<extra_0>".join([c.claim_text for c in claims]) + "<extra_0>"},
+            {
+                "role": "assistant",
+                "content": "<extra_0>".join([c.claim_text for c in claims])
+                + "<extra_0>",
+            },
         ]
-        
+
         conversation_str = self.prm_tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=False
         )
-        
-        input_ids = self.prm_tokenizer.encode(
-            conversation_str, 
-            return_tensors="pt"
-        ).to(self.prm_model.device)
-        
+
+        input_ids = self.prm_tokenizer.encode(conversation_str, return_tensors="pt").to(
+            self.prm_model.device
+        )
+
         # Get model outputs
         with torch.no_grad():
             outputs = self.prm_model(input_ids=input_ids)
-        
+
         # Extract step rewards
         step_sep_id = self.prm_tokenizer.encode("<extra_0>")[0]
-        token_masks = (input_ids == step_sep_id)
-        
+        token_masks = input_ids == step_sep_id
+
         # Compute rewards
         rewards = self._extract_step_rewards(outputs[0], token_masks)
-        
+
         return rewards[0] if rewards else []
-    
+
     def _extract_step_rewards(self, logits, token_masks):
         """Extract reward scores from PRM logits"""
         probabilities = F.softmax(logits, dim=-1)
         probabilities = probabilities * token_masks.unsqueeze(-1)
-        
+
         all_scores = []
         for i in range(probabilities.size(0)):
             sample = probabilities[i]
@@ -302,5 +302,5 @@ class DirectPRMScorer(StepScorerRewardBase):
             positive_probs = sample[sample != 0].view(-1, 2)[:, 1]
             scores = positive_probs.cpu().tolist()
             all_scores.append(scores)
-            
+
         return all_scores

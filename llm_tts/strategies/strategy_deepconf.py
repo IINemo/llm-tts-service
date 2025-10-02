@@ -31,7 +31,7 @@ def extract_answer(text: str) -> Optional[str]:
         return None
 
     # Extract from original text (preserving case)
-    ans = text[last_boxed_idx + 5:]  # Skip "boxed"
+    ans = text[last_boxed_idx + 5 :]  # Skip "boxed"
 
     if len(ans) == 0:
         return ""
@@ -57,7 +57,9 @@ def extract_answer(text: str) -> Optional[str]:
         return a
 
 
-def compute_token_confidence_from_logprobs(top_logprobs: List[Dict], topk: int = 20) -> float:
+def compute_token_confidence_from_logprobs(
+    top_logprobs: List[Dict], topk: int = 20
+) -> float:
     """
     Compute token confidence from top-k logprobs (DeepConf formula).
 
@@ -78,13 +80,15 @@ def compute_token_confidence_from_logprobs(top_logprobs: List[Dict], topk: int =
         return 0.0
 
     # Take top-k logprobs and compute negative mean
-    mean_logprob = np.mean([lp['logprob'] for lp in top_logprobs[:k]])
+    mean_logprob = np.mean([lp["logprob"] for lp in top_logprobs[:k]])
     confidence = -mean_logprob
 
     return round(float(confidence), 3)
 
 
-def compute_sliding_window_confidence(confs: List[float], window_size: int) -> List[float]:
+def compute_sliding_window_confidence(
+    confs: List[float], window_size: int
+) -> List[float]:
     """
     Compute sliding window mean confidence (from DeepConf).
 
@@ -100,7 +104,7 @@ def compute_sliding_window_confidence(confs: List[float], window_size: int) -> L
 
     sliding_means = []
     for i in range(len(confs) - window_size + 1):
-        window = confs[i:i + window_size]
+        window = confs[i : i + window_size]
         sliding_means.append(round(sum(window) / len(window), 3))
 
     return sliding_means
@@ -124,7 +128,9 @@ def weighted_majority_vote(answers: List[str], weights: List[float]) -> Optional
     for answer, weight in zip(answers, weights):
         if answer is not None:
             answer_str = str(answer)
-            answer_weights[answer_str] = answer_weights.get(answer_str, 0.0) + float(weight)
+            answer_weights[answer_str] = answer_weights.get(answer_str, 0.0) + float(
+                weight
+            )
 
     if not answer_weights:
         return None
@@ -176,13 +182,17 @@ class StrategyDeepConf(StrategyBase):
         self.confidence_threshold = confidence_threshold
 
         # Check model supports logprobs
-        if not hasattr(model, 'supports_logprobs') or not model.supports_logprobs():
-            log.warning("⚠️  Model does not support logprobs - DeepConf will not work correctly")
+        if not hasattr(model, "supports_logprobs") or not model.supports_logprobs():
+            log.warning(
+                "⚠️  Model does not support logprobs - DeepConf will not work correctly"
+            )
 
-        if not hasattr(model, 'generate_with_confidence'):
+        if not hasattr(model, "generate_with_confidence"):
             raise ValueError("Model must have generate_with_confidence() method")
 
-        log.info(f"✅ DeepConf initialized: budget={budget}, window={window_size}, filter={filter_method}")
+        log.info(
+            f"✅ DeepConf initialized: budget={budget}, window={window_size}, filter={filter_method}"
+        )
 
     def generate_trajectory(self, prompt: str) -> Dict[str, Any]:
         """
@@ -201,7 +211,7 @@ class StrategyDeepConf(StrategyBase):
         traces = self._generate_traces(prompt)
 
         # Extract answers and confidences
-        valid_traces = [t for t in traces if t.get('extracted_answer')]
+        valid_traces = [t for t in traces if t.get("extracted_answer")]
         log.info(f"📊 Valid traces with answers: {len(valid_traces)}/{len(traces)}")
 
         if not valid_traces:
@@ -217,8 +227,8 @@ class StrategyDeepConf(StrategyBase):
                     "selected_answer": None,
                     "confidence_score": 0.0,
                     "vote_distribution": {},
-                    "all_traces": traces
-                }
+                    "all_traces": traces,
+                },
             }
 
         # Filter traces by confidence
@@ -226,8 +236,8 @@ class StrategyDeepConf(StrategyBase):
         log.info(f"🔍 Filtered traces: {len(filtered_traces)}/{len(valid_traces)}")
 
         # Perform weighted voting
-        answers = [t['extracted_answer'] for t in filtered_traces]
-        weights = [t['min_conf'] for t in filtered_traces]
+        answers = [t["extracted_answer"] for t in filtered_traces]
+        weights = [t["min_conf"] for t in filtered_traces]
 
         selected_answer = weighted_majority_vote(answers, weights)
 
@@ -237,22 +247,30 @@ class StrategyDeepConf(StrategyBase):
             vote_dist[ans] = vote_dist.get(ans, 0.0) + weight
 
         total_weight = sum(vote_dist.values())
-        vote_percentages = {ans: (w / total_weight) * 100 for ans, w in vote_dist.items()}
+        vote_percentages = {
+            ans: (w / total_weight) * 100 for ans, w in vote_dist.items()
+        }
 
         # Get confidence (proportion of vote)
-        confidence_score = vote_dist.get(selected_answer, 0.0) / total_weight if total_weight > 0 else 0.0
+        confidence_score = (
+            vote_dist.get(selected_answer, 0.0) / total_weight
+            if total_weight > 0
+            else 0.0
+        )
 
         # Find selected trace
         selected_trace = None
         for trace in filtered_traces:
-            if trace['extracted_answer'] == selected_answer:
-                selected_trace = trace['text']
+            if trace["extracted_answer"] == selected_answer:
+                selected_trace = trace["text"]
                 break
 
         log.info(f"🏆 Selected answer: '{selected_answer}'")
         log.info(f"   Confidence: {confidence_score:.3f}")
         log.info(f"   Vote distribution:")
-        for ans, pct in sorted(vote_percentages.items(), key=lambda x: x[1], reverse=True):
+        for ans, pct in sorted(
+            vote_percentages.items(), key=lambda x: x[1], reverse=True
+        ):
             log.info(f"     {ans}: {pct:.1f}%")
 
         return {
@@ -268,8 +286,8 @@ class StrategyDeepConf(StrategyBase):
                 "vote_distribution": vote_percentages,
                 "filter_method": self.filter_method,
                 "all_traces": traces,
-                "filtered_traces": filtered_traces
-            }
+                "filtered_traces": filtered_traces,
+            },
         }
 
     def _generate_traces(self, prompt: str) -> List[Dict[str, Any]]:
@@ -285,20 +303,21 @@ class StrategyDeepConf(StrategyBase):
                     prompt=prompt,
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,
-                    top_p=self.top_p
+                    top_p=self.top_p,
                 )
 
                 # Compute per-token confidences
                 token_confs = []
                 for token_info in token_data:
                     conf = compute_token_confidence_from_logprobs(
-                        token_info.get('top_logprobs', []),
-                        topk=self.top_logprobs
+                        token_info.get("top_logprobs", []), topk=self.top_logprobs
                     )
                     token_confs.append(conf)
 
                 # Compute sliding window confidences
-                window_confs = compute_sliding_window_confidence(token_confs, self.window_size)
+                window_confs = compute_sliding_window_confidence(
+                    token_confs, self.window_size
+                )
                 min_conf = min(window_confs) if window_confs else 0.0
 
                 # Extract answer
@@ -315,7 +334,9 @@ class StrategyDeepConf(StrategyBase):
 
                 traces.append(trace)
 
-                log.info(f"   Tokens: {len(token_data)}, Min conf: {min_conf:.3f}, Answer: {extracted_answer}")
+                log.info(
+                    f"   Tokens: {len(token_data)}, Min conf: {min_conf:.3f}, Answer: {extracted_answer}"
+                )
 
             except Exception as e:
                 log.error(f"   ❌ Error generating trace {i+1}: {e}")
@@ -330,14 +351,14 @@ class StrategyDeepConf(StrategyBase):
 
         if self.filter_method == "top10":
             # Keep top 10% by min_conf
-            confs = [t['min_conf'] for t in traces]
+            confs = [t["min_conf"] for t in traces]
             threshold = np.percentile(confs, 90)
-            filtered = [t for t in traces if t['min_conf'] >= threshold]
+            filtered = [t for t in traces if t["min_conf"] >= threshold]
             return filtered if filtered else traces  # Return all if none pass
 
         if self.filter_method == "threshold" and self.confidence_threshold is not None:
             # Keep traces above threshold
-            filtered = [t for t in traces if t['min_conf'] >= self.confidence_threshold]
+            filtered = [t for t in traces if t["min_conf"] >= self.confidence_threshold]
             return filtered if filtered else traces  # Return all if none pass
 
         return traces
