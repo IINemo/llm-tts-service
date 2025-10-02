@@ -6,12 +6,14 @@ by Wang et al. (2022). Generates multiple diverse reasoning paths and selects
 the most consistent answer via majority voting.
 """
 
-import torch
-from typing import List, Dict, Any, Optional
 import logging
+from typing import Any, Dict, List, Optional
+
 import numpy as np
+import torch
 
 from llm_tts.scorers.majority_voting import ChainMajorityVotingScorer
+
 from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)

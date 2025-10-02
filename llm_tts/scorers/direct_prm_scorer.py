@@ -2,19 +2,18 @@
 Direct PRM scorer that bypasses the stat calculator pipeline for efficient stepwise scoring
 """
 
+import logging
+from typing import Any, Dict, List
+
 import torch
 import torch.nn.functional as F
-from typing import List, Any, Dict
-from transformers import AutoTokenizer, AutoModel
-from tqdm import tqdm
-
 from lm_polygraph import WhiteboxModel
 from lm_polygraph.stat_calculators import StatCalculator
 from lm_polygraph.stat_calculators.extract_claims import Claim
+from tqdm import tqdm
+from transformers import AutoModel, AutoTokenizer
 
 from .step_scorer_reward_base import StepScorerRewardBase
-
-import logging
 
 log = logging.getLogger(__name__)
 
@@ -259,7 +258,10 @@ class DirectPRMScorer(StepScorerRewardBase):
         messages = [
             {
                 "role": "system",
-                "content": "Please reason step by step, and put your final answer within \\boxed{}.",
+                "content": (
+                    "Please reason step by step, and put your final "
+                    "answer within \\boxed{}."
+                ),
             },
             {"role": "user", "content": question},
             {

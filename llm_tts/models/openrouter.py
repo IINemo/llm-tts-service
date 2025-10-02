@@ -2,9 +2,9 @@
 OpenRouter model adapter with token probability support.
 """
 
-import os
 import logging
-from typing import List, Dict, Optional, Tuple
+import os
+from typing import Dict, List, Optional, Tuple
 
 try:
     from openai import OpenAI
@@ -161,7 +161,8 @@ class OpenRouterModel(BaseModel):
                     )
             else:
                 log.warning(
-                    f"No logprobs in response! Model '{self.model_name}' may not support logprobs via OpenRouter"
+                    f"No logprobs in response! Model '{self.model_name}' "
+                    "may not support logprobs via OpenRouter"
                 )
 
             return generated_text, token_confidence_data

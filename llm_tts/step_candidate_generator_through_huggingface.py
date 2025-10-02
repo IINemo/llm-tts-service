@@ -2,24 +2,20 @@
 Candidate step generation system for online best-of-n
 """
 
-import torch
-from typing import List, Dict
-from transformers import StoppingCriteriaList
+import logging
 import time
+from typing import List, Dict
+
+import torch
+from lm_polygraph import WhiteboxModel
+from transformers import StoppingCriteriaList
 
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
     StepCandidateGeneratorBase,
 )
 
-from lm_polygraph import WhiteboxModel
-
-from .step_detection import (
-    StepBoundaryDetector,
-    BatchStepStoppingCriteria,
-)
-
-import logging
+from .step_detection import BatchStepStoppingCriteria, StepBoundaryDetector
 
 log = logging.getLogger(__name__)
 
@@ -91,13 +87,18 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             }
 
             log.info(
-                f"Generation params: do_sample={gen_params['do_sample']}, temp={gen_params['temperature']}, top_p={gen_params['top_p']}, num_return_sequences={gen_params['num_return_sequences']}"
+                f"Generation params: do_sample={gen_params['do_sample']}, "
+                f"temp={gen_params['temperature']}, "
+                f"top_p={gen_params['top_p']}, "
+                f"num_return_sequences={gen_params['num_return_sequences']}"
             )
             log.info(
-                f"Model generation_parameters.do_sample: {self.model.generation_parameters.do_sample}"
+                f"Model generation_parameters.do_sample: "
+                f"{self.model.generation_parameters.do_sample}"
             )
             log.info(
-                f"Model generation_parameters.temperature: {self.model.generation_parameters.temperature}"
+                f"Model generation_parameters.temperature: "
+                f"{self.model.generation_parameters.temperature}"
             )
 
             # Override model's default generation parameters to ensure sampling
@@ -112,7 +113,9 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             self.model.generation_parameters.top_k = self.top_k
 
             log.info(
-                f"After override - do_sample: {self.model.generation_parameters.do_sample}, temp: {self.model.generation_parameters.temperature}"
+                f"After override - do_sample: "
+                f"{self.model.generation_parameters.do_sample}, "
+                f"temp: {self.model.generation_parameters.temperature}"
             )
 
             with torch.no_grad():

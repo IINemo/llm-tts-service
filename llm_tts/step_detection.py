@@ -2,9 +2,9 @@
 Real-time step boundary detection during generation
 """
 
-import torch
 from typing import List
 
+import torch
 from transformers import StoppingCriteria
 
 
@@ -19,8 +19,10 @@ class StepBoundaryDetector:
     ):
         """
         Args:
-            step_patterns: Patterns that indicate step boundaries (e.g., ["\n- Step", "\nStep"])
-            answer_patterns: Patterns that indicate final answer (e.g., ["<Answer>:", "\n\nAnswer:"])
+            step_patterns: Patterns that indicate step boundaries
+                (e.g., ["\n- Step", "\nStep"])
+            answer_patterns: Patterns that indicate final answer
+                (e.g., ["<Answer>:", "\n\nAnswer:"])
             max_tokens_per_step: Maximum tokens allowed per step
         """
         self.step_patterns = step_patterns or [
@@ -53,7 +55,8 @@ class StepBoundaryDetector:
                 return True
 
         # Count occurrences of "- Step" pattern specifically
-        # We need to see it twice: once at the beginning of current step, once at the beginning of next step
+        # We need to see it twice: once at the beginning of current step,
+        # once at the beginning of next step
         step_count = generated_text.count("- Step")
 
         # Stop when we see 2 or more "- Step" markers (current step + next step beginning)

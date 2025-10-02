@@ -1,7 +1,9 @@
-from .strategy_base import StrategyBase
-from typing import Dict, Any
-import torch
 import logging
+from typing import Any, Dict
+
+import torch
+
+from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 

@@ -1,23 +1,25 @@
-from parse import parse
-from concurrent.futures.thread import ThreadPoolExecutor
-from tqdm import tqdm
-import numpy as np
-
-from lm_polygraph.utils.openai_chat import OpenAIChat
-
 import logging
+from concurrent.futures.thread import ThreadPoolExecutor
+
+import numpy as np
+from lm_polygraph.utils.openai_chat import OpenAIChat
+from parse import parse
+from tqdm import tqdm
 
 log = logging.getLogger()
 
 
 ANNOTATION_PROMPT = r"""
-You will be given a <Problem> and its proposed <Solution>. Your task is to assess whether the solution is **correct** or **incorrect**.
+You will be given a <Problem> and its proposed <Solution>.
+Your task is to assess whether the solution is **correct** or **incorrect**.
 
-Respond using the **exact format** below, do not include any text outside this template.
+Respond using the **exact format** below,
+do not include any text outside this template.
 Output format:
 <start of response>
 Solution comments:
-... your comments on the solution, explaining reasoning, pointing out any errors or confirming correctness ...
+... your comments on the solution, explaining reasoning,
+    pointing out any errors or confirming correctness ...
 <Grade>: (Correct|Incorrect)
 <end of response>
 
@@ -43,10 +45,12 @@ class EvaluatorGoldStandard:
 
     def _score_single(self, inp: tuple[str, str, str]) -> float:
         problem, solution, gold_answer = inp
-        # This line extracts the question from the problem string using the prompt template
-        # It uses the parse library to match the prompt template against the problem string
-        # and extracts the named field "q" (which corresponds to {q} in the template)
-        # If parsing fails, parse() returns None and accessing .named["q"] will raise an AttributeError
+        # This line extracts the question from the problem string using
+        # the prompt template. It uses the parse library to match the
+        # prompt template against the problem string and extracts the
+        # named field "q" (which corresponds to {q} in the template).
+        # If parsing fails, parse() returns None and accessing
+        # .named["q"] will raise an AttributeError
         parsed = parse(self.prompt, problem)
         if parsed is not None:
             problem = parsed.named["q"]
