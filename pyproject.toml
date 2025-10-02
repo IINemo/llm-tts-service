@@ -31,7 +31,7 @@ dependencies = [
     "parse>=1.19.0",
     "hydra-core>=1.2.0",
     "omegaconf>=2.2.0",
-    "lm-polygraph>=0.0.1",  # Dev branch required as per README
+    # "lm-polygraph>=0.0.1",  # Installed separately via setup.sh (dev branch)
 ]
 
 [project.optional-dependencies]
