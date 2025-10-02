@@ -2,7 +2,8 @@ import torch
 from typing import List, Dict
 import copy
 
-from llm_tts.step_candidate_generator import StepCandidateGenerator
+from llm_tts.step_candidate_generator_through_api import StepCandidateGeneratorThroughAPI
+from llm_tts.step_candidate_generator_through_huggingface import StepCandidateGeneratorThroughHuggingface
 from .strategy_base import StrategyBase
 
 import logging
@@ -23,7 +24,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         max_new_tokens: int,
         temperature: float,
         generation_batch_size: int,
-        step_generator: StepCandidateGenerator,
+        step_generator: StepCandidateGeneratorThroughAPI | StepCandidateGeneratorThroughHuggingface,
     ):
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
@@ -69,13 +70,17 @@ class StrategyOnlineBestOfN(StrategyBase):
                 log.info("No candidates generated, stopping")
                 break
 
+
+            print([c.text for c in candidates], '7777777777777777')
             # Score candidates
-            all_validities = self.scorer.score_candidates(
-                trajectory, [c.text for c in candidates]
+            candidate_validity_scores = self.scorer.score_candidates(
+                request, candidates
             )
 
-            # Aggregate scores for each candidate
-            candidate_validity_scores = self._aggregate_scores(all_validities)
+
+            # print("all_validities", all_validities)
+            # # Aggregate scores for each candidate
+            # candidate_validity_scores = self._aggregate_scores(all_validities)
 
             # Log all candidates
             log.info(f"Generated {len(candidates)} candidates:")
@@ -103,7 +108,11 @@ class StrategyOnlineBestOfN(StrategyBase):
                 break
 
         # Generate final answer
-        final_answer, final_validity = self._generate_final_answer(trajectory)
+        print("Trajectory: ", trajectory)
+        request = copy.deepcopy(instance)
+        request.append({"role": "assistant", "content": trajectory})
+        print("Request: ", request)
+        final_answer, final_validity = self._generate_final_answer(request)
         trajectory += final_answer.text
         selected_steps.append(final_answer)
         validity_scores.append(final_validity)
@@ -124,37 +133,35 @@ class StrategyOnlineBestOfN(StrategyBase):
             self.candidates_per_step + self.generation_batch_size - 1
         ) // self.generation_batch_size
 
-        try:
-            for batch_idx in range(num_batches):
-                # Calculate batch size for this iteration
-                start_idx = batch_idx * self.generation_batch_size
-                end_idx = min(
-                    (batch_idx + 1) * self.generation_batch_size,
-                    self.candidates_per_step,
-                )
-                batch_size = end_idx - start_idx
+        
+        for batch_idx in range(num_batches):
+            # Calculate batch size for this iteration
+            start_idx = batch_idx * self.generation_batch_size
+            end_idx = min(
+                (batch_idx + 1) * self.generation_batch_size,
+                self.candidates_per_step,
+            )
+            batch_size = end_idx - start_idx
 
-                log.info(
-                    f"Generating batch {batch_idx+1}/{num_batches} ({batch_size} candidates)"
-                )
+            log.info(
+                f"Generating batch {batch_idx+1}/{num_batches} ({batch_size} candidates)"
+            )
 
-                # Generate batch
-                batch_candidates = self.step_generator.generate_candidates(
-                    request, candidates_per_step=batch_size
-                )
-                if batch_candidates:
-                    all_candidates.extend(batch_candidates)
+            # Generate batch
+            batch_candidates = self.step_generator.generate_candidates(
+                request, candidates_per_step=batch_size
+            )
+            if batch_candidates:
+                all_candidates.extend(batch_candidates)
 
-                # Clear GPU cache after each batch
-                torch.cuda.empty_cache()
-
-        finally:
-            pass
+            # Clear GPU cache after each batch
+            torch.cuda.empty_cache()
 
         return all_candidates
 
     def _aggregate_scores(self, all_validities) -> List[float]:
         """Aggregate validity scores from multiple evaluations"""
+
         scores = []
         for validities in all_validities:
             # Compute mean validity
@@ -183,11 +190,13 @@ class StrategyOnlineBestOfN(StrategyBase):
             chat, candidates_per_step=self.candidates_per_step
         )
 
-        # Score answer candidates
-        all_validities = self.scorer.score_candidates(chat, answer_candidates)
+        # # Score answer candidates
+        # all_validities = self.scorer.score_candidates(chat, answer_candidates)
 
-        # Aggregate scores
-        answer_validity_scores = self._aggregate_scores(all_validities)
+        # print("all_validities", all_validities)
+        # # Aggregate scores
+        # answer_validity_scores = self._aggregate_scores(all_validities)
+        answer_validity_scores = self.scorer.score_candidates(chat, answer_candidates)
 
         # Select best answer based on criterion
         best_idx, _ = self._select_best_candidate(

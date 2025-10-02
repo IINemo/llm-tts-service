@@ -21,7 +21,7 @@ import logging
 log = logging.getLogger(__name__)
 
 
-class StepCandidateGenerator(StepCandidateGeneratorBase):
+class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
     """Generates N candidate next steps for online best-of-n"""
 
     def __init__(
@@ -31,7 +31,7 @@ class StepCandidateGenerator(StepCandidateGeneratorBase):
         temperature: float,
         top_p: float,
         top_k: int,
-        max_new_tokens,
+        max_new_tokens: int,
     ):
         self.model = model
         self.detector = detector or StepBoundaryDetector()

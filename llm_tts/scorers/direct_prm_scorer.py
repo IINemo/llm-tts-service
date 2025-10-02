@@ -73,8 +73,6 @@ class StepsExtractor(StatCalculator):
             steps: list[Claim] = self.split_to_steps(
                 greedy_text, greedy_tokens, model.tokenizer
             )
-            print("steps", steps)
-            print('==================')
             claims.append(steps)
             claim_texts_concatenated += [c.claim_text for c in steps]
             claim_input_texts_concatenated += [input_text for c in steps]
@@ -99,6 +97,7 @@ class StepsExtractor(StatCalculator):
     ) -> list[Claim]:
         if not tokenizer.decode(tokens).startswith(text):
             return []
+
         prev_token_i, token_i = 0, 0
         prev_text_i = 0
         claims: list[Claim] = []
@@ -220,13 +219,9 @@ class DirectPRMScorer(StepScorerRewardBase):
         all_rewards = []
         
         for candidate in candidates:
-            try:
-                rewards = self._score_single_candidate(chat, candidate)
-                all_rewards.append(rewards)
-            except Exception as e:
-                log.warning(f"Failed to score candidate: {e}")
-                all_rewards.append([0.0])  # Neutral reward
-            
+            rewards = self._score_single_candidate(chat, candidate)
+            all_rewards.append(rewards)
+
             # Clean up memory after each candidate
             torch.cuda.empty_cache()
         
@@ -240,33 +235,23 @@ class DirectPRMScorer(StepScorerRewardBase):
         """Score a single candidate using PRM"""
         
         # Extract claims from candidate
-        try:
-            candidate_tokens = self.model.tokenize([candidate])
-            if candidate_tokens is None or 'input_ids' not in candidate_tokens:
-                log.warning(f"Failed to tokenize candidate: {candidate[:50]}...")
-                return [0.0]
-                
-            claims = self.steps_extractor.split_to_steps(
-                candidate,
-                candidate_tokens['input_ids'][0],
-                self.model.tokenizer
-            )
+        candidate_tokens = self.prm_tokenizer(
+            candidate.text, return_tensors="pt"
+        )
             
-            if not claims:
-                log.debug(f"No claims extracted from candidate: {candidate[:50]}...")
-                return [0.0]
-                
-        except Exception as e:
-            log.warning(f"Error extracting claims: {e}")
+        claims = self.steps_extractor.split_to_steps(
+            candidate.text,
+            candidate_tokens["input_ids"][0],
+            self.prm_tokenizer
+        )
+        
+        if not claims:
+            log.debug(f"No claims extracted from candidate: {candidate.text[:50]}...")
             return [0.0]
         
         # Get PRM rewards
-        try:
-            rewards = self._compute_prm_rewards(chat, claims)
-            return rewards if rewards else [0.0]
-        except Exception as e:
-            log.warning(f"Error computing PRM rewards: {e}")
-            return [0.0]
+        rewards = self._compute_prm_rewards(chat, claims)
+        return rewards if rewards else [0.0]
     
     def _compute_prm_rewards(self, chat: List[Dict[str, str]], claims: List[Any]) -> List[float]:
         """Compute PRM rewards for claims"""
@@ -275,7 +260,7 @@ class DirectPRMScorer(StepScorerRewardBase):
             return []
         
         # Format conversation for PRM
-        question = chat["messages"][-1]["content"]
+        question = chat[-1]["content"]
         log.info(f"Question: {question}")
         messages = [
             {"role": "system", "content": "Please reason step by step, and put your final answer within \\boxed{}."},
