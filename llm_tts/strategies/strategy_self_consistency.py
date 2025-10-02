@@ -224,6 +224,7 @@ class StrategySelfConsistency(StrategyBase):
         Returns:
             Dictionary with trajectory information compatible with evaluation framework
         """
+        
         log.info(f"Starting self-consistency reasoning for prompt: {prompt[:100]}...")
 
         # Generate multiple reasoning paths

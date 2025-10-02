@@ -3,7 +3,7 @@ Candidate step generation system for online best-of-n using API models
 """
 
 import time
-from typing import List, Dict, Optional
+from typing import List
 import logging
 
 from llm_tts.step_candidate_generator_base import StepCandidate, StepCandidateGeneratorBase

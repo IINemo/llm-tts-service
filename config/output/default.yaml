@@ -4,7 +4,7 @@ hydra:
   run:
     dir: ${save_dir}/eval/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
-save_dir: "./results"  # Directory to save results (will create validity/redundancy subdirs)
+save_dir: "./workdir"  # Directory to save results (will create validity/redundancy subdirs)
 resume: true  # Resume from existing save file
 n_threads: 1  # Number of threads for DeepSeek verification
 annotation_prompt_type: "non_unique"  # Type of annotation prompt for DeepSeek: unique, non_unique

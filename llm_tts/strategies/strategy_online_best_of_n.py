@@ -34,7 +34,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         self.scorer = scorer
         self.step_generator = step_generator
 
-    def generate_trajectory(self, instance: List) -> Dict[str, any]:
+    def generate_trajectory(self, instance: List[Dict[str, str]]) -> Dict[str, any]:
         """
         Generate a trajectory step-by-step using specified criterion.
 
@@ -70,17 +70,10 @@ class StrategyOnlineBestOfN(StrategyBase):
                 log.info("No candidates generated, stopping")
                 break
 
-
-            print([c.text for c in candidates], '7777777777777777')
             # Score candidates
             candidate_validity_scores = self.scorer.score_candidates(
                 request, candidates
             )
-
-
-            # print("all_validities", all_validities)
-            # # Aggregate scores for each candidate
-            # candidate_validity_scores = self._aggregate_scores(all_validities)
 
             # Log all candidates
             log.info(f"Generated {len(candidates)} candidates:")
@@ -108,10 +101,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                 break
 
         # Generate final answer
-        print("Trajectory: ", trajectory)
         request = copy.deepcopy(instance)
         request.append({"role": "assistant", "content": trajectory})
-        print("Request: ", request)
+        
         final_answer, final_validity = self._generate_final_answer(request)
         trajectory += final_answer.text
         selected_steps.append(final_answer)
@@ -124,15 +116,15 @@ class StrategyOnlineBestOfN(StrategyBase):
             "completed": len(selected_steps) > 0,
         }
 
-    def _generate_candidates_in_batches(self, request) -> List:
+    def _generate_candidates_in_batches(self, request: List[Dict[str, str]]) -> List:
         """Generate candidates in smaller batches to avoid OOM"""
+        
         all_candidates = []
 
         # Calculate number of batches needed
         num_batches = (
             self.candidates_per_step + self.generation_batch_size - 1
         ) // self.generation_batch_size
-
         
         for batch_idx in range(num_batches):
             # Calculate batch size for this iteration
@@ -159,25 +151,9 @@ class StrategyOnlineBestOfN(StrategyBase):
 
         return all_candidates
 
-    def _aggregate_scores(self, all_validities) -> List[float]:
-        """Aggregate validity scores from multiple evaluations"""
-
-        scores = []
-        for validities in all_validities:
-            # Compute mean validity
-            if validities and len(validities) > 0:
-                if hasattr(validities, "mean"):
-                    validity_score = float(validities.mean())
-                else:
-                    validity_score = float(sum(validities) / len(validities))
-            else:
-                validity_score = 0.5
-
-            scores.append(validity_score)
-        return scores
-
     def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
         """Select the best candidate based on scores"""
+        
         # Higher validity is better
         best_idx = max(range(len(scores)), key=lambda i: scores[i])
         return best_idx, candidates[best_idx]
@@ -190,12 +166,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             chat, candidates_per_step=self.candidates_per_step
         )
 
-        # # Score answer candidates
-        # all_validities = self.scorer.score_candidates(chat, answer_candidates)
-
-        # print("all_validities", all_validities)
-        # # Aggregate scores
-        # answer_validity_scores = self._aggregate_scores(all_validities)
+        # Score answer candidates
         answer_validity_scores = self.scorer.score_candidates(chat, answer_candidates)
 
         # Select best answer based on criterion
