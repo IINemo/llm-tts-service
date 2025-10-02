@@ -3,20 +3,17 @@ Model factory for creating model instances from configuration.
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from .base import BaseModel
-from .together_ai import TogetherAIModel
 from .openrouter import OpenRouterModel
+from .together_ai import TogetherAIModel
 
 log = logging.getLogger(__name__)
 
 
 def create_model(
-    provider: str,
-    model_name: str,
-    api_key: Optional[str] = None,
-    **kwargs
+    provider: str, model_name: str, api_key: Optional[str] = None, **kwargs
 ) -> BaseModel:
     """
     Create a model instance from provider and configuration.
@@ -40,18 +37,10 @@ def create_model(
     provider = provider.lower().replace("-", "_")
 
     if provider == "together_ai" or provider == "togetherai":
-        return TogetherAIModel(
-            model_name=model_name,
-            api_key=api_key,
-            **kwargs
-        )
+        return TogetherAIModel(model_name=model_name, api_key=api_key, **kwargs)
 
     elif provider == "openrouter":
-        return OpenRouterModel(
-            model_name=model_name,
-            api_key=api_key,
-            **kwargs
-        )
+        return OpenRouterModel(model_name=model_name, api_key=api_key, **kwargs)
 
     elif provider == "local":
         # TODO: Implement local model support
@@ -98,8 +87,5 @@ def create_model_from_config(config: Dict[str, Any]) -> BaseModel:
     api_key = config.pop("api_key", None)
 
     return create_model(
-        provider=provider,
-        model_name=model_name,
-        api_key=api_key,
-        **config
+        provider=provider, model_name=model_name, api_key=api_key, **config
     )

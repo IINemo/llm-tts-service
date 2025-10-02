@@ -2,11 +2,12 @@
 Base scoring interface for online best-of-n step evaluation
 """
 
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any
-from dataclasses import dataclass
-import numpy as np
 import logging
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, Dict, List
+
+import numpy as np
 
 log = logging.getLogger(__name__)
 

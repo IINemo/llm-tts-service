@@ -1,12 +1,14 @@
-from .strategy_base import StrategyBase
-from typing import Dict, Any
-import torch
 import logging
+from typing import Any, Dict
+
+import torch
+
+from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 
 
-class StrategyChainOfThought(StrategyBase)  :
+class StrategyChainOfThought(StrategyBase):
     """
     Basic Chain-of-Thought strategy for comparison.
     Generates a single reasoning path with step-by-step thinking.
@@ -16,7 +18,7 @@ class StrategyChainOfThought(StrategyBase)  :
         self,
         model,
         max_new_tokens: int = 512,
-        temperature: float = 0.1  # Lower temperature for more deterministic reasoning
+        temperature: float = 0.1,  # Lower temperature for more deterministic reasoning
     ):
         self.model = model
         self.max_new_tokens = max_new_tokens
@@ -35,16 +37,16 @@ class StrategyChainOfThought(StrategyBase)  :
         log.info(f"Starting Chain-of-Thought reasoning for prompt: {prompt[:100]}...")
 
         # Check if this is an API model
-        if hasattr(self.model, 'api_model') or self.model.device == "api":
+        if hasattr(self.model, "api_model") or self.model.device == "api":
             log.info("Using API model for CoT generation")
             try:
-                if hasattr(self.model, 'generate'):
+                if hasattr(self.model, "generate"):
                     # Direct API model
                     completions = self.model.generate(
                         prompt=prompt,
                         max_new_tokens=self.max_new_tokens,
                         temperature=self.temperature,
-                        num_return_sequences=1
+                        num_return_sequences=1,
                     )
                     generated_text = completions[0] if completions else ""
                 else:
@@ -53,7 +55,7 @@ class StrategyChainOfThought(StrategyBase)  :
                         prompt=prompt,
                         max_new_tokens=self.max_new_tokens,
                         temperature=self.temperature,
-                        num_return_sequences=1
+                        num_return_sequences=1,
                     )
                     generated_text = completions[0] if completions else ""
 
@@ -69,8 +71,8 @@ class StrategyChainOfThought(StrategyBase)  :
             log.info("Using local model for CoT generation")
             # Tokenize prompt
             inputs = self.model.tokenize([prompt])
-            input_ids = inputs['input_ids'].to(self.model.device)
-            attention_mask = inputs['attention_mask'].to(self.model.device)
+            input_ids = inputs["input_ids"].to(self.model.device)
+            attention_mask = inputs["attention_mask"].to(self.model.device)
 
             # Generate single reasoning path
             with torch.no_grad():
@@ -83,13 +85,15 @@ class StrategyChainOfThought(StrategyBase)  :
                     num_return_sequences=1,
                     pad_token_id=self.model.tokenizer.eos_token_id,
                     eos_token_id=self.model.tokenizer.eos_token_id,
-                    repetition_penalty=1.1
+                    repetition_penalty=1.1,
                 )
 
             # Decode generated reasoning
             output_seq = outputs[0]
-            new_tokens = output_seq[input_ids.shape[1]:]
-            generated_text = self.model.tokenizer.decode(new_tokens, skip_special_tokens=True)
+            new_tokens = output_seq[input_ids.shape[1] :]
+            generated_text = self.model.tokenizer.decode(
+                new_tokens, skip_special_tokens=True
+            )
 
             # Combine with prompt
             full_reasoning = prompt + generated_text
@@ -103,8 +107,8 @@ class StrategyChainOfThought(StrategyBase)  :
             "strategy": "chain_of_thought",
             "metadata": {
                 "temperature": self.temperature,
-                "max_new_tokens": self.max_new_tokens
-            }
+                "max_new_tokens": self.max_new_tokens,
+            },
         }
 
     def cleanup(self):

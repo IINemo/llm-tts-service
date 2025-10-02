@@ -1,41 +1,39 @@
 #!/usr/bin/env python3
 
-import os
 import logging
+import os
 import random
+from pathlib import Path
+
+import hydra
 import numpy as np
 import torch
-from tqdm import tqdm
-import traceback
-from pathlib import Path
-import hydra
+from datasets import Dataset, load_dataset
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import OmegaConf
-from datasets import load_dataset, Dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM
-
 from lm_polygraph import WhiteboxModel
+from omegaconf import OmegaConf
+from tqdm import tqdm
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from llm_tts.strategies import (
-    StrategyOnlineBestOfN,
-)
-from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
+from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers.direct_prm_scorer import DirectPRMScorer
-from llm_tts.step_candidate_generator_through_api import StepCandidateGeneratorThroughAPI
-from llm_tts.step_candidate_generator_through_huggingface import StepCandidateGeneratorThroughHuggingface
+from llm_tts.step_candidate_generator_through_api import (
+    StepCandidateGeneratorThroughAPI,
+)
+from llm_tts.step_candidate_generator_through_huggingface import (
+    StepCandidateGeneratorThroughHuggingface,
+)
 from llm_tts.step_detection import StepBoundaryDetector
-
-
-import logging
+from llm_tts.strategies import StrategyOnlineBestOfN
 
 log = logging.getLogger(__name__)
 
 
 def load_tokenizer(model_path: str):
     tokenizer = AutoTokenizer.from_pretrained(model_path)
-    #tokenizer.chat_template = None
-    #tokenizer.padding_side = "left"  # Fix padding side for decoder-only models
+    # tokenizer.chat_template = None
+    # tokenizer.padding_side = "left"  # Fix padding side for decoder-only models
     return tokenizer
 
 
@@ -53,7 +51,7 @@ def load_prompt_template(prompt_file: str) -> str:
             return f.read().strip()
     else:
         # Default prompt template for ReasonEval
-        #return "Question: {question}\n\nLet's solve this step by step.\n\n"
+        # return "Question: {question}\n\nLet's solve this step by step.\n\n"
         return ""
 
 
@@ -89,7 +87,7 @@ def load_existing_results(save_path: str, dataset):
     except Exception as e:
         if "Sample mismatch" in str(e):
             raise  # Re-raise validation errors
-        
+
         log.warning(f"Failed to load existing results: {e}")
         results = []
         processed_indices = set()
@@ -145,7 +143,7 @@ def create_model(config):
         detector = StepBoundaryDetector(
             step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
             answer_patterns=["<Answer>:", "\n<Answer>:"],
-            max_tokens_per_step=config.generation.max_new_tokens
+            max_tokens_per_step=config.generation.max_new_tokens,
         )
         step_generator = StepCandidateGeneratorThroughHuggingface(
             model=model,
@@ -153,7 +151,7 @@ def create_model(config):
             temperature=config.generation.temperature,
             max_new_tokens=config.generation.max_new_tokens,
             top_p=config.generation.top_p,
-            top_k=config.generation.top_k
+            top_k=config.generation.top_k,
         )
 
     elif config.model.type == "openai_api":
@@ -162,13 +160,13 @@ def create_model(config):
             openai_api_key=config.model.api_key,
             model_path=config.model.model_path,
             supports_logprobs=config.model.supports_logprobs,
-            #generation_parameters=config.model.generation_parameters,
+            # generation_parameters=config.model.generation_parameters,
         )
 
         detector = StepBoundaryDetector(
             step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
             answer_patterns=["<Answer>:", "\n<Answer>:"],
-            max_tokens_per_step=config.generation.max_new_tokens
+            max_tokens_per_step=config.generation.max_new_tokens,
         )
         step_generator = StepCandidateGeneratorThroughAPI(
             model=model,
@@ -176,7 +174,7 @@ def create_model(config):
             temperature=config.generation.temperature,
             max_new_tokens=config.generation.max_new_tokens,
             top_p=config.generation.top_p,
-            top_k=config.generation.top_k
+            top_k=config.generation.top_k,
         )
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
@@ -211,14 +209,14 @@ def generate_trajectories(
     prompt_template: str,
 ):
     # Phase 1: Generate trajectories (without checking correctness)
-    log.info(f"\n{'='*60}")
-    log.info(f"Phase 1: Generating trajectories")
-    log.info(f"{'='*60}")
+    log.info("\n" + "=" * 60)
+    log.info("Phase 1: Generating trajectories")
+    log.info("=" * 60)
 
-    save_path_file = Path(save_path) / f"results.pt"
+    save_path_file = Path(save_path) / "results.pt"
 
     subset_size = len(dataset)
-    for i in tqdm(range(subset_size), desc=f"Generating trajectories"):
+    for i in tqdm(range(subset_size), desc="Generating trajectories"):
         # Skip if already processed
         if i in processed_indices:
             log.info(f"Skipping sample {i} (already processed)")
@@ -226,7 +224,7 @@ def generate_trajectories(
 
         instance = dataset[i]
 
-        log.info(f"\n{'='*60}")
+        log.info("\n" + "=" * 60)
         log.info(f"Sample {i+1}/{subset_size}")
         log.info(f"Question: {instance['question'][:200]}...")
 
@@ -236,10 +234,9 @@ def generate_trajectories(
         else:
             request = [
                 {"role": "system", "content": ""},
-                {"role": "user",   "content": instance["question"]}
+                {"role": "user", "content": instance["question"]},
             ]
-        
-        
+
         result = strategy.generate_trajectory(request)
 
         # Extract generated answer (but don't check correctness yet)
@@ -283,15 +280,19 @@ def evaluate_results(
     save_path: str,
 ):
     # Phase 2: Check correctness for all results
-    log.info(f"\n{'='*60}")
-    log.info(f"Phase 2: Checking correctness")
-    log.info(f"{'='*60}")
+    log.info("\n" + "=" * 60)
+    log.info("Phase 2: Checking correctness")
+    log.info("=" * 60)
 
     # Use DeepSeek verification
     log.info(f"Using DeepSeek verification with {config.evaluator.n_threads} threads")
 
     # Load prompt template and ensure compatibility
-    prompt_template = load_prompt_template(config.dataset.prompt_file) if config.dataset.prompt_file else ""
+    prompt_template = (
+        load_prompt_template(config.dataset.prompt_file)
+        if config.dataset.prompt_file
+        else ""
+    )
     if "{question}" in prompt_template:
         prompt_template = prompt_template.replace("{question}", "{q}")
 
@@ -329,7 +330,8 @@ def evaluate_results(
             for idx, annotation in zip(result_indices, annotations):
                 if np.isnan(annotation):
                     log.warning(
-                        f"DeepSeek returned unclear result for sample {results[idx]['index']}, marking as incorrect"
+                        f"DeepSeek returned unclear result for sample "
+                        f"{results[idx]['index']}, marking as incorrect"
                     )
                     results[idx]["is_correct"] = False
                 else:
@@ -349,7 +351,7 @@ def evaluate_results(
                 results[idx]["is_correct"] = False
 
     # Final save with correctness results
-    save_path_file = Path(save_path) / f"results.pt"
+    save_path_file = Path(save_path) / "results.pt"
     torch.save(results, save_path_file)
     log.info(f"Final save with correctness: {len(results)} results to {save_path_file}")
 
@@ -358,12 +360,10 @@ def evaluate_results(
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
 
-    log.info(f"\nSummary:")
+    log.info("\nSummary:")
     log.info(f"  - Total samples: {len(results)}")
     log.info(f"  - Completed: {completed} ({completed/len(results):.1%})")
-    log.info(
-        f"  - Correct: {correct} ({correct/len(results):.1%})"
-    )
+    log.info(f"  - Correct: {correct} ({correct/len(results):.1%})")
     log.info(f"  - Errors: {errors}")
 
     if completed > 0:
@@ -377,7 +377,7 @@ def evaluate_results(
             all_validities.extend(r["validity_scores"])
             all_steps.append(len(r["steps"]))
 
-    log.info(f"\nStep Statistics:")
+    log.info("\nStep Statistics:")
     log.info(f"  - Avg steps per trajectory: {np.mean(all_steps):.1f}")
     log.info(f"  - Avg validity score: {np.mean(all_validities):.3f}")
 
@@ -427,7 +427,11 @@ def main(config):
     if config.dataset.subset:
         dataset = dataset.select(range(min(config.dataset.subset, len(dataset))))
 
-    prompt_template = load_prompt_template(config.dataset.prompt_file) if config.dataset.prompt_file else ""
+    prompt_template = (
+        load_prompt_template(config.dataset.prompt_file)
+        if config.dataset.prompt_file
+        else ""
+    )
 
     # Load model
     log.info(f"Loading model: {config.model.model_path}")
@@ -437,7 +441,9 @@ def main(config):
     scorer = create_scorer(config, model)
 
     # Create tts strategy
-    generator = create_tts_strategy(config=config, step_generator=step_generator, scorer=scorer)
+    generator = create_tts_strategy(
+        config=config, step_generator=step_generator, scorer=scorer
+    )
 
     # Load existing results if resuming
     if config.output.resume:
@@ -455,7 +461,7 @@ def main(config):
         strategy=generator,
         dataset=dataset,
         processed_indices=processed_indices,
-        prompt_template=prompt_template
+        prompt_template=prompt_template,
     )
 
     # Evaluate results
@@ -464,8 +470,6 @@ def main(config):
         results=results,
         save_path=output_dir,
     )
-
-
 
 
 if __name__ == "__main__":

@@ -1,12 +1,17 @@
-import torch
-from typing import List, Dict
 import copy
-
-from llm_tts.step_candidate_generator_through_api import StepCandidateGeneratorThroughAPI
-from llm_tts.step_candidate_generator_through_huggingface import StepCandidateGeneratorThroughHuggingface
-from .strategy_base import StrategyBase
-
 import logging
+from typing import Dict, List
+
+import torch
+
+from llm_tts.step_candidate_generator_through_api import (
+    StepCandidateGeneratorThroughAPI,
+)
+from llm_tts.step_candidate_generator_through_huggingface import (
+    StepCandidateGeneratorThroughHuggingface,
+)
+
+from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +29,9 @@ class StrategyOnlineBestOfN(StrategyBase):
         max_new_tokens: int,
         temperature: float,
         generation_batch_size: int,
-        step_generator: StepCandidateGeneratorThroughAPI | StepCandidateGeneratorThroughHuggingface,
+        step_generator: (
+            StepCandidateGeneratorThroughAPI | StepCandidateGeneratorThroughHuggingface
+        ),
     ):
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
@@ -70,13 +77,11 @@ class StrategyOnlineBestOfN(StrategyBase):
                 log.info("No candidates generated, stopping")
                 break
 
-
-            print([c.text for c in candidates], '7777777777777777')
+            print([c.text for c in candidates], "7777777777777777")
             # Score candidates
             candidate_validity_scores = self.scorer.score_candidates(
                 request, candidates
             )
-
 
             # print("all_validities", all_validities)
             # # Aggregate scores for each candidate
@@ -133,7 +138,6 @@ class StrategyOnlineBestOfN(StrategyBase):
             self.candidates_per_step + self.generation_batch_size - 1
         ) // self.generation_batch_size
 
-        
         for batch_idx in range(num_batches):
             # Calculate batch size for this iteration
             start_idx = batch_idx * self.generation_batch_size
