@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Dict, Optional
 import torch
 from abc import abstractmethod
 
@@ -33,6 +33,6 @@ class StepCandidateGeneratorBase:
     """Base class for step candidate generator"""
 
     @abstractmethod
-    def generate_candidates(self, trajectory: str) -> List[StepCandidate]:
+    def generate_candidates(self, request: List[Dict[str, str]]) -> List[StepCandidate]:
         """Generate candidates for a given trajectory"""
         pass

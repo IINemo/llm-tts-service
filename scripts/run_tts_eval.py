@@ -14,14 +14,16 @@ from omegaconf import OmegaConf
 from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from lm_polygraph import WhiteboxModel, BlackboxModel
+from lm_polygraph import WhiteboxModel
 
 from llm_tts.strategies import (
     StrategyOnlineBestOfN,
 )
+from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
 from llm_tts.scorers.direct_prm_scorer import DirectPRMScorer
-from llm_tts.step_candidate_generator import StepCandidateGenerator
+from llm_tts.step_candidate_generator_through_api import StepCandidateGeneratorThroughAPI
+from llm_tts.step_candidate_generator_through_huggingface import StepCandidateGeneratorThroughHuggingface
 from llm_tts.step_detection import StepBoundaryDetector
 
 
@@ -145,7 +147,7 @@ def create_model(config):
             answer_patterns=["<Answer>:", "\n<Answer>:"],
             max_tokens_per_step=config.generation.max_new_tokens
         )
-        step_generator = StepCandidateGenerator(
+        step_generator = StepCandidateGeneratorThroughHuggingface(
             model=model,
             detector=detector,
             temperature=config.generation.temperature,
@@ -156,12 +158,25 @@ def create_model(config):
 
     elif config.model.type == "openai_api":
         log.info(f"Using OpenAI API model: {config.model.model_path}")
-        model = BlackboxModel.from_openai(
-            openai_api_key=os.environ.get("OPENAI_API_KEY"),
+        model = BlackboxModelWithStreaming(
+            openai_api_key=config.model.api_key,
             model_path=config.model.model_path,
             supports_logprobs=config.model.supports_logprobs,
             #generation_parameters=config.model.generation_parameters,
-            
+        )
+
+        detector = StepBoundaryDetector(
+            step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
+            answer_patterns=["<Answer>:", "\n<Answer>:"],
+            max_tokens_per_step=config.generation.max_new_tokens
+        )
+        step_generator = StepCandidateGeneratorThroughAPI(
+            model=model,
+            detector=detector,
+            temperature=config.generation.temperature,
+            max_new_tokens=config.generation.max_new_tokens,
+            top_p=config.generation.top_p,
+            top_k=config.generation.top_k
         )
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
@@ -224,46 +239,31 @@ def generate_trajectories(
                 {"role": "user",   "content": instance["question"]}
             ]
         
-        try:
-            result = strategy.generate_trajectory(request)
+        
+        result = strategy.generate_trajectory(request)
 
-            # Extract generated answer (but don't check correctness yet)
-            generated_text = result["trajectory"]
-            if instance["question"] in generated_text:
-                generated_text = generated_text.replace(instance["question"], "").strip()
+        # Extract generated answer (but don't check correctness yet)
+        generated_text = result["trajectory"]
+        if instance["question"] in generated_text:
+            generated_text = generated_text.replace(instance["question"], "").strip()
 
-            # Store result WITHOUT correctness check
-            results.append(
-                {
-                    "index": i,
-                    "question": instance["question"],
-                    "gold_answer": instance["answer"],
-                    "generated_trajectory": result["trajectory"],
-                    "generated_answer": generated_text,
-                    "steps": result["steps"],
-                    "validity_scores": result["validity_scores"],
-                    "completed": result["completed"],
-                }
-            )
+        # Store result WITHOUT correctness check
+        results.append(
+            {
+                "index": i,
+                "question": instance["question"],
+                "gold_answer": instance["answer"],
+                "generated_trajectory": result["trajectory"],
+                "generated_answer": generated_text,
+                "steps": result["steps"],
+                "validity_scores": result["validity_scores"],
+                "completed": result["completed"],
+            }
+        )
 
-            log.info(f"Generated: {generated_text}")
-            log.info(f"Num steps: {len(result['steps'])}")
-            log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
-
-        except Exception as e:
-            log.error(f"Error processing sample {i}: {e}")
-            traceback.print_exc()
-
-            results.append(
-                {
-                    "index": i,
-                    "question": instance["question"],
-                    "gold_answer": instance["answer"],
-                    "error": str(e),
-                    "criterion_used": "validity",
-                    "completed": False,
-                }
-            )
+        log.info(f"Generated: {generated_text}")
+        log.info(f"Num steps: {len(result['steps'])}")
+        log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
 
         # Save periodically
         if len(results) % 10 == 0:

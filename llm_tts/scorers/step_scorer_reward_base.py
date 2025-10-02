@@ -1,6 +1,6 @@
 from .step_scorer_base import StepScorerBase, CandidateScore
 
-from typing import List
+from typing import List, Dict
 from abc import abstractmethod
 
 
@@ -10,7 +10,7 @@ class StepScorerRewardBase(StepScorerBase):
     @abstractmethod
     def compute_claim_rewards(
         self,
-        trajectory: str,
+        chat: List[Dict[str, str]],
         candidates: List[str], 
         **kwargs
     ) -> List[List[float]]:
@@ -28,12 +28,13 @@ class StepScorerRewardBase(StepScorerBase):
     
     def score_candidates_detailed(
         self,
-        trajectory: str,
+        chat: List[Dict[str, str]],
         candidates: List[str],
         **kwargs
     ) -> List[CandidateScore]:
         """Score candidates with detailed claim-level information"""
-        claim_rewards_list = self.compute_claim_rewards(trajectory, candidates, **kwargs)
+        
+        claim_rewards_list = self.compute_claim_rewards(chat, candidates, **kwargs)
         
         detailed_scores = []
         for i, candidate in enumerate(candidates):
