@@ -1,0 +1,15 @@
+# @package model
+
+# Together AI API model configuration
+type: "together_ai"
+model_name: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"  # Together AI model identifier
+api_key: null  # Will use TOGETHER_API_KEY environment variable if null
+base_url: "https://api.together.xyz/v1"
+max_retries: 3
+retry_delay: 1.0
+
+# Alternative models you can use:
+# model_name: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"  # Larger model
+# model_name: "mistralai/Mixtral-8x7B-Instruct-v0.1"         # Mixtral model
+# model_name: "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO"  # Nous Hermes
+# model_name: "Qwen/Qwen2.5-7B-Instruct"                     # Qwen model

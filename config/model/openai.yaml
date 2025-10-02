@@ -1,0 +1,4 @@
+type: "openai_api"
+model_path: "gpt-4o-mini"  # Base model for generation
+supports_logprobs: true
+api_key: "" # specify

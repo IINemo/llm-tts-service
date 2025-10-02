@@ -4,73 +4,61 @@ Candidate step generation system for online best-of-n
 
 import logging
 import time
-from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 import torch
 from lm_polygraph import WhiteboxModel
 from transformers import StoppingCriteriaList
+
+from llm_tts.step_candidate_generator_base import (
+    StepCandidate,
+    StepCandidateGeneratorBase,
+)
 
 from .step_detection import BatchStepStoppingCriteria, StepBoundaryDetector
 
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class StepCandidate:
-    """Represents a candidate next step in trajectory"""
-
-    def __init__(
-        self,
-        text: str,
-        token_ids: List[int],
-        is_complete: bool,
-        is_trajectory_complete: bool,
-        generation_scores: Optional[torch.Tensor] = None,
-        raw_text: str = None,
-    ):
-        self.text = text
-        self.token_ids = token_ids
-        self.is_complete = is_complete
-        self.is_trajectory_complete = is_trajectory_complete
-        self.generation_scores = generation_scores
-        self.raw_text = raw_text or text
-
-    def __str__(self):
-        return f"StepCandidate(text='{self.text[:50]}...', complete={self.is_complete})"
-
-
-class StepCandidateGenerator:
+class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
     """Generates N candidate next steps for online best-of-n"""
 
     def __init__(
         self,
         model: WhiteboxModel,
-        detector: StepBoundaryDetector = None,
-        candidates_per_step: int = 5,
-        temperature: float = 0.8,
-        top_p: float = 0.95,
-        top_k: int = 50,
-        max_new_tokens: int = 250,
+        detector: StepBoundaryDetector,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        max_new_tokens: int,
     ):
         self.model = model
         self.detector = detector or StepBoundaryDetector()
-        self.candidates_per_step = candidates_per_step
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
         self.max_new_tokens = max_new_tokens
         self.device = model.device()
 
-    def generate_candidates(self, trajectory: str) -> List[StepCandidate]:
+    def generate_candidates(
+        self, request, candidates_per_step: int
+    ) -> List[StepCandidate]:
         """Generate N candidate next steps from current trajectory"""
 
-        log.info(f"Generating {self.candidates_per_step} candidates from trajectory")
+        log.info(f"Generating {candidates_per_step} candidates from trajectory")
 
         # Tokenize current trajectory
-        inputs = self.model.tokenize([trajectory])
+        inputs = self.model.tokenizer.apply_chat_template(
+            [request], tokenize=False, add_generation_prompt=True
+        )
+        inputs = self.model.tokenizer(
+            inputs,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.max_new_tokens,
+        )
         input_length = inputs["input_ids"].shape[1]
-
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         # Create stopping criteria for batch generation
@@ -78,7 +66,7 @@ class StepCandidateGenerator:
             tokenizer=self.model.tokenizer,
             start_length=input_length,
             detector=self.detector,
-            batch_size=self.candidates_per_step,
+            batch_size=candidates_per_step,
         )
 
         try:
@@ -90,7 +78,7 @@ class StepCandidateGenerator:
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
-                "num_return_sequences": self.candidates_per_step,
+                "num_return_sequences": candidates_per_step,
                 "output_scores": True,
                 "return_dict_in_generate": True,
                 "stopping_criteria": StoppingCriteriaList([stopping_criteria]),
@@ -186,3 +174,8 @@ class StepCandidateGenerator:
             candidates.append(candidate)
 
         return candidates
+
+    def generate_answer(self, request, candidates_per_step: int) -> str:
+        """Generate and select best final answer based on criterion"""
+
+        return self.generate_candidates(request, candidates_per_step)
