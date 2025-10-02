@@ -1,34 +1,27 @@
 """
-Direct ReasonEval scorer that bypasses the stat calculator pipeline for efficient stepwise scoring
+Direct ReasonEval scorer that bypasses the stat calculator pipeline
+for efficient stepwise scoring
 """
+
+import logging
+from typing import Any, Dict, List, Tuple
 
 import torch
 import torch.nn as nn
-from typing import List, Any, Tuple
-import logging
-from transformers import AutoTokenizer
-
-from .uncertainty_based_scorer import UncertaintyBasedScorer
-
-from typing import Dict, List, Tuple
-from parse import parse
-import numpy as np
-from tqdm import tqdm
-
 from lm_polygraph import WhiteboxModel
-from lm_polygraph.stat_calculators.stat_calculator import StatCalculator
-from lm_polygraph.utils.model import Model
 from lm_polygraph.stat_calculators.extract_claims import Claim
+from lm_polygraph.stat_calculators.stat_calculator import StatCalculator
+from tqdm import tqdm
 from transformers import (
-    MistralModel,
-    MistralPreTrainedModel,
+    AutoTokenizer,
     LlamaModel,
     LlamaPreTrainedModel,
-    AutoTokenizer,
+    MistralModel,
+    MistralPreTrainedModel,
 )
 from transformers.configuration_utils import PretrainedConfig
 
-import logging
+from .uncertainty_based_scorer import UncertaintyBasedScorer
 
 log = logging.getLogger(__name__)
 
@@ -88,7 +81,7 @@ class StepsExtractor(StatCalculator):
                 greedy_text, greedy_tokens, model.tokenizer
             )
             print("steps", steps)
-            print('==================')
+            print("==================")
             claims.append(steps)
             claim_texts_concatenated += [c.claim_text for c in steps]
             claim_input_texts_concatenated += [input_text for c in steps]
@@ -518,7 +511,8 @@ class DirectReasonEvalScorerSeparate(DirectReasonEvalScorer):
     """
     ReasonEval scorer that returns validity and redundancy scores separately.
 
-    This allows running separate evaluations for validity-based and redundancy-based selection.
+    This allows running separate evaluations for validity-based and
+    redundancy-based selection.
     """
 
     def score_candidates(

@@ -51,16 +51,6 @@ clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +
 	find . -type f -name "*.pyc" -delete
 
-lint:
-	flake8 llm_tts scripts
-	mypy llm_tts scripts
-	black --check llm_tts scripts
-	isort --check llm_tts scripts
-
-format:
-	black llm_tts scripts
-	isort llm_tts scripts
-
 # GSM8K benchmark shortcuts
 .PHONY: eval-gsm8k eval-gsm8k-subset
 

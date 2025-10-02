@@ -32,7 +32,7 @@ repos:
     hooks:
       - id: flake8
         args: [
-          '--max-line-length=88',
+          '--max-line-length=100',
           '--extend-ignore=E203,W503',  # E203: conflicts with black, W503: line break before binary operator
           '--exclude=.git,__pycache__,lm-polygraph,build,dist,outputs'
         ]

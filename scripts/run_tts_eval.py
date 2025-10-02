@@ -1,29 +1,24 @@
 #!/usr/bin/env python3
 
-import os
 import logging
+import os
 import random
-import numpy as np
-import torch
-from tqdm import tqdm
-from datasets import load_dataset, Dataset
 import traceback
 from pathlib import Path
+
 import hydra
+import numpy as np
+import torch
+from datasets import Dataset, load_dataset
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import OmegaConf
-from transformers import AutoTokenizer, AutoModelForCausalLM
-
 from lm_polygraph import WhiteboxModel
+from omegaconf import OmegaConf
+from tqdm import tqdm
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from llm_tts.strategies import (
-    StrategyOnlineBestOfN,
-)
 from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
 from llm_tts.scorers.reasoneval_direct import DirectReasonEvalScorerSeparate
-
-
-import logging
+from llm_tts.strategies import StrategyOnlineBestOfN
 
 log = logging.getLogger(__name__)
 
@@ -84,7 +79,7 @@ def load_existing_results(save_path: str, dataset):
     except Exception as e:
         if "Sample mismatch" in str(e):
             raise  # Re-raise validation errors
-        
+
         log.warning(f"Failed to load existing results: {e}")
         results = []
         processed_indices = set()
@@ -155,14 +150,14 @@ def generate_trajectories(
     processed_indices: set,
 ):
     # Phase 1: Generate trajectories (without checking correctness)
-    log.info(f"\n{'='*60}")
-    log.info(f"Phase 1: Generating trajectories")
-    log.info(f"{'='*60}")
+    log.info("\n" + "=" * 60)
+    log.info("Phase 1: Generating trajectories")
+    log.info("=" * 60)
 
-    save_path_file = Path(save_path) / f"results.pt"
+    save_path_file = Path(save_path) / "results.pt"
 
     subset_size = len(dataset)
-    for i in tqdm(range(subset_size), desc=f"Generating trajectories"):
+    for i in tqdm(range(subset_size), desc="Generating trajectories"):
         # Skip if already processed
         if i in processed_indices:
             log.info(f"Skipping sample {i} (already processed)")
@@ -171,7 +166,7 @@ def generate_trajectories(
 
         sample = dataset[i]
 
-        log.info(f"\n{'='*60}")
+        log.info("\n" + "=" * 60)
         log.info(f"Sample {i+1}/{subset_size}")
         log.info(f"Question: {sample['question'][:200]}...")
 
@@ -234,12 +229,12 @@ def evaluate_results(
     results,
     save_path: str,
 ):
-    prompt_file=config.dataset.prompt_file
+    prompt_file = config.dataset.prompt_file
 
     # Phase 2: Check correctness for all results
-    log.info(f"\n{'='*60}")
-    log.info(f"Phase 2: Checking correctness")
-    log.info(f"{'='*60}")
+    log.info("\n" + "=" * 60)
+    log.info("Phase 2: Checking correctness")
+    log.info("=" * 60)
 
     # Use DeepSeek verification
     log.info(f"Using DeepSeek verification with {config.evaluator.n_threads} threads")
@@ -283,7 +278,8 @@ def evaluate_results(
             for idx, annotation in zip(result_indices, annotations):
                 if np.isnan(annotation):
                     log.warning(
-                        f"DeepSeek returned unclear result for sample {results[idx]['index']}, marking as incorrect"
+                        f"DeepSeek returned unclear result for sample "
+                        f"{results[idx]['index']}, marking as incorrect"
                     )
                     results[idx]["is_correct"] = False
                 else:
@@ -303,7 +299,7 @@ def evaluate_results(
                 results[idx]["is_correct"] = False
 
     # Final save with correctness results
-    save_path_file = Path(save_path) / f"results.pt"
+    save_path_file = Path(save_path) / "results.pt"
     torch.save(results, save_path_file)
     log.info(f"Final save with correctness: {len(results)} results to {save_path_file}")
 
@@ -312,12 +308,10 @@ def evaluate_results(
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
 
-    log.info(f"\nSummary:")
+    log.info("\nSummary:")
     log.info(f"  - Total samples: {len(results)}")
     log.info(f"  - Completed: {completed} ({completed/len(results):.1%})")
-    log.info(
-        f"  - Correct: {correct} ({correct/len(results):.1%})"
-    )
+    log.info(f"  - Correct: {correct} ({correct/len(results):.1%})")
     log.info(f"  - Errors: {errors}")
 
     if completed > 0:
@@ -331,7 +325,7 @@ def evaluate_results(
             all_validities.extend(r["validity_scores"])
             all_steps.append(len(r["steps"]))
 
-    log.info(f"\nStep Statistics:")
+    log.info("\nStep Statistics:")
     log.info(f"  - Avg steps per trajectory: {np.mean(all_steps):.1f}")
     log.info(f"  - Avg validity score: {np.mean(all_validities):.3f}")
 
