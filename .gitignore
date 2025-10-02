@@ -174,3 +174,7 @@ outputs/
 
 *.zip
 *.bst
+*.pdf
+*.bib
+*.tex
+*.sty
