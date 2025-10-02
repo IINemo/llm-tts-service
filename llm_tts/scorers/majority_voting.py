@@ -44,11 +44,11 @@ class MajorityVotingScorer(StepScorerBase):
             if matches:
                 answer = matches[-1].strip()  # Take the last match
                 # Clean up the answer
-                answer = re.sub(r'[^\w\s\-\+\*\/\(\)\.\,]', '', answer)
+                answer = re.sub(r"[^\w\s\-\+\*\/\(\)\.\,]", "", answer)
                 return answer.lower()
 
         # If no pattern matches, try to extract number from the end
-        numbers = re.findall(r'-?\d+\.?\d*', text)
+        numbers = re.findall(r"-?\d+\.?\d*", text)
         if numbers:
             return numbers[-1].lower()
 
@@ -60,10 +60,7 @@ class MajorityVotingScorer(StepScorerBase):
         return "unknown"
 
     def score_candidates_detailed(
-        self,
-        trajectory: str,
-        candidates: List[str],
-        **kwargs
+        self, trajectory: str, candidates: List[str], **kwargs
     ) -> List[CandidateScore]:
         """
         Score candidates based on majority voting.
@@ -102,12 +99,12 @@ class MajorityVotingScorer(StepScorerBase):
                 claim_scores=[confidence_score],  # Single score per candidate
                 aggregate_scores={},
                 metadata={
-                    'scorer_type': 'majority_voting',
-                    'extracted_answer': answer,
-                    'answer_frequency': frequency,
-                    'total_candidates': total_candidates,
-                    'all_answers': answers
-                }
+                    "scorer_type": "majority_voting",
+                    "extracted_answer": answer,
+                    "answer_frequency": frequency,
+                    "total_candidates": total_candidates,
+                    "all_answers": answers,
+                },
             )
             detailed_scores.append(candidate_score)
 
@@ -142,7 +139,7 @@ class ChainMajorityVotingScorer(StepScorerBase):
                 return matches[-1].strip().lower()
 
         # Fallback to number extraction
-        numbers = re.findall(r'-?\d+(?:\.\d+)?', text)
+        numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
         if numbers:
             return numbers[-1]
 
@@ -181,10 +178,7 @@ class ChainMajorityVotingScorer(StepScorerBase):
         return scores
 
     def score_candidates_detailed(
-        self,
-        trajectory: str,
-        candidates: List[str],
-        **kwargs
+        self, trajectory: str, candidates: List[str], **kwargs
     ) -> List[CandidateScore]:
         """Score candidates - but this scorer is meant for complete chains"""
         # For individual steps, we can't do proper majority voting
@@ -198,9 +192,9 @@ class ChainMajorityVotingScorer(StepScorerBase):
                 claim_scores=[uniform_score],
                 aggregate_scores={},
                 metadata={
-                    'scorer_type': 'chain_majority_voting',
-                    'note': 'uniform_scores_for_individual_steps'
-                }
+                    "scorer_type": "chain_majority_voting",
+                    "note": "uniform_scores_for_individual_steps",
+                },
             )
             detailed_scores.append(candidate_score)
 

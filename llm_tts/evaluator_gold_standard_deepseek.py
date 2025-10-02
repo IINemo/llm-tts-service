@@ -31,12 +31,7 @@ Solution comments:
 
 class EvaluatorGoldStandard:
     def __init__(
-        self,
-        prompt: str,
-        cache_path: str,
-        base_url: str,
-        model: str,
-        n_threads: int
+        self, prompt: str, cache_path: str, base_url: str, model: str, n_threads: int
     ):
         self.chat = OpenAIChat(
             cache_path=cache_path,
@@ -57,7 +52,9 @@ class EvaluatorGoldStandard:
             problem = parsed.named["q"]
             # If parsing fails, keep the original problem string unchanged
 
-        prompt = ANNOTATION_PROMPT.format(problem=problem, solution=solution, gold_answer=gold_answer)
+        prompt = ANNOTATION_PROMPT.format(
+            problem=problem, solution=solution, gold_answer=gold_answer
+        )
         reply = self.chat.ask(prompt)
         if "<Grade>: Correct" in reply:
             return 0

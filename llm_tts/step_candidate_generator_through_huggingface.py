@@ -7,7 +7,10 @@ from typing import List, Dict
 from transformers import StoppingCriteriaList
 import time
 
-from llm_tts.step_candidate_generator_base import StepCandidate, StepCandidateGeneratorBase
+from llm_tts.step_candidate_generator_base import (
+    StepCandidate,
+    StepCandidateGeneratorBase,
+)
 
 from lm_polygraph import WhiteboxModel
 
@@ -41,13 +44,17 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         self.max_new_tokens = max_new_tokens
         self.device = model.device()
 
-    def generate_candidates(self, request: List[Dict[str, str]], candidates_per_step: int) -> List[StepCandidate]:
+    def generate_candidates(
+        self, request: List[Dict[str, str]], candidates_per_step: int
+    ) -> List[StepCandidate]:
         """Generate N candidate next steps from current trajectory"""
 
         log.info(f"Generating {candidates_per_step} candidates from trajectory")
 
         # Tokenize current trajectory
-        inputs = self.model.tokenizer.apply_chat_template([request], tokenize=False, add_generation_prompt=True)
+        inputs = self.model.tokenizer.apply_chat_template(
+            [request], tokenize=False, add_generation_prompt=True
+        )
         inputs = self.model.tokenizer(
             inputs,
             return_tensors="pt",
@@ -165,7 +172,9 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
 
         return candidates
 
-    def generate_answer(self, request: List[Dict[str, str]], candidates_per_step: int) -> str:
+    def generate_answer(
+        self, request: List[Dict[str, str]], candidates_per_step: int
+    ) -> str:
         """Generate and select best final answer based on criterion"""
 
         return self.generate_candidates(request, candidates_per_step)

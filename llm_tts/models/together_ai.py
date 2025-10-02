@@ -25,7 +25,7 @@ class TogetherAIModel(BaseModel):
         api_key: Optional[str] = None,
         base_url: str = "https://api.together.xyz/v1",
         max_retries: int = 3,
-        retry_delay: float = 1.0
+        retry_delay: float = 1.0,
     ):
         super().__init__(model_name, api_key)
 
@@ -43,7 +43,7 @@ class TogetherAIModel(BaseModel):
 
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
         log.info(f"Initialized Together AI model: {self.model_name}")
@@ -59,7 +59,7 @@ class TogetherAIModel(BaseModel):
         temperature: float = 0.7,
         num_return_sequences: int = 1,
         stop_sequences: Optional[List[str]] = None,
-        **kwargs
+        **kwargs,
     ) -> List[str]:
         """
         Generate text using Together AI API.
@@ -96,7 +96,7 @@ class TogetherAIModel(BaseModel):
                     f"{self.base_url}/completions",
                     headers=self.headers,
                     json=payload,
-                    timeout=60
+                    timeout=60,
                 )
                 response.raise_for_status()
 
@@ -113,9 +113,13 @@ class TogetherAIModel(BaseModel):
 
             except requests.exceptions.RequestException as e:
                 if attempt < self.max_retries - 1:
-                    wait_time = self.retry_delay * (2 ** attempt)
+                    wait_time = self.retry_delay * (2**attempt)
                     log.warning(f"Request failed: {e}. Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                 else:
-                    log.error(f"API request failed after {self.max_retries} retries: {e}")
-                    raise RuntimeError(f"API request failed after {self.max_retries} retries: {e}")
+                    log.error(
+                        f"API request failed after {self.max_retries} retries: {e}"
+                    )
+                    raise RuntimeError(
+                        f"API request failed after {self.max_retries} retries: {e}"
+                    )

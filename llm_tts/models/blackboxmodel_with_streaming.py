@@ -1,13 +1,10 @@
-from typing import List, Optional, Dict
-
-from lm_polygraph import BlackboxModel
-from lm_polygraph.utils.generation_parameters import (
-    GenerationParameters,
-    GenerationParametersFactory,
-)
-from llm_tts.step_detection import StepBoundaryDetector
+from typing import Dict, List, Optional
 
 import openai
+from lm_polygraph import BlackboxModel
+from lm_polygraph.utils.generation_parameters import GenerationParameters
+
+from llm_tts.step_detection import StepBoundaryDetector
 
 
 class BlackboxModelWithStreaming(BlackboxModel):
@@ -23,6 +20,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
         supports_logprobs (bool): Whether logprobs are supported.
         boundary_detector (StepBoundaryDetector): Detector for step/trajectory boundaries.
     """
+
     def __init__(
         self,
         openai_api_key: str = None,
@@ -58,9 +56,6 @@ class BlackboxModelWithStreaming(BlackboxModel):
         for chat in chats:
             buffer = []
             token_count = 0
-            print('====================')
-            print(chat)
-            print('**********************')
             with self.client.responses.stream(
                 model=self.model_path,
                 input=chat,
@@ -70,21 +65,35 @@ class BlackboxModelWithStreaming(BlackboxModel):
                     if event.type == "response.output_text.delta":
                         delta = event.delta
                         buffer.append(delta)
-                        token_count += 1  # rough proxy; use tiktoken to count tokens precisely if needed
+                        # rough proxy; use tiktoken for precise token counting
+                        token_count += 1
 
                         current_text = "".join(buffer)
 
-                        if self.boundary_detector and self.boundary_detector.is_step_complete(current_text, token_count):
+                        if (
+                            self.boundary_detector
+                            and self.boundary_detector.is_step_complete(
+                                current_text, token_count
+                            )
+                        ):
                             stream.close()
-                            step_text = self.boundary_detector.extract_step_text(current_text)
-                            trajectory_done = self.boundary_detector.is_trajectory_complete(current_text)
-                            results.append({
-                                "step_text": step_text,
-                                "raw_collected": current_text,
-                                "token_count_guess": token_count,
-                                "trajectory_complete": trajectory_done,
-                                "reason": "boundary-detected",
-                            })
+                            step_text = self.boundary_detector.extract_step_text(
+                                current_text
+                            )
+                            trajectory_done = (
+                                self.boundary_detector.is_trajectory_complete(
+                                    current_text
+                                )
+                            )
+                            results.append(
+                                {
+                                    "step_text": step_text,
+                                    "raw_collected": current_text,
+                                    "token_count_guess": token_count,
+                                    "trajectory_complete": trajectory_done,
+                                    "reason": "boundary-detected",
+                                }
+                            )
                             break  # Stop streaming for this input
 
                     elif event.type in ("response.completed", "response.error"):
@@ -95,21 +104,33 @@ class BlackboxModelWithStreaming(BlackboxModel):
                         # If we exited the loop without boundary, return whatever we collected
                         current_text = "".join(buffer)
                         if self.boundary_detector:
-                            results.append({
-                                "step_text": self.boundary_detector.extract_step_text(current_text),
-                                "raw_collected": current_text,
-                                "token_count_guess": token_count,
-                                "trajectory_complete": self.boundary_detector.is_trajectory_complete(current_text),
-                                "reason": "stream-ended",
-                            })
+                            results.append(
+                                {
+                                    "step_text": (
+                                        self.boundary_detector.extract_step_text(
+                                            current_text
+                                        )
+                                    ),
+                                    "raw_collected": current_text,
+                                    "token_count_guess": token_count,
+                                    "trajectory_complete": (
+                                        self.boundary_detector.is_trajectory_complete(
+                                            current_text
+                                        )
+                                    ),
+                                    "reason": "stream-ended",
+                                }
+                            )
                         else:
-                            results.append({
-                                "step_text": current_text,
-                                "raw_collected": current_text,
-                                "token_count_guess": token_count,
-                                "trajectory_complete": False,
-                                "reason": "stream-ended",
-                            })
+                            results.append(
+                                {
+                                    "step_text": current_text,
+                                    "raw_collected": current_text,
+                                    "token_count_guess": token_count,
+                                    "trajectory_complete": False,
+                                    "reason": "stream-ended",
+                                }
+                            )
         return results
 
     def tokenize(self, texts: List[str]) -> List[List[str]]:

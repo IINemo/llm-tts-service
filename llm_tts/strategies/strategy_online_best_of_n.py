@@ -2,8 +2,12 @@ import torch
 from typing import List, Dict
 import copy
 
-from llm_tts.step_candidate_generator_through_api import StepCandidateGeneratorThroughAPI
-from llm_tts.step_candidate_generator_through_huggingface import StepCandidateGeneratorThroughHuggingface
+from llm_tts.step_candidate_generator_through_api import (
+    StepCandidateGeneratorThroughAPI,
+)
+from llm_tts.step_candidate_generator_through_huggingface import (
+    StepCandidateGeneratorThroughHuggingface,
+)
 from .strategy_base import StrategyBase
 
 import logging
@@ -24,7 +28,9 @@ class StrategyOnlineBestOfN(StrategyBase):
         max_new_tokens: int,
         temperature: float,
         generation_batch_size: int,
-        step_generator: StepCandidateGeneratorThroughAPI | StepCandidateGeneratorThroughHuggingface,
+        step_generator: (
+            StepCandidateGeneratorThroughAPI | StepCandidateGeneratorThroughHuggingface
+        ),
     ):
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
@@ -103,7 +109,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         # Generate final answer
         request = copy.deepcopy(instance)
         request.append({"role": "assistant", "content": trajectory})
-        
+
         final_answer, final_validity = self._generate_final_answer(request)
         trajectory += final_answer.text
         selected_steps.append(final_answer)
@@ -118,14 +124,14 @@ class StrategyOnlineBestOfN(StrategyBase):
 
     def _generate_candidates_in_batches(self, request: List[Dict[str, str]]) -> List:
         """Generate candidates in smaller batches to avoid OOM"""
-        
+
         all_candidates = []
 
         # Calculate number of batches needed
         num_batches = (
             self.candidates_per_step + self.generation_batch_size - 1
         ) // self.generation_batch_size
-        
+
         for batch_idx in range(num_batches):
             # Calculate batch size for this iteration
             start_idx = batch_idx * self.generation_batch_size
@@ -153,7 +159,7 @@ class StrategyOnlineBestOfN(StrategyBase):
 
     def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
         """Select the best candidate based on scores"""
-        
+
         # Higher validity is better
         best_idx = max(range(len(scores)), key=lambda i: scores[i])
         return best_idx, candidates[best_idx]

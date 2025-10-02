@@ -8,6 +8,7 @@ from typing import List, Dict, Optional, Tuple
 
 try:
     from openai import OpenAI
+
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
@@ -29,7 +30,7 @@ class OpenRouterModel(BaseModel):
         model_name: str = "openai/gpt-4o-mini",
         api_key: Optional[str] = None,
         base_url: str = "https://openrouter.ai/api/v1",
-        top_logprobs: int = 10
+        top_logprobs: int = 10,
     ):
         """
         Initialize OpenRouter model.
@@ -59,10 +60,7 @@ class OpenRouterModel(BaseModel):
                 "or set OPENROUTER_API_KEY environment variable."
             )
 
-        self.client = OpenAI(
-            base_url=self.base_url,
-            api_key=self.api_key
-        )
+        self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
 
         log.info(f"Initialized OpenRouter model: {self.model_name}")
         log.info(f"Requesting top-{self.top_logprobs} token probabilities")
@@ -73,7 +71,7 @@ class OpenRouterModel(BaseModel):
         OpenAI models support it, most others don't.
         """
         # Models known to support logprobs via OpenRouter
-        supported_prefixes = ['openai/', 'gpt-', 'anthropic/']
+        supported_prefixes = ["openai/", "gpt-", "anthropic/"]
         return any(self.model_name.startswith(prefix) for prefix in supported_prefixes)
 
     def generate(
@@ -82,7 +80,7 @@ class OpenRouterModel(BaseModel):
         max_tokens: int = 512,
         temperature: float = 0.7,
         num_return_sequences: int = 1,
-        **kwargs
+        **kwargs,
     ) -> List[str]:
         """
         Generate text using OpenRouter API.
@@ -103,7 +101,7 @@ class OpenRouterModel(BaseModel):
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=max_tokens,
                 temperature=temperature,
-                **kwargs
+                **kwargs,
             )
 
             generated_text = response.choices[0].message.content
@@ -114,11 +112,7 @@ class OpenRouterModel(BaseModel):
             raise
 
     def generate_with_confidence(
-        self,
-        prompt: str,
-        max_tokens: int = 512,
-        temperature: float = 0.7,
-        **kwargs
+        self, prompt: str, max_tokens: int = 512, temperature: float = 0.7, **kwargs
     ) -> Tuple[str, Optional[List[Dict]]]:
         """
         Generate text and extract token-level confidence scores.
@@ -135,7 +129,7 @@ class OpenRouterModel(BaseModel):
                 temperature=temperature,
                 logprobs=True,
                 top_logprobs=self.top_logprobs,
-                **kwargs
+                **kwargs,
             )
 
             # Extract generated text
@@ -143,25 +137,32 @@ class OpenRouterModel(BaseModel):
 
             # Extract token confidence data
             token_confidence_data = []
-            if hasattr(response.choices[0], 'logprobs') and response.choices[0].logprobs:
+            if (
+                hasattr(response.choices[0], "logprobs")
+                and response.choices[0].logprobs
+            ):
                 logprobs_obj = response.choices[0].logprobs
 
                 # Check if it has 'content' attribute
-                if hasattr(logprobs_obj, 'content') and logprobs_obj.content:
+                if hasattr(logprobs_obj, "content") and logprobs_obj.content:
                     for token_info in logprobs_obj.content:
                         token_data = {
-                            'token': token_info.token,
-                            'logprob': token_info.logprob,
-                            'top_logprobs': [
-                                {'token': t.token, 'logprob': t.logprob}
+                            "token": token_info.token,
+                            "logprob": token_info.logprob,
+                            "top_logprobs": [
+                                {"token": t.token, "logprob": t.logprob}
                                 for t in token_info.top_logprobs
-                            ]
+                            ],
                         }
                         token_confidence_data.append(token_data)
                 else:
-                    log.warning("Logprobs object exists but has no 'content' attribute or it's empty")
+                    log.warning(
+                        "Logprobs object exists but has no 'content' attribute or it's empty"
+                    )
             else:
-                log.warning(f"No logprobs in response! Model '{self.model_name}' may not support logprobs via OpenRouter")
+                log.warning(
+                    f"No logprobs in response! Model '{self.model_name}' may not support logprobs via OpenRouter"
+                )
 
             return generated_text, token_confidence_data
 

@@ -6,7 +6,6 @@ import random
 import numpy as np
 import torch
 from tqdm import tqdm
-import traceback
 from pathlib import Path
 import hydra
 from hydra.core.hydra_config import HydraConfig
@@ -16,15 +15,17 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from lm_polygraph import WhiteboxModel
 
-from llm_tts.strategies import (
-    StrategyOnlineBestOfN,
-)
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
 from llm_tts.scorers.direct_prm_scorer import DirectPRMScorer
-from llm_tts.step_candidate_generator_through_api import StepCandidateGeneratorThroughAPI
-from llm_tts.step_candidate_generator_through_huggingface import StepCandidateGeneratorThroughHuggingface
+from llm_tts.step_candidate_generator_through_api import (
+    StepCandidateGeneratorThroughAPI,
+)
+from llm_tts.step_candidate_generator_through_huggingface import (
+    StepCandidateGeneratorThroughHuggingface,
+)
 from llm_tts.step_detection import StepBoundaryDetector
+from llm_tts.strategies import StrategyOnlineBestOfN
 
 
 import logging
@@ -34,8 +35,8 @@ log = logging.getLogger(__name__)
 
 def load_tokenizer(model_path: str):
     tokenizer = AutoTokenizer.from_pretrained(model_path)
-    #tokenizer.chat_template = None
-    #tokenizer.padding_side = "left"  # Fix padding side for decoder-only models
+    # tokenizer.chat_template = None
+    # tokenizer.padding_side = "left"  # Fix padding side for decoder-only models
     return tokenizer
 
 
@@ -53,7 +54,7 @@ def load_prompt_template(prompt_file: str) -> str:
             return f.read().strip()
     else:
         # Default prompt template for ReasonEval
-        #return "Question: {question}\n\nLet's solve this step by step.\n\n"
+        # return "Question: {question}\n\nLet's solve this step by step.\n\n"
         return ""
 
 
@@ -89,7 +90,7 @@ def load_existing_results(save_path: str, dataset):
     except Exception as e:
         if "Sample mismatch" in str(e):
             raise  # Re-raise validation errors
-        
+
         log.warning(f"Failed to load existing results: {e}")
         results = []
         processed_indices = set()
@@ -145,7 +146,7 @@ def create_model(config):
         detector = StepBoundaryDetector(
             step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
             answer_patterns=["<Answer>:", "\n<Answer>:"],
-            max_tokens_per_step=config.generation.max_new_tokens
+            max_tokens_per_step=config.generation.max_new_tokens,
         )
         step_generator = StepCandidateGeneratorThroughHuggingface(
             model=model,
@@ -153,7 +154,7 @@ def create_model(config):
             temperature=config.generation.temperature,
             max_new_tokens=config.generation.max_new_tokens,
             top_p=config.generation.top_p,
-            top_k=config.generation.top_k
+            top_k=config.generation.top_k,
         )
 
     elif config.model.type == "openai_api":
@@ -162,13 +163,13 @@ def create_model(config):
             openai_api_key=config.model.api_key,
             model_path=config.model.model_path,
             supports_logprobs=config.model.supports_logprobs,
-            #generation_parameters=config.model.generation_parameters,
+            # generation_parameters=config.model.generation_parameters,
         )
 
         detector = StepBoundaryDetector(
             step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
             answer_patterns=["<Answer>:", "\n<Answer>:"],
-            max_tokens_per_step=config.generation.max_new_tokens
+            max_tokens_per_step=config.generation.max_new_tokens,
         )
         step_generator = StepCandidateGeneratorThroughAPI(
             model=model,
@@ -176,7 +177,7 @@ def create_model(config):
             temperature=config.generation.temperature,
             max_new_tokens=config.generation.max_new_tokens,
             top_p=config.generation.top_p,
-            top_k=config.generation.top_k
+            top_k=config.generation.top_k,
         )
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
@@ -236,10 +237,9 @@ def generate_trajectories(
         else:
             request = [
                 {"role": "system", "content": ""},
-                {"role": "user",   "content": instance["question"]}
+                {"role": "user", "content": instance["question"]},
             ]
-        
-        
+
         result = strategy.generate_trajectory(request)
 
         # Extract generated answer (but don't check correctness yet)
@@ -291,7 +291,11 @@ def evaluate_results(
     log.info(f"Using DeepSeek verification with {config.evaluator.n_threads} threads")
 
     # Load prompt template and ensure compatibility
-    prompt_template = load_prompt_template(config.dataset.prompt_file) if config.dataset.prompt_file else ""
+    prompt_template = (
+        load_prompt_template(config.dataset.prompt_file)
+        if config.dataset.prompt_file
+        else ""
+    )
     if "{question}" in prompt_template:
         prompt_template = prompt_template.replace("{question}", "{q}")
 
@@ -361,9 +365,7 @@ def evaluate_results(
     log.info(f"\nSummary:")
     log.info(f"  - Total samples: {len(results)}")
     log.info(f"  - Completed: {completed} ({completed/len(results):.1%})")
-    log.info(
-        f"  - Correct: {correct} ({correct/len(results):.1%})"
-    )
+    log.info(f"  - Correct: {correct} ({correct/len(results):.1%})")
     log.info(f"  - Errors: {errors}")
 
     if completed > 0:
@@ -427,7 +429,11 @@ def main(config):
     if config.dataset.subset:
         dataset = dataset.select(range(min(config.dataset.subset, len(dataset))))
 
-    prompt_template = load_prompt_template(config.dataset.prompt_file) if config.dataset.prompt_file else ""
+    prompt_template = (
+        load_prompt_template(config.dataset.prompt_file)
+        if config.dataset.prompt_file
+        else ""
+    )
 
     # Load model
     log.info(f"Loading model: {config.model.model_path}")
@@ -437,7 +443,9 @@ def main(config):
     scorer = create_scorer(config, model)
 
     # Create tts strategy
-    generator = create_tts_strategy(config=config, step_generator=step_generator, scorer=scorer)
+    generator = create_tts_strategy(
+        config=config, step_generator=step_generator, scorer=scorer
+    )
 
     # Load existing results if resuming
     if config.output.resume:
@@ -455,7 +463,7 @@ def main(config):
         strategy=generator,
         dataset=dataset,
         processed_indices=processed_indices,
-        prompt_template=prompt_template
+        prompt_template=prompt_template,
     )
 
     # Evaluate results

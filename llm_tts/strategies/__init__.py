@@ -5,9 +5,9 @@ from .strategy_self_consistency import StrategySelfConsistency
 from .strategy_deepconf import StrategyDeepConf
 
 __all__ = [
-    'StrategyOnlineBestOfN',
-    'StrategyChainOfThought',
-    'StrategySelfConsistency',
-    'StrategyDeepThinkConfidence',
-    'StrategyDeepConf'
+    "StrategyOnlineBestOfN",
+    "StrategyChainOfThought",
+    "StrategySelfConsistency",
+    "StrategyDeepThinkConfidence",
+    "StrategyDeepConf",
 ]
