@@ -3,7 +3,7 @@ Base model interface for all providers.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 class BaseModel(ABC):
@@ -15,11 +15,7 @@ class BaseModel(ABC):
 
     @abstractmethod
     def generate(
-        self,
-        prompt: str,
-        max_tokens: int = 512,
-        temperature: float = 0.7,
-        **kwargs
+        self, prompt: str, max_tokens: int = 512, temperature: float = 0.7, **kwargs
     ) -> List[str]:
         """
         Generate text from prompt.
@@ -41,11 +37,7 @@ class BaseModel(ABC):
         pass
 
     def generate_with_confidence(
-        self,
-        prompt: str,
-        max_tokens: int = 512,
-        temperature: float = 0.7,
-        **kwargs
+        self, prompt: str, max_tokens: int = 512, temperature: float = 0.7, **kwargs
     ) -> Tuple[str, Optional[List[Dict]]]:
         """
         Generate text with token-level confidence data.
