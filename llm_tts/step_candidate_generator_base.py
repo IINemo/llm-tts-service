@@ -28,7 +28,6 @@ class StepCandidate:
         return f"StepCandidate(text='{self.text[:50]}...', complete={self.is_complete})"
 
 
-
 class StepCandidateGeneratorBase:
     """Base class for step candidate generator"""
 

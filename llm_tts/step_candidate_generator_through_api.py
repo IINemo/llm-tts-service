@@ -49,9 +49,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             
             # Use the model's generate_texts method which handles streaming
             results = self.model.generate_texts([request])
-
-            print('8888888888888888')
-            print(results)
             
             if results and len(results) > 0:
                 result = results[0]
