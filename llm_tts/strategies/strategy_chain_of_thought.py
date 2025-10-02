@@ -6,7 +6,7 @@ import logging
 log = logging.getLogger(__name__)
 
 
-class StrategyChainOfThought(StrategyBase)  :
+class StrategyChainOfThought(StrategyBase):
     """
     Basic Chain-of-Thought strategy for comparison.
     Generates a single reasoning path with step-by-step thinking.

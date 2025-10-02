@@ -13,9 +13,9 @@ class StepBoundaryDetector:
     
     def __init__(
         self,
-        step_patterns: List[str] = None,
-        answer_patterns: List[str] = None,
-        max_tokens_per_step: int = 250
+        step_patterns: List[str],
+        answer_patterns: List[str],
+        max_tokens_per_step: int
     ):
         """
         Args:

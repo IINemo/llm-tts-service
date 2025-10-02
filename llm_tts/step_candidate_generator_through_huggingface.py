@@ -3,7 +3,7 @@ Candidate step generation system for online best-of-n
 """
 
 import torch
-from typing import List
+from typing import List, Dict
 from transformers import StoppingCriteriaList
 import time
 
@@ -41,7 +41,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         self.max_new_tokens = max_new_tokens
         self.device = model.device()
 
-    def generate_candidates(self, request, candidates_per_step: int) -> List[StepCandidate]:
+    def generate_candidates(self, request: List[Dict[str, str]], candidates_per_step: int) -> List[StepCandidate]:
         """Generate N candidate next steps from current trajectory"""
 
         log.info(f"Generating {candidates_per_step} candidates from trajectory")
@@ -165,7 +165,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
 
         return candidates
 
-    def generate_answer(self, request, candidates_per_step: int) -> str:
+    def generate_answer(self, request: List[Dict[str, str]], candidates_per_step: int) -> str:
         """Generate and select best final answer based on criterion"""
 
         return self.generate_candidates(request, candidates_per_step)
