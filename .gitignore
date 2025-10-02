@@ -171,3 +171,10 @@ logs/
 tmp/
 temp/
 outputs/
+
+*.zip
+*.bst
+*.pdf
+*.bib
+*.tex
+*.sty

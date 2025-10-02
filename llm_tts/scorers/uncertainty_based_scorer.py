@@ -1,6 +1,7 @@
-from .step_scorer_base import StepScorerBase, CandidateScore
-from typing import List
 from abc import abstractmethod
+from typing import List
+
+from .step_scorer_base import CandidateScore, StepScorerBase
 
 
 class UncertaintyBasedScorer(StepScorerBase):

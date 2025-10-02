@@ -53,3 +53,7 @@ Pre-commit hooks run automatically on `git commit` and will block commits that f
 # TODO:
 1. Add new scorers
 2. Add tree of thought
+
+
+# Example:
+OPENAI_API_KEY=<key> PYTHONPATH=./ python ./scripts/run_tts_eval.py --config-path=../config/ --config-name=run_tts_eval.yaml dataset=small_gsm8k dataset.subset=1

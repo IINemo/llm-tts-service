@@ -1,0 +1,5 @@
+# @package strategy
+
+type: chain_of_thought
+max_new_tokens: 512          # Max tokens for reasoning
+temperature: 0.1             # Lower temperature for deterministic reasoning

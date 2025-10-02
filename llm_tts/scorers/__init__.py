@@ -1,2 +1,3 @@
+from .direct_prm_scorer import DirectPRMScorer
+from .majority_voting import ChainMajorityVotingScorer, MajorityVotingScorer
 from .uncertainty_based_scorer import UncertaintyBasedScorer
-from .reasoneval_direct import DirectReasonEvalScorerSeparate, DirectReasonEvalScorer
