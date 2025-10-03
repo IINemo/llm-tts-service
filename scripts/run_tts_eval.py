@@ -46,13 +46,8 @@ def load_model(model_path: str, device_map: str):
 
 def load_prompt_template(prompt_file: str) -> str:
     """Load prompt template from file"""
-    if prompt_file and os.path.exists(prompt_file):
-        with open(prompt_file, "r") as f:
-            return f.read().strip()
-    else:
-        # Default prompt template for ReasonEval
-        # return "Question: {question}\n\nLet's solve this step by step.\n\n"
-        return ""
+    with open(prompt_file, "r") as f:
+        return f.read().strip()
 
 
 def load_existing_results(save_path: str, dataset):
@@ -230,14 +225,10 @@ def generate_trajectories(
         log.info(f"Question: {instance['question'][:200]}...")
 
         # Generate trajectory
-        if prompt_template:
-            request = prompt_template.format(question=instance["question"])
-        else:
-            request = [
-                {"role": "system", "content": ""},
-                {"role": "user", "content": instance["question"]},
-            ]
-
+        request = [
+            {"role": "system", "content": ""},
+            {"role": "user", "content": prompt_template.format(question=instance["question"]) if prompt_template else instance["question"]},
+        ]
         result = strategy.generate_trajectory(request)
 
         # Extract generated answer (but don't check correctness yet)
