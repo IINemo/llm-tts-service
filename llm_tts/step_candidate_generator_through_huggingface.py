@@ -9,15 +9,51 @@ from typing import List, Dict
 import torch
 from lm_polygraph import WhiteboxModel
 from transformers import StoppingCriteriaList
+from transformers import StoppingCriteria
 
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
     StepCandidateGeneratorBase,
 )
 
-from .step_detection import BatchStepStoppingCriteria, StepBoundaryDetector
+from .step_boundary_detector import StepBoundaryDetector
 
 log = logging.getLogger(__name__)
+
+
+class BatchStepStoppingCriteria(StoppingCriteria):
+    """Stopping criteria for batch step generation"""
+
+    def __init__(
+        self,
+        tokenizer,
+        start_length: int,
+        detector: StepBoundaryDetector,
+        batch_size: int,
+    ):
+        self.tokenizer = tokenizer
+        self.start_length = start_length
+        self.detector = detector
+        self.batch_size = batch_size
+        self.finished = [False] * batch_size
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> bool:
+        """Check stopping criteria for entire batch"""
+        # Check each sequence in batch
+        for i in range(min(input_ids.shape[0], self.batch_size)):
+            if not self.finished[i]:
+                generated_ids = input_ids[i][self.start_length :]
+                generated_text = self.tokenizer.decode(
+                    generated_ids, skip_special_tokens=True
+                )
+
+                if self.detector.is_step_complete(
+                    generated_text, token_count=len(generated_ids)
+                ):
+                    self.finished[i] = True
+
+        # Stop when all sequences are finished
+        return all(self.finished)
 
 
 class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
@@ -69,74 +105,66 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             batch_size=candidates_per_step,
         )
 
-        try:
-            start_time = time.time()
+        start_time = time.time()
 
-            gen_params = {
-                "max_new_tokens": self.max_new_tokens,
-                "do_sample": True,
-                "temperature": self.temperature,
-                "top_p": self.top_p,
-                "top_k": self.top_k,
-                "num_return_sequences": candidates_per_step,
-                "output_scores": True,
-                "return_dict_in_generate": True,
-                "stopping_criteria": StoppingCriteriaList([stopping_criteria]),
-                "pad_token_id": self.model.tokenizer.eos_token_id,
-                "eos_token_id": self.model.tokenizer.eos_token_id,
-            }
+        gen_params = {
+            "max_new_tokens": self.max_new_tokens,
+            "do_sample": True,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "num_return_sequences": candidates_per_step,
+            "output_scores": True,
+            "return_dict_in_generate": True,
+            "stopping_criteria": StoppingCriteriaList([stopping_criteria]),
+            "pad_token_id": self.model.tokenizer.eos_token_id,
+            "eos_token_id": self.model.tokenizer.eos_token_id,
+        }
 
-            log.info(
-                f"Generation params: do_sample={gen_params['do_sample']}, "
-                f"temp={gen_params['temperature']}, "
-                f"top_p={gen_params['top_p']}, "
-                f"num_return_sequences={gen_params['num_return_sequences']}"
-            )
-            log.info(
-                f"Model generation_parameters.do_sample: "
-                f"{self.model.generation_parameters.do_sample}"
-            )
-            log.info(
-                f"Model generation_parameters.temperature: "
-                f"{self.model.generation_parameters.temperature}"
-            )
+        log.info(
+            f"Generation params: do_sample={gen_params['do_sample']}, "
+            f"temp={gen_params['temperature']}, "
+            f"top_p={gen_params['top_p']}, "
+            f"num_return_sequences={gen_params['num_return_sequences']}"
+        )
+        log.info(
+            f"Model generation_parameters.do_sample: "
+            f"{self.model.generation_parameters.do_sample}"
+        )
+        log.info(
+            f"Model generation_parameters.temperature: "
+            f"{self.model.generation_parameters.temperature}"
+        )
 
-            # Override model's default generation parameters to ensure sampling
-            old_do_sample = self.model.generation_parameters.do_sample
-            old_temperature = self.model.generation_parameters.temperature
-            old_top_p = self.model.generation_parameters.top_p
-            old_top_k = self.model.generation_parameters.top_k
+        # Override model's default generation parameters to ensure sampling
+        old_do_sample = self.model.generation_parameters.do_sample
+        old_temperature = self.model.generation_parameters.temperature
+        old_top_p = self.model.generation_parameters.top_p
+        old_top_k = self.model.generation_parameters.top_k
 
-            self.model.generation_parameters.do_sample = True
-            self.model.generation_parameters.temperature = self.temperature
-            self.model.generation_parameters.top_p = self.top_p
-            self.model.generation_parameters.top_k = self.top_k
+        self.model.generation_parameters.do_sample = True
+        self.model.generation_parameters.temperature = self.temperature
+        self.model.generation_parameters.top_p = self.top_p
+        self.model.generation_parameters.top_k = self.top_k
 
-            log.info(
-                f"After override - do_sample: "
-                f"{self.model.generation_parameters.do_sample}, "
-                f"temp: {self.model.generation_parameters.temperature}"
-            )
+        log.info(
+            f"After override - do_sample: "
+            f"{self.model.generation_parameters.do_sample}, "
+            f"temp: {self.model.generation_parameters.temperature}"
+        )
 
-            with torch.no_grad():
-                outputs = self.model.generate(**inputs, **gen_params)
+        with torch.no_grad():
+            outputs = self.model.generate(**inputs, **gen_params)
 
-            # Restore original parameters
-            self.model.generation_parameters.do_sample = old_do_sample
-            self.model.generation_parameters.temperature = old_temperature
-            self.model.generation_parameters.top_p = old_top_p
-            self.model.generation_parameters.top_k = old_top_k
+        # Restore original parameters
+        self.model.generation_parameters.do_sample = old_do_sample
+        self.model.generation_parameters.temperature = old_temperature
+        self.model.generation_parameters.top_p = old_top_p
+        self.model.generation_parameters.top_k = old_top_k
 
-            generation_time = time.time() - start_time
+        generation_time = time.time() - start_time
 
-            log.info(f"Generated candidates in {generation_time:.2f}s")
-
-        except torch.OutOfMemoryError as e:
-            log.error(f"CUDA OOM during candidate generation: {e}")
-            # torch.cuda.empty_cache()
-            raise e
-            # Fallback to single candidate
-            # return self._generate_single_candidate(trajectory, verbose)
+        log.info(f"Generated candidates in {generation_time:.2f}s")
 
         # Extract step candidates
         candidates = []
