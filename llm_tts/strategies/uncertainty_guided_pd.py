@@ -351,8 +351,6 @@ class UncertaintyGuidedCoT_PD:
         # Prepend whitespace/newlines variants
         prefixes = ["", "\n", "\n\n", " ", "\t"]
         variants += [p + b for p in prefixes for b in bases]
-        # Answer tag variants
-        variants += ["<Answer>:", "\n<Answer>:", "\n\n<Answer>:", " Answer:", "\nAnswer:"]
         
         uniq = list(set(variants))
         return uniq

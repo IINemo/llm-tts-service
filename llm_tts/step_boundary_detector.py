@@ -167,11 +167,11 @@ class UncertStepBoundaryDetector:
         self.step_patterns = step_patterns or [
             "\n**Step",
             "\n## Step",
-            "<Answer>:",
-            "\n<Answer>:",
-            "\n\nAnswer:",
-            "\nFinal Answer:",
-            "\n\nThe answer is"
+            # "<Answer>:",
+            # "\n<Answer>:",
+            # "\n\nAnswer:",
+            # "\nFinal Answer:",
+            # "\n\nThe answer is"
         ]
         # Modern/lowercase-friendly defaults
         self.answer_patterns = answer_patterns or [
@@ -179,7 +179,8 @@ class UncertStepBoundaryDetector:
             "\n<answer>:",
             "final answer",
             "answer:",
-            "answer is"
+            "answer is",
+            "answer"
         ]
         self.max_tokens_per_step = max_tokens_per_step
 
