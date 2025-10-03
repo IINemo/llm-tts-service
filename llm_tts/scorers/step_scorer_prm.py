@@ -152,11 +152,7 @@ class StepScorerPRM(StepScorerRewardBase):
     """
 
     def __init__(
-        self,
-        model: WhiteboxModel,
-        prm_model_path: str, 
-        device: str,
-        batch_size: int
+        self, model: WhiteboxModel, prm_model_path: str, device: str, batch_size: int
     ):
         super().__init__("DirectPRM")
         self.model = model
@@ -171,7 +167,7 @@ class StepScorerPRM(StepScorerRewardBase):
 
     def prepare_model(self):
         """Load PRM model and tokenizer"""
-        
+
         log.info(f"Loading PRM model from {self.prm_model_path}")
         self.prm_tokenizer = AutoTokenizer.from_pretrained(
             self.prm_model_path, trust_remote_code=True

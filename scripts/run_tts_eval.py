@@ -151,7 +151,7 @@ def create_model(config):
 
     elif config.model.type == "openai_api":
         log.info(f"Using OpenAI API model: {config.model.model_path}")
-        
+
         detector = StepBoundaryDetector(
             step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
             answer_patterns=["<Answer>:", "\n<Answer>:"],
@@ -227,7 +227,14 @@ def generate_trajectories(
         # Generate trajectory
         request = [
             {"role": "system", "content": ""},
-            {"role": "user", "content": prompt_template.format(question=instance["question"]) if prompt_template else instance["question"]},
+            {
+                "role": "user",
+                "content": (
+                    prompt_template.format(question=instance["question"])
+                    if prompt_template
+                    else instance["question"]
+                ),
+            },
         ]
         result = strategy.generate_trajectory(request)
 
