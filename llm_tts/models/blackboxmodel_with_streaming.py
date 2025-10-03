@@ -100,8 +100,10 @@ class BlackboxModelWithStreaming(BlackboxModel):
                                         text_now
                                     ),
                                     "raw_collected": text_now,
-                                    "trajectory_complete": self.boundary_detector.is_trajectory_complete(
-                                        text_now
+                                    "trajectory_complete": (
+                                        self.boundary_detector.is_trajectory_complete(
+                                            text_now
+                                        )
                                     ),
                                     "reason": "boundary-detected",
                                 }
