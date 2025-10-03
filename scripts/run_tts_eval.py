@@ -156,17 +156,18 @@ def create_model(config):
 
     elif config.model.type == "openai_api":
         log.info(f"Using OpenAI API model: {config.model.model_path}")
-        model = BlackboxModelWithStreaming(
-            openai_api_key=config.model.api_key,
-            model_path=config.model.model_path,
-            supports_logprobs=config.model.supports_logprobs,
-            # generation_parameters=config.model.generation_parameters,
-        )
-
+        
         detector = StepBoundaryDetector(
             step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
             answer_patterns=["<Answer>:", "\n<Answer>:"],
             max_tokens_per_step=config.generation.max_new_tokens,
+        )
+        model = BlackboxModelWithStreaming(
+            openai_api_key=config.model.api_key,
+            model_path=config.model.model_path,
+            supports_logprobs=config.model.supports_logprobs,
+            boundary_detector=detector,
+            # generation_parameters=config.model.generation_parameters,
         )
         step_generator = StepCandidateGeneratorThroughAPI(
             model=model,

@@ -49,6 +49,7 @@ class StepBoundaryDetector:
 
     def is_step_complete(self, generated_text: str, token_count: int = None) -> bool:
         """Check if current generation represents a complete step"""
+        
         # Immediate completion if we hit an answer pattern - triggers answer phase
         for pattern in self.answer_patterns:
             if pattern in generated_text:
@@ -105,6 +106,7 @@ class StepBoundaryDetector:
 
     def extract_step_text(self, generated_text: str) -> str:
         """Extract the step text, removing boundary markers at the END only"""
+        
         step_text = generated_text.strip()
 
         # Special handling for "- Step" pattern
