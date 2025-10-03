@@ -60,12 +60,17 @@ class EvaluatorGoldStandard:
             problem=problem, solution=solution, gold_answer=gold_answer
         )
         reply = self.chat.ask(prompt)
-        if "<Grade>: Correct" in reply:
-            return 0
-        elif "<Grade>: Incorrect" in reply:
-            return 1
+
+        # Check for both formats: "<Grade>: Correct" and "Grade: Correct"
+        if "<Grade>: Correct" in reply or "Grade: Correct" in reply:
+            score = 0
+        elif "<Grade>: Incorrect" in reply or "Grade: Incorrect" in reply:
+            score = 1
         else:
-            return np.nan
+            score = np.nan
+
+        # Return tuple of (score, reply) for logging
+        return (score, reply)
 
     def __call__(
         self, problems: list[str], solutions: list[str], gold_answers: list[str]

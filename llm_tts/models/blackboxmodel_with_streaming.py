@@ -29,6 +29,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
         generation_parameters: GenerationParameters = GenerationParameters(),
         supports_logprobs: bool = False,
         boundary_detector: Optional[StepBoundaryDetector] = None,
+        base_url: Optional[str] = None,
     ):
         super().__init__(
             openai_api_key=openai_api_key,
@@ -37,7 +38,15 @@ class BlackboxModelWithStreaming(BlackboxModel):
             generation_parameters=generation_parameters,
             supports_logprobs=supports_logprobs,
         )
-        self.client = openai.OpenAI(api_key=openai_api_key)
+        # Create client with optional custom base_url (e.g., OpenRouter)
+        client_kwargs = {"api_key": openai_api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self.client = openai.OpenAI(**client_kwargs)
+
+        # Override parent's openai_api for non-streaming calls
+        self.openai_api = self.client
+
         self.boundary_detector = boundary_detector
         self.stop_args = {}
 
@@ -45,13 +54,22 @@ class BlackboxModelWithStreaming(BlackboxModel):
         """
         Streams completions for each input text, returning step/trajectory info per input.
 
+        If output_scores=True is in args, delegates to parent's non-streaming method
+        for logprobs support (used by DeepConf).
+
         Args:
-            input_texts (List[str]): List of user prompts.
-            **args: Additional arguments (currently unused).
+            chats (List[List[Dict[str, str]]]): List of chat message lists.
+            **args: Additional arguments.
 
         Returns:
-            List[dict]: List of dicts with step/trajectory info for each input.
+            List[dict] with step info (streaming) or List[str] (non-streaming with logprobs)
         """
+        # Check if logprobs are requested (DeepConf offline mode)
+        if args.get("output_scores", False):
+            # Use parent's non-streaming method with logprobs support
+            return super().generate_texts(chats, **args)
+
+        # Otherwise use streaming mode
         results = []
         for chat in chats:
             buffer = []
