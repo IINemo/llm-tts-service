@@ -24,14 +24,14 @@ from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard  # no
 from llm_tts.models.blackboxmodel_with_streaming import (  # noqa: E402
     BlackboxModelWithStreaming,
 )
-from llm_tts.scorers.direct_prm_scorer import DirectPRMScorer  # noqa: E402
+from llm_tts.scorers.step_scorer_prm import StepScorerPRM  # noqa: E402
+from llm_tts.step_boundary_detector import StepBoundaryDetector  # noqa: E402
 from llm_tts.step_candidate_generator_through_api import (  # noqa: E402
     StepCandidateGeneratorThroughAPI,
 )
 from llm_tts.step_candidate_generator_through_huggingface import (  # noqa: E402
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.step_detection import StepBoundaryDetector  # noqa: E402
 from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN  # noqa: E402
 
 log = logging.getLogger(__name__)
