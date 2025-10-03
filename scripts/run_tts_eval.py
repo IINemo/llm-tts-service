@@ -5,27 +5,34 @@ import os
 import random
 from pathlib import Path
 
-import hydra
-import numpy as np
-import torch
-from datasets import Dataset, load_dataset
-from hydra.core.hydra_config import HydraConfig
-from lm_polygraph import WhiteboxModel
-from omegaconf import OmegaConf
-from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from dotenv import load_dotenv
 
-from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
-from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers.direct_prm_scorer import DirectPRMScorer
-from llm_tts.step_candidate_generator_through_api import (
+# Load environment variables from .env file before other imports
+load_dotenv()
+
+import hydra  # noqa: E402
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+from datasets import Dataset, load_dataset  # noqa: E402
+from hydra.core.hydra_config import HydraConfig  # noqa: E402
+from lm_polygraph import WhiteboxModel  # noqa: E402
+from omegaconf import OmegaConf  # noqa: E402
+from tqdm import tqdm  # noqa: E402
+from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
+
+from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard  # noqa: E402
+from llm_tts.models.blackboxmodel_with_streaming import (  # noqa: E402
+    BlackboxModelWithStreaming,
+)
+from llm_tts.scorers.direct_prm_scorer import DirectPRMScorer  # noqa: E402
+from llm_tts.step_candidate_generator_through_api import (  # noqa: E402
     StepCandidateGeneratorThroughAPI,
 )
-from llm_tts.step_candidate_generator_through_huggingface import (
+from llm_tts.step_candidate_generator_through_huggingface import (  # noqa: E402
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.step_detection import StepBoundaryDetector
-from llm_tts.strategies import StrategyOnlineBestOfN
+from llm_tts.step_detection import StepBoundaryDetector  # noqa: E402
+from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -155,34 +162,72 @@ def create_model(config):
         )
 
     elif config.model.type == "openai_api":
-        log.info(f"Using OpenAI API model: {config.model.model_path}")
-        model = BlackboxModelWithStreaming(
-            openai_api_key=config.model.api_key,
-            model_path=config.model.model_path,
-            supports_logprobs=config.model.supports_logprobs,
-            # generation_parameters=config.model.generation_parameters,
-        )
+        # Check if DeepConf strategy - use BlackboxModelWithStreaming
+        if config.strategy.type == "deepconf":
+            log.info(f"Using API model for DeepConf: {config.model.model_name}")
 
-        detector = StepBoundaryDetector(
-            step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
-            answer_patterns=["<Answer>:", "\n<Answer>:"],
-            max_tokens_per_step=config.generation.max_new_tokens,
-        )
-        step_generator = StepCandidateGeneratorThroughAPI(
-            model=model,
-            detector=detector,
-            temperature=config.generation.temperature,
-            max_new_tokens=config.generation.max_new_tokens,
-            top_p=config.generation.top_p,
-            top_k=config.generation.top_k,
-        )
+            # Determine API provider
+            if config.model.get("provider") == "openrouter":
+                import os
+
+                api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+                if not api_key:
+                    raise ValueError(
+                        "OpenRouter API key required. Set via config or "
+                        "OPENROUTER_API_KEY env var"
+                    )
+
+                # Use BlackboxModelWithStreaming with OpenRouter base_url
+                model = BlackboxModelWithStreaming(
+                    openai_api_key=api_key,
+                    model_path=config.model.model_name,
+                    supports_logprobs=True,
+                    base_url="https://openrouter.ai/api/v1",
+                )
+
+                log.info(f"Using OpenRouter with model: {config.model.model_name}")
+            else:
+                # Standard OpenAI
+                import os
+
+                api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
+                model = BlackboxModelWithStreaming(
+                    openai_api_key=api_key,
+                    model_path=config.model.model_path,
+                    supports_logprobs=True,
+                )
+
+            step_generator = None  # DeepConf doesn't use step generator
+
+        else:
+            # Standard API model with streaming
+            log.info(f"Using OpenAI API model: {config.model.model_path}")
+            model = BlackboxModelWithStreaming(
+                openai_api_key=config.model.api_key,
+                model_path=config.model.model_path,
+                supports_logprobs=config.model.supports_logprobs,
+            )
+
+            detector = StepBoundaryDetector(
+                step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
+                answer_patterns=["<Answer>:", "\n<Answer>:"],
+                max_tokens_per_step=config.generation.max_new_tokens,
+            )
+            step_generator = StepCandidateGeneratorThroughAPI(
+                model=model,
+                detector=detector,
+                temperature=config.generation.temperature,
+                max_new_tokens=config.generation.max_new_tokens,
+                top_p=config.generation.top_p,
+                top_k=config.generation.top_k,
+            )
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
     return model, step_generator
 
 
-def create_tts_strategy(config, step_generator, scorer):
+def create_tts_strategy(config, model, step_generator, scorer):
     if config.strategy.type == "direct_online_best_of_n_reason_eval_separate":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
@@ -192,6 +237,29 @@ def create_tts_strategy(config, step_generator, scorer):
             max_new_tokens=config.generation.max_new_tokens,
             temperature=config.generation.temperature,
             generation_batch_size=config.generation.batch_size,
+        )
+
+    elif config.strategy.type == "deepconf":
+        # DeepConf requires BlackboxModel with logprobs support
+        if not isinstance(model, BlackboxModelWithStreaming):
+            raise ValueError(
+                f"DeepConf requires BlackboxModelWithStreaming, got {type(model).__name__}"
+            )
+
+        strategy = StrategyDeepConf(
+            model=model,
+            mode=config.strategy.mode,
+            budget=config.strategy.budget,
+            window_size=config.strategy.window_size,
+            temperature=config.generation.temperature,
+            top_p=config.generation.top_p,
+            max_tokens=config.generation.max_new_tokens,
+            top_logprobs=config.model.top_logprobs,
+            filter_method=config.strategy.filter_method,
+            warmup_traces=config.strategy.get("warmup_traces"),
+            total_budget=config.strategy.get("total_budget"),
+            confidence_percentile=config.strategy.get("confidence_percentile"),
+            confidence_threshold=config.strategy.get("confidence_threshold"),
         )
 
     else:
@@ -228,9 +296,15 @@ def generate_trajectories(
         log.info(f"Sample {i+1}/{subset_size}")
         log.info(f"Question: {instance['question'][:200]}...")
 
+        # Extract and log gold answer
+        from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
+
+        gold_answer_num = extract_answer_from_gsm8k(instance["answer"])
+        log.info(f"Gold answer: {gold_answer_num}")
+
         # Generate trajectory
         if prompt_template:
-            request = prompt_template.format(question=instance["question"])
+            request = prompt_template.format(q=instance["question"])
         else:
             request = [
                 {"role": "system", "content": ""},
@@ -284,9 +358,6 @@ def evaluate_results(
     log.info("Phase 2: Checking correctness")
     log.info("=" * 60)
 
-    # Use DeepSeek verification
-    log.info(f"Using DeepSeek verification with {config.evaluator.n_threads} threads")
-
     # Load prompt template and ensure compatibility
     prompt_template = (
         load_prompt_template(config.dataset.prompt_file)
@@ -296,59 +367,107 @@ def evaluate_results(
     if "{question}" in prompt_template:
         prompt_template = prompt_template.replace("{question}", "{q}")
 
-    # Create evaluator
-    evaluator = EvaluatorGoldStandard(
-        prompt=prompt_template,
-        base_url=config.evaluator.base_url,
-        model=config.evaluator.model,
-        n_threads=config.evaluator.n_threads,
-        cache_path=os.path.expanduser("~/.cache"),
-    )
+    # Check evaluation method from config (default: simple for GSM8K)
+    eval_method = config.get("eval_method", "simple")
 
-    # Prepare data for batch processing
-    problems = []
-    solutions = []
-    gold_answers = []
-    result_indices = []
+    if eval_method == "llm_judge":
+        # Use LLM-as-a-judge for verification
+        log.info(f"Using LLM-as-a-judge for verification: {config.evaluator.model}")
 
-    # always process all results, since we have deepseek cache.
-    for i, result in enumerate(results):
-        if "error" not in result:
-            problems.append(result["question"])
-            solutions.append(result["generated_answer"])
-            gold_answers.append(result["gold_answer"])
-            result_indices.append(i)
+        # Determine which API key to use based on provider (if specified) or base_url
+        provider = config.evaluator.get("provider", None)
+        if provider == "openrouter":
+            api_key_env = "OPENROUTER_API_KEY"
+        elif provider == "deepseek":
+            api_key_env = "DEEPSEEK_API_KEY"
+        elif provider == "openai":
+            api_key_env = "OPENAI_API_KEY"
+        else:
+            # Fallback: infer from base_url
+            if "openrouter" in config.evaluator.base_url:
+                api_key_env = "OPENROUTER_API_KEY"
+            elif "deepseek" in config.evaluator.base_url:
+                api_key_env = "DEEPSEEK_API_KEY"
+            else:
+                api_key_env = "OPENAI_API_KEY"
 
-    if problems:
-        log.info(f"Verifying {len(problems)} solutions with DeepSeek...")
+        # Set the API key in the environment so OpenAIChat can pick it up
+        api_key = os.getenv(api_key_env)
+        if api_key:
+            os.environ["OPENAI_API_KEY"] = api_key
 
-        # Get annotations from DeepSeek
-        try:
-            annotations = evaluator(problems, solutions, gold_answers)
+        evaluator = EvaluatorGoldStandard(
+            prompt=prompt_template,
+            base_url=config.evaluator.base_url,
+            model=config.evaluator.model,
+            n_threads=config.evaluator.n_threads,
+            cache_path=os.path.expanduser("~/.cache"),
+        )
 
-            # Update results with correctness
-            for idx, annotation in zip(result_indices, annotations):
-                if np.isnan(annotation):
-                    log.warning(
-                        f"DeepSeek returned unclear result for sample "
-                        f"{results[idx]['index']}, marking as incorrect"
-                    )
-                    results[idx]["is_correct"] = False
-                else:
-                    results[idx]["is_correct"] = (
-                        annotation == 0
-                    )  # 0 = correct, 1 = incorrect
+        # Prepare data for batch processing
+        problems = []
+        solutions = []
+        gold_answers = []
+        result_indices = []
 
-                if (idx - result_indices[0]) % 10 == 0:
+        for i, result in enumerate(results):
+            if "error" not in result:
+                problems.append(result["question"])
+                solutions.append(result["generated_answer"])
+                gold_answers.append(result["gold_answer"])
+                result_indices.append(i)
+
+        if problems:
+            log.info(f"Verifying {len(problems)} solutions with LLM judge...")
+
+            try:
+                annotations = evaluator(problems, solutions, gold_answers)
+
+                for idx, (annotation, reply) in zip(result_indices, annotations):
+                    if np.isnan(annotation):
+                        log.warning(
+                            f"LLM judge returned unclear result for sample "
+                            f"{results[idx]['index']}, marking as incorrect"
+                        )
+                        results[idx]["is_correct"] = False
+                    else:
+                        results[idx]["is_correct"] = annotation == 0
+
                     log.info(f"\nSample {results[idx]['index']}:")
-                    log.info(f"DeepSeek annotation: {annotation}")
-                    log.info(f"Correct: {results[idx]['is_correct']}")
+                    log.info(f"  LLM judge response:\n{reply}")
+                    log.info(f"  Correct: {results[idx]['is_correct']}")
 
-        except Exception as e:
-            log.error(f"Error during DeepSeek verification: {e}")
-            # Fall back to marking all as incorrect
-            for idx in result_indices:
-                results[idx]["is_correct"] = False
+            except Exception as e:
+                log.error(f"Error during LLM judge verification: {e}")
+                for idx in result_indices:
+                    results[idx]["is_correct"] = False
+
+    else:
+        # Use simple numeric/string comparison (default for GSM8K)
+        log.info("Using simple answer comparison for verification")
+        from llm_tts.datasets.gsm8k import (
+            evaluate_gsm8k_answer,
+            extract_answer_from_gsm8k,
+        )
+        from llm_tts.utils.confidence import extract_answer
+
+        for i, result in enumerate(results):
+            if "error" not in result:
+                # Extract answer from gold answer (format: "#### 18")
+                gold_answer_num = extract_answer_from_gsm8k(result["gold_answer"])
+
+                # Extract answer from predicted text (format: "... \boxed{18} ...")
+                predicted_text = result.get("generated_answer", "")
+                predicted_answer = extract_answer(predicted_text)
+
+                # Compare answers
+                is_correct = evaluate_gsm8k_answer(predicted_answer, gold_answer_num)
+                results[i]["is_correct"] = is_correct
+
+                log.info(f"\nSample {result['index']}:")
+                log.info(f"  Predicted: {predicted_answer}")
+                log.info(f"  Gold: {gold_answer_num}")
+                log.info(f"  Correct: {is_correct}")
 
     # Final save with correctness results
     save_path_file = Path(save_path) / "results.pt"
@@ -418,6 +537,20 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
+
+    # Check if dataset is cached
+    cache_dir = config.system.hf_cache or os.path.expanduser(
+        "~/.cache/huggingface/datasets"
+    )
+    dataset_cache_name = config.dataset.dataset_path.replace("/", "___")
+    cache_exists = os.path.exists(os.path.join(cache_dir, dataset_cache_name))
+    if cache_exists:
+        log.info(f"Using cached dataset from: {cache_dir}")
+    else:
+        log.info(f"Downloading dataset to cache: {cache_dir}")
+
+    # Set offline mode to avoid network requests for cached datasets
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
     dataset = load_dataset(
         config.dataset.dataset_path,
         config.dataset.dataset_config,
@@ -434,15 +567,19 @@ def main(config):
     )
 
     # Load model
-    log.info(f"Loading model: {config.model.model_path}")
+    model_name = config.model.get("model_name") or config.model.get("model_path")
+    log.info(f"Loading model: {model_name}")
     model, step_generator = create_model(config)
 
-    # Create scorer
-    scorer = create_scorer(config, model)
+    # Create scorer (skip for DeepConf)
+    if config.strategy.type != "deepconf":
+        scorer = create_scorer(config, model)
+    else:
+        scorer = None
 
     # Create tts strategy
     generator = create_tts_strategy(
-        config=config, step_generator=step_generator, scorer=scorer
+        config=config, model=model, step_generator=step_generator, scorer=scorer
     )
 
     # Load existing results if resuming

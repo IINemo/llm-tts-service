@@ -7,36 +7,38 @@ Run with:
     python tests/test_deepconf_accurate.py
 """
 
-import sys
 import os
-sys.path.insert(0, os.path.abspath('.'))
+import sys
 
-import logging
-import importlib.util
+sys.path.insert(0, os.path.abspath("."))
+
+import importlib.util  # noqa: E402
+import logging  # noqa: E402
 
 # Import models normally (no lm-polygraph issue)
-from llm_tts.models import create_model
+from llm_tts.models import create_model  # noqa: E402
 
 # Import deepconf_strategy directly without triggering strategies/__init__.py
 spec = importlib.util.spec_from_file_location(
-    "llm_tts.strategies.deepconf_strategy",
-    "llm_tts/strategies/deepconf_strategy.py"
+    "llm_tts.strategies.deepconf_strategy", "llm_tts/strategies/deepconf_strategy.py"
 )
 deepconf_module = importlib.util.module_from_spec(spec)
-sys.modules['llm_tts.strategies.deepconf_strategy'] = deepconf_module
+sys.modules["llm_tts.strategies.deepconf_strategy"] = deepconf_module
 spec.loader.exec_module(deepconf_module)
 DeepConfStrategy = deepconf_module.DeepConfStrategy
 extract_answer = deepconf_module.extract_answer
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 log = logging.getLogger(__name__)
 
 
 def test_1_answer_extraction():
     """Test 1: Answer extraction with LaTeX boxed format"""
-    log.info("="*70)
+    log.info("=" * 70)
     log.info("Test 1: Answer Extraction")
-    log.info("="*70)
+    log.info("=" * 70)
 
     test_cases = [
         ("The answer is \\boxed{70}", "70"),
@@ -64,9 +66,9 @@ def test_1_answer_extraction():
 
 def test_2_model_with_logprobs():
     """Test 2: Verify model supports logprobs"""
-    log.info("="*70)
+    log.info("=" * 70)
     log.info("Test 2: Model Logprobs Support")
-    log.info("="*70)
+    log.info("=" * 70)
 
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
@@ -78,11 +80,11 @@ def test_2_model_with_logprobs():
             provider="openrouter",
             model_name="openai/gpt-4o-mini",
             api_key=api_key,
-            top_logprobs=20
+            top_logprobs=20,
         )
 
-        assert model.supports_logprobs() == True
-        assert hasattr(model, 'generate_with_confidence')
+        assert model.supports_logprobs() is True
+        assert hasattr(model, "generate_with_confidence")
 
         log.info(f"✅ Model: {model.model_name}")
         log.info(f"✅ Supports logprobs: {model.supports_logprobs()}")
@@ -91,15 +93,16 @@ def test_2_model_with_logprobs():
     except Exception as e:
         log.error(f"❌ Test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def test_3_deepconf_generation():
     """Test 3: DeepConf trace generation"""
-    log.info("="*70)
+    log.info("=" * 70)
     log.info("Test 3: DeepConf Trace Generation")
-    log.info("="*70)
+    log.info("=" * 70)
 
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
@@ -111,7 +114,7 @@ def test_3_deepconf_generation():
             provider="openrouter",
             model_name="openai/gpt-4o-mini",
             api_key=api_key,
-            top_logprobs=20
+            top_logprobs=20,
         )
 
         strategy = DeepConfStrategy(
@@ -120,11 +123,13 @@ def test_3_deepconf_generation():
             window_size=16,
             temperature=0.7,
             max_tokens=500,
-            filter_method="none"
+            filter_method="none",
         )
 
         # Use boxed format in prompt
-        prompt = "What is 23 + 47? Show your work and put the final answer in \\boxed{}."
+        prompt = (
+            "What is 23 + 47? Show your work and put the final answer in \\boxed{}."
+        )
 
         result = strategy.generate_trajectory(prompt)
 
@@ -133,23 +138,24 @@ def test_3_deepconf_generation():
         log.info(f"✅ Selected answer: {result['metadata']['selected_answer']}")
         log.info(f"✅ Confidence: {result['metadata']['confidence_score']:.3f}")
 
-        assert result['metadata']['num_paths_generated'] == 3
-        assert result['completed'] == True
+        assert result["metadata"]["num_paths_generated"] == 3
+        assert result["completed"] is True
 
         return True
 
     except Exception as e:
         log.error(f"❌ Test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def test_4_deepconf_voting():
     """Test 4: DeepConf confidence-weighted voting"""
-    log.info("="*70)
+    log.info("=" * 70)
     log.info("Test 4: DeepConf Voting")
-    log.info("="*70)
+    log.info("=" * 70)
 
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
@@ -161,7 +167,7 @@ def test_4_deepconf_voting():
             provider="openrouter",
             model_name="openai/gpt-4o-mini",
             api_key=api_key,
-            top_logprobs=20
+            top_logprobs=20,
         )
 
         strategy = DeepConfStrategy(
@@ -170,7 +176,7 @@ def test_4_deepconf_voting():
             window_size=16,
             temperature=0.8,
             max_tokens=500,
-            filter_method="top10"  # Filter to top 10% by confidence
+            filter_method="top10",  # Filter to top 10% by confidence
         )
 
         prompt = "Calculate 15 * 6. Put your answer in \\boxed{}."
@@ -183,34 +189,37 @@ def test_4_deepconf_voting():
         log.info(f"✅ Confidence: {result['metadata']['confidence_score']:.3f}")
 
         # Show vote distribution
-        log.info(f"✅ Vote distribution:")
-        for ans, pct in result['metadata']['vote_distribution'].items():
+        log.info("✅ Vote distribution:")
+        for ans, pct in result["metadata"]["vote_distribution"].items():
             log.info(f"   {ans}: {pct:.1f}%")
 
         # Verify answer (should be 90)
         expected = "90"
-        is_correct = result['metadata']['selected_answer'] == expected
+        is_correct = result["metadata"]["selected_answer"] == expected
 
         if is_correct:
-            log.info(f"✅ Answer is correct!")
+            log.info("✅ Answer is correct!")
         else:
-            log.warning(f"⚠️  Answer '{result['metadata']['selected_answer']}' != expected '{expected}'")
-            log.warning(f"   (This may be due to answer extraction format)")
+            log.warning(
+                f"⚠️  Answer '{result['metadata']['selected_answer']}' != expected '{expected}'"
+            )
+            log.warning("   (This may be due to answer extraction format)")
 
         return True  # Test passes even if answer is wrong (testing integration)
 
     except Exception as e:
         log.error(f"❌ Test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def main():
     """Run all tests"""
-    log.info("\n" + "="*70)
+    log.info("\n" + "=" * 70)
     log.info("🧪 Accurate DeepConf - Integration Tests")
-    log.info("="*70 + "\n")
+    log.info("=" * 70 + "\n")
 
     # Check for API key
     if not os.getenv("OPENROUTER_API_KEY"):
@@ -237,9 +246,9 @@ def main():
             log.info("")
 
     # Summary
-    log.info("="*70)
+    log.info("=" * 70)
     log.info("📊 TEST SUMMARY")
-    log.info("="*70)
+    log.info("=" * 70)
 
     passed = sum(1 for _, result in results if result)
     total = len(results)

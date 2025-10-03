@@ -15,6 +15,20 @@ Update lm-polygraph later:
 ./setup.sh --update
 ```
 
+## Configuration
+
+**API Keys:**
+```bash
+# Copy example env file
+cp .env.example .env
+
+# Edit .env and add your API keys
+# OPENROUTER_API_KEY=your-key-here
+# DEEPSEEK_API_KEY=your-key-here
+```
+
+The script will automatically load API keys from `.env` file.
+
 ## Development
 
 Install dev dependencies and pre-commit hooks:
@@ -55,5 +69,7 @@ Pre-commit hooks run automatically on `git commit` and will block commits that f
 2. Add tree of thought
 
 
-# Example:
-OPENAI_API_KEY=<key> PYTHONPATH=./ python ./scripts/run_tts_eval.py --config-path=../config/ --config-name=run_tts_eval.yaml dataset=small_gsm8k dataset.subset=1
+## Running Experiments
+
+See strategy-specific documentation:
+- [DeepConf Strategy](docs/deepconf/DeepConf.md) - Confidence-based test-time scaling
