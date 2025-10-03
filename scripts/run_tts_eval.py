@@ -53,13 +53,8 @@ def load_model(model_path: str, device_map: str):
 
 def load_prompt_template(prompt_file: str) -> str:
     """Load prompt template from file"""
-    if prompt_file and os.path.exists(prompt_file):
-        with open(prompt_file, "r") as f:
-            return f.read().strip()
-    else:
-        # Default prompt template for ReasonEval
-        # return "Question: {question}\n\nLet's solve this step by step.\n\n"
-        return ""
+    with open(prompt_file, "r") as f:
+        return f.read().strip()
 
 
 def load_existing_results(save_path: str, dataset):
@@ -123,7 +118,7 @@ def set_random_seeds(seed):
 
 def create_scorer(config, model):
     if config.scorer.type == "prm":
-        scorer = DirectPRMScorer(
+        scorer = StepScorerPRM(
             model=model,
             prm_model_path=config.scorer.model_path,
             device=config.scorer.device,

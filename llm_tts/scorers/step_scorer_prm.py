@@ -138,7 +138,7 @@ class StepsExtractor(StatCalculator):
         return claims
 
 
-class DirectPRMScorer(StepScorerRewardBase):
+class StepScorerPRM(StepScorerRewardBase):
     """
     Direct PRM scorer that applies Process Reward Model without stat calculator pipeline.
 
@@ -152,41 +152,36 @@ class DirectPRMScorer(StepScorerRewardBase):
     """
 
     def __init__(
-        self,
-        model: WhiteboxModel,
-        prm_model_path: str,  # = "Qwen/Qwen2.5-Math-7B-PRM800K",
-        device: str = "cuda",
-        batch_size: int = 8,
-        prompt_template: str = None,
+        self, model: WhiteboxModel, prm_model_path: str, device: str, batch_size: int
     ):
         super().__init__("DirectPRM")
         self.model = model
         self.prm_model_path = prm_model_path
         self.device = device
         self.batch_size = batch_size
-        self.prompt_template = (
-            prompt_template or "Question: {q}\n\nLet's solve this step by step.\n\n"
-        )
         self.prm_model = None
         self.prm_tokenizer = None
         self.steps_extractor = StepsExtractor(progress_bar=False)
 
+        self.prepare_model()
+
     def prepare_model(self):
         """Load PRM model and tokenizer"""
-        if self.prm_model is None:
-            log.info(f"Loading PRM model from {self.prm_model_path}")
-            self.prm_tokenizer = AutoTokenizer.from_pretrained(
-                self.prm_model_path, trust_remote_code=True
-            )
-            self.prm_model = AutoModel.from_pretrained(
-                self.prm_model_path,
-                device_map=self.device,
-                torch_dtype=torch.bfloat16,
-                trust_remote_code=True,
-            ).eval()
+
+        log.info(f"Loading PRM model from {self.prm_model_path}")
+        self.prm_tokenizer = AutoTokenizer.from_pretrained(
+            self.prm_model_path, trust_remote_code=True
+        )
+        self.prm_model = AutoModel.from_pretrained(
+            self.prm_model_path,
+            device_map=self.device,
+            torch_dtype=torch.bfloat16,
+            trust_remote_code=True,
+        ).eval()
 
     def cleanup(self):
         """Free PRM model memory"""
+
         if self.prm_model is not None:
             del self.prm_model
             self.prm_model = None
@@ -207,7 +202,6 @@ class DirectPRMScorer(StepScorerRewardBase):
         Returns:
             List of claim reward lists (one per candidate)
         """
-        self.prepare_model()
 
         if not candidates:
             return []
@@ -294,6 +288,7 @@ class DirectPRMScorer(StepScorerRewardBase):
 
     def _extract_step_rewards(self, logits, token_masks):
         """Extract reward scores from PRM logits"""
+
         probabilities = F.softmax(logits, dim=-1)
         probabilities = probabilities * token_masks.unsqueeze(-1)
 
