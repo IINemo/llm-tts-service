@@ -8,11 +8,11 @@ from typing import List
 
 from lm_polygraph import BlackboxModel
 
+from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
     StepCandidateGeneratorBase,
 )
-from llm_tts.step_boundary_detector import StepBoundaryDetector
 
 log = logging.getLogger(__name__)
 
