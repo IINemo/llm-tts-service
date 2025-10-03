@@ -17,14 +17,14 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers.direct_prm_scorer import DirectPRMScorer
+from llm_tts.scorers import StepScorerPRM
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
 )
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.step_detection import StepBoundaryDetector
+from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.strategies import StrategyOnlineBestOfN
 
 log = logging.getLogger(__name__)
@@ -111,7 +111,7 @@ def set_random_seeds(seed):
 
 def create_scorer(config, model):
     if config.scorer.type == "prm":
-        scorer = DirectPRMScorer(
+        scorer = StepScorerPRM(
             model=model,
             prm_model_path=config.scorer.model_path,
             device=config.scorer.device,

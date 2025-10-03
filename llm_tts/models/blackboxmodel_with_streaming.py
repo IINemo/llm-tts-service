@@ -4,7 +4,7 @@ import openai
 from lm_polygraph import BlackboxModel
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 
-from llm_tts.step_detection import StepBoundaryDetector
+from llm_tts.step_boundary_detector import StepBoundaryDetector
 
 
 class BlackboxModelWithStreaming(BlackboxModel):

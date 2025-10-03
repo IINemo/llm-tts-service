@@ -4,9 +4,6 @@ Real-time step boundary detection during generation
 
 from typing import List
 
-import torch
-from transformers import StoppingCriteria
-
 
 class StepBoundaryDetector:
     """Detects when a reasoning step is complete during generation"""
@@ -128,38 +125,3 @@ class StepBoundaryDetector:
                     break
 
         return step_text
-
-
-class BatchStepStoppingCriteria(StoppingCriteria):
-    """Stopping criteria for batch step generation"""
-
-    def __init__(
-        self,
-        tokenizer,
-        start_length: int,
-        detector: StepBoundaryDetector,
-        batch_size: int,
-    ):
-        self.tokenizer = tokenizer
-        self.start_length = start_length
-        self.detector = detector
-        self.batch_size = batch_size
-        self.finished = [False] * batch_size
-
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> bool:
-        """Check stopping criteria for entire batch"""
-        # Check each sequence in batch
-        for i in range(min(input_ids.shape[0], self.batch_size)):
-            if not self.finished[i]:
-                generated_ids = input_ids[i][self.start_length :]
-                generated_text = self.tokenizer.decode(
-                    generated_ids, skip_special_tokens=True
-                )
-
-                if self.detector.is_step_complete(
-                    generated_text, token_count=len(generated_ids)
-                ):
-                    self.finished[i] = True
-
-        # Stop when all sequences are finished
-        return all(self.finished)
