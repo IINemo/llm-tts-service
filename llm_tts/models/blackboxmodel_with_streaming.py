@@ -4,7 +4,7 @@ import openai
 from lm_polygraph import BlackboxModel
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 
-from llm_tts.step_detection import StepBoundaryDetector
+from llm_tts.step_boundary_detector import StepBoundaryDetector
 
 
 class BlackboxModelWithStreaming(BlackboxModel):
@@ -73,85 +73,77 @@ class BlackboxModelWithStreaming(BlackboxModel):
         results = []
         for chat in chats:
             buffer = []
-            token_count = 0
-            print("====================")
-            print(chat)
-            print("**********************")
             with self.client.responses.stream(
                 model=self.model_path,
                 input=chat,
                 **self.stop_args,
             ) as stream:
-                for event in stream:
-                    if event.type == "response.output_text.delta":
-                        delta = event.delta
-                        buffer.append(delta)
-                        # rough proxy; use tiktoken for precise token counting
-                        token_count += 1
+                buffer = []
+                boundary_fired = False
 
-                        current_text = "".join(buffer)
+                for event in stream:
+                    t = getattr(event, "type", None)
+
+                    if t == "response.output_text.delta":
+                        delta = event.delta  # only exists for this type
+                        buffer.append(delta)
 
                         if (
                             self.boundary_detector
-                            and self.boundary_detector.is_step_complete(
-                                current_text, token_count
-                            )
+                            and self.boundary_detector.is_step_complete("".join(buffer))
                         ):
-                            stream.close()
-                            step_text = self.boundary_detector.extract_step_text(
-                                current_text
-                            )
-                            trajectory_done = (
-                                self.boundary_detector.is_trajectory_complete(
-                                    current_text
-                                )
-                            )
+                            stream.close()  # early stop
+                            text_now = "".join(buffer)
                             results.append(
                                 {
-                                    "step_text": step_text,
-                                    "raw_collected": current_text,
-                                    "token_count_guess": token_count,
-                                    "trajectory_complete": trajectory_done,
+                                    "step_text": self.boundary_detector.extract_step_text(
+                                        text_now
+                                    ),
+                                    "raw_collected": text_now,
+                                    "trajectory_complete": self.boundary_detector.is_trajectory_complete(
+                                        text_now
+                                    ),
                                     "reason": "boundary-detected",
                                 }
                             )
-                            break  # Stop streaming for this input
+                            boundary_fired = True
+                            break
 
-                    elif event.type in ("response.completed", "response.error"):
-                        # Natural end or error; fall through and return what we have
+                    elif t in ("response.completed", "response.error"):
+                        # finalize after the loop
                         break
 
                     else:
-                        # If we exited the loop without boundary, return whatever we collected
-                        current_text = "".join(buffer)
-                        if self.boundary_detector:
-                            results.append(
-                                {
-                                    "step_text": (
-                                        self.boundary_detector.extract_step_text(
-                                            current_text
-                                        )
-                                    ),
-                                    "raw_collected": current_text,
-                                    "token_count_guess": token_count,
-                                    "trajectory_complete": (
-                                        self.boundary_detector.is_trajectory_complete(
-                                            current_text
-                                        )
-                                    ),
-                                    "reason": "stream-ended",
-                                }
-                            )
-                        else:
-                            results.append(
-                                {
-                                    "step_text": current_text,
-                                    "raw_collected": current_text,
-                                    "token_count_guess": token_count,
-                                    "trajectory_complete": False,
-                                    "reason": "stream-ended",
-                                }
-                            )
+                        # ignore unrelated event types; keep streaming
+                        continue
+
+                if not boundary_fired:
+                    text_now = "".join(buffer)
+                    results.append(
+                        {
+                            "step_text": (
+                                self.boundary_detector.extract_step_text(text_now)
+                                if self.boundary_detector
+                                else text_now
+                            ),
+                            "raw_collected": text_now,
+                            "trajectory_complete": (
+                                self.boundary_detector.is_trajectory_complete(text_now)
+                                if self.boundary_detector
+                                else False
+                            ),
+                            "reason": (
+                                "stream-ended"
+                                if t == "response.completed"
+                                else (
+                                    "stream-error"
+                                    if t == "response.error"
+                                    else "ended-unknown"
+                                )
+                            ),
+                        }
+                    )
+
         return results
 
     def tokenize(self, texts: List[str]) -> List[List[str]]:
