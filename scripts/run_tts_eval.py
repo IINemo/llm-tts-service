@@ -245,7 +245,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
             model=model,
             mode=config.strategy.mode,
             budget=config.strategy.budget,
-            window_size=config.strategy.window_size,
+            window_size=config.strategy.get("window_size", 5),
             temperature=config.generation.temperature,
             top_p=config.generation.top_p,
             max_tokens=config.generation.max_new_tokens,
