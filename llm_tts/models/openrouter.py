@@ -170,3 +170,97 @@ class OpenRouterModel(BaseModel):
         except Exception as e:
             log.error(f"Generation with confidence failed: {e}")
             raise
+
+    def stream_with_confidence(
+        self,
+        prompt: str,
+        max_tokens: int = 512,
+        temperature: float = 0.7,
+        confidence_callback: Optional[callable] = None,
+        **kwargs,
+    ):
+        """
+        Stream text generation with token-level confidence scores.
+
+        Args:
+            prompt: Input text prompt
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            confidence_callback: Optional callback(token, logprob, top_logprobs) -> bool
+                                 Return True to stop generation early
+            **kwargs: Additional API parameters
+
+        Yields:
+            Dict with 'token', 'logprob', 'top_logprobs', and 'text' (accumulated)
+        """
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stream=True,
+                logprobs=True,
+                top_logprobs=self.top_logprobs,
+                **kwargs,
+            )
+
+            accumulated_text = ""
+
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+
+                choice = chunk.choices[0]
+
+                # Check if we have delta content
+                if hasattr(choice, "delta") and choice.delta:
+                    delta = choice.delta
+
+                    # Extract token text
+                    token_text = getattr(delta, "content", None)
+                    if token_text:
+                        accumulated_text += token_text
+
+                    # Extract logprobs if available
+                    logprob_data = None
+                    top_logprobs_data = []
+
+                    if hasattr(choice, "logprobs") and choice.logprobs:
+                        logprobs_obj = choice.logprobs
+
+                        # Extract from content array
+                        if hasattr(logprobs_obj, "content") and logprobs_obj.content:
+                            for token_info in logprobs_obj.content:
+                                logprob_data = token_info.logprob
+                                top_logprobs_data = [
+                                    {"token": t.token, "logprob": t.logprob}
+                                    for t in token_info.top_logprobs
+                                ]
+
+                    # Yield current state
+                    result = {
+                        "token": token_text,
+                        "logprob": logprob_data,
+                        "top_logprobs": top_logprobs_data,
+                        "text": accumulated_text,
+                    }
+                    yield result
+
+                    # Check early stopping callback
+                    if confidence_callback and token_text and logprob_data is not None:
+                        should_stop = confidence_callback(
+                            token_text, logprob_data, top_logprobs_data
+                        )
+                        if should_stop:
+                            log.info("Early stopping triggered by confidence callback")
+                            break
+
+                # Check for finish reason
+                if hasattr(choice, "finish_reason") and choice.finish_reason:
+                    log.debug(f"Stream finished: {choice.finish_reason}")
+                    break
+
+        except Exception as e:
+            log.error(f"Streaming with confidence failed: {e}")
+            raise
