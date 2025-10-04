@@ -39,6 +39,7 @@ class BatchStepStoppingCriteria(StoppingCriteria):
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> bool:
         """Check stopping criteria for entire batch"""
+        
         # Check each sequence in batch
         for i in range(min(input_ids.shape[0], self.batch_size)):
             if not self.finished[i]:
@@ -67,6 +68,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         top_p: float,
         top_k: int,
         max_new_tokens: int,
+        disable_thinking_mode: bool
     ):
         self.model = model
         self.detector = detector or StepBoundaryDetector()
@@ -75,9 +77,10 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         self.top_k = top_k
         self.max_new_tokens = max_new_tokens
         self.device = model.device()
+        self.disable_thinking_mode = disable_thinking_mode
 
     def generate_candidates(
-        self, request: List[Dict[str, str]], candidates_per_step: int
+        self, request: List[Dict[str, str]], trajectory: str, candidates_per_step: int
     ) -> List[StepCandidate]:
         """Generate N candidate next steps from current trajectory"""
 
@@ -87,6 +90,11 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         inputs = self.model.tokenizer.apply_chat_template(
             [request], tokenize=False, add_generation_prompt=True
         )
+        if self.disable_thinking_mode: # TODO: it is wrong
+            inputs[0] += "\n<think>\n\n</think>\n\n" #TODO: incorrect usage of assistant role
+
+        inputs[0] = inputs[0] + trajectory
+
         inputs = self.model.tokenizer(
             inputs,
             return_tensors="pt",
@@ -172,13 +180,13 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             # Get newly generated tokens
             new_tokens = sequence[input_length:]
             raw_generated_text = self.model.tokenizer.decode(
-                new_tokens, skip_special_tokens=True
+                new_tokens, skip_special_tokens=False
             )
 
             # Extract step using detector
             step_text = self.detector.extract_step_text(raw_generated_text)
             is_complete = self.detector.is_step_complete(raw_generated_text)
-            is_trajectory_complete = self.detector.is_trajectory_complete(
+            is_trajectory_complete = self.detector.is_trajectory_complete( # TODO: does not work even if it generates <end of response>
                 raw_generated_text
             )
 
@@ -203,9 +211,16 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
 
         return candidates
 
-    def generate_answer(
-        self, request: List[Dict[str, str]], candidates_per_step: int
-    ) -> str:
+    def generate_answer_candidates(
+        self, request: List[Dict[str, str]], trajectory: str, candidates_per_step: int
+    ) -> List[StepCandidate]:
         """Generate and select best final answer based on criterion"""
 
-        return self.generate_candidates(request, candidates_per_step)
+        ending_trajectory = trajectory + "\n<Answer>:\n" # TODO: get configuration from the step boundary detector
+        candidates = self.generate_candidates(request, ending_trajectory, candidates_per_step)
+        for cand in candidates:
+            cand.is_trajectory_complete = True
+            cand.text = "\n<Answer>:\n" + cand.text
+            cand.raw_text = "\n<Answer>:\n" + cand.raw_text
+
+        return candidates

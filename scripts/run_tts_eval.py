@@ -147,6 +147,7 @@ def create_model(config):
             max_new_tokens=config.generation.max_new_tokens,
             top_p=config.generation.top_p,
             top_k=config.generation.top_k,
+            disable_thinking_mode=config.generation.disable_thinking_mode,
         )
 
     elif config.model.type == "openai_api":
