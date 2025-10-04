@@ -99,7 +99,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
         return candidates
 
-    def generate_answer(self, request: List[Dict[str, str]], trajectory: str, candidates_per_step: int) -> str:
+    def generate_answer_candidates(
+        self, request: List[Dict[str, str]], trajectory: str, candidates_per_step: int
+    ) -> str:
         """Generate and select best final answer based on criterion"""
 
         return self.generate_candidates(request, trajectory, candidates_per_step)
