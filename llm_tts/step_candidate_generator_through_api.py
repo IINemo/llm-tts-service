@@ -4,7 +4,8 @@ Candidate step generation system for online best-of-n using API models
 
 import logging
 import time
-from typing import List
+import copy
+from typing import List, Dict
 
 from lm_polygraph import BlackboxModel
 
@@ -37,7 +38,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self.max_new_tokens = max_new_tokens
 
     def generate_candidates(
-        self, request, candidates_per_step: int
+        self, request: List[Dict[str, str]], trajectory: str, candidates_per_step: int
     ) -> List[StepCandidate]:
         """Generate N candidate next steps from current trajectory"""
 
@@ -46,6 +47,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         candidates = []
 
         start_time = time.time()
+        request = copy.deepcopy(request)
+        request.append({"role": "assistant", "content": trajectory})
 
         # Generate multiple candidates by making multiple API calls
         for i in range(candidates_per_step):
@@ -96,7 +99,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
         return candidates
 
-    def generate_answer(self, request, candidates_per_step: int) -> str:
+    def generate_answer_candidates(
+        self, request: List[Dict[str, str]], trajectory: str, candidates_per_step: int
+    ) -> str:
         """Generate and select best final answer based on criterion"""
 
-        return self.generate_candidates(request, candidates_per_step)
+        return self.generate_candidates(request, trajectory, candidates_per_step)

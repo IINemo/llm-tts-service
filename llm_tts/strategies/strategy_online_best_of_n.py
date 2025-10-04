@@ -41,7 +41,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         self.scorer = scorer
         self.step_generator = step_generator
 
-    def generate_trajectory(self, instance: List[Dict[str, str]]) -> Dict[str, any]:
+    def generate_trajectory(self, request: List[Dict[str, str]]) -> Dict[str, any]:
         """
         Generate a trajectory step-by-step using specified criterion.
 
@@ -59,18 +59,14 @@ class StrategyOnlineBestOfN(StrategyBase):
         selected_steps = []
         validity_scores = []
         for step_num in range(self.max_steps):
-            request = copy.deepcopy(instance)
-            if trajectory:
-                request.append({"role": "assistant", "content": trajectory})
-
             log.info(f"\n=== Step {step_num} ===")
 
             # Generate candidates in batches if needed
             if self.generation_batch_size < self.candidates_per_step:
-                candidates = self._generate_candidates_in_batches(request)
+                candidates = self._generate_candidates_in_batches(request, trajectory=trajectory)
             else:
                 candidates = self.step_generator.generate_candidates(
-                    request, candidates_per_step=self.candidates_per_step
+                    request, trajectory=trajectory, candidates_per_step=self.candidates_per_step
                 )
 
             if not candidates:
@@ -100,21 +96,18 @@ class StrategyOnlineBestOfN(StrategyBase):
 
             # Update trajectory
             trajectory += selected_candidate.text
-            selected_steps.append(selected_candidate.text)
+            selected_steps.append(selected_candidate)
 
             # Check if trajectory is complete
             if selected_candidate.is_trajectory_complete:
                 log.info("Answer pattern detected - generating final answer")
                 break
 
-        # Generate final answer
-        request = copy.deepcopy(instance)
-        request.append({"role": "assistant", "content": trajectory})
-
-        final_answer, final_validity = self._generate_final_answer(request)
-        trajectory += final_answer.text
-        selected_steps.append(final_answer)
-        validity_scores.append(final_validity)
+        if not selected_candidate.is_trajectory_complete:
+            final_answer, final_validity = self._generate_final_answer(request, trajectory)
+            trajectory += final_answer.text
+            selected_steps.append(final_answer)
+            validity_scores.append(final_validity)
 
         return {
             "trajectory": trajectory,
@@ -123,7 +116,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             "completed": len(selected_steps) > 0,
         }
 
-    def _generate_candidates_in_batches(self, request: List[Dict[str, str]]) -> List:
+    def _generate_candidates_in_batches(self, request: List[Dict[str, str]], trajectory: str) -> List:
         """Generate candidates in smaller batches to avoid OOM"""
 
         all_candidates = []
@@ -148,7 +141,7 @@ class StrategyOnlineBestOfN(StrategyBase):
 
             # Generate batch
             batch_candidates = self.step_generator.generate_candidates(
-                request, candidates_per_step=batch_size
+                request, trajectory=trajectory, candidates_per_step=batch_size
             )
             if batch_candidates:
                 all_candidates.extend(batch_candidates)
@@ -165,12 +158,12 @@ class StrategyOnlineBestOfN(StrategyBase):
         best_idx = max(range(len(scores)), key=lambda i: scores[i])
         return best_idx, candidates[best_idx]
 
-    def _generate_final_answer(self, chat) -> tuple:
+    def _generate_final_answer(self, chat: List[Dict[str, str]], trajectory: str) -> tuple:
         """Generate and select best final answer based on criterion"""
 
         # Generate answer candidates in batches if needed
-        answer_candidates = self.step_generator.generate_answer(
-            chat, candidates_per_step=self.candidates_per_step
+        answer_candidates = self.step_generator.generate_answer_candidates(
+            chat, trajectory=trajectory, candidates_per_step=self.candidates_per_step
         )
 
         # Score answer candidates
@@ -184,6 +177,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         log.info(f"Generated {len(answer_candidates)} answer candidates")
         log.info(f"Selected answer {best_idx}")
         log.info(f"Validity: {answer_validity_scores[best_idx]:.3f}")
+        log.info(f"Text: {answer_candidates[best_idx].text}")
 
         return answer_candidates[best_idx], answer_validity_scores[best_idx]
 
