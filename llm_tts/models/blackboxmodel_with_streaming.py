@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import openai
 from lm_polygraph import BlackboxModel
@@ -54,22 +54,109 @@ class BlackboxModelWithStreaming(BlackboxModel):
         """
         Streams completions for each input text, returning step/trajectory info per input.
 
-        If output_scores=True is in args, delegates to parent's non-streaming method
-        for logprobs support (used by DeepConf).
+        Supports two modes:
+        1. Streaming + logprobs (for DeepConf and other uses)
+        2. Streaming with boundary detection (legacy, no logprobs)
 
         Args:
             chats (List[List[Dict[str, str]]]): List of chat message lists.
-            **args: Additional arguments.
+            **args: Additional arguments including:
+                - output_scores (bool): Request logprobs in streaming mode
+                - confidence_callback (Callable): Optional callback for early stopping
+                - max_new_tokens (int): Max tokens to generate
+                - temperature (float): Sampling temperature
 
         Returns:
-            List[dict] with step info (streaming) or List[str] (non-streaming with logprobs)
+            List[dict] with generated text and optionally logprobs
         """
-        # Check if logprobs are requested (DeepConf offline mode)
-        if args.get("output_scores", False):
-            # Use parent's non-streaming method with logprobs support
-            return super().generate_texts(chats, **args)
+        # Mode 1: Streaming + logprobs (used by DeepConf and whenever logprobs are needed)
+        if args.get("output_scores", False) or args.get(
+            "stream_with_confidence", False
+        ):
+            confidence_callback: Optional[Callable] = args.get("confidence_callback")
+            max_new_tokens: int = args.get("max_new_tokens", 512)
+            temperature: float = args.get("temperature", 0.7)
 
-        # Otherwise use streaming mode
+            results = []
+            for chat in chats:
+                response = self.client.chat.completions.create(
+                    model=self.model_path,
+                    messages=chat,
+                    max_tokens=max_new_tokens,
+                    temperature=temperature,
+                    stream=True,
+                    logprobs=True,
+                    top_logprobs=20,
+                )
+
+                accumulated_text = ""
+                all_logprobs = []
+                stopped_early = False
+
+                for chunk in response:
+                    if not chunk.choices:
+                        continue
+
+                    choice = chunk.choices[0]
+
+                    # Extract delta content
+                    if hasattr(choice, "delta") and choice.delta:
+                        delta = choice.delta
+                        token_text = getattr(delta, "content", None)
+
+                        if token_text:
+                            accumulated_text += token_text
+
+                        # Extract logprobs
+                        if hasattr(choice, "logprobs") and choice.logprobs:
+                            logprobs_obj = choice.logprobs
+
+                            if (
+                                hasattr(logprobs_obj, "content")
+                                and logprobs_obj.content
+                            ):
+                                for token_info in logprobs_obj.content:
+                                    logprob_data = {
+                                        "token": token_info.token,
+                                        "logprob": token_info.logprob,
+                                        "top_logprobs": [
+                                            {"token": t.token, "logprob": t.logprob}
+                                            for t in token_info.top_logprobs
+                                        ],
+                                    }
+                                    all_logprobs.append(logprob_data)
+
+                                    # Check confidence callback (online mode only)
+                                    if confidence_callback:
+                                        should_stop = confidence_callback(
+                                            token_info.logprob,
+                                            [
+                                                {"token": t.token, "logprob": t.logprob}
+                                                for t in token_info.top_logprobs
+                                            ],
+                                        )
+                                        if should_stop:
+                                            stopped_early = True
+                                            break
+
+                    if stopped_early:
+                        break
+
+                    # Check finish reason
+                    if hasattr(choice, "finish_reason") and choice.finish_reason:
+                        break
+
+                results.append(
+                    {
+                        "text": accumulated_text,
+                        "logprobs": all_logprobs,
+                        "stopped_early": stopped_early,
+                    }
+                )
+
+            return results
+
+        # Mode 3: Streaming with boundary detection (default)
         results = []
         for chat in chats:
             buffer = []
@@ -85,14 +172,14 @@ class BlackboxModelWithStreaming(BlackboxModel):
                     t = getattr(event, "type", None)
 
                     if t == "response.output_text.delta":
-                        delta = event.delta  # only exists for this type
+                        delta = event.delta
                         buffer.append(delta)
 
                         if (
                             self.boundary_detector
                             and self.boundary_detector.is_step_complete("".join(buffer))
                         ):
-                            stream.close()  # early stop
+                            stream.close()
                             text_now = "".join(buffer)
                             results.append(
                                 {
@@ -112,11 +199,9 @@ class BlackboxModelWithStreaming(BlackboxModel):
                             break
 
                     elif t in ("response.completed", "response.error"):
-                        # finalize after the loop
                         break
 
                     else:
-                        # ignore unrelated event types; keep streaming
                         continue
 
                 if not boundary_fired:
