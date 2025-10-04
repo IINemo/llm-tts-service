@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from lm_polygraph import BlackboxModel
 
+from llm_tts.confidence_processor import ConfidenceProcessor
 from llm_tts.utils.confidence import (
     compute_sliding_window_confidence,
     compute_token_confidence_from_logprobs,
@@ -182,8 +183,17 @@ class StrategyDeepConf(StrategyBase):
             np.percentile(warmup_min_confs, 100 - self.confidence_percentile)
         )
 
+        # Log warmup statistics
         log.info(f"📊 Warmup complete: conf_threshold={conf_threshold:.3f}")
         log.info(f"   Min confs: {[f'{c:.3f}' for c in warmup_min_confs]}")
+        log.info(
+            f"   Mean: {np.mean(warmup_min_confs):.3f}, "
+            f"Median: {np.median(warmup_min_confs):.3f}, "
+            f"Std: {np.std(warmup_min_confs):.3f}"
+        )
+        log.info(
+            f"   Percentile: {100 - self.confidence_percentile}th = {conf_threshold:.3f}"
+        )
 
         # Phase 2: Adaptive generation with early stopping
         log.info("Phase 2: Adaptive generation...")
@@ -192,7 +202,46 @@ class StrategyDeepConf(StrategyBase):
             prompt, remaining, conf_threshold
         )
 
+        # Calculate adaptive phase statistics
+        num_stopped_early = sum(
+            1 for t in adaptive_traces if t.get("stopped_early", False)
+        )
+        num_completed = len(adaptive_traces) - num_stopped_early
+        adaptive_tokens = sum(len(t.get("token_data", [])) for t in adaptive_traces)
+        warmup_tokens = sum(len(t.get("token_data", [])) for t in warmup_traces)
+
         log.info(f"📊 Adaptive complete: generated {len(adaptive_traces)} traces")
+        log.info(f"   Stopped early: {num_stopped_early}/{len(adaptive_traces)}")
+        log.info(f"   Completed: {num_completed}/{len(adaptive_traces)}")
+        log.info(f"   Tokens: warmup={warmup_tokens}, adaptive={adaptive_tokens}")
+
+        if warmup_traces and adaptive_traces:
+            avg_warmup_tokens = warmup_tokens / len(warmup_traces)
+            avg_adaptive_tokens = adaptive_tokens / len(adaptive_traces)
+            if num_stopped_early > 0:
+                early_stopped = [
+                    t for t in adaptive_traces if t.get("stopped_early", False)
+                ]
+                avg_early_stop_tokens = (
+                    sum(len(t.get("token_data", [])) for t in early_stopped)
+                    / num_stopped_early
+                )
+                potential_tokens = num_stopped_early * avg_warmup_tokens
+                saved_tokens = potential_tokens - sum(
+                    len(t.get("token_data", [])) for t in early_stopped
+                )
+                savings_pct = (
+                    (saved_tokens / potential_tokens * 100)
+                    if potential_tokens > 0
+                    else 0
+                )
+                log.info(
+                    f"   Avg tokens: warmup={avg_warmup_tokens:.1f}, \
+                        adaptive={avg_adaptive_tokens:.1f}"
+                )
+                log.info(f"   Early stop avg: {avg_early_stop_tokens:.1f} tokens")
+                log.info(f"   Token savings: {saved_tokens:.0f} ({savings_pct:.1f}%)")
+
         for i, trace in enumerate(adaptive_traces):
             log.info(
                 f"  Trace {i+1}: min_conf={trace['min_conf']:.3f}, "
@@ -247,20 +296,31 @@ class StrategyDeepConf(StrategyBase):
                     {"role": "user", "content": prompt},
                 ]
 
-                # Generate with logprobs
-                texts = self.model.generate_texts(
+                # Generate with logprobs (now returns streaming format)
+                results = self.model.generate_texts(
                     [messages],
-                    max_new_tokens=self.max_tokens,  # Use max_new_tokens, not max_tokens
+                    max_new_tokens=self.max_tokens,
                     temperature=self.temperature,
                     top_p=self.top_p,
                     output_scores=True,
                     top_logprobs=self.top_logprobs,
                 )
 
-                text = texts[0]
+                result = results[0]
+                text = result["text"]
+                logprobs_data = result["logprobs"]
 
-                # Extract logprobs
-                token_confs, token_data = self._extract_logprobs_from_model()
+                # Extract confidences from logprobs
+                token_confs = []
+                for token_info in logprobs_data:
+                    # Use mean of top-k logprobs (same as online mode)
+                    top_logprobs = token_info["top_logprobs"][: self.top_logprobs]
+                    mean_logprob = sum(t["logprob"] for t in top_logprobs) / len(
+                        top_logprobs
+                    )
+                    token_confs.append(-mean_logprob)
+
+                token_data = logprobs_data
 
                 # Compute sliding window confidences
                 window_confs = compute_sliding_window_confidence(
@@ -304,15 +364,105 @@ class StrategyDeepConf(StrategyBase):
         """
         Generate n traces with adaptive early stopping based on confidence.
 
-        TODO: This requires streaming with logprobs - currently not implemented.
-        For now, falls back to batch generation.
+        Uses streaming + logprobs to stop generation when confidence drops.
         """
-        # TODO: Implement streaming with confidence-based early stopping
-        # For now, use batch generation
-        log.warning(
-            "⚠️  Adaptive early stopping not yet implemented, " "using batch generation"
+        log.info(
+            f"🔄 Generating {n} adaptive traces with confidence "
+            f"threshold={conf_threshold:.3f}"
         )
-        return self._generate_traces_batch(prompt, n)
+
+        traces = []
+
+        for i in range(n):
+            try:
+                # Prepare messages
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a math problem solver. Always put your "
+                            "final numerical answer in \\boxed{answer} format."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+
+                # Create confidence processor for this trace
+                processor = ConfidenceProcessor(
+                    threshold=conf_threshold,
+                    window_size=self.window_size,
+                    top_k=self.top_logprobs,
+                    method="mean_logprob",  # Same formula as warmup phase
+                )
+
+                # Callback for confidence-based stopping
+                def confidence_callback(
+                    logprob: float, top_logprobs: List[dict]
+                ) -> bool:
+                    return processor.process_token(logprob, top_logprobs)
+
+                # Generate with streaming + confidence stopping
+                results = self.model.generate_texts(
+                    [messages],
+                    stream_with_confidence=True,
+                    confidence_callback=confidence_callback,
+                    max_new_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                )
+
+                result = results[0]
+                text = result["text"]
+                logprobs_data = result["logprobs"]
+                stopped_early = result.get("stopped_early", False)
+
+                # Compute token confidences from logprobs
+                token_confs = []
+                for token_info in logprobs_data:
+                    conf = compute_token_confidence_from_logprobs(
+                        token_info["top_logprobs"], topk=self.top_logprobs
+                    )
+                    token_confs.append(conf)
+
+                # Compute sliding window confidences
+                window_confs = compute_sliding_window_confidence(
+                    token_confs, self.window_size
+                )
+                min_conf = min(window_confs) if window_confs else 0.0
+
+                # Extract answer
+                extracted_answer = extract_answer(text)
+
+                trace = {
+                    "text": text,
+                    "min_conf": min_conf,
+                    "extracted_answer": extracted_answer,
+                    "token_confs": token_confs,
+                    "window_confs": window_confs,
+                    "token_data": logprobs_data,
+                    "stopped_early": stopped_early,
+                }
+
+                traces.append(trace)
+
+                early_str = " (stopped early)" if stopped_early else ""
+                log.info(
+                    f"  Trace {i+1}/{n}: tokens={len(logprobs_data)}, "
+                    f"min_conf={min_conf:.3f}, answer={extracted_answer}{early_str}"
+                )
+
+                # Debug: log text if no answer extracted
+                if not extracted_answer:
+                    log.warning(f"    No answer extracted. Text length: {len(text)}")
+                    log.warning(f"    Text ends with: ...{text[-150:]}")
+
+            except Exception as e:
+                log.error(f"  ❌ Error generating adaptive trace {i+1}: {e}")
+                import traceback
+
+                log.error(traceback.format_exc())
+                continue
+
+        return traces
 
     def _extract_logprobs_from_model(self) -> tuple:
         """
@@ -434,12 +584,27 @@ class StrategyDeepConf(StrategyBase):
             ans: weight / total_weight for ans, weight in answer_weights.items()
         }
 
+        # Calculate answer statistics
+        num_unique_answers = len(answer_weights)
+        total_answers = len(answers)
+        agreement_rate = (
+            max(answers.count(ans) for ans in answer_weights.keys()) / total_answers
+            if total_answers > 0
+            else 0
+        )
+
         log.info(f"🏆 Selected answer: '{selected_answer}'")
         log.info(f"   Confidence: {confidence_score:.3f}")
+        log.info(f"   Answers: {total_answers} total, {num_unique_answers} unique")
+        log.info(
+            f"   Agreement: {agreement_rate:.1%} \
+                ({max(answers.count(ans) for ans in answer_weights.keys())}/{total_answers} traces)"
+        )
         log.info("   Vote distribution (weighted by min_conf):")
         for ans, pct in sorted(vote_dist.items(), key=lambda x: x[1], reverse=True):
             raw_weight = answer_weights[ans]
-            log.info(f"     {ans}: {pct:.1%} (weight={raw_weight:.3f})")
+            count = answers.count(ans)
+            log.info(f"     {ans}: {pct:.1%} (weight={raw_weight:.3f}, count={count})")
 
         return {
             "selected_answer": selected_answer,
