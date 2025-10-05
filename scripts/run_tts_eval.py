@@ -11,6 +11,7 @@ import torch
 from datasets import Dataset, load_dataset
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
+from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -147,7 +148,7 @@ def create_model(config):
             max_new_tokens=config.generation.max_new_tokens,
             top_p=config.generation.top_p,
             top_k=config.generation.top_k,
-            disable_thinking_mode=config.generation.disable_thinking_mode,
+            disable_thinking_mode=config.model.disable_thinking_mode,
         )
 
     elif config.model.type == "openai_api":
@@ -158,21 +159,27 @@ def create_model(config):
             answer_patterns=["<Answer>:", "\n<Answer>:"],
             max_tokens_per_step=config.generation.max_new_tokens,
         )
+
+        generation_parameters = GenerationParameters()
+        generation_parameters.temperature = config.generation.temperature
+        generation_parameters.max_new_tokens = config.generation.max_new_tokens
+        generation_parameters.top_p = config.generation.top_p
+        generation_parameters.top_k = config.generation.top_k
+
         model = BlackboxModelWithStreaming(
             openai_api_key=config.model.api_key,
             model_path=config.model.model_path,
             supports_logprobs=config.model.supports_logprobs,
             boundary_detector=detector,
-            # generation_parameters=config.model.generation_parameters,
+            generation_parameters=generation_parameters,
         )
+
         step_generator = StepCandidateGeneratorThroughAPI(
             model=model,
             detector=detector,
-            temperature=config.generation.temperature,
-            max_new_tokens=config.generation.max_new_tokens,
-            top_p=config.generation.top_p,
-            top_k=config.generation.top_k,
+            prefill_mode=config.model.prefill_mode,
         )
+
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 

@@ -1,0 +1,5 @@
+type: "openai_api"
+model_path: "deepseek-reasoner"  # Base model for generation
+supports_logprobs: true
+api_key: "" # specify
+prefill_mode: true
