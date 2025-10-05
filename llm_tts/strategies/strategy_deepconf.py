@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from lm_polygraph import BlackboxModel
 
-from llm_tts.confidence_processor import ConfidenceProcessor
+from llm_tts.early_stopping import ConfidenceEarlyStopping
 from llm_tts.utils.confidence import (
     compute_sliding_window_confidence,
     compute_token_confidence_from_logprobs,
@@ -175,6 +175,10 @@ class StrategyDeepConf(StrategyBase):
 
         # Phase 1: Warmup
         log.info("Phase 1: Warmup...")
+
+        # Clear any existing early stopping for warmup phase
+        self.model.early_stopping = None
+
         warmup_traces = self._generate_traces_batch(prompt, self.warmup_traces)
 
         # Compute confidence threshold
@@ -296,9 +300,12 @@ class StrategyDeepConf(StrategyBase):
                     {"role": "user", "content": prompt},
                 ]
 
-                # Generate with logprobs (now returns streaming format)
+                # Generate with logprobs using parent's generate_texts() method
+                # Disable early stopping for batch generation
+                self.model.early_stopping = None
+
                 results = self.model.generate_texts(
-                    [messages],
+                    chats=[messages],
                     max_new_tokens=self.max_tokens,
                     temperature=self.temperature,
                     top_p=self.top_p,
@@ -306,9 +313,9 @@ class StrategyDeepConf(StrategyBase):
                     top_logprobs=self.top_logprobs,
                 )
 
-                result = results[0]
-                text = result["text"]
-                logprobs_data = result["logprobs"]
+                # Extract text and logprobs from result
+                text = results[0]["text"]
+                logprobs_data = results[0].get("logprobs", [])
 
                 # Extract confidences from logprobs
                 token_confs = []
@@ -387,25 +394,17 @@ class StrategyDeepConf(StrategyBase):
                     {"role": "user", "content": prompt},
                 ]
 
-                # Create confidence processor for this trace
-                processor = ConfidenceProcessor(
+                # Configure model with confidence-based early stopping
+                self.model.early_stopping = ConfidenceEarlyStopping(
                     threshold=conf_threshold,
                     window_size=self.window_size,
                     top_k=self.top_logprobs,
                     method="mean_logprob",  # Same formula as warmup phase
                 )
 
-                # Callback for confidence-based stopping
-                def confidence_callback(
-                    logprob: float, top_logprobs: List[dict]
-                ) -> bool:
-                    return processor.process_token(logprob, top_logprobs)
-
-                # Generate with streaming + confidence stopping
+                # Generate with early stopping configured in model
                 results = self.model.generate_texts(
                     [messages],
-                    stream_with_confidence=True,
-                    confidence_callback=confidence_callback,
                     max_new_tokens=self.max_tokens,
                     temperature=self.temperature,
                 )
