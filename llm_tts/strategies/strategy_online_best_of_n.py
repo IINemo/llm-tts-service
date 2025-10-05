@@ -1,6 +1,5 @@
 import torch
 from typing import List, Dict
-import copy
 import logging
 
 
