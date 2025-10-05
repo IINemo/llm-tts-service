@@ -49,7 +49,7 @@ class StepBoundaryDetector:
 
         # Immediate completion if we hit an answer pattern - triggers answer phase
         for pattern in self.answer_patterns:
-            if pattern in generated_text:
+            if pattern in generated_text and not generated_text.startswith(pattern):
                 return True
 
         # Count occurrences of "- Step" pattern specifically
@@ -118,7 +118,7 @@ class StepBoundaryDetector:
 
         # For answer patterns, remove from the first occurrence
         for pattern in self.answer_patterns:
-            if pattern in step_text:
+            if pattern in step_text and not step_text.startswith(pattern):
                 pos = step_text.find(pattern)
                 if pos != -1:
                     step_text = step_text[:pos].strip()
