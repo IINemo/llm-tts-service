@@ -25,17 +25,11 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self,
         model: BlackboxModel,
         detector: StepBoundaryDetector,
-        temperature: float,
-        top_p: float,
-        top_k: int,
-        max_new_tokens: int,
+        prefill_mode: bool,
     ):
         self.model = model
         self.detector = detector or StepBoundaryDetector()
-        self.temperature = temperature
-        self.top_p = top_p
-        self.top_k = top_k
-        self.max_new_tokens = max_new_tokens
+        self.prefill_mode = prefill_mode
 
     def generate_candidates(
         self, request: List[Dict[str, str]], trajectory: str, candidates_per_step: int
@@ -49,10 +43,14 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         start_time = time.time()
         
         request_with_trajectory = copy.deepcopy(request)
-        if trajectory:
-            request_with_trajectory = self._add_prefix_to_request(request_with_trajectory, trajectory)
-        else:
+
+        if not trajectory:
             request_with_trajectory = request
+        else:
+            if not self.prefill_mode:
+                request_with_trajectory = self._add_prefix_to_request(request_with_trajectory, trajectory)
+            else:
+                request_with_trajectory.append({"role": "assistant", "content": trajectory, "prefix": True})
 
         # Generate multiple candidates by making multiple API calls
         for i in range(candidates_per_step):
