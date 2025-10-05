@@ -1,4 +1,3 @@
-import copy
 import logging
 from typing import Dict, List
 
@@ -63,10 +62,14 @@ class StrategyOnlineBestOfN(StrategyBase):
 
             # Generate candidates in batches if needed
             if self.generation_batch_size < self.candidates_per_step:
-                candidates = self._generate_candidates_in_batches(request, trajectory=trajectory)
+                candidates = self._generate_candidates_in_batches(
+                    request, trajectory=trajectory
+                )
             else:
                 candidates = self.step_generator.generate_candidates(
-                    request, trajectory=trajectory, candidates_per_step=self.candidates_per_step
+                    request,
+                    trajectory=trajectory,
+                    candidates_per_step=self.candidates_per_step,
                 )
 
             if not candidates:
@@ -104,7 +107,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                 break
 
         if not selected_candidate.is_trajectory_complete:
-            final_answer, final_validity = self._generate_final_answer(request, trajectory)
+            final_answer, final_validity = self._generate_final_answer(
+                request, trajectory
+            )
             trajectory += final_answer.text
             selected_steps.append(final_answer)
             validity_scores.append(final_validity)
@@ -116,7 +121,9 @@ class StrategyOnlineBestOfN(StrategyBase):
             "completed": len(selected_steps) > 0,
         }
 
-    def _generate_candidates_in_batches(self, request: List[Dict[str, str]], trajectory: str) -> List:
+    def _generate_candidates_in_batches(
+        self, request: List[Dict[str, str]], trajectory: str
+    ) -> List:
         """Generate candidates in smaller batches to avoid OOM"""
 
         all_candidates = []
@@ -158,7 +165,9 @@ class StrategyOnlineBestOfN(StrategyBase):
         best_idx = max(range(len(scores)), key=lambda i: scores[i])
         return best_idx, candidates[best_idx]
 
-    def _generate_final_answer(self, chat: List[Dict[str, str]], trajectory: str) -> tuple:
+    def _generate_final_answer(
+        self, chat: List[Dict[str, str]], trajectory: str
+    ) -> tuple:
         """Generate and select best final answer based on criterion"""
 
         # Generate answer candidates in batches if needed
