@@ -1,7 +1,7 @@
 # @package _global_
 
-# DeepConf Online Mode Configuration
-# This demonstrates adaptive early stopping with streaming + logprobs
+# DeepConf Offline Mode Configuration
+# This demonstrates standard weighted voting without early stopping
 
 defaults:
   - /dataset/gsm8k
@@ -34,21 +34,14 @@ generation:
 # DeepConf strategy (no scorer needed)
 scorer: null
 
-# DeepConf online mode strategy
+# DeepConf offline mode strategy
 strategy:
   type: deepconf
-  mode: "online"  # Enable online mode with adaptive early stopping
-
-  # Budget (not used in online mode but required by config)
-  budget: 10
-
-  # Online mode parameters
-  warmup_traces: 3  # Initial traces to establish confidence threshold
-  total_budget: 10  # Total traces (warmup + adaptive)
-  confidence_percentile: 10  # Use 90th percentile as threshold (100 - 10)
+  mode: "offline"  # Standard weighted voting mode
+  budget: 8  # Number of traces to generate
 
   # Generation parameters
-  window_size: 5  # Sliding window for confidence computation
+  window_size: 2048  # Sliding window (algorithmic parameter - DO NOT CHANGE)
   temperature: 0.7
   top_p: 1.0
   max_tokens: 512
