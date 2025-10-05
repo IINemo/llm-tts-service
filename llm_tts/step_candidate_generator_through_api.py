@@ -2,10 +2,10 @@
 Candidate step generation system for online best-of-n using API models
 """
 
+import copy
 import logging
 import time
-import copy
-from typing import List, Dict
+from typing import Dict, List
 
 from lm_polygraph import BlackboxModel
 

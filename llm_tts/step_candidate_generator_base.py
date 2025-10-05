@@ -33,11 +33,15 @@ class StepCandidateGeneratorBase:
     """Base class for step candidate generator"""
 
     @abstractmethod
-    def generate_candidates(self, request: List[Dict[str, str]], trajectory: str) -> List[StepCandidate]:
+    def generate_candidates(
+        self, request: List[Dict[str, str]], trajectory: str
+    ) -> List[StepCandidate]:
         """Generate candidates for a given trajectory"""
         pass
 
     @abstractmethod
-    def generate_answer_candidates(self, request: List[Dict[str, str]], trajectory: str) -> List[StepCandidate]:
+    def generate_answer_candidates(
+        self, request: List[Dict[str, str]], trajectory: str
+    ) -> List[StepCandidate]:
         """Generate answer for a given trajectory"""
         pass
