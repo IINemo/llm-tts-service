@@ -74,11 +74,60 @@ Pre-commit hooks run automatically on `git commit` and will block commits that f
 See strategy-specific documentation:
 - [DeepConf Strategy](docs/deepconf/DeepConf.md) - Confidence-based test-time scaling
 
-# Examples:
-- Reasoner Qwen-3 local:
-```OPENAI_API_KEY=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 PYTHONPATH=./ python ./scripts/run_tts_eval.py --config-path=../config/ --config-name=run_tts_eval.yaml dataset=small_gsm8k dataset.subset=1 model=hf_qwen3```
-- Reasoner ChatGPT: ```OPENAI_API_KEY=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 PYTHONPATH=./ python ./scripts/run_tts_eval.py --config-path=../config/ --config-name=run_tts_eval.yaml dataset=small_gsm8k dataset.subset=1 model=openai model.api_key=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 model.model_path="gpt-4o-mini"```
-- With uncertainty:
+## Examples
+
+**Note:** API keys are loaded from `.env` file - no need to specify them in the command.
+
+### Online Best-of-N Strategy
+
+Reasoner with Qwen-3 (local):
+```bash
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name run_tts_eval \
+  dataset=small_gsm8k \
+  dataset.subset=1 \
+  model=hf_qwen3
 ```
-OPENAI_API_KEY=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 PYTHONPATH=./ python ./scripts/run_tts_eval.py --config-path=../config/ --config-name=run_tts_eval.yaml dataset=small_gsm8k dataset.subset=1 model=hf_qwen3 scorer=uncertainty
+
+Reasoner with ChatGPT:
+```bash
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name run_tts_eval \
+  dataset=small_gsm8k \
+  dataset.subset=1 \
+  model=openai \
+  model.model_path="gpt-4o-mini"
+```
+
+With uncertainty scorer:
+```bash
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name run_tts_eval \
+  dataset=small_gsm8k \
+  dataset.subset=1 \
+  model=hf_qwen3 \
+  scorer=uncertainty
+```
+
+### DeepConf Strategy
+
+**Offline mode** (generate N traces, filter by confidence, majority vote):
+```bash
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
+  model.model_name="openai/gpt-3.5-turbo" \
+  dataset.subset=10
+```
+
+**Online mode** (adaptive generation with confidence-based early stopping):
+```bash
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_online \
+  model.model_name="openai/gpt-3.5-turbo" \
+  dataset.subset=10
 ```
