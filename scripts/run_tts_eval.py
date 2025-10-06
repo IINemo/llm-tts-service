@@ -11,7 +11,6 @@ import torch
 from datasets import Dataset, load_dataset
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
-from lm_polygraph.utils.causal_lm_with_uncertainty import CausalLMWithUncertainty
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
