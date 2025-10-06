@@ -56,9 +56,6 @@ class CandidateScore:
 class StepScorerBase(ABC):
     """Abstract base class for scoring step candidates in real-time"""
 
-    def __init__(self, name: str):
-        self.name = name
-
     @abstractmethod
     def score_candidates_detailed(
         self, chat: List[Dict[str, str]], candidates: List[str], **kwargs
@@ -97,15 +94,6 @@ class StepScorerBase(ABC):
         """
         detailed_scores = self.score_candidates_detailed(chat, candidates, **kwargs)
         return [score.get_score(aggregation) for score in detailed_scores]
-
-    @abstractmethod
-    def prepare_model(self):
-        """Prepare/load the scoring model if needed"""
-        pass
-
-    def cleanup(self):
-        """Cleanup resources (default no-op)"""
-        pass
 
     def __str__(self):
         return f"{self.__class__.__name__}({self.name})"

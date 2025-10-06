@@ -3,6 +3,10 @@ from typing import Dict, List
 
 import torch
 
+from llm_tts.step_candidate_generator_base import (
+    StepCandidate,
+    covert_trajectory_to_string,
+)
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
 )
@@ -25,8 +29,6 @@ class StrategyOnlineBestOfN(StrategyBase):
         scorer,
         candidates_per_step: int,
         max_steps: int,
-        max_new_tokens: int,
-        temperature: float,
         generation_batch_size: int,
         step_generator: (
             StepCandidateGeneratorThroughAPI | StepCandidateGeneratorThroughHuggingface
@@ -34,8 +36,6 @@ class StrategyOnlineBestOfN(StrategyBase):
     ):
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
-        self.max_new_tokens = max_new_tokens
-        self.temperature = temperature
         self.generation_batch_size = generation_batch_size or candidates_per_step
         self.scorer = scorer
         self.step_generator = step_generator
@@ -54,7 +54,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                 - completed: Whether trajectory reached completion
         """
 
-        trajectory = ""
+        trajectory = []
         selected_steps = []
         validity_scores = []
         for step_num in range(self.max_steps):
@@ -98,7 +98,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             log.info(f"Text: {selected_candidate.text}")
 
             # Update trajectory
-            trajectory += selected_candidate.text
+            trajectory.append(selected_candidate)
             selected_steps.append(selected_candidate)
 
             # Check if trajectory is complete
@@ -110,19 +110,19 @@ class StrategyOnlineBestOfN(StrategyBase):
             final_answer, final_validity = self._generate_final_answer(
                 request, trajectory
             )
-            trajectory += final_answer.text
+            trajectory.append(final_answer)
             selected_steps.append(final_answer)
             validity_scores.append(final_validity)
 
         return {
-            "trajectory": trajectory,
+            "trajectory": covert_trajectory_to_string(trajectory),
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,
         }
 
     def _generate_candidates_in_batches(
-        self, request: List[Dict[str, str]], trajectory: str
+        self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
     ) -> List:
         """Generate candidates in smaller batches to avoid OOM"""
 
@@ -166,7 +166,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         return best_idx, candidates[best_idx]
 
     def _generate_final_answer(
-        self, chat: List[Dict[str, str]], trajectory: str
+        self, chat: List[Dict[str, str]], trajectory: List[StepCandidate]
     ) -> tuple:
         """Generate and select best final answer based on criterion"""
 

@@ -13,6 +13,7 @@ from transformers import StoppingCriteria, StoppingCriteriaList
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
     StepCandidateGeneratorBase,
+    covert_trajectory_to_string,
 )
 
 from .step_boundary_detector import StepBoundaryDetector
@@ -79,7 +80,10 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         self.disable_thinking_mode = disable_thinking_mode
 
     def generate_candidates(
-        self, request: List[Dict[str, str]], trajectory: str, candidates_per_step: int
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
     ) -> List[StepCandidate]:
         """Generate N candidate next steps from current trajectory"""
 
@@ -94,7 +98,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 0
             ] += "\n<think>\n\n</think>\n\n"  # TODO: incorrect usage of assistant role
 
-        inputs[0] = inputs[0] + trajectory
+        inputs[0] = inputs[0] + covert_trajectory_to_string(trajectory)
 
         inputs = self.model.tokenizer(
             inputs,
@@ -208,22 +212,40 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 is_trajectory_complete=is_trajectory_complete,
                 generation_scores=gen_scores,
                 raw_text=raw_generated_text,
+                other_data=(
+                    {"uncertainty_score": outputs.uncertainty_score}
+                    if hasattr(outputs, "uncertainty_score")
+                    else None
+                ),
             )
             candidates.append(candidate)
 
         return candidates
 
     def generate_answer_candidates(
-        self, request: List[Dict[str, str]], trajectory: str, candidates_per_step: int
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
     ) -> List[StepCandidate]:
         """Generate and select best final answer based on criterion"""
 
-        ending_trajectory = (
-            trajectory + "\n<Answer>:\n"
-        )  # TODO: get configuration from the step boundary detector
+        ending_trajectory = [e for e in trajectory]
+        ending_trajectory.append(
+            StepCandidate(
+                text="\n<Answer>:\n",  # TODO: get configuration from the step boundary detector
+                token_ids=[],
+                is_complete=False,
+                is_trajectory_complete=False,
+                generation_scores=None,
+                raw_text="\n<Answer>:\n",
+            )
+        )
+
         candidates = self.generate_candidates(
             request, ending_trajectory, candidates_per_step
         )
+
         for cand in candidates:
             cand.is_trajectory_complete = True
             cand.text = "\n<Answer>:\n" + cand.text

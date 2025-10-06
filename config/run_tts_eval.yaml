@@ -6,22 +6,15 @@ defaults:
   - generation: default
   - output: default
   - system: default
+  - scorer: prm
   - _self_
 
-# Main configuration
-scorer:
-  type: prm
-  #model_path: "GAIR/ReasonEval-7B"
-  model_path: "Qwen/Qwen2.5-Math-7B-PRM800K"
-  device: cuda:1
-  batch_size: 1
-
 evaluator:
-  base_url: https://api.deepseek.com/v1
-  model: deepseek-reasoner
+  base_url: https://openrouter.ai/api/v1
+  model: deepseek/deepseek-r1-0528
   n_threads: 1
 
 strategy:
-  type: direct_online_best_of_n_reason_eval_separate
+  type: online_best_of_n
   candidates_per_step: 3
   max_steps: 3

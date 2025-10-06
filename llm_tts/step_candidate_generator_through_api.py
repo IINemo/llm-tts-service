@@ -13,6 +13,7 @@ from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
     StepCandidateGeneratorBase,
+    covert_trajectory_to_string,
 )
 
 log = logging.getLogger(__name__)
@@ -25,37 +26,33 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self,
         model: BlackboxModel,
         detector: StepBoundaryDetector,
-        temperature: float,
-        top_p: float,
-        top_k: int,
-        max_new_tokens: int,
+        prefill_mode: bool,
     ):
         self.model = model
         self.detector = detector or StepBoundaryDetector()
-        self.temperature = temperature
-        self.top_p = top_p
-        self.top_k = top_k
-        self.max_new_tokens = max_new_tokens
+        self.prefill_mode = prefill_mode
 
     def generate_candidates(
-        self, request: List[Dict[str, str]], trajectory: str, candidates_per_step: int
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
     ) -> List[StepCandidate]:
         """Generate N candidate next steps from current trajectory"""
 
         log.info(f"Generating {candidates_per_step} candidates from trajectory")
 
-        candidates = []
-
         start_time = time.time()
-        request = copy.deepcopy(request)
-        request.append({"role": "assistant", "content": trajectory})
+
+        candidates = []
+        request_with_trajectory = self._prepare_request(request, trajectory)
 
         # Generate multiple candidates by making multiple API calls
         for i in range(candidates_per_step):
             log.info(f"Generating candidate {i+1}/{candidates_per_step}")
 
             # Use the model's generate_texts method which handles streaming
-            results = self.model.generate_texts([request])
+            results = self.model.generate_texts([request_with_trajectory])
 
             if results and len(results) > 0:
                 result = results[0]
@@ -81,18 +78,10 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     raw_text=result.get("raw_collected", ""),
                 )
                 candidates.append(candidate)
+
             else:
                 log.warning(f"No result returned for candidate {i+1}")
-                # Create empty candidate
-                candidate = StepCandidate(
-                    text="",
-                    token_ids=[],
-                    is_complete=False,
-                    is_trajectory_complete=False,
-                    generation_scores=None,
-                    raw_text="",
-                )
-                candidates.append(candidate)
+                raise ValueError(f"No result returned for candidate {i+1}")
 
         generation_time = time.time() - start_time
         log.info(f"Generated {len(candidates)} candidates in {generation_time:.2f}s")
@@ -100,8 +89,76 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         return candidates
 
     def generate_answer_candidates(
-        self, request: List[Dict[str, str]], trajectory: str, candidates_per_step: int
-    ) -> str:
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
+    ) -> List[StepCandidate]:
         """Generate and select best final answer based on criterion"""
 
-        return self.generate_candidates(request, trajectory, candidates_per_step)
+        final_trajectory = [e for e in trajectory]
+        final_trajectory.append(
+            StepCandidate(
+                text="\n<Answer>:\n",  # TODO: get configuration from the step boundary detector
+                token_ids=[],
+                is_complete=False,
+                is_trajectory_complete=False,
+                generation_scores=None,
+                raw_text="\n<Answer>:\n",
+            )
+        )
+
+        candidates = self.generate_candidates(
+            request, final_trajectory, candidates_per_step
+        )
+        for cand in candidates:
+            cand.is_trajectory_complete = True
+            cand.text = "\n<Answer>:\n" + cand.text
+            cand.raw_text = "\n<Answer>:\n" + cand.raw_text
+
+        return candidates
+
+    def _prepare_request(
+        self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
+    ):
+        request_with_trajectory = copy.deepcopy(request)
+
+        if not trajectory:
+            request_with_trajectory = request
+
+        else:
+            if not self.prefill_mode:
+                request_with_trajectory = self._add_prefix_to_request(
+                    request_with_trajectory, trajectory
+                )
+            else:
+                request_with_trajectory.append(
+                    {
+                        "role": "assistant",
+                        "content": covert_trajectory_to_string(trajectory),
+                        "prefix": True,
+                    }
+                )
+
+        return request_with_trajectory
+
+    def _add_prefix_to_request(
+        self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
+    ):
+        continuation_request = request
+        prefix = covert_trajectory_to_string(trajectory)
+        continuation_promt = (
+            "Continue the assistant message from the EXACT prefix below. "
+            "Begin immediately after the last character of the prefix. "
+            "Output ONLY the final answer text; "
+            "do NOT include steps, chain-of-thought, or any preface. "
+            "Do NOT repeat the prefix.\n"
+            "----- PREFIX START -----\n"
+            f"{prefix}\n"
+            "----- PREFIX END -----"
+        )
+
+        log.debug(f"Continuation prompt: {continuation_promt}")
+        continuation_request.append({"role": "user", "content": continuation_promt})
+
+        return continuation_request
