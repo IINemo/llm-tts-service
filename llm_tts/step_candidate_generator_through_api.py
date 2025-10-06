@@ -2,19 +2,19 @@
 Candidate step generation system for online best-of-n using API models
 """
 
+import copy
 import logging
 import time
-import copy
-from typing import List, Dict
+from typing import Dict, List
 
 from lm_polygraph import BlackboxModel
 
+from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
     StepCandidateGeneratorBase,
-    covert_trajectory_to_string
+    covert_trajectory_to_string,
 )
-from llm_tts.step_boundary_detector import StepBoundaryDetector
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         log.info(f"Generating {candidates_per_step} candidates from trajectory")
 
         start_time = time.time()
-        
+
         candidates = []
         request_with_trajectory = self._prepare_request(request, trajectory)
 
@@ -97,14 +97,16 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         """Generate and select best final answer based on criterion"""
 
         final_trajectory = [e for e in trajectory]
-        final_trajectory.append(StepCandidate(
-            text="\n<Answer>:\n", # TODO: get configuration from the step boundary detector
-            token_ids=[],
-            is_complete=False,
-            is_trajectory_complete=False,
-            generation_scores=None,
-            raw_text="\n<Answer>:\n",
-        ))
+        final_trajectory.append(
+            StepCandidate(
+                text="\n<Answer>:\n",  # TODO: get configuration from the step boundary detector
+                token_ids=[],
+                is_complete=False,
+                is_trajectory_complete=False,
+                generation_scores=None,
+                raw_text="\n<Answer>:\n",
+            )
+        )
 
         candidates = self.generate_candidates(
             request, final_trajectory, candidates_per_step

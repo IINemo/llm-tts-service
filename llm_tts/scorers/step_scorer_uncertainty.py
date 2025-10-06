@@ -1,5 +1,6 @@
-from .step_scorer_reward_base import StepScorerBase, CandidateScore
-from typing import List, Dict
+from typing import Dict, List
+
+from .step_scorer_reward_base import CandidateScore, StepScorerBase
 
 
 class StepScorerUncertainty(StepScorerBase):

@@ -4,11 +4,11 @@ Candidate step generation system for online best-of-n
 
 import logging
 import time
-from typing import List, Dict
+from typing import Dict, List
 
 import torch
 from lm_polygraph import WhiteboxModel
-from transformers import StoppingCriteriaList, StoppingCriteria
+from transformers import StoppingCriteria, StoppingCriteriaList
 
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
