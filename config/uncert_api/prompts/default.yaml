@@ -7,5 +7,3 @@ gsm8k:
 hotpotqa:
   base_template_path: config/prompts/hotpotqa_base_prompt.txt
   cot_template_path: config/prompts/hotpotqa_cot_prompt.txt
-
-

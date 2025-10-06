@@ -1,0 +1,65 @@
+# @package _global_
+# Configuration for running Uncertainty-Guided CoT with Together AI on GSM8K
+
+defaults:
+  - dataset: small_gsm8k
+  - generation: default
+  - output: default
+  - system: default
+  - _self_
+
+model:
+  type: "openrouter"
+  model_path: "openai/gpt-4.1-mini"
+  eos_token: "<|endoftext|>"
+
+strategy:
+  type: "uncertainty_guided_pd"
+  candidates_per_step: 3
+  max_steps: 20
+  uncertainty_metric: "pd"  # pd | entropy
+  uncertainty_threshold: 0.40  # null for auto (0.40 for math, 0.45 for qa)
+  uncertainty_top_k: 5
+  problem_type: "math"  # auto-detected from dataset if not set
+
+  step_marker_patterns:
+    - "## Step {n}:"
+    - "Step {n}:"
+    - "- Step {n}:"
+
+  detector_step_patterns: null  # Default: ["\n**Step", "\n## Step"]
+
+  # Override answer patterns to avoid false positives from bare "answer" word
+  detector_answer_patterns:
+    - "<answer>:"
+    - "\n<answer>:"
+    - "final answer"
+    # when pure answer is used, we can falsely detect it as a result but it is often used in the middle of the answer
+    - "answer:"
+
+generation:
+  temperature: 0.7
+  max_new_tokens: 128
+  batch_size: 1
+  top_p: 0.95
+  top_k: 50
+
+dataset:
+  dataset_path: "openai/gsm8k"
+  dataset_config: "main"
+  dataset_split: "test"
+  subset: 1
+  prompt_file: ./config/prompts/gsm8k_uncert_cot.txt
+
+evaluator:
+  api_key: ${oc.env:OPENROUTER_API_KEY}
+  model: "deepseek/deepseek-chat-v3.1"
+  n_threads: 4
+
+output:
+  resume: false
+
+# System
+system:
+  seed: 42
+  hf_cache: null

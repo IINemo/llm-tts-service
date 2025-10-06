@@ -2,7 +2,7 @@
 
 defaults:
   - dataset: gsm8k
-  - provider: together/default  
+  - provider: together/default
   - step_markers: default
   - strategy: test_minimal
 
@@ -28,12 +28,12 @@ model:
 
 output:
   run_id: test_50_newUncert_v2
- 
+
 prompt_paths:
   gsm8k:
     base: config/prompts/uncert_cot_short_prompt.txt
     cot: config/prompts/uncert_cot_short_prompt.txt
-  
+
 strategy:
   candidates_per_step: 3
   max_steps: 30
@@ -54,4 +54,3 @@ verification:
 
 system:
   seed: 42
-

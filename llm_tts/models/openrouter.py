@@ -112,61 +112,115 @@ class OpenRouterModel(BaseModel):
             raise
 
     def generate_with_confidence(
-        self, prompt: str, max_tokens: int = 512, temperature: float = 0.7, **kwargs
-    ) -> Tuple[str, Optional[List[Dict]]]:
+        self,
+        prompt: str,
+        max_tokens: int = 512,
+        temperature: float = 0.7,
+        n: int = 1,
+        top_k: Optional[int] = None,
+        stop: Optional[List[str]] = None,
+        **kwargs,
+    ) -> List[Tuple[str, Optional[List[Dict]]]]:
         """
         Generate text and extract token-level confidence scores.
 
+        Args:
+            prompt: Input text prompt
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            n: Number of completions to generate
+            top_k: Override default top_logprobs for this call
+            stop: Stop sequences
+            **kwargs: Additional API parameters
+
         Returns:
-            Tuple of (generated_text, token_confidence_data)
-            where token_confidence_data contains logprobs for each token
+            List of (generated_text, token_confidence_data) tuples, one per completion.
+            token_confidence_data contains logprobs for each token.
+
+        Note: For backward compatibility, when called without reading the return as a list,
+              it will still work for n=1 (returns list with one tuple).
         """
+        k = top_k if top_k is not None else self.top_logprobs
+        k = max(0, min(int(k), 20))
+
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=max_tokens,
                 temperature=temperature,
+                n=n,
                 logprobs=True,
-                top_logprobs=self.top_logprobs,
+                top_logprobs=k,
+                stop=stop,
                 **kwargs,
             )
+            results = []
+            for choice in response.choices:
+                # Extract generated text
+                generated_text = choice.message.content or ""
 
-            # Extract generated text
-            generated_text = response.choices[0].message.content
+                # Extract token confidence data
+                token_confidence_data = []
+                if hasattr(choice, "logprobs") and choice.logprobs:
+                    logprobs_obj = choice.logprobs
 
-            # Extract token confidence data
-            token_confidence_data = []
-            if (
-                hasattr(response.choices[0], "logprobs")
-                and response.choices[0].logprobs
-            ):
-                logprobs_obj = response.choices[0].logprobs
-
-                # Check if it has 'content' attribute
-                if hasattr(logprobs_obj, "content") and logprobs_obj.content:
-                    for token_info in logprobs_obj.content:
-                        token_data = {
-                            "token": token_info.token,
-                            "logprob": token_info.logprob,
-                            "top_logprobs": [
-                                {"token": t.token, "logprob": t.logprob}
-                                for t in token_info.top_logprobs
-                            ],
-                        }
-                        token_confidence_data.append(token_data)
+                    # Check if it has 'content' attribute
+                    if hasattr(logprobs_obj, "content") and logprobs_obj.content:
+                        for token_info in logprobs_obj.content:
+                            token_data = {
+                                "token": token_info.token,
+                                "logprob": token_info.logprob,
+                                "top_logprobs": [
+                                    {"token": t.token, "logprob": t.logprob}
+                                    for t in token_info.top_logprobs
+                                ],
+                            }
+                            token_confidence_data.append(token_data)
+                    else:
+                        log.warning(
+                            "Logprobs object exists but has no 'content' attribute or it's empty"
+                        )
                 else:
-                    log.warning(
-                        "Logprobs object exists but has no 'content' attribute or it's empty"
+                    if n == 1:  # Only warn for single completion
+                        log.warning(
+                            f"No logprobs in response! Model '{self.model_name}' "
+                            "may not support logprobs via OpenRouter"
+                        )
+
+                results.append(
+                    (
+                        generated_text,
+                        token_confidence_data if token_confidence_data else None,
                     )
-            else:
-                log.warning(
-                    f"No logprobs in response! Model '{self.model_name}' "
-                    "may not support logprobs via OpenRouter"
                 )
 
-            return generated_text, token_confidence_data
+            return results
 
         except Exception as e:
             log.error(f"Generation with confidence failed: {e}")
             raise
+
+    def generate_texts(
+        self,
+        prompt: str,
+        n: int = 1,
+        temperature: float = 0.7,
+        max_new_tokens: int = 128,
+        stop: Optional[List[str]] = None,
+    ) -> List[str]:
+        """
+        Generate text completions and return as list of strings (without logprobs).
+
+        This is a convenience wrapper around generate_with_confidence that discards
+        the confidence/logprob information.
+        """
+        results = self.generate_with_confidence(
+            prompt=prompt,
+            max_tokens=max_new_tokens,
+            temperature=temperature,
+            n=n,
+            top_k=0,  # Don't need logprobs for this method
+            stop=stop,
+        )
+        return [text for text, _ in results]

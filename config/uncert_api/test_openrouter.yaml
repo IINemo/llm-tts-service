@@ -1,6 +1,6 @@
 defaults:
   - dataset: gsm8k
-  - provider: openrouter/default  
+  - provider: openrouter/default
   - strategy: test_minimal
   - prompts: default
 
@@ -11,13 +11,13 @@ provider:
   type: openrouter
   model: deepseek/deepseek-r1-0528-qwen3-8b
   api_key: "OPENROUTER_API_KEY"
- 
+
 prompt_paths:
   gsm8k:
     base: config/prompts/gsm8k_base_prompt.txt
     # cot: config/prompts/gsm8k_cot_prompt.txt
     cot: config/prompts/qwen3_prompt.txt
-  
+
 strategy:
   candidates_per_step: 2
   max_steps: 5

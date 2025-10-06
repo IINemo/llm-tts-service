@@ -14,5 +14,3 @@ model_patterns:
   - model_regex: ".*"
     patterns:
       - "Step {n}:"
-
-

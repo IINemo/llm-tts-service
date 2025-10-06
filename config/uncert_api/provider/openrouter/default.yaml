@@ -5,5 +5,3 @@ model: openai/gpt-4o-mini
 api_base: https://openrouter.ai/api/v1
 top_logprobs: 20
 api_key: "OPENROUTER_API_KEY"
-
-

@@ -17,6 +17,7 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llm_tts.evaluator_gold_standard import EvaluatorGoldStandard
+from llm_tts.models import OpenRouterModel, TogetherAIModel
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
@@ -26,7 +27,7 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyOnlineBestOfN
+from llm_tts.strategies import StrategyOnlineBestOfN, UncertaintyGuidedCoT_PD
 
 log = logging.getLogger(__name__)
 
@@ -168,6 +169,7 @@ def create_model(config):
             top_k=config.generation.top_k,
             disable_thinking_mode=config.model.disable_thinking_mode,
         )
+        return model, step_generator
 
     elif config.model.type == "openai_api":
         log.info(f"Using OpenAI API model: {config.model.model_path}")
@@ -197,6 +199,26 @@ def create_model(config):
             detector=detector,
             prefill_mode=config.model.prefill_mode,
         )
+        return model, step_generator
+
+    elif config.model.type in ("together_ai", "openrouter"):
+        # API-based models for uncertainty-guided CoT
+        log.info(f"Using {config.model.type} model: {config.model.model_path}")
+
+        api_key = getattr(config.model, "api_key", None)
+        if config.model.type == "together_ai":
+            model = TogetherAIModel(model_name=config.model.model_path, api_key=api_key)
+        else:  # openrouter
+            model = OpenRouterModel(
+                model_name=config.model.model_path,
+                api_key=api_key,
+                base_url=getattr(
+                    config.model, "api_base", "https://openrouter.ai/api/v1"
+                ),
+            )
+
+        # For uncertainty-guided strategy, we return model without step_generator
+        return model, None
 
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
@@ -204,7 +226,7 @@ def create_model(config):
     return model, step_generator
 
 
-def create_tts_strategy(config, step_generator, scorer):
+def create_tts_strategy(config, model, step_generator, scorer):
     if config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
@@ -212,6 +234,59 @@ def create_tts_strategy(config, step_generator, scorer):
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
             generation_batch_size=config.generation.batch_size,
+        )
+
+    elif config.strategy.type == "uncertainty_guided_pd":
+        if step_generator is not None:
+            raise ValueError(
+                "uncertainty_guided_pd strategy requires API model (together_ai or openrouter)"
+            )
+
+        # Extract problem type from dataset name or config
+        dataset_name = getattr(config.dataset, "dataset_path", "").lower()
+        if "gsm8k" in dataset_name:
+            problem_type = "math"
+        elif "hotpot" in dataset_name:
+            problem_type = "qa"
+        else:
+            problem_type = getattr(config.strategy, "problem_type", "math")
+
+        step_marker_patterns = getattr(config.strategy, "step_marker_patterns", None)
+        step_marker_patterns = (
+            list(step_marker_patterns)
+            if step_marker_patterns
+            else ["## Step {n}:", "Step {n}:", "- Step {n}:"]
+        )
+
+        # Get detector patterns for boundary detection (optional override)
+        # Note: UncertStepBoundaryDetector uses case-insensitive matching
+        detector_step_patterns = getattr(
+            config.strategy, "detector_step_patterns", None
+        )
+        detector_answer_patterns = getattr(
+            config.strategy, "detector_answer_patterns", None
+        )
+        if detector_step_patterns:
+            detector_step_patterns = list(detector_step_patterns)
+        if detector_answer_patterns:
+            detector_answer_patterns = list(detector_answer_patterns)
+
+        strategy = UncertaintyGuidedCoT_PD(
+            api_client=model,
+            candidates_per_step=config.strategy.candidates_per_step,
+            max_steps=config.strategy.max_steps,
+            max_new_tokens=config.generation.max_new_tokens,
+            temperature=config.generation.temperature,
+            problem_type=problem_type,
+            uncertainty_threshold=getattr(
+                config.strategy, "uncertainty_threshold", None
+            ),
+            uncertainty_metric=getattr(config.strategy, "uncertainty_metric", "pd"),
+            uncertainty_top_k=getattr(config.strategy, "uncertainty_top_k", 5),
+            step_marker_patterns=step_marker_patterns,
+            detector_step_patterns=detector_step_patterns,
+            detector_answer_patterns=detector_answer_patterns,
+            eos_token=getattr(config.model, "eos_token", None),
         )
 
     else:
@@ -223,10 +298,11 @@ def create_tts_strategy(config, step_generator, scorer):
 def generate_trajectories(
     results,
     save_path,
-    strategy: StrategyOnlineBestOfN,
+    strategy,
     dataset: Dataset,
     processed_indices: set,
     prompt_template: str,
+    is_uncertainty_guided: bool = False,
 ):
     # Phase 1: Generate trajectories (without checking correctness)
     log.info("\n" + "=" * 60)
@@ -248,19 +324,29 @@ def generate_trajectories(
         log.info(f"Sample {i+1}/{subset_size}")
         log.info(f"Question: {instance['question'][:200]}...")
 
-        # Generate trajectory
-        request = [
-            {"role": "system", "content": ""},
-            {
-                "role": "user",
-                "content": (
-                    prompt_template.format(question=instance["question"])
-                    if prompt_template
-                    else instance["question"]
-                ),
-            },
-        ]
-        result = strategy.generate_trajectory(request)
+        # Generate trajectory based on strategy type
+        if is_uncertainty_guided:
+            # UncertaintyGuidedCoT_PD expects a string prompt
+            prompt = (
+                prompt_template.format(question=instance["question"])
+                if prompt_template
+                else instance["question"]
+            )
+            result = strategy.generate_trajectory(prompt)
+        else:
+            # StrategyOnlineBestOfN expects a chat-style request
+            request = [
+                {"role": "system", "content": ""},
+                {
+                    "role": "user",
+                    "content": (
+                        prompt_template.format(question=instance["question"])
+                        if prompt_template
+                        else instance["question"]
+                    ),
+                },
+            ]
+            result = strategy.generate_trajectory(request)
 
         # Extract generated answer (but don't check correctness yet)
         generated_text = result["trajectory"]
@@ -268,22 +354,30 @@ def generate_trajectories(
             generated_text = generated_text.replace(instance["question"], "").strip()
 
         # Store result WITHOUT correctness check
-        results.append(
-            {
-                "index": i,
-                "question": instance["question"],
-                "gold_answer": instance["answer"],
-                "generated_trajectory": result["trajectory"],
-                "generated_answer": generated_text,
-                "steps": result["steps"],
-                "validity_scores": result["validity_scores"],
-                "completed": result["completed"],
-            }
-        )
+        result_dict = {
+            "index": i,
+            "question": instance["question"],
+            "gold_answer": instance["answer"],
+            "generated_trajectory": result["trajectory"],
+            "generated_answer": generated_text,
+            "steps": result.get("steps", []),
+            "completed": result.get("completed", False),
+        }
 
-        log.info(f"Generated: {generated_text}")
-        log.info(f"Num steps: {len(result['steps'])}")
-        log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
+        # Add strategy-specific fields
+        if is_uncertainty_guided:
+            result_dict["uncertainties"] = result.get("uncertainties", [])
+            result_dict["decision_trace"] = result.get("decision_trace", [])
+            # For uncertainty-guided, we don't have validity_scores
+            result_dict["validity_scores"] = []
+        else:
+            result_dict["validity_scores"] = result.get("validity_scores", [])
+
+        results.append(result_dict)
+
+        log.info(f"Num steps: {len(result.get('steps', []))}")
+        if not is_uncertainty_guided and result.get("validity_scores"):
+            log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
 
         # Save periodically
         if len(results) % 10 == 0:
@@ -408,7 +502,7 @@ def evaluate_results(
 
 @hydra.main(
     version_base=None,
-    config_path=None,
+    config_path="../config/",
     config_name=None,
 )
 def main(config):
@@ -461,13 +555,18 @@ def main(config):
     log.info(f"Loading model: {config.model.model_path}")
     model, step_generator = create_model(config)
 
-    # Create scorer
-    scorer = create_scorer(config, model)
+    # Create scorer (only needed for non-uncertainty-guided strategies)
+    scorer = None
+    if step_generator is not None:
+        scorer = create_scorer(config, model)
 
     # Create tts strategy
     generator = create_tts_strategy(
-        config=config, step_generator=step_generator, scorer=scorer
+        config=config, model=model, step_generator=step_generator, scorer=scorer
     )
+
+    # Check if using uncertainty-guided strategy
+    is_uncertainty_guided = config.strategy.type == "uncertainty_guided_pd"
 
     # Load existing results if resuming
     if config.output.resume:
@@ -486,6 +585,7 @@ def main(config):
         dataset=dataset,
         processed_indices=processed_indices,
         prompt_template=prompt_template,
+        is_uncertainty_guided=is_uncertainty_guided,
     )
 
     # Evaluate results
