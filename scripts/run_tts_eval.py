@@ -321,7 +321,7 @@ def generate_trajectories(
 
         # Generate trajectory
         if prompt_template:
-            request = prompt_template.format(q=instance["question"])
+            request = prompt_template.format(question=instance["question"])
         else:
             request = [
                 {"role": "system", "content": ""},
@@ -449,8 +449,11 @@ def evaluate_results(
                         results[idx]["is_correct"] = annotation == 0
 
                     log.info(f"\nSample {results[idx]['index']}:")
-                    log.info(f"  LLM judge response:\n{reply}")
-                    log.info(f"  Correct: {results[idx]['is_correct']}")
+                    log.info(f"Gold answer: {results[idx]['gold_answer']}")
+                    log.info(f"Generated answer: {results[idx]['generated_answer']}")
+                    log.info(f"LLM judge annotation: {annotation}")
+                    log.info(f"LLM judge response:\n{reply}")
+                    log.info(f"Correct: {results[idx]['is_correct']}")
 
             except Exception as e:
                 log.error(f"Error during LLM judge verification: {e}")
