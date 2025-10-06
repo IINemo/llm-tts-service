@@ -187,14 +187,12 @@ def create_model(config):
 
 
 def create_tts_strategy(config, step_generator, scorer):
-    if config.strategy.type == "direct_online_best_of_n_reason_eval_separate":
+    if config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
-            max_new_tokens=config.generation.max_new_tokens,
-            temperature=config.generation.temperature,
             generation_batch_size=config.generation.batch_size,
         )
 
