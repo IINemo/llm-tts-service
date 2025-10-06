@@ -5,28 +5,35 @@ import os
 import random
 from pathlib import Path
 
-import hydra
-import numpy as np
-import torch
-from datasets import Dataset, load_dataset
-from hydra.core.hydra_config import HydraConfig
-from lm_polygraph import WhiteboxModel
-from lm_polygraph.utils.generation_parameters import GenerationParameters
-from omegaconf import OmegaConf
-from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from dotenv import load_dotenv
 
-from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
-from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
-from llm_tts.step_boundary_detector import StepBoundaryDetector
-from llm_tts.step_candidate_generator_through_api import (
+# Load environment variables from .env file before other imports
+load_dotenv()
+
+import hydra  # noqa: E402
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+from datasets import Dataset, load_dataset  # noqa: E402
+from hydra.core.hydra_config import HydraConfig  # noqa: E402
+from lm_polygraph import WhiteboxModel  # noqa: E402
+from lm_polygraph.utils.generation_parameters import GenerationParameters  # noqa: E402
+from omegaconf import OmegaConf  # noqa: E402
+from tqdm import tqdm  # noqa: E402
+from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
+
+from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard  # noqa: E402
+from llm_tts.models.blackboxmodel_with_streaming import (  # noqa: E402
+    BlackboxModelWithStreaming,
+)
+from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty  # noqa: E402
+from llm_tts.step_boundary_detector import StepBoundaryDetector  # noqa: E402
+from llm_tts.step_candidate_generator_through_api import (  # noqa: E402
     StepCandidateGeneratorThroughAPI,
 )
-from llm_tts.step_candidate_generator_through_huggingface import (
+from llm_tts.step_candidate_generator_through_huggingface import (  # noqa: E402
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN
+from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +118,10 @@ def set_random_seeds(seed):
 
 
 def create_scorer(config, model):
+    # DeepConf doesn't use a scorer
+    if config.scorer is None:
+        return None
+
     if config.scorer.type == "prm":
         scorer = StepScorerPRM(
             model=model,
@@ -170,19 +181,33 @@ def create_model(config):
         )
 
     elif config.model.type == "openai_api":
-        log.info(f"Using OpenAI API model: {config.model.model_path}")
+        model_path = config.model.model_path
+        log.info(f"Using OpenAI API model: {model_path}")
 
         # Check if DeepConf strategy
         if config.strategy.type == "deepconf":
             # DeepConf uses streaming with logprobs but no boundary detector
+            import os
+
+            # Check provider for API key and base URL
+            if config.model.get("provider") == "openrouter":
+                api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+                base_url = "https://openrouter.ai/api/v1"
+            else:
+                api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
+                base_url = None
+
             model = BlackboxModelWithStreaming(
-                openai_api_key=config.model.api_key,
-                model_path=config.model.model_path,
+                openai_api_key=api_key,
+                model_path=model_path,
                 supports_logprobs=True,
+                base_url=base_url,
             )
             step_generator = None  # DeepConf doesn't use step generator
         else:
-            # Other strategies use boundary detection
+            # Other strategies use boundary detection via early stopping
+            from llm_tts.early_stopping import BoundaryEarlyStopping
+
             detector = StepBoundaryDetector(
                 step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
                 answer_patterns=["<Answer>:", "\n<Answer>:"],
@@ -195,11 +220,14 @@ def create_model(config):
             generation_parameters.top_p = config.generation.top_p
             generation_parameters.top_k = config.generation.top_k
 
+            # Create boundary-based early stopping
+            early_stopping = BoundaryEarlyStopping(detector=detector)
+
             model = BlackboxModelWithStreaming(
                 openai_api_key=config.model.api_key,
-                model_path=config.model.model_path,
+                model_path=model_path,
                 supports_logprobs=config.model.supports_logprobs,
-                boundary_detector=detector,
+                early_stopping=early_stopping,
                 generation_parameters=generation_parameters,
             )
 
@@ -343,18 +371,27 @@ def evaluate_results(
     # Use DeepSeek verification
     log.info(f"Using DeepSeek verification with {config.evaluator.n_threads} threads")
 
-    # Load prompt template and ensure compatibility
+    # For OpenRouter evaluator, ensure OPENAI_API_KEY is set BEFORE creating evaluator
+    if config.evaluator.get("provider") == "openrouter":
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        if openrouter_key:
+            os.environ["OPENAI_API_KEY"] = openrouter_key
+            log.info("Set OPENAI_API_KEY from OPENROUTER_API_KEY for evaluator")
+
+    # Load prompt template
     prompt_template = (
         load_prompt_template(config.dataset.prompt_file)
         if config.dataset.prompt_file
         else ""
     )
-    if "{question}" in prompt_template:
-        prompt_template = prompt_template.replace("{question}", "{q}")
+    # For evaluator, we need to use {q} format
+    eval_prompt_template = prompt_template
+    if "{question}" in eval_prompt_template:
+        eval_prompt_template = eval_prompt_template.replace("{question}", "{q}")
 
     # Create evaluator
     evaluator = EvaluatorGoldStandard(
-        prompt=prompt_template,
+        prompt=eval_prompt_template,
         base_url=config.evaluator.base_url,
         model=config.evaluator.model,
         n_threads=config.evaluator.n_threads,
@@ -490,7 +527,8 @@ def main(config):
     )
 
     # Load model
-    log.info(f"Loading model: {config.model.model_path}")
+    model_path = config.model.model_path
+    log.info(f"Loading model: {model_path}")
     model, step_generator = create_model(config)
 
     # Create scorer
