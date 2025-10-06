@@ -1,0 +1,4 @@
+type: prm
+model_path: "Qwen/Qwen2.5-Math-7B-PRM800K"
+device: cuda:1
+batch_size: 1

@@ -2,3 +2,5 @@
 
 type: "local"
 model_path: "Qwen/Qwen3-8B"  # Base model for generation
+disable_thinking_mode: true
+device: cuda:0
