@@ -1,15 +1,18 @@
-import torch
-from typing import List, Dict
 import logging
+from typing import Dict, List
 
+import torch
 
+from llm_tts.step_candidate_generator_base import (
+    StepCandidate,
+    covert_trajectory_to_string,
+)
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
 )
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.step_candidate_generator_base import StepCandidate, covert_trajectory_to_string
 
 from .strategy_base import StrategyBase
 
@@ -59,10 +62,14 @@ class StrategyOnlineBestOfN(StrategyBase):
 
             # Generate candidates in batches if needed
             if self.generation_batch_size < self.candidates_per_step:
-                candidates = self._generate_candidates_in_batches(request, trajectory=trajectory)
+                candidates = self._generate_candidates_in_batches(
+                    request, trajectory=trajectory
+                )
             else:
                 candidates = self.step_generator.generate_candidates(
-                    request, trajectory=trajectory, candidates_per_step=self.candidates_per_step
+                    request,
+                    trajectory=trajectory,
+                    candidates_per_step=self.candidates_per_step,
                 )
 
             if not candidates:
@@ -100,7 +107,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                 break
 
         if not selected_candidate.is_trajectory_complete:
-            final_answer, final_validity = self._generate_final_answer(request, trajectory)
+            final_answer, final_validity = self._generate_final_answer(
+                request, trajectory
+            )
             trajectory.append(final_answer)
             selected_steps.append(final_answer)
             validity_scores.append(final_validity)
@@ -112,7 +121,9 @@ class StrategyOnlineBestOfN(StrategyBase):
             "completed": len(selected_steps) > 0,
         }
 
-    def _generate_candidates_in_batches(self, request: List[Dict[str, str]], trajectory: List[StepCandidate]) -> List:
+    def _generate_candidates_in_batches(
+        self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
+    ) -> List:
         """Generate candidates in smaller batches to avoid OOM"""
 
         all_candidates = []
@@ -154,7 +165,9 @@ class StrategyOnlineBestOfN(StrategyBase):
         best_idx = max(range(len(scores)), key=lambda i: scores[i])
         return best_idx, candidates[best_idx]
 
-    def _generate_final_answer(self, chat: List[Dict[str, str]], trajectory: List[StepCandidate]) -> tuple:
+    def _generate_final_answer(
+        self, chat: List[Dict[str, str]], trajectory: List[StepCandidate]
+    ) -> tuple:
         """Generate and select best final answer based on criterion"""
 
         # Generate answer candidates in batches if needed

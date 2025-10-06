@@ -59,7 +59,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
             with self.client.responses.stream(
                 model=self.model_path,
                 input=chat,
-                **self.stop_args, # TODO: fix / add stop args
+                **self.stop_args,  # TODO: fix / add stop args
             ) as stream:
                 buffer = []
                 boundary_fired = False
