@@ -1,0 +1,10 @@
+# Default model configuration
+# Uses OpenRouter with gpt-4o-mini for compatibility and cost-effectiveness
+
+type: "openai_api"
+provider: openrouter
+model_path: "openai/gpt-4o-mini"
+api_key: null  # Set via OPENROUTER_API_KEY env var
+supports_logprobs: true
+prefill_mode: false
+top_logprobs: 10
