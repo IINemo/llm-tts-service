@@ -1,12 +1,12 @@
 # @package _global_
 
 defaults:
-  - /dataset/gsm8k
-  - /model/openrouter
-  - /generation/default
-  - /output/default
-  - /system/default
-  - /strategy/chain_of_thought
+  - dataset: gsm8k
+  - model: openrouter
+  - generation: default
+  - output: default
+  - system: default
+  - strategy: chain_of_thought
   - _self_
 
 # Chain-of-thought doesn't need a scorer

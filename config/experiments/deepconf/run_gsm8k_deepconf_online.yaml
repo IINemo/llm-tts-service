@@ -4,11 +4,11 @@
 # This demonstrates adaptive early stopping with streaming + logprobs
 
 defaults:
-  - /dataset/gsm8k
-  - /model/openrouter
-  - /generation/default
-  - /output/default
-  - /system/default
+  - dataset: gsm8k
+  - model: openrouter
+  - generation: default
+  - output: default
+  - system: default
   - _self_
 
 # Main configuration
