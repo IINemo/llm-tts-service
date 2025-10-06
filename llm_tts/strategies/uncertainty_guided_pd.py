@@ -324,8 +324,6 @@ class UncertaintyGuidedCoT_PD:
         # Build from configured patterns to be robust across models.
         # We stop at the NEXT step header number (e.g., generating Step N should stop at Step N+1).
         next_headers = [p.replace("{n}", str(step_num + 2)) for p in self.step_marker_patterns]
-        if self.eos_token:
-            next_headers.append(self.eos_token)
         
         variants: List[str] = []
         bases = list(next_headers)
@@ -351,6 +349,9 @@ class UncertaintyGuidedCoT_PD:
         # Prepend whitespace/newlines variants
         prefixes = ["", "\n", "\n\n", " ", "\t"]
         variants += [p + b for p in prefixes for b in bases]
+
+        if self.eos_token:
+            variants.append(self.eos_token)
         
         uniq = list(set(variants))
         return uniq

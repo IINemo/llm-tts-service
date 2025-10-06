@@ -88,7 +88,6 @@ def extract_answer_text(output: str, prompt_prefix: str = "") -> str:
     # Build patterns from detector (default) and add capitalized variants
     det = uncert_detector()
     pats = list(det.answer_patterns)
-    # Ensure canonical capitalized tags are also covered for slicing length
     pats.extend(["<Answer>:", "\n<Answer>:", "Answer:", "\nAnswer:"])
     # Find last match
     low = text.lower()
@@ -414,7 +413,7 @@ def run_eval(cfg: DictConfig):
             # Base greedy completion
             if do_base:
                 base_p = render_base_prompt("hotpotqa", q, ctx)
-                base_texts = client.generate_texts(base_p, n=base_n, temperature=base_temp, max_new_tokens=base_max_new_tokens)
+                base_texts = client.generate_texts(base_p, n=base_n, temperature=base_temp, max_new_tokens=base_max_new_tokens, stop=base_stop)
                 base_gen = base_texts[0] if base_texts else ""
                 base_ans = extract_answer_text(base_gen)
                 base_ok = check_correctness("hotpotqa", ds[i], base_ans)
