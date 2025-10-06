@@ -1,4 +1,3 @@
 from .majority_voting import ChainMajorityVotingScorer, MajorityVotingScorer
 from .step_scorer_prm import StepScorerPRM
 from .step_scorer_uncertainty import StepScorerUncertainty
-from .uncertainty_based_scorer import UncertaintyBasedScorer
