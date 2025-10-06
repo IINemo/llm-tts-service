@@ -69,8 +69,7 @@ class EvaluatorGoldStandard:
         else:
             score = np.nan
 
-        # Return tuple of (score, reply) for logging
-        return (score, reply)
+        return score
 
     def __call__(
         self, problems: list[str], solutions: list[str], gold_answers: list[str]

@@ -154,7 +154,8 @@ class StepScorerPRM(StepScorerRewardBase):
     def __init__(
         self, model: WhiteboxModel, prm_model_path: str, device: str, batch_size: int
     ):
-        super().__init__("DirectPRM")
+        super().__init__()
+        self.name = "DirectPRM"
         self.model = model
         self.prm_model_path = prm_model_path
         self.device = device

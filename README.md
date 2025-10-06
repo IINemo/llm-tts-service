@@ -119,7 +119,7 @@ python scripts/run_tts_eval.py \
 python scripts/run_tts_eval.py \
   --config-path ../config \
   --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
-  model.model_name="openai/gpt-3.5-turbo" \
+  model.model_path="openai/gpt-3.5-turbo" \
   dataset.subset=10
 ```
 
@@ -128,6 +128,6 @@ python scripts/run_tts_eval.py \
 python scripts/run_tts_eval.py \
   --config-path ../config \
   --config-name experiments/deepconf/run_gsm8k_deepconf_online \
-  model.model_name="openai/gpt-3.5-turbo" \
+  model.model_path="openai/gpt-3.5-turbo" \
   dataset.subset=10
 ```
