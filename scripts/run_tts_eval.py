@@ -12,13 +12,14 @@ from datasets import Dataset, load_dataset
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
 from lm_polygraph.utils.generation_parameters import GenerationParameters
+from lm_polygraph.utils.causal_lm_with_uncertainty import CausalLMWithUncertainty
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import StepScorerPRM
+from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
 )
@@ -120,7 +121,7 @@ def create_scorer(config, model):
         )
 
     elif config.scorer.type == "uncertainty":
-        raise NotImplementedError("Uncertainty scorer not implemented")
+        scorer = StepScorerUncertainty()
 
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
@@ -130,11 +131,24 @@ def create_scorer(config, model):
 
 def create_model(config):
     if config.model.type == "local":
-        log.info(f"Loading model: {config.model.model_path}")
-        tokenizer = load_tokenizer(config.model.model_path)
-        base_model = load_model(config.model.model_path, config.system.device)
-        base_model.eval()
-        model = WhiteboxModel(base_model, tokenizer)
+        if config.scorer.type == "uncertainty":
+            log.info(f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}")
+
+            import importlib  
+            mod = importlib.import_module(config.scorer.uncertainty_model_creator)
+            model = mod.create_uncertainty_model(config)
+            model.generation_parameters = GenerationParameters()
+            model.generation_parameters.temperature = config.generation.temperature
+            model.generation_parameters.max_new_tokens = config.generation.max_new_tokens
+            model.generation_parameters.top_p = config.generation.top_p
+            model.generation_parameters.top_k = config.generation.top_k
+        
+        else:
+            log.info(f"Loading model: {config.model.model_path}")
+            tokenizer = load_tokenizer(config.model.model_path)
+            base_model = load_model(config.model.model_path, config.system.device)
+            base_model.eval()
+            model = WhiteboxModel(base_model, tokenizer)
 
         detector = StepBoundaryDetector(
             step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],

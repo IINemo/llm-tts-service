@@ -211,6 +211,11 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 is_trajectory_complete=is_trajectory_complete,
                 generation_scores=gen_scores,
                 raw_text=raw_generated_text,
+                other_data=(
+                    {"uncertainty_score": outputs.uncertainty_score}
+                    if hasattr(outputs, "uncertainty_score")
+                    else None
+                ),
             )
             candidates.append(candidate)
 
@@ -224,20 +229,22 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
     ) -> List[StepCandidate]:
         """Generate and select best final answer based on criterion"""
 
-        ending_trajectory = [e for e in trajectory] 
-        ending_trajectory.append(StepCandidate(
-            text="\n<Answer>:\n", # TODO: get configuration from the step boundary detector
-            token_ids=[],
-            is_complete=False,
-            is_trajectory_complete=False,
-            generation_scores=None,
-            raw_text="\n<Answer>:\n",
-        ))
+        ending_trajectory = [e for e in trajectory]
+        ending_trajectory.append(
+            StepCandidate(
+                text="\n<Answer>:\n",  # TODO: get configuration from the step boundary detector
+                token_ids=[],
+                is_complete=False,
+                is_trajectory_complete=False,
+                generation_scores=None,
+                raw_text="\n<Answer>:\n",
+            )
+        )
 
         candidates = self.generate_candidates(
             request, ending_trajectory, candidates_per_step
         )
-        
+
         for cand in candidates:
             cand.is_trajectory_complete = True
             cand.text = "\n<Answer>:\n" + cand.text
