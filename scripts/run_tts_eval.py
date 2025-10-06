@@ -434,6 +434,8 @@ def evaluate_results(
 
                 if (idx - result_indices[0]) % 10 == 0:
                     log.info(f"\nSample {results[idx]['index']}:")
+                    log.info(f"Gold answer: {results[idx]['gold_answer']}")
+                    log.info(f"Generated answer: {results[idx]['generated_answer']}")
                     log.info(f"DeepSeek annotation: {annotation}")
                     log.info(f"Correct: {results[idx]['is_correct']}")
 
