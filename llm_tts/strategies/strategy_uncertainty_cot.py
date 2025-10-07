@@ -1,7 +1,6 @@
 import logging
 import math
-import re
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 from llm_tts.step_boundary_detector import uncert_detector
 from llm_tts.step_candidate_generator_base import StepCandidate
@@ -12,24 +11,15 @@ log = logging.getLogger(__name__)
 class UncertaintyGuidedCoT_PD:
     def __init__(
         self,
-        model=None,
+        api_client: Optional[object] = None,
         candidates_per_step: int = 3,
         max_steps: int = 10,
         max_new_tokens: int = 128,
         temperature: float = 0.7,
-        scorer=None,
-        generation_batch_size: Optional[int] = None,
         problem_type: str = "math",
         uncertainty_threshold: Optional[float] = None,
-        greedy_temperature: float = 0.1,
-        # Legacy parameters for backward compatibility
-        openrouter_client=None,
-        together_client=None,
-        # New parameter - unified API client (TogetherAIModel or OpenRouterModel)
-        api_client: Optional[Union[object, None]] = None,
         uncertainty_metric: str = "pd",
         uncertainty_top_k: Optional[int] = None,
-        step_header_template: Optional[str] = None,
         step_marker_patterns: Optional[List[str]] = None,
         detector_step_patterns: Optional[List[str]] = None,
         detector_answer_patterns: Optional[List[str]] = None,
@@ -39,48 +29,30 @@ class UncertaintyGuidedCoT_PD:
         Initialize Uncertainty-Guided CoT with Predictive Distribution (PD).
 
         Args:
-            model: Legacy parameter, kept for compatibility
             api_client: Unified API client (TogetherAIModel, OpenRouterModel, or compatible)
-            openrouter_client: Legacy parameter for backward compatibility
-            together_client: Legacy parameter for backward compatibility
             candidates_per_step: Number of candidate paths to generate at each step
             max_steps: Maximum number of reasoning steps
             max_new_tokens: Maximum tokens per step
             temperature: Sampling temperature for generation
-            scorer: Optional scorer for candidate evaluation
-            generation_batch_size: Batch size for generation
             problem_type: Type of problem ("math" or "qa")
             uncertainty_threshold: Threshold for triggering CoT branching
-            greedy_temperature: Temperature for greedy continuation
             uncertainty_metric: Metric for uncertainty ("pd" or "entropy")
             uncertainty_top_k: Number of top logprobs to consider
-            step_header_template: Template for step headers
             step_marker_patterns: Patterns for step markers (used for generation formatting)
             detector_step_patterns: Patterns for step detection (optional override)
             detector_answer_patterns: Patterns for answer detection (optional override)
             eos_token: End-of-sequence token
         """
-        self.model = model
-        self.scorer = scorer
-
-        # Handle legacy parameters: prefer api_client, then legacy clients
-        if api_client is not None:
-            self.api_client = api_client
-        elif together_client is not None:
-            self.api_client = together_client
-        elif openrouter_client is not None:
-            self.api_client = openrouter_client
-        else:
+        if api_client is None:
             raise RuntimeError(
-                "Must provide api_client (TogetherAIModel/OpenRouterModel instance) "
-                "or legacy together_client/openrouter_client parameter"
+                "api_client must be provided (TogetherAIModel/OpenRouterModel or compatible)"
             )
+        self.api_client = api_client
 
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
-        self.generation_batch_size = generation_batch_size or candidates_per_step
         self.problem_type = problem_type.lower()
         self.uncertainty_metric = (uncertainty_metric or "pd").lower()
         self.uncertainty_top_k = (
@@ -160,11 +132,11 @@ class UncertaintyGuidedCoT_PD:
                         if tok is not None and lp is not None:
                             token_probs_last[tok] = math.exp(lp)
 
-                pd_info = self._compute_pd_uncertainty(
+                pd_info = self._compute_uncertainty(
                     trajectory, token_to_prob=token_probs_last
                 )
             except Exception as e:
-                raise f"Uncertainty probe failed: {e}"
+                raise RuntimeError(f"Uncertainty probe failed: {e}")
             uncertainties.append(pd_info)
             uncertainty = pd_info["uncertainty"]
             used_cot = bool(uncertainty > self.uncertainty_threshold)
@@ -306,11 +278,7 @@ class UncertaintyGuidedCoT_PD:
             "decision_trace": decision_trace,
         }
 
-    def _score_and_select_best(self, trajectory: str, candidates) -> Tuple[int, any]:
-        candidate_texts = [c.text for c in candidates]
-        all_validities = self.scorer.score_candidates(trajectory, candidate_texts)
-        best_idx = max(range(len(all_validities)), key=lambda i: all_validities[i])
-        return best_idx, candidates[best_idx]
+    # Removed legacy scorer-based selection method
 
     def _compute_uncertainty(
         self, trajectory: str, token_to_prob: Optional[Dict[str, float]] = None
@@ -440,62 +408,6 @@ class UncertaintyGuidedCoT_PD:
             "uncertainty": float(entropy),
         }
 
-    def _should_measure_uncertainty(self, trajectory: str, step_num: int) -> bool:
-        """Decide when to probe uncertainty to avoid interrupting early planning.
-
-        Rules:
-        - Never measure at step 0 (let the model plan first).
-        - Trigger if an explicit answer marker appears in tail (to branch to answer phase).
-        - Prefer triggering immediately after a configured step header (e.g., "## Step N:").
-        - Otherwise, require at least one sentence boundary and sufficient content length.
-        """
-        if step_num == 0:
-            return False
-
-        tail = trajectory[-256:]
-
-        if (
-            "<answer>:" in tail.lower()
-            or "\n<answer>:" in tail.lower()
-            or "answer:" in tail.lower()
-        ):
-            return True
-
-        # Prefer triggering right after a configured step header (e.g., "## Step N:")
-        if getattr(self, "step_header_re", None) is not None:
-            tail2 = trajectory[-512:]
-            last = None
-            for m in self.step_header_re.finditer(tail2):
-                last = m
-            if last is not None:
-                after = tail2[last.end() :]
-                if len(after.strip()) <= 2:
-                    return True
-
-        # Require at least one sentence boundary with enough content
-        has_sentence_boundary = bool(re.search(r"[\.!\?]\s", tail)) or ("\n\n" in tail)
-        long_enough = len(tail.strip()) >= 80
-
-        if self.problem_type == "qa":
-            semantic_cues = [
-                r"According to",
-                r"From the passage",
-                r"We can see that",
-                r"Combining this with",
-                r"This means",
-            ]
-        else:
-            semantic_cues = [
-                r"So we have",
-                r"Therefore",
-                r"Thus",
-                r"Hence",
-                r"Next,",
-            ]
-
-        has_semantic_cue = any(re.search(p, tail) for p in semantic_cues)
-        return (has_sentence_boundary and long_enough) or has_semantic_cue
-
     def _generate_final_answer(self, trajectory: str) -> Tuple[str, float]:
         """
         Generate multiple answer candidates and select the one with the highest
@@ -559,8 +471,4 @@ class UncertaintyGuidedCoT_PD:
         return best, float(confidences[best_idx])
 
     def cleanup(self):
-        try:
-            if self.scorer is not None:
-                self.scorer.cleanup()
-        except Exception:
-            pass
+        pass
