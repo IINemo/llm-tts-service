@@ -1,7 +1,0 @@
-# @package dataset
-
-name: hotpotqa
-subset_frac: 0.05
-hf_path: hotpot_qa
-hf_config: distractor
-split: validation

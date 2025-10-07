@@ -1,6 +1,0 @@
-# @package provider
-
-type: together
-model: openai/gpt-oss-120b
-logprobs_support: 20
-api_key: "TOGETHER_API_KEY"

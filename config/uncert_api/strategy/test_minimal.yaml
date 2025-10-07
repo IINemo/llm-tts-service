@@ -1,9 +1,0 @@
-# @package strategy
-
-uncertainty_metric: pd
-uncertainty_threshold: null
-candidates_per_step: 2
-max_steps: 3               # Reduced from default 8
-max_new_tokens: 64         # Reduced from default 128
-temperature: 0.7
-uncertainty_top_k: 2
