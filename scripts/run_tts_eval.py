@@ -242,50 +242,24 @@ def create_tts_strategy(config, model, step_generator, scorer):
                 "uncertainty_guided_pd strategy requires API model (together_ai or openrouter)"
             )
 
-        # Extract problem type from dataset name or config
-        dataset_name = getattr(config.dataset, "dataset_path", "").lower()
-        if "gsm8k" in dataset_name:
-            problem_type = "math"
-        elif "hotpot" in dataset_name:
-            problem_type = "qa"
-        else:
-            problem_type = getattr(config.strategy, "problem_type", "math")
-
-        step_marker_patterns = getattr(config.strategy, "step_marker_patterns", None)
-        step_marker_patterns = (
-            list(step_marker_patterns)
-            if step_marker_patterns
-            else ["## Step {n}:", "Step {n}:", "- Step {n}:"]
-        )
-
-        # Get detector patterns for boundary detection (optional override)
-        # Note: UncertStepBoundaryDetector uses case-insensitive matching
-        detector_step_patterns = getattr(
-            config.strategy, "detector_step_patterns", None
-        )
-        detector_answer_patterns = getattr(
-            config.strategy, "detector_answer_patterns", None
-        )
-        if detector_step_patterns:
-            detector_step_patterns = list(detector_step_patterns)
-        if detector_answer_patterns:
-            detector_answer_patterns = list(detector_answer_patterns)
-
         strategy = UncertaintyGuidedCoT_PD(
             api_client=model,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
             max_new_tokens=config.generation.max_new_tokens,
             temperature=config.generation.temperature,
-            problem_type=problem_type,
             uncertainty_threshold=getattr(
                 config.strategy, "uncertainty_threshold", None
             ),
             uncertainty_metric=getattr(config.strategy, "uncertainty_metric", "pd"),
             uncertainty_top_k=getattr(config.strategy, "uncertainty_top_k", 5),
-            step_marker_patterns=step_marker_patterns,
-            detector_step_patterns=detector_step_patterns,
-            detector_answer_patterns=detector_answer_patterns,
+            step_marker_patterns=getattr(config.strategy, "step_marker_patterns", None),
+            detector_step_patterns=getattr(
+                config.strategy, "detector_step_patterns", None
+            ),
+            detector_answer_patterns=getattr(
+                config.strategy, "detector_answer_patterns", None
+            ),
             eos_token=getattr(config.model, "eos_token", None),
         )
 
@@ -302,7 +276,6 @@ def generate_trajectories(
     dataset: Dataset,
     processed_indices: set,
     prompt_template: str,
-    is_uncertainty_guided: bool = False,
 ):
     # Phase 1: Generate trajectories (without checking correctness)
     log.info("\n" + "=" * 60)
@@ -324,29 +297,18 @@ def generate_trajectories(
         log.info(f"Sample {i+1}/{subset_size}")
         log.info(f"Question: {instance['question'][:200]}...")
 
-        # Generate trajectory based on strategy type
-        if is_uncertainty_guided:
-            # UncertaintyGuidedCoT_PD expects a string prompt
-            prompt = (
-                prompt_template.format(question=instance["question"])
-                if prompt_template
-                else instance["question"]
-            )
-            result = strategy.generate_trajectory(prompt)
-        else:
-            # StrategyOnlineBestOfN expects a chat-style request
-            request = [
-                {"role": "system", "content": ""},
-                {
-                    "role": "user",
-                    "content": (
-                        prompt_template.format(question=instance["question"])
-                        if prompt_template
-                        else instance["question"]
-                    ),
-                },
-            ]
-            result = strategy.generate_trajectory(request)
+        request = [
+            {"role": "system", "content": ""},
+            {
+                "role": "user",
+                "content": (
+                    prompt_template.format(question=instance["question"])
+                    if prompt_template
+                    else instance["question"]
+                ),
+            },
+        ]
+        result = strategy.generate_trajectory(request)
 
         # Extract generated answer (but don't check correctness yet)
         generated_text = result["trajectory"]
@@ -354,30 +316,22 @@ def generate_trajectories(
             generated_text = generated_text.replace(instance["question"], "").strip()
 
         # Store result WITHOUT correctness check
-        result_dict = {
-            "index": i,
-            "question": instance["question"],
-            "gold_answer": instance["answer"],
-            "generated_trajectory": result["trajectory"],
-            "generated_answer": generated_text,
-            "steps": result.get("steps", []),
-            "completed": result.get("completed", False),
-        }
+        results.append(
+            {
+                "index": i,
+                "question": instance["question"],
+                "gold_answer": instance["answer"],
+                "generated_trajectory": result["trajectory"],
+                "generated_answer": generated_text,
+                "steps": result["steps"],
+                "validity_scores": result["validity_scores"],
+                "completed": result["completed"],
+            }
+        )
 
-        # Add strategy-specific fields
-        if is_uncertainty_guided:
-            result_dict["uncertainties"] = result.get("uncertainties", [])
-            result_dict["decision_trace"] = result.get("decision_trace", [])
-            # For uncertainty-guided, we don't have validity_scores
-            result_dict["validity_scores"] = []
-        else:
-            result_dict["validity_scores"] = result.get("validity_scores", [])
-
-        results.append(result_dict)
-
-        log.info(f"Num steps: {len(result.get('steps', []))}")
-        if not is_uncertainty_guided and result.get("validity_scores"):
-            log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
+        log.info(f"Generated: {generated_text}")
+        log.info(f"Num steps: {len(result['steps'])}")
+        log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
 
         # Save periodically
         if len(results) % 10 == 0:
@@ -421,6 +375,7 @@ def evaluate_results(
         model=config.evaluator.model,
         n_threads=config.evaluator.n_threads,
         cache_path=os.path.expanduser("~/.cache"),
+        api_key=getattr(config.evaluator, "api_key", None),
     )
 
     # Prepare data for batch processing
@@ -565,9 +520,6 @@ def main(config):
         config=config, model=model, step_generator=step_generator, scorer=scorer
     )
 
-    # Check if using uncertainty-guided strategy
-    is_uncertainty_guided = config.strategy.type == "uncertainty_guided_pd"
-
     # Load existing results if resuming
     if config.output.resume:
         results, processed_indices = load_existing_results(
@@ -585,7 +537,6 @@ def main(config):
         dataset=dataset,
         processed_indices=processed_indices,
         prompt_template=prompt_template,
-        is_uncertainty_guided=is_uncertainty_guided,
     )
 
     # Evaluate results

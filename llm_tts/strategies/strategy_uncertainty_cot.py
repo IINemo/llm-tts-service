@@ -1,6 +1,6 @@
 import logging
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from llm_tts.step_boundary_detector import uncert_detector
 from llm_tts.step_candidate_generator_base import StepCandidate
@@ -16,7 +16,6 @@ class UncertaintyGuidedCoT_PD:
         max_steps: int = 10,
         max_new_tokens: int = 128,
         temperature: float = 0.7,
-        problem_type: str = "math",
         uncertainty_threshold: Optional[float] = None,
         uncertainty_metric: str = "pd",
         uncertainty_top_k: Optional[int] = None,
@@ -34,7 +33,6 @@ class UncertaintyGuidedCoT_PD:
             max_steps: Maximum number of reasoning steps
             max_new_tokens: Maximum tokens per step
             temperature: Sampling temperature for generation
-            problem_type: Type of problem ("math" or "qa")
             uncertainty_threshold: Threshold for triggering CoT branching
             uncertainty_metric: Metric for uncertainty ("pd" or "entropy")
             uncertainty_top_k: Number of top logprobs to consider
@@ -53,19 +51,22 @@ class UncertaintyGuidedCoT_PD:
         self.max_steps = max_steps
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
-        self.problem_type = problem_type.lower()
         self.uncertainty_metric = (uncertainty_metric or "pd").lower()
         self.uncertainty_top_k = (
             int(uncertainty_top_k) if uncertainty_top_k is not None else None
         )
-        self.step_marker_patterns = step_marker_patterns
+        self.step_marker_patterns = step_marker_patterns or [
+            "## Step {n}:",
+            "Step {n}:",
+            "- Step {n}:",
+        ]
         self.eos_token = eos_token
 
         if uncertainty_threshold is None:
             if self.uncertainty_metric == "entropy":
-                self.uncertainty_threshold = 1.2 if self.problem_type == "qa" else 1.0
+                self.uncertainty_threshold = 1.2
             else:
-                self.uncertainty_threshold = 0.45 if self.problem_type == "qa" else 0.40
+                self.uncertainty_threshold = 0.45
         else:
             self.uncertainty_threshold = uncertainty_threshold
 
@@ -77,9 +78,65 @@ class UncertaintyGuidedCoT_PD:
             max_tokens_per_step=max_new_tokens,
         )
 
-    def generate_trajectory(self, prompt: str) -> Dict[str, any]:
+    def _normalize_to_prompt(
+        self, prompt_or_chat: Union[str, List[Dict[str, str]]]
+    ) -> str:
+        """
+        Accept either a plain prompt string or a chat-style message list and
+        return a single prompt string used by the uncertainty-guided pipeline.
+
+        Chat format expected: List[{"role": str, "content": str}]. We
+        concatenate non-empty system messages (if any) and the user messages,
+        preserving order, separated by blank lines. If only one of them is
+        present, it is used as-is.
+        """
+        if isinstance(prompt_or_chat, str):
+            return prompt_or_chat
+
+        if isinstance(prompt_or_chat, list):
+            try:
+                system_parts: List[str] = []
+                user_parts: List[str] = []
+                for m in prompt_or_chat:
+                    role = m.get("role")
+                    content = m.get("content")
+                    if not content:
+                        continue
+                    if role == "system":
+                        system_parts.append(str(content))
+                    elif role == "user":
+                        user_parts.append(str(content))
+                    else:
+                        # Fallback: include any other roles in order
+                        user_parts.append(str(content))
+
+                system_text = "\n".join(p for p in system_parts if p)
+                user_text = "\n".join(p for p in user_parts if p)
+
+                if system_text and user_text:
+                    return f"{system_text}\n\n{user_text}"
+                return system_text or user_text or ""
+            except Exception:
+                # As a last resort, try a naive stringify
+                return "\n".join(
+                    str(m.get("content", ""))
+                    for m in prompt_or_chat
+                    if isinstance(m, dict)
+                )
+
+        raise TypeError(
+            "generate_trajectory expects a string or chat-style List[Dict[str, str]]"
+        )
+
+    def generate_trajectory(
+        self, prompt_or_chat: Union[str, List[Dict[str, str]]]
+    ) -> Dict[str, any]:
         """
         Uncertainty-guided decoding pipeline.
+
+        Accepts either:
+          - str: a plain prompt
+          - List[Dict[str, str]]: chat-style messages (e.g., [{"role": "user", "content": "..."}])
 
         Loop:
           1) Probe next-token uncertainty at current prompt using top-2 probabilities.
@@ -87,6 +144,7 @@ class UncertaintyGuidedCoT_PD:
              Else → sample K paths, compute path confidences (avg p1-p2), pick best.
           3) Repeat until an <Answer>: tag is produced or max_steps is reached.
         """
+        prompt = self._normalize_to_prompt(prompt_or_chat)
         log_prompt = prompt.replace("\n", "\\n")
         log.info(f"Initial prompt: {log_prompt}")
         trajectory = prompt
@@ -94,6 +152,7 @@ class UncertaintyGuidedCoT_PD:
         selected_steps: List[str] = []
         uncertainties: List[Dict[str, float]] = []
         decision_trace: List[Dict[str, any]] = []
+        validity_scores: List[float] = []
 
         for step_num in range(self.max_steps):
             log.info(f"\n=== PD step {step_num+1} ===")
@@ -162,6 +221,7 @@ class UncertaintyGuidedCoT_PD:
 
             if used_cot:
                 # 2.2) Multi-path: compute confidence per path and select max
+                log.info("Used multi-path completion")
                 candidates: List[StepCandidate] = []
                 confidences: List[float] = []
 
@@ -175,25 +235,7 @@ class UncertaintyGuidedCoT_PD:
                     cut_text = self.detector.extract_step_text(cut_text)
 
                     # Compute confidence from token logprobs
-                    gaps: List[float] = []
-                    if token_data:
-                        for token_info in token_data:
-                            top_alts = token_info.get("top_logprobs", [])
-                            if len(top_alts) >= 2:
-                                # Get top 2 probabilities
-                                probs = []
-                                for alt in top_alts[:2]:
-                                    lp = alt.get("logprob")
-                                    if lp is not None:
-                                        probs.append(math.exp(lp))
-                                if len(probs) >= 2:
-                                    gaps.append(max(0.0, probs[0] - probs[1]))
-                            elif len(top_alts) == 1:
-                                lp = top_alts[0].get("logprob")
-                                if lp is not None:
-                                    gaps.append(math.exp(lp))
-
-                    conf = float(sum(gaps) / len(gaps)) if gaps else 0.0
+                    conf = self._compute_confidence_from_token_data(token_data)
                     confidences.append(conf)
                     candidates.append(
                         StepCandidate(
@@ -213,6 +255,7 @@ class UncertaintyGuidedCoT_PD:
                 best_idx = max(range(len(confidences)), key=lambda i: confidences[i])
                 best = candidates[best_idx]
                 chosen_text = best.text
+                step_conf = float(confidences[best_idx])
                 branch = "cot"
                 extra = {
                     "candidates": [
@@ -225,8 +268,9 @@ class UncertaintyGuidedCoT_PD:
                     ]
                 }
             else:
+                log.info("Used greedy completion")
                 # 2.1) Greedy continuation: take first completion
-                text, _ = gen_results[0]
+                text, token_data = gen_results[0]
 
                 # Truncate at stop markers
                 cut_text = text
@@ -235,6 +279,8 @@ class UncertaintyGuidedCoT_PD:
                         cut_text = cut_text[: cut_text.index(marker)]
 
                 chosen_text = self.detector.extract_step_text(cut_text).strip()
+                # Compute greedy confidence from token logprobs
+                step_conf = self._compute_confidence_from_token_data(token_data)
                 branch = "greedy"
                 extra = {}
 
@@ -243,6 +289,7 @@ class UncertaintyGuidedCoT_PD:
             log_chosen_text = chosen_text.replace("\n", "\\n")
             log.info(f"Step {step_num+1} generation: {log_chosen_text}")
             selected_steps.append(chosen_text)
+            validity_scores.append(step_conf)
 
             decision = {
                 "step": step_num + 1,
@@ -266,9 +313,10 @@ class UncertaintyGuidedCoT_PD:
 
         # If no explicit <Answer>:, try to elicit one succinctly
         if not self.detector.contains_answer_pattern(trajectory):
-            final_answer, _ = self._generate_final_answer(trajectory)
+            final_answer, final_conf = self._generate_final_answer(trajectory)
             trajectory += final_answer
             selected_steps.append(final_answer)
+            validity_scores.append(float(final_conf))
 
         return {
             "trajectory": trajectory,
@@ -276,9 +324,31 @@ class UncertaintyGuidedCoT_PD:
             "uncertainties": uncertainties,
             "completed": self.detector.contains_answer_pattern(trajectory),
             "decision_trace": decision_trace,
+            "validity_scores": validity_scores,
         }
 
     # Removed legacy scorer-based selection method
+
+    def _compute_confidence_from_token_data(
+        self, token_data: Optional[List[Dict[str, Any]]]
+    ) -> float:
+        gaps: List[float] = []
+        if token_data:
+            for token_info in token_data:
+                top_alts = token_info.get("top_logprobs", [])
+                if len(top_alts) >= 2:
+                    probs = []
+                    for alt in top_alts[:2]:
+                        lp = alt.get("logprob")
+                        if lp is not None:
+                            probs.append(math.exp(lp))
+                    if len(probs) >= 2:
+                        gaps.append(max(0.0, probs[0] - probs[1]))
+                elif len(top_alts) == 1:
+                    lp = top_alts[0].get("logprob")
+                    if lp is not None:
+                        gaps.append(math.exp(lp))
+        return float(sum(gaps) / len(gaps)) if gaps else 0.0
 
     def _compute_uncertainty(
         self, trajectory: str, token_to_prob: Optional[Dict[str, float]] = None
