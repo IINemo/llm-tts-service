@@ -14,6 +14,7 @@ class UncertaintyGuidedCoT_PD:
         api_client: Optional[object] = None,
         candidates_per_step: int = 3,
         max_steps: int = 10,
+        max_empty_steps: int = 5,
         max_new_tokens: int = 128,
         temperature: float = 0.7,
         uncertainty_threshold: Optional[float] = None,
@@ -31,6 +32,7 @@ class UncertaintyGuidedCoT_PD:
             api_client: Unified API client (TogetherAIModel, OpenRouterModel, or compatible)
             candidates_per_step: Number of candidate paths to generate at each step
             max_steps: Maximum number of reasoning steps
+            max_empty_steps: Maximum number of empty generations before stopping
             max_new_tokens: Maximum tokens per step
             temperature: Sampling temperature for generation
             uncertainty_threshold: Threshold for triggering CoT branching
@@ -49,6 +51,7 @@ class UncertaintyGuidedCoT_PD:
 
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
+        self.max_empty_steps = max_empty_steps
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.uncertainty_metric = (uncertainty_metric or "pd").lower()
@@ -153,18 +156,20 @@ class UncertaintyGuidedCoT_PD:
         uncertainties: List[Dict[str, float]] = []
         decision_trace: List[Dict[str, any]] = []
         validity_scores: List[float] = []
+        empty_gen_count = 0
 
         for step_num in range(self.max_steps):
             log.info(f"\n=== PD step {step_num+1} ===")
-            log_trajectory = trajectory.replace("\n", "\\n")
-            log.info(f"Trajectory: {log_trajectory}")
 
             # 1) Probe uncertainty BEFORE deciding how many paths to generate
             #    Use a single-token generation with logprobs to estimate PD uncertainty.
 
             # Build stop markers for the next step, OpenAI API only supports 4 stop markers,
             # so we pass only markers from configured patterns
-            stop_markers = self._build_stop_variants(step_num, build_all=False)
+
+            # TODO: think of how to pass build_all, false only needed for openai models
+            # as they only support max of 4 stop markers
+            stop_markers = self._build_stop_variants(step_num, build_all=True)
 
             try:
                 # Generate 1 token with logprobs for uncertainty estimation
@@ -195,7 +200,8 @@ class UncertaintyGuidedCoT_PD:
                     trajectory, token_to_prob=token_probs_last
                 )
             except Exception as e:
-                raise RuntimeError(f"Uncertainty probe failed: {e}")
+                raise RuntimeError(f"Completion failed: {e}")
+
             uncertainties.append(pd_info)
             uncertainty = pd_info["uncertainty"]
             used_cot = bool(uncertainty > self.uncertainty_threshold)
@@ -286,8 +292,9 @@ class UncertaintyGuidedCoT_PD:
 
             # 3) Append and check for answer
             trajectory += chosen_text
-            log_chosen_text = chosen_text.replace("\n", "\\n")
-            log.info(f"Step {step_num+1} generation: {log_chosen_text}")
+            log.info(
+                "Step %d generation: %s", step_num + 1, chosen_text.replace("\n", "\\n")
+            )
             selected_steps.append(chosen_text)
             validity_scores.append(step_conf)
 
@@ -304,12 +311,16 @@ class UncertaintyGuidedCoT_PD:
                 log.info(f"Answer found in step {step_num+1}")
                 break
 
-            if trajectory.endswith("#"):
-                trajectory = trajectory.rstrip("#").rstrip()
-            next_header = self._format_step_header(step_num + 2)
-            if not trajectory.endswith("\n"):
-                trajectory += "\n"
-            trajectory += next_header
+            if chosen_text == "":
+                empty_gen_count += 1
+                if empty_gen_count > self.max_empty_steps:
+                    log.warning("No generation found")
+                    break
+            # else:
+            # next_header = self._format_step_header(step_num + 2)
+            # if not trajectory.endswith("\n"):
+            #     trajectory += "\n"
+            # trajectory += next_header
 
         # If no explicit <Answer>:, try to elicit one succinctly
         if not self.detector.contains_answer_pattern(trajectory):

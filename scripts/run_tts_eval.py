@@ -329,7 +329,8 @@ def generate_trajectories(
             }
         )
 
-        log.info(f"Generated: {generated_text}")
+        # replaced \n for better readability
+        log.info("Generated: %s", generated_text.replace("\n", "\\n"))
         log.info(f"Num steps: {len(result['steps'])}")
         log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
 
@@ -375,7 +376,6 @@ def evaluate_results(
         model=config.evaluator.model,
         n_threads=config.evaluator.n_threads,
         cache_path=os.path.expanduser("~/.cache"),
-        api_key=getattr(config.evaluator, "api_key", None),
     )
 
     # Prepare data for batch processing
