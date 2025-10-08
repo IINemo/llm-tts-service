@@ -16,7 +16,7 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
+from llm_tts.evaluator_gold_standard import EvaluatorGoldStandard
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
@@ -312,10 +312,11 @@ def evaluate_results(
 
     # Load prompt template and ensure compatibility
     prompt_template = (
-        load_prompt_template(config.dataset.prompt_file)
-        if config.dataset.prompt_file
+        load_prompt_template(config.evaluator.prompt_file)
+        if config.evaluator.prompt_file
         else ""
     )
+
     if "{question}" in prompt_template:
         prompt_template = prompt_template.replace("{question}", "{q}")
 

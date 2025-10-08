@@ -13,7 +13,7 @@ class StepScorerUncertainty(StepScorerBase):
         return [
             CandidateScore(
                 candidate_text=candidate,
-                claim_scores=candidate.other_data["uncertainty_score"],
+                claim_scores=(1. - candidate.other_data["uncertainty_score"]),
                 aggregate_scores={},
                 metadata={"scorer_type": "uncertainty"},
             )

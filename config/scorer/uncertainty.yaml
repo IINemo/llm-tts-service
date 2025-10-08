@@ -1,5 +1,5 @@
 type: uncertainty
-uncertainty_model_creator: config.scorer.msp_uncertainty
+uncertainty_model_creator: config.scorer.entropy_uncertainty
 uncertainty: 
   test: 1
 device: cuda:1
