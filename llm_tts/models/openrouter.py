@@ -31,6 +31,8 @@ class OpenRouterModel(BaseModel):
         api_key: Optional[str] = None,
         base_url: str = "https://openrouter.ai/api/v1",
         top_logprobs: int = 10,
+        max_retries: int = 10,
+        retry_delay: float = 0.5,
     ):
         """
         Initialize OpenRouter model.
@@ -53,6 +55,8 @@ class OpenRouterModel(BaseModel):
         self.base_url = base_url
         self.top_logprobs = min(top_logprobs, 20)  # OpenRouter max is 20
         self.device = "api"
+        self.max_retries = max(1, int(max_retries))
+        self.retry_delay = float(retry_delay)
 
         if not self.api_key:
             raise ValueError(
@@ -118,6 +122,7 @@ class OpenRouterModel(BaseModel):
         temperature: float = 0.7,
         n: int = 1,
         top_k: Optional[int] = None,
+        top_logprobs: Optional[int] = None,
         stop: Optional[List[str]] = None,
         **kwargs,
     ) -> List[Tuple[str, Optional[List[Dict]]]]:
@@ -140,66 +145,95 @@ class OpenRouterModel(BaseModel):
         Note: For backward compatibility, when called without reading the return as a list,
               it will still work for n=1 (returns list with one tuple).
         """
-        k = top_k if top_k is not None else self.top_logprobs
-        k = max(0, min(int(k), 20))
+        # Normalize top-k argument name
+        k = top_logprobs if top_logprobs is not None else top_k
+        k = self.top_logprobs if k is None else max(0, min(int(k), 20))
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-                temperature=temperature,
-                n=n,
-                logprobs=True,
-                top_logprobs=k,
-                stop=stop,
-                **kwargs,
-            )
-            results = []
-            for choice in response.choices:
-                # Extract generated text
-                generated_text = choice.message.content or ""
-
-                # Extract token confidence data
-                token_confidence_data = []
-                if hasattr(choice, "logprobs") and choice.logprobs:
-                    logprobs_obj = choice.logprobs
-
-                    # Check if it has 'content' attribute
-                    if hasattr(logprobs_obj, "content") and logprobs_obj.content:
-                        for token_info in logprobs_obj.content:
-                            token_data = {
-                                "token": token_info.token,
-                                "logprob": token_info.logprob,
-                                "top_logprobs": [
-                                    {"token": t.token, "logprob": t.logprob}
-                                    for t in token_info.top_logprobs
-                                ],
-                            }
-                            token_confidence_data.append(token_data)
-                    else:
-                        log.warning(
-                            "Logprobs object exists but has no 'content' attribute or it's empty"
-                        )
-                else:
-                    if n == 1:  # Only warn for single completion
-                        log.warning(
-                            f"No logprobs in response! Model '{self.model_name}' "
-                            "may not support logprobs via OpenRouter"
-                        )
-
-                results.append(
-                    (
-                        generated_text,
-                        token_confidence_data if token_confidence_data else None,
-                    )
+        for attempt in range(self.max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    n=n,
+                    logprobs=(k > 0),
+                    top_logprobs=k,
+                    stop=stop,
+                    **kwargs,
                 )
 
-            return results
+                # Validate logprobs if requested
+                if k > 0:
+                    missing = False
+                    for choice in response.choices:
+                        lp = getattr(choice, "logprobs", None)
+                        if lp is None:
+                            missing = True
+                            break
+                        content = getattr(lp, "content", None)
+                        if not content:
+                            missing = True
+                            break
+                    if missing:
+                        log.warning(
+                            "OpenRouter did not return logprobs despite request (attempt %d/%d)",
+                            attempt + 1,
+                            self.max_retries,
+                        )
+                        if attempt < self.max_retries - 1:
+                            import time as _time
 
-        except Exception as e:
-            log.error(f"Generation with confidence failed: {e}")
-            raise
+                            _time.sleep(self.retry_delay)
+                            continue
+                        raise RuntimeError(
+                            f"OpenRouter did not return logprobs for model '{self.model_name}'"
+                        )
+
+                results: List[Tuple[str, Optional[List[Dict]]]] = []
+                for choice in response.choices:
+                    generated_text = choice.message.content or ""
+
+                    token_confidence_data: List[Dict] = []
+                    lp = getattr(choice, "logprobs", None)
+                    if lp is not None:
+                        content_items = getattr(lp, "content", None)
+                        if content_items:
+                            for token_info in content_items:
+                                top_items = (
+                                    getattr(token_info, "top_logprobs", None) or []
+                                )
+                                token_confidence_data.append(
+                                    {
+                                        "token": getattr(token_info, "token", None),
+                                        "logprob": getattr(token_info, "logprob", None),
+                                        "top_logprobs": [
+                                            {
+                                                "token": getattr(t, "token", None),
+                                                "logprob": getattr(t, "logprob", None),
+                                            }
+                                            for t in top_items
+                                        ],
+                                    }
+                                )
+
+                    results.append(
+                        (
+                            generated_text,
+                            token_confidence_data if token_confidence_data else None,
+                        )
+                    )
+
+                return results
+
+            except Exception as e:
+                if attempt < self.max_retries - 1:
+                    import time as _time
+
+                    _time.sleep(self.retry_delay)
+                    continue
+                log.error(f"Generation with confidence failed: {e}")
+                raise
 
     def generate_texts(
         self,
