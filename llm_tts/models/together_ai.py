@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 class TogetherAIModel(BaseModel):
     """
     Together AI API model adapter.
-    Supports token log probabilities when using Together SDK.
+    Supports token log probabilities via Together SDK.
     """
 
     def __init__(
@@ -32,7 +32,7 @@ class TogetherAIModel(BaseModel):
         api_key: Optional[str] = None,
         base_url: str = "https://api.together.xyz/v1",
         max_retries: int = 3,
-        retry_delay: float = 0.5,
+        retry_delay: float = 1.0,
     ):
         super().__init__(model_name, api_key)
 
