@@ -177,8 +177,8 @@ class UncertaintyGuidedCoT_PD:
                     prompt=trajectory,
                     max_tokens=1,
                     temperature=0.0,
-                    n=1,
-                    top_k=self.uncertainty_top_k or 5,
+                    num_return_sequences=1,
+                    top_logprobs=self.uncertainty_top_k or 5,
                 )
 
                 # Extract token probabilities from the first (only) result
@@ -220,8 +220,8 @@ class UncertaintyGuidedCoT_PD:
                 prompt=trajectory,
                 max_tokens=self.max_new_tokens,
                 temperature=temp_for_gen,
-                n=n_for_gen,
-                top_k=self.uncertainty_top_k or 5,
+                num_return_sequences=n_for_gen,
+                top_logprobs=self.uncertainty_top_k or 5,
                 stop=stop_markers,
             )
 
@@ -314,7 +314,10 @@ class UncertaintyGuidedCoT_PD:
             if chosen_text == "":
                 empty_gen_count += 1
                 if empty_gen_count > self.max_empty_steps:
-                    log.warning("No generation found")
+                    log.warning(
+                        f"No generation found within last {self.max_empty_steps} steps."
+                        "Stopping generation."
+                    )
                     break
             # else:
             # next_header = self._format_step_header(step_num + 2)

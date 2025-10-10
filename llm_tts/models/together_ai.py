@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 class TogetherAIModel(BaseModel):
     """
     Together AI API model adapter.
-    Supports token log probabilities when using Together SDK.
+    Supports token log probabilities via Together SDK.
     """
 
     def __init__(
@@ -32,7 +32,7 @@ class TogetherAIModel(BaseModel):
         api_key: Optional[str] = None,
         base_url: str = "https://api.together.xyz/v1",
         max_retries: int = 3,
-        retry_delay: float = 0.5,
+        retry_delay: float = 1.0,
     ):
         super().__init__(model_name, api_key)
 
@@ -102,7 +102,6 @@ class TogetherAIModel(BaseModel):
             response = self.client.chat.completions.create(**completion_args)
             return [choice.text or "" for choice in response.choices]
         except Exception as e:
-            log.error(f"Together API request failed: {e}")
             raise RuntimeError(f"Together API request failed: {e}")
 
     def generate_with_confidence(
@@ -110,8 +109,7 @@ class TogetherAIModel(BaseModel):
         prompt: str,
         max_tokens: int = 512,
         temperature: float = 0.7,
-        n: int = 1,
-        top_k: Optional[int] = None,
+        num_return_sequences: int = 1,
         top_logprobs: Optional[int] = None,
         stop: Optional[List[str]] = None,
         **kwargs,
@@ -123,24 +121,27 @@ class TogetherAIModel(BaseModel):
             prompt: Input prompt
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature
-            n: Number of completions to generate
-            top_k: Number of top logprobs to retrieve
+            num_return_sequences: Number of completions to generate
+            top_logprobs: Number of top logprobs to retrieve
             stop: Stop sequences
             **kwargs: Additional parameters
 
         Returns:
             List of (generated_text, token_confidence_data) tuples
         """
-        k = top_logprobs if top_logprobs is not None else top_k
-        k = min(max(k if k is not None else 5, 0), 20)
+        if (top_logprobs is None) or (top_logprobs == 0):
+            log.warning(
+                "You are requesting logprobs, but top_logprobs is set to 0. "
+                "This will not return any logprobs."
+            )
+
         completion_args = {
             "model": self.model_name,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
-            "n": n,
+            "n": num_return_sequences,
             "max_tokens": max_tokens,
-            "logprobs": True if k > 0 else False,
-            "top_logprobs": k,
+            "logprobs": top_logprobs,
         }
         if stop:
             completion_args["stop"] = stop
@@ -155,6 +156,7 @@ class TogetherAIModel(BaseModel):
                     continue
                 raise RuntimeError(f"Together.ai request failed: {e}") from e
 
+            # Validate logprobs if requested
             if completion_args.get("logprobs"):
                 missing = False
                 for choice in response.choices:
@@ -162,6 +164,7 @@ class TogetherAIModel(BaseModel):
                     if lp is None:
                         missing = True
                         break
+                    # Together SDK returns arrays for tokens & top_logprobs
                     tokens = getattr(lp, "tokens", None)
                     top_arr = getattr(lp, "top_logprobs", None)
                     if tokens is None or top_arr is None:
@@ -209,26 +212,3 @@ class TogetherAIModel(BaseModel):
                     )
                 )
             return results
-
-    def generate_texts(
-        self,
-        prompt: str,
-        n: int = 1,
-        temperature: float = 0.7,
-        max_new_tokens: int = 128,
-        stop: Optional[List[str]] = None,
-    ) -> List[str]:
-        """
-        Generate text completions and return as list of strings (without logprobs).
-
-        This is a convenience wrapper around generate_with_confidence.
-        """
-        results = self.generate_with_confidence(
-            prompt=prompt,
-            max_tokens=max_new_tokens,
-            temperature=temperature,
-            n=n,
-            top_k=0,  # Don't need logprobs
-            stop=stop,
-        )
-        return [text for text, _ in results]
