@@ -102,7 +102,6 @@ class TogetherAIModel(BaseModel):
             response = self.client.chat.completions.create(**completion_args)
             return [choice.text or "" for choice in response.choices]
         except Exception as e:
-            log.error(f"Together API request failed: {e}")
             raise RuntimeError(f"Together API request failed: {e}")
 
     def generate_with_confidence(
