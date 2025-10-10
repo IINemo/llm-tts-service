@@ -105,6 +105,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             return_tensors="pt",
             padding=True,
             truncation=True,
+            add_special_tokens=False,
             max_length=self.max_new_tokens,
         )
         input_length = inputs["input_ids"].shape[1]
@@ -212,7 +213,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 generation_scores=gen_scores,
                 raw_text=raw_generated_text,
                 other_data=(
-                    {"uncertainty_score": outputs.uncertainty_score}
+                    {"uncertainty_score": outputs.uncertainty_score[0]} # TODO: check if it is correct
                     if hasattr(outputs, "uncertainty_score")
                     else None
                 ),
