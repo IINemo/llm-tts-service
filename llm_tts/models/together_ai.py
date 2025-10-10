@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 class TogetherAIModel(BaseModel):
     """
     Together AI API model adapter.
-    Supports token log probabilities via Together SDK.
+    Supports token log probabilities when using Together SDK.
     """
 
     def __init__(
@@ -32,7 +32,7 @@ class TogetherAIModel(BaseModel):
         api_key: Optional[str] = None,
         base_url: str = "https://api.together.xyz/v1",
         max_retries: int = 3,
-        retry_delay: float = 1.0,
+        retry_delay: float = 0.5,
     ):
         super().__init__(model_name, api_key)
 
@@ -102,6 +102,7 @@ class TogetherAIModel(BaseModel):
             response = self.client.chat.completions.create(**completion_args)
             return [choice.text or "" for choice in response.choices]
         except Exception as e:
+            log.error(f"Together API request failed: {e}")
             raise RuntimeError(f"Together API request failed: {e}")
 
     def generate_with_confidence(
@@ -109,8 +110,7 @@ class TogetherAIModel(BaseModel):
         prompt: str,
         max_tokens: int = 512,
         temperature: float = 0.7,
-        n: int = 1,
-        top_k: Optional[int] = 2,
+        num_return_sequences: int = 1,
         top_logprobs: Optional[int] = None,
         stop: Optional[List[str]] = None,
         **kwargs,
@@ -122,21 +122,26 @@ class TogetherAIModel(BaseModel):
             prompt: Input prompt
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature
-            n: Number of completions to generate
-            top_k: Number of top logprobs to retrieve
+            num_return_sequences: Number of completions to generate
+            top_logprobs: Number of top logprobs to retrieve
             stop: Stop sequences
             **kwargs: Additional parameters
 
         Returns:
             List of (generated_text, token_confidence_data) tuples
         """
+        if (top_logprobs is None) or (top_logprobs == 0):
+            log.warning(
+                "You are requesting logprobs, but top_logprobs is set to 0. "
+                "This will not return any logprobs."
+            )
+
         completion_args = {
             "model": self.model_name,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
-            "n": n,
+            "n": num_return_sequences,
             "max_tokens": max_tokens,
-            "logprobs": True if top_logprobs > 0 else False,
             "top_logprobs": top_logprobs,
         }
         if stop:
@@ -145,7 +150,7 @@ class TogetherAIModel(BaseModel):
 
         for attempt in range(self.max_retries):
             try:
-                resp = self.client.chat.completions.create(**completion_args)
+                response = self.client.chat.completions.create(**completion_args)
             except Exception as e:
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay)
@@ -155,7 +160,7 @@ class TogetherAIModel(BaseModel):
             # Validate logprobs if requested
             if completion_args.get("logprobs"):
                 missing = False
-                for choice in resp.choices:
+                for choice in response.choices:
                     lp = getattr(choice, "logprobs", None)
                     if lp is None:
                         missing = True
@@ -180,80 +185,31 @@ class TogetherAIModel(BaseModel):
                     )
 
             results = []
-            for choice in resp.choices:
-                text = choice.message.content or ""
-                token_data = []
+            for choice in response.choices:
+                logprobs_obj = choice.logprobs
+                generated_text = choice.message.content or ""
+                token_confidence_data = []
 
-                lp = getattr(choice, "logprobs", None)
-                if lp is not None:
-                    tokens = getattr(lp, "tokens", []) or []
-                    token_logprobs = getattr(lp, "token_logprobs", []) or []
-                    top_logprobs_seq = getattr(lp, "top_logprobs", []) or []
-
-                    for i in range(len(tokens)):
-                        token_info = {
-                            "token": tokens[i],
-                            "logprob": (
-                                token_logprobs[i] if i < len(token_logprobs) else None
-                            ),
-                            "top_logprobs": [],
+                for token_string, token_logprob, pos_top_logprobs in zip(
+                    logprobs_obj.tokens,
+                    logprobs_obj.token_logprobs,
+                    logprobs_obj.top_logprobs,
+                ):
+                    token_confidence_data.append(
+                        {
+                            "token": token_string,
+                            "logprob": token_logprob,
+                            "top_logprobs": [
+                                {"token": token, "logprob": logprob}
+                                for token, logprob in pos_top_logprobs.items()
+                            ],
                         }
-                        if i < len(top_logprobs_seq):
-                            top_lp = top_logprobs_seq[i]
-                            if isinstance(top_lp, dict):
-                                token_info["top_logprobs"] = [
-                                    {"token": t, "logprob": lp}
-                                    for t, lp in top_lp.items()
-                                ]
-                            elif isinstance(top_lp, list):
-                                token_info["top_logprobs"] = [
-                                    {
-                                        "token": getattr(
-                                            e,
-                                            "token",
-                                            (
-                                                e.get("token")
-                                                if isinstance(e, dict)
-                                                else None
-                                            ),
-                                        ),
-                                        "logprob": getattr(
-                                            e,
-                                            "logprob",
-                                            (
-                                                e.get("logprob")
-                                                if isinstance(e, dict)
-                                                else None
-                                            ),
-                                        ),
-                                    }
-                                    for e in top_lp
-                                ]
-                        token_data.append(token_info)
+                    )
 
-                results.append((text, token_data if token_data else None))
-
+                results.append(
+                    (
+                        generated_text,
+                        token_confidence_data if token_confidence_data else None,
+                    )
+                )
             return results
-
-    def generate_texts(
-        self,
-        prompt: str,
-        n: int = 1,
-        temperature: float = 0.7,
-        max_new_tokens: int = 128,
-        stop: Optional[List[str]] = None,
-    ) -> List[str]:
-        """
-        Generate text completions and return as list of strings (without logprobs).
-
-        This is a convenience wrapper around generate_with_confidence.
-        """
-        results = self.generate_with_confidence(
-            prompt=prompt,
-            max_tokens=max_new_tokens,
-            temperature=temperature,
-            n=n,
-            top_k=0,  # Don't need logprobs
-            stop=stop,
-        )
-        return [text for text, _ in results]
