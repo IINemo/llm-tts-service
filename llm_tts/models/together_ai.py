@@ -141,7 +141,7 @@ class TogetherAIModel(BaseModel):
             "temperature": temperature,
             "n": num_return_sequences,
             "max_tokens": max_tokens,
-            "top_logprobs": top_logprobs,
+            "logprobs": top_logprobs,
         }
         if stop:
             completion_args["stop"] = stop
