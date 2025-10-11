@@ -1,12 +1,13 @@
 import logging
 import re
 from typing import Dict, List
-
+from typing import Union
 import numpy as np
 from lm_polygraph.model_adapters import WhiteboxModelvLLM
 from lm_polygraph.stat_calculators.greedy_probs import GreedyProbsCalculator
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 from vllm import SamplingParams
+
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +61,6 @@ class MUR:
         estimators,
         max_steps: int,
         temperature: float,
-        generation_batch_size: int,
         candidate_num: int = 4,
         max_tokens: int = 512,
         momentum_rate: float = 0.9,
@@ -71,7 +71,6 @@ class MUR:
     ):
         self.max_steps = max_steps
         self.temperature = temperature
-        self.generation_batch_size = generation_batch_size or candidate_num
         self.momentum_rate = momentum_rate
         self.scaling_rate = scaling_rate
         self.calc_infer_llm = GreedyProbsCalculator()
@@ -113,12 +112,12 @@ class MUR:
         if critic_model is not None:
             self.critic_tokenizer = critic_model.get_tokenizer()
 
-    def generate_trajectory(self, prompt: str) -> Dict[str, any]:
+    def generate_trajectory(self, input: Union[str, List[Dict[str, str]]]) -> Dict[str, any]:
         """
         Generate a trajectory step-by-step using specified criterion.
 
         Args:
-            prompt: Initial prompt/question
+            input: Initial prompt/question or a conversation
 
         Returns:
             Dictionary with:
@@ -126,6 +125,12 @@ class MUR:
                 - steps: List of selected steps
                 - completed: Whether trajectory reached completion
         """
+        if isinstance(input, str):
+            prompt = input
+        elif isinstance(input, list) and all(isinstance(m, dict) for m in input):
+            prompt = input[-1]['content']
+        else:
+            raise ValueError("Input must be a string or a list of role-content dictionaries.")
 
         trajectory = []
         selected_steps = []
@@ -227,14 +232,13 @@ class MUR:
                 )
                 all_policy_output_tokens += len(deps["greedy_log_likelihoods"][0])
                 final_answer = deps["greedy_texts"][0]
-                trajectory.append(final_answer)
+                trajectory.append(f"Step{str(step_num)}: {final_answer}")
                 selected_steps.append(final_answer)
-                validity_scores.append(final_answer)
             except Exception as e:
                 log.error(f"Error generating final answer: {e}")
 
         return {
-            "trajectory": trajectory,
+            "trajectory": '\n'.join(trajectory),
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,

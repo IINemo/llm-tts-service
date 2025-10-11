@@ -18,14 +18,17 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import StepScorerPRM
+from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
 )
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.step_boundary_detector import StepBoundaryDetector
-from llm_tts.strategies import StrategyOnlineBestOfN
+from llm_tts.strategies import StrategyOnlineBestOfN, MUR
+from vllm import LLM
+from lm_polygraph.estimators import Perplexity
+
 
 log = logging.getLogger(__name__)
 
@@ -117,6 +120,8 @@ def create_scorer(config, model):
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
         )
+    elif config.scorer.type == "perplexity":
+        scorer = Perplexity()
 
     elif config.scorer.type == "uncertainty":
         raise NotImplementedError("Uncertainty scorer not implemented")
@@ -172,6 +177,14 @@ def create_model(config):
             top_p=config.generation.top_p,
             top_k=config.generation.top_k,
         )
+    elif config.model.type == "vllm":
+        log.info(f"Using VLLM model: {config.model.model_path}")
+        model = LLM(
+            model=config.model.model_path,
+            gpu_memory_utilization=config.model.gpu_memory_utilization,
+            max_model_len=config.model.max_model_len,
+        )
+        return model, model
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
@@ -188,6 +201,26 @@ def create_tts_strategy(config, step_generator, scorer):
             max_new_tokens=config.generation.max_new_tokens,
             temperature=config.generation.temperature,
             generation_batch_size=config.generation.batch_size,
+        )
+    elif config.strategy.type == "mur":
+        critic_model = None
+        if config.strategy.critic_model_path != "None":
+            critic_model = LLM(
+                model=config.model.critic_model_path,
+                gpu_memory_utilization=config.model.gpu_memory_utilization,
+                max_model_len=config.model.max_model_len,
+            )
+        strategy = MUR(
+            vllm_model=step_generator,
+            critic_model=critic_model,
+            estimators=scorer,
+            max_steps=config.strategy.max_steps,
+            max_tokens=config.generation.max_new_tokens,
+            momentum_rate=config.strategy.momentum_rate,
+            scaling_rate=config.strategy.scaling_rate,
+            temperature=config.generation.temperature,
+            candidate_num=config.strategy.candidate_num,
+            logprobs=config.strategy.logprobs,
         )
 
     else:
@@ -256,7 +289,7 @@ def generate_trajectories(
                 "completed": result["completed"],
             }
         )
-
+        
         log.info(f"Generated: {generated_text}")
         log.info(f"Num steps: {len(result['steps'])}")
         log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
