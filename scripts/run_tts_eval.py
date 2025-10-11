@@ -11,14 +11,13 @@ import torch
 from datasets import Dataset, load_dataset
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
-from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from llm_tts.evaluator_gold_standard import EvaluatorGoldStandard
+from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
+from llm_tts.scorers import StepScorerPRM
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
@@ -26,7 +25,10 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyOnlineBestOfN
+from llm_tts.strategies import StrategyOnlineBestOfN, MUR
+from vllm import LLM
+from lm_polygraph.estimators import Perplexity
+
 
 log = logging.getLogger(__name__)
 
@@ -118,9 +120,11 @@ def create_scorer(config, model):
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
         )
+    elif config.scorer.type == "perplexity":
+        scorer = Perplexity()
 
     elif config.scorer.type == "uncertainty":
-        scorer = StepScorerUncertainty()
+        raise NotImplementedError("Uncertainty scorer not implemented")
 
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
@@ -130,29 +134,11 @@ def create_scorer(config, model):
 
 def create_model(config):
     if config.model.type == "local":
-        if config.scorer.type == "uncertainty":
-            log.info(
-                f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
-            )
-
-            import importlib
-
-            mod = importlib.import_module(config.scorer.uncertainty_model_creator)
-            model = mod.create_uncertainty_model(config)
-            model.generation_parameters = GenerationParameters()
-            model.generation_parameters.temperature = config.generation.temperature
-            model.generation_parameters.max_new_tokens = (
-                config.generation.max_new_tokens
-            )
-            model.generation_parameters.top_p = config.generation.top_p
-            model.generation_parameters.top_k = config.generation.top_k
-
-        else:
-            log.info(f"Loading model: {config.model.model_path}")
-            tokenizer = load_tokenizer(config.model.model_path)
-            base_model = load_model(config.model.model_path, config.system.device)
-            base_model.eval()
-            model = WhiteboxModel(base_model, tokenizer)
+        log.info(f"Loading model: {config.model.model_path}")
+        tokenizer = load_tokenizer(config.model.model_path)
+        base_model = load_model(config.model.model_path, config.system.device)
+        base_model.eval()
+        model = WhiteboxModel(base_model, tokenizer)
 
         detector = StepBoundaryDetector(
             step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
@@ -166,7 +152,6 @@ def create_model(config):
             max_new_tokens=config.generation.max_new_tokens,
             top_p=config.generation.top_p,
             top_k=config.generation.top_k,
-            disable_thinking_mode=config.model.disable_thinking_mode,
         )
 
     elif config.model.type == "openai_api":
@@ -177,27 +162,29 @@ def create_model(config):
             answer_patterns=["<Answer>:", "\n<Answer>:"],
             max_tokens_per_step=config.generation.max_new_tokens,
         )
-
-        generation_parameters = GenerationParameters()
-        generation_parameters.temperature = config.generation.temperature
-        generation_parameters.max_new_tokens = config.generation.max_new_tokens
-        generation_parameters.top_p = config.generation.top_p
-        generation_parameters.top_k = config.generation.top_k
-
         model = BlackboxModelWithStreaming(
             openai_api_key=config.model.api_key,
             model_path=config.model.model_path,
             supports_logprobs=config.model.supports_logprobs,
             boundary_detector=detector,
-            generation_parameters=generation_parameters,
+            # generation_parameters=config.model.generation_parameters,
         )
-
         step_generator = StepCandidateGeneratorThroughAPI(
             model=model,
             detector=detector,
-            prefill_mode=config.model.prefill_mode,
+            temperature=config.generation.temperature,
+            max_new_tokens=config.generation.max_new_tokens,
+            top_p=config.generation.top_p,
+            top_k=config.generation.top_k,
         )
-
+    elif config.model.type == "vllm":
+        log.info(f"Using VLLM model: {config.model.model_path}")
+        model = LLM(
+            model=config.model.model_path,
+            gpu_memory_utilization=config.model.gpu_memory_utilization,
+            max_model_len=config.model.max_model_len,
+        )
+        return model, model
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
@@ -205,13 +192,35 @@ def create_model(config):
 
 
 def create_tts_strategy(config, step_generator, scorer):
-    if config.strategy.type == "online_best_of_n":
+    if config.strategy.type == "direct_online_best_of_n_reason_eval_separate":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
+            max_new_tokens=config.generation.max_new_tokens,
+            temperature=config.generation.temperature,
             generation_batch_size=config.generation.batch_size,
+        )
+    elif config.strategy.type == "mur":
+        critic_model = None
+        if config.strategy.critic_model_path != "None":
+            critic_model = LLM(
+                model=config.model.critic_model_path,
+                gpu_memory_utilization=config.model.gpu_memory_utilization,
+                max_model_len=config.model.max_model_len,
+            )
+        strategy = MUR(
+            vllm_model=step_generator,
+            critic_model=critic_model,
+            estimators=scorer,
+            max_steps=config.strategy.max_steps,
+            max_tokens=config.generation.max_new_tokens,
+            momentum_rate=config.strategy.momentum_rate,
+            scaling_rate=config.strategy.scaling_rate,
+            temperature=config.generation.temperature,
+            candidate_num=config.strategy.candidate_num,
+            logprobs=config.strategy.logprobs,
         )
 
     else:
@@ -280,7 +289,7 @@ def generate_trajectories(
                 "completed": result["completed"],
             }
         )
-
+        
         log.info(f"Generated: {generated_text}")
         log.info(f"Num steps: {len(result['steps'])}")
         log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
@@ -312,11 +321,10 @@ def evaluate_results(
 
     # Load prompt template and ensure compatibility
     prompt_template = (
-        load_prompt_template(config.evaluator.prompt_file)
-        if config.evaluator.prompt_file
+        load_prompt_template(config.dataset.prompt_file)
+        if config.dataset.prompt_file
         else ""
     )
-
     if "{question}" in prompt_template:
         prompt_template = prompt_template.replace("{question}", "{q}")
 
