@@ -1,3 +1,4 @@
+from .phi import PhiDecoder
 from .strategy_base import StrategyBase
 from .strategy_chain_of_thought import StrategyChainOfThought
 from .strategy_deepconf import StrategyDeepConf
@@ -10,4 +11,5 @@ __all__ = [
     "StrategySelfConsistency",
     "StrategyDeepThinkConfidence",
     "StrategyDeepConf",
+    "PhiDecoder",
 ]

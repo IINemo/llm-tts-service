@@ -11,10 +11,12 @@ import torch
 from datasets import Dataset, load_dataset
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
+from lm_polygraph.estimators import Perplexity
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from vllm import LLM
 
 from llm_tts.evaluator_gold_standard import EvaluatorGoldStandard
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
@@ -26,7 +28,7 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyOnlineBestOfN
+from llm_tts.strategies import PhiDecoder, StrategyOnlineBestOfN
 
 log = logging.getLogger(__name__)
 
@@ -118,6 +120,8 @@ def create_scorer(config, model):
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
         )
+    elif config.scorer.type == "perplexity":
+        scorer = Perplexity()
 
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
@@ -197,7 +201,14 @@ def create_model(config):
             detector=detector,
             prefill_mode=config.model.prefill_mode,
         )
-
+    elif config.model.type == "vllm":
+        log.info(f"Using VLLM model: {config.model.model_path}")
+        model = LLM(
+            model=config.model.model_path,
+            gpu_memory_utilization=config.model.gpu_memory_utilization,
+            max_model_len=config.model.max_model_len,
+        )
+        return model, model
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
@@ -212,6 +223,24 @@ def create_tts_strategy(config, step_generator, scorer):
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
             generation_batch_size=config.generation.batch_size,
+        )
+
+    elif config.strategy.type == "phi":
+        strategy = PhiDecoder(
+            vllm_model=step_generator,
+            max_model_len=config.generation.max_new_tokens,
+            step_beam_size=config.strategy.step_beam_size,
+            num_rollout=config.strategy.num_rollout,
+            num_foresight=config.strategy.num_foresight,
+            strategy=config.strategy.strategy,
+            width_pruning_strategy=config.strategy.width_pruning_strategy,
+            depth_pruning_strategy=config.strategy.depth_pruning_strategy,
+            cluster_num=config.strategy.cluster_num,
+            threshold=config.strategy.threshold,
+            least_foresight_num=config.strategy.least_foresight_num,
+            sigma_rate=config.strategy.sigma_rate,
+            temperature=config.generation.temperature,
+            max_tokens=config.generation.max_new_tokens,
         )
 
     else:
