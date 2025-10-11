@@ -1,13 +1,12 @@
 import logging
 import re
-from typing import Dict, List
-from typing import Union
+from typing import Dict, List, Union
+
 import numpy as np
 from lm_polygraph.model_adapters import WhiteboxModelvLLM
 from lm_polygraph.stat_calculators.greedy_probs import GreedyProbsCalculator
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 from vllm import SamplingParams
-
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +111,9 @@ class MUR:
         if critic_model is not None:
             self.critic_tokenizer = critic_model.get_tokenizer()
 
-    def generate_trajectory(self, input: Union[str, List[Dict[str, str]]]) -> Dict[str, any]:
+    def generate_trajectory(
+        self, input: Union[str, List[Dict[str, str]]]
+    ) -> Dict[str, any]:
         """
         Generate a trajectory step-by-step using specified criterion.
 
@@ -128,9 +129,11 @@ class MUR:
         if isinstance(input, str):
             prompt = input
         elif isinstance(input, list) and all(isinstance(m, dict) for m in input):
-            prompt = input[-1]['content']
+            prompt = input[-1]["content"]
         else:
-            raise ValueError("Input must be a string or a list of role-content dictionaries.")
+            raise ValueError(
+                "Input must be a string or a list of role-content dictionaries."
+            )
 
         trajectory = []
         selected_steps = []
@@ -238,7 +241,7 @@ class MUR:
                 log.error(f"Error generating final answer: {e}")
 
         return {
-            "trajectory": '\n'.join(trajectory),
+            "trajectory": "\n".join(trajectory),
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,

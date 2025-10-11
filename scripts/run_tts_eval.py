@@ -11,9 +11,11 @@ import torch
 from datasets import Dataset, load_dataset
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
+from lm_polygraph.estimators import Perplexity
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from vllm import LLM
 
 from llm_tts.evaluator_gold_standard_deepseek import EvaluatorGoldStandard
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
@@ -25,10 +27,7 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyOnlineBestOfN, MUR
-from vllm import LLM
-from lm_polygraph.estimators import Perplexity
-
+from llm_tts.strategies import MUR, StrategyOnlineBestOfN
 
 log = logging.getLogger(__name__)
 
@@ -289,7 +288,7 @@ def generate_trajectories(
                 "completed": result["completed"],
             }
         )
-        
+
         log.info(f"Generated: {generated_text}")
         log.info(f"Num steps: {len(result['steps'])}")
         log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
