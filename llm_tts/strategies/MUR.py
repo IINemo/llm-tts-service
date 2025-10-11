@@ -1,12 +1,13 @@
 import logging
 import re
-from typing import Dict, List, Union
-
+from typing import Dict, List
+from typing import Union
 import numpy as np
 from lm_polygraph.model_adapters import WhiteboxModelvLLM
 from lm_polygraph.stat_calculators.greedy_probs import GreedyProbsCalculator
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 from vllm import SamplingParams
+
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ def build_policy_input(tokenizer, question, traj, step_idx):
     )
     input_text = input_text.replace(tokenizer.eos_token, "").strip()
     input_text += (
-        "\n".join(traj) + f"\nStep{step_idx}:" if step_idx > 0 else f"\nStep0:"
+        "\n".join(traj) + f"\nStep{step_idx}:" if step_idx > 0 else "\nStep0:"
     )
     return input_text
 
