@@ -140,7 +140,12 @@ class BlackboxModelWithStreaming(BlackboxModel):
         return results
 
     def generate_with_confidence(
-        self, prompt: str, max_tokens: int = 512, temperature: float = 0.7, **kwargs
+        self,
+        prompt: str,
+        max_tokens: int = 512,
+        temperature: float = 0.7,
+        num_return_sequences: int = 1,
+        **kwargs,
     ) -> Tuple[str, Optional[List[Dict]]]:
         """
         Generate text and extract token-level confidence scores.
@@ -152,7 +157,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
             **kwargs: Additional provider-specific parameters
 
         Returns:
-            Tuple of (generated_text, token_confidence_data)
+            List of (generated_text, token_confidence_data) pairs
             where token_confidence_data contains logprobs for each token
         """
         try:
@@ -171,44 +176,43 @@ class BlackboxModelWithStreaming(BlackboxModel):
                 max_tokens=max_tokens,
                 temperature=temperature,
                 logprobs=True,
-                top_logprobs=20,  # Max allowed by OpenAI
+                # top_logprobs=20,  # not every model / provider supports excatcly 20
+                # so it is better to specify it and pass in **kwargs
                 **kwargs,
             )
 
-            # Extract generated text
-            generated_text = response.choices[0].message.content
+            results = []
+            for choice in response.choices:
+                # Extract generated text for this choice
+                generated_text = choice.message.content
 
-            # Extract token confidence data
-            token_confidence_data = []
-            if (
-                hasattr(response.choices[0], "logprobs")
-                and response.choices[0].logprobs
-            ):
-                logprobs_obj = response.choices[0].logprobs
-
-                # Check if it has 'content' attribute
-                if hasattr(logprobs_obj, "content") and logprobs_obj.content:
-                    for token_info in logprobs_obj.content:
-                        token_data = {
-                            "token": token_info.token,
-                            "logprob": token_info.logprob,
-                            "top_logprobs": [
-                                {"token": t.token, "logprob": t.logprob}
-                                for t in token_info.top_logprobs
-                            ],
-                        }
-                        token_confidence_data.append(token_data)
+                # Extract token confidence data for this choice
+                token_confidence_data: List[Dict] = []
+                if hasattr(choice, "logprobs") and choice.logprobs:
+                    logprobs_obj = choice.logprobs
+                    if hasattr(logprobs_obj, "content") and logprobs_obj.content:
+                        for token_info in logprobs_obj.content:
+                            token_data = {
+                                "token": token_info.token,
+                                "logprob": token_info.logprob,
+                                "top_logprobs": [
+                                    {"token": t.token, "logprob": t.logprob}
+                                    for t in token_info.top_logprobs
+                                ],
+                            }
+                            token_confidence_data.append(token_data)
+                    else:
+                        log.warning(
+                            "Logprobs object exists but has no 'content' attribute or it's empty"
+                        )
                 else:
                     log.warning(
-                        "Logprobs object exists but has no 'content' attribute or it's empty"
+                        f"No logprobs in response choice! Model '{self.model_path}' may not support logprobs"
                     )
-            else:
-                log.warning(
-                    f"No logprobs in response! Model '{self.model_path}' "
-                    "may not support logprobs"
-                )
 
-            return generated_text, token_confidence_data
+                results.append((generated_text, token_confidence_data))
+
+            return results
 
         except Exception as e:
             log.error(f"Generation with confidence failed: {e}")
