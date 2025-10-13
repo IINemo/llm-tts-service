@@ -18,6 +18,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llm_tts.evaluator_gold_standard import EvaluatorGoldStandard
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
+from llm_tts.models.together_ai import TogetherAIModel
 from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_through_api import (
@@ -26,7 +27,7 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyOnlineBestOfN
+from llm_tts.strategies import StrategyOnlineBestOfN, UncertaintyGuidedCoT_PD
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +112,9 @@ def set_random_seeds(seed):
 
 
 def create_scorer(config, model):
+    if config.scorer is None:
+        return None
+
     if config.scorer.type == "prm":
         scorer = StepScorerPRM(
             model=model,
@@ -198,13 +202,37 @@ def create_model(config):
             prefill_mode=config.model.prefill_mode,
         )
 
+    elif config.model.type == "openrouter":
+        log.info(f"Using OpenRouter API model: {config.model.model_path}")
+
+        model = BlackboxModelWithStreaming(
+            openai_api_key=config.model.api_key,
+            base_url=config.model.base_url,
+            model_path=config.model.model_path,
+            supports_logprobs=config.model.supports_logprobs,
+        )
+        step_generator = None
+
+    elif config.model.type == "together_ai":
+        log.info(f"Using Together AI model: {config.model.model_path}")
+
+        api_key = config.model.get("api_key") or os.getenv("TOGETHER_API_KEY")
+        model = TogetherAIModel(
+            model_name=config.model.model_path,
+            api_key=api_key,
+            base_url=config.model.get("base_url", "https://api.together.xyz/v1"),
+            max_retries=config.model.get("max_retries", 3),
+            retry_delay=config.model.get("retry_delay", 1.0),
+        )
+        step_generator = None
+
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
     return model, step_generator
 
 
-def create_tts_strategy(config, step_generator, scorer):
+def create_tts_strategy(config, step_generator, scorer, model):
     if config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
@@ -212,6 +240,33 @@ def create_tts_strategy(config, step_generator, scorer):
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
             generation_batch_size=config.generation.batch_size,
+        )
+
+    elif config.strategy.type == "uncertainty_guided_pd":
+        if not isinstance(model, TogetherAIModel) and not isinstance(
+            model, BlackboxModelWithStreaming
+        ):
+            raise ValueError(
+                f"UnCertCoT requires TogetherAIModel or BlackboxModelWithStreaming, got {type(model).__name__}"
+            )
+
+        strategy = UncertaintyGuidedCoT_PD(
+            api_client=model,
+            model_name=config.model.model_path,
+            candidates_per_step=config.strategy.candidates_per_step,
+            max_steps=config.strategy.max_steps,
+            max_empty_steps=config.strategy.max_empty_steps,
+            max_new_tokens=config.generation.max_new_tokens,
+            temperature=config.generation.temperature,
+            uncertainty_threshold=config.strategy.get("uncertainty_threshold", 0.3),
+            uncertainty_metric=config.strategy.get("uncertainty_metric", "pd"),
+            uncertainty_top_k=config.strategy.get("uncertainty_top_k", 5),
+            step_marker_patterns=config.strategy.get("step_marker_patterns", None),
+            detector_step_patterns=config.strategy.get("detector_step_patterns", None),
+            detector_answer_patterns=config.strategy.get(
+                "detector_answer_patterns", None
+            ),
+            eos_token=config.model.get("eos_token", None),
         )
 
     else:
@@ -466,7 +521,7 @@ def main(config):
 
     # Create tts strategy
     generator = create_tts_strategy(
-        config=config, step_generator=step_generator, scorer=scorer
+        config=config, step_generator=step_generator, scorer=scorer, model=model
     )
 
     # Load existing results if resuming
