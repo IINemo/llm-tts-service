@@ -10,9 +10,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY service/requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
+# Copy pyproject.toml and source code for installation
+COPY pyproject.toml .
+COPY llm_tts/ ./llm_tts/
+
+# Install package with service dependencies
+RUN pip install --no-cache-dir --user -e ".[service]"
 
 # Copy lm-polygraph and install it
 COPY lm-polygraph/ ./lm-polygraph/
@@ -40,7 +43,7 @@ COPY --from=builder /root/.local /home/tts/.local
 
 # Copy application code
 COPY --chown=tts:tts llm_tts/ ./llm_tts/
-COPY --chown=tts:tts service/ ./service/
+COPY --chown=tts:tts service_app/ ./service_app/
 
 # Switch to non-root user
 USER tts
@@ -54,4 +57,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 # Run the service
-CMD ["python", "service/main.py"]
+CMD ["python", "service_app/main.py"]

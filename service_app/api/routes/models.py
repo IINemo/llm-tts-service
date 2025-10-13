@@ -6,7 +6,7 @@ import time
 
 from fastapi import APIRouter
 
-from service.api.models.openai_compat import ModelInfo, ModelsResponse
+from service_app.api.models.openai_compat import ModelInfo, ModelsResponse
 
 router = APIRouter()
 

@@ -9,16 +9,15 @@ from typing import Dict
 
 from fastapi import APIRouter, HTTPException
 
-from service.api.models.openai_compat import (
+from service_app.api.models.openai_compat import (
     ChatCompletionChoice,
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatMessage,
-    ErrorDetail,
     ErrorResponse,
     Usage,
 )
-from service.core.strategy_manager import strategy_manager
+from service_app.core.strategy_manager import strategy_manager
 
 log = logging.getLogger(__name__)
 
@@ -90,11 +89,11 @@ async def create_chat_completion(request: ChatCompletionRequest):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": ErrorDetail(
-                        message="Streaming is not yet supported",
-                        type="invalid_request_error",
-                        param="stream",
-                    )
+                    "error": {
+                        "message": "Streaming is not yet supported",
+                        "type": "invalid_request_error",
+                        "param": "stream",
+                    }
                 },
             )
 
@@ -219,8 +218,10 @@ async def create_chat_completion(request: ChatCompletionRequest):
         raise HTTPException(
             status_code=500,
             detail={
-                "error": ErrorDetail(
-                    message=str(e), type="internal_error", code="internal_server_error"
-                )
+                "error": {
+                    "message": str(e),
+                    "type": "internal_error",
+                    "code": "internal_server_error",
+                }
             },
         )

@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  tts-service:
+    build:
+      context: .
+      dockerfile: service_app/Dockerfile
+    container_name: llm-tts-service
+    ports:
+      - "8001:8001"
+    environment:
+      # API Keys (set these in .env or pass via environment)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+      # Service configuration
+      - PORT=8001
+      - HOST=0.0.0.0
+
+      # DeepConf defaults
+      - DEEPCONF_BUDGET=${DEEPCONF_BUDGET:-8}
+      - DEEPCONF_FILTER_METHOD=${DEEPCONF_FILTER_METHOD:-top5}
+      - DEEPCONF_TEMPERATURE=${DEEPCONF_TEMPERATURE:-0.7}
+
+    volumes:
+      # Optional: Mount outputs directory to persist results
+      - ./outputs:/app/outputs
+
+      # Optional: Mount config for dynamic configuration
+      - ./config:/app/config:ro
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - tts-network
+
+networks:
+  tts-network:
+    driver: bridge
+
+# Optional: Add monitoring services
+# Uncomment to enable Prometheus + Grafana monitoring
+#
+# prometheus:
+#   image: prom/prometheus:latest
+#   volumes:
+#     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+#   ports:
+#     - "9090:9090"
+#   networks:
+#     - tts-network
+#
+# grafana:
+#   image: grafana/grafana:latest
+#   ports:
+#     - "3000:3000"
+#   networks:
+#     - tts-network
