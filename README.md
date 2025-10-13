@@ -63,3 +63,7 @@ Pre-commit hooks run automatically on `git commit` and will block commits that f
 ```
 OPENAI_API_KEY=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 PYTHONPATH=./ python ./scripts/run_tts_eval.py --config-path=../config/ --config-name=run_tts_eval.yaml dataset=small_gsm8k dataset.subset=1 model=hf_qwen3 scorer=uncertainty
 ```
+- Uhead:
+```
+OPENAI_API_KEY=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 PYTHONPATH=./ python ./scripts/run_tts_eval.py --config-path=../config/ --config-name=run_tts_eval.yaml dataset=small_gsm8k dataset.subset=1 model=hf_qwen3 scorer=uncertainty_uhead
+```
