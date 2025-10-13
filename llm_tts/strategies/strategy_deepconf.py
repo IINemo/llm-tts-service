@@ -182,7 +182,7 @@ class StrategyDeepConf(StrategyBase):
         self.confidence_threshold = confidence_threshold
 
         # Check model supports logprobs
-        if not hasattr(model, "supports_logprobs") or not model.supports_logprobs():
+        if not hasattr(model, "supports_logprobs") or not model.supports_logprobs:
             log.warning(
                 "⚠️  Model does not support logprobs - DeepConf will not work correctly"
             )
