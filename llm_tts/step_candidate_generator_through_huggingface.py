@@ -213,7 +213,9 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 generation_scores=gen_scores,
                 raw_text=raw_generated_text,
                 other_data=(
-                    {"uncertainty_score": outputs.uncertainty_score[0]} # TODO: check if it is correct
+                    {
+                        "uncertainty_score": outputs.uncertainty_score[0]
+                    }  # TODO: check if it is correct
                     if hasattr(outputs, "uncertainty_score")
                     else None
                 ),
