@@ -1,0 +1,11 @@
+type: uncertainty
+uncertainty_model_creator: config.scorer.uncertainty_uhead
+uncertainty: 
+  cfg:
+      predict_token_uncertainties: false
+      uq_head_path: llm-uncertainty-head/uhead_claim_att_exp3_Mistral-7B-Instruct-v0.2
+      args_generate:
+        max_new_tokens: 256
+      generations_cache_dir: ""
+device: cuda:1
+batch_size: 1
