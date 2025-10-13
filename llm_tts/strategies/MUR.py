@@ -1,37 +1,25 @@
 import logging
 import re
-from typing import Dict, List
-from typing import Union
+from typing import Dict, List, Union
+
 import numpy as np
 from lm_polygraph.model_adapters import WhiteboxModelvLLM
 from lm_polygraph.stat_calculators.greedy_probs import GreedyProbsCalculator
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 from vllm import SamplingParams
 
+from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 
 
-def build_policy_input(tokenizer, question, traj, step_idx):
-    chat = [
-        {
-            "role": "user",
-            "content": f"Q: {question}\n Break problem and solve it step by step (Step0, Step1, Step2,...). Always end your solution with the phrase 'the answer is' followed by your final answer. Start your solution with 'Step{step_idx}:'\n",
-        }
-    ]
-    input_text = tokenizer.apply_chat_template(
-        chat, tokenize=False, enable_thinking=False, add_generation_prompt=True
-    )
-    input_text = input_text.replace(tokenizer.eos_token, "").strip()
-    input_text += (
-        "\n".join(traj) + f"\nStep{step_idx}:" if step_idx > 0 else "\nStep0:"
-    )
-    return input_text
-
-
 def ciritique_last_generation_math(problem, solution):
-
-    system_prompt = "You are a math teacher. Your task is to review and critique the paragraphs in solution directly. Output your judgement in the format of `\\boxed{Yes}` if the paragraph is correct, or `\\boxed{No}` if the paragraph is incorrect."
+    system_prompt = (
+        "You are a math teacher. Your task is to review and critique the paragraphs in "
+        "the solution directly. Output your judgement in the format of "
+        "`\\boxed{Yes}` if the paragraph is correct, or `\\boxed{No}` if the paragraph "
+        "is incorrect."
+    )
 
     user_prompt = f"""[Math Problem]
 
@@ -49,7 +37,7 @@ def ciritique_last_generation_math(problem, solution):
     return {"system_prompt": system_prompt, "user_prompt": user_prompt}
 
 
-class MUR:
+class MUR(StrategyBase):
     """
     MUR: Momentum Uncertainty guided Reasoning for Large Language Models
     Reimplement from https://github.com/yayayacc/MUR/blob/main/guided_search-mur.py
@@ -68,7 +56,9 @@ class MUR:
         logprobs: int = 1,
         device: str = "cuda:0",
         critic_model: str = None,
+        system_prompt: str = None,
     ):
+        super().__init__()
         self.max_steps = max_steps
         self.temperature = temperature
         self.momentum_rate = momentum_rate
@@ -77,6 +67,23 @@ class MUR:
         self.estimators = estimators
         self.candidate_num = candidate_num
         self.max_tokens = max_tokens
+        self.system_prompt = (
+            system_prompt
+            if system_prompt is not None
+            else (
+                (
+                    "Break problem and solve it step by step.\n"
+                    "Example:\n"
+                    "Question: Michael had 58 golf balls. On Tuesday, he lost 23 golf balls. "
+                    "On Wednesday, he lost 2 more. How many golf balls did he have at the end of Wednesday?\n"
+                    "Step: Michael started with 58 golf balls.\n"
+                    "Step: After losing 23 on Tuesday, he had 58 - 23 = 35.\n"
+                    "After losing 2 more, he had 35 - 2 = 33 golf balls.\n"
+                    "So the answer is: 33.\n"
+                    "NOTE: Always end your solution with the phrase 'the answer is' followed by your final answer."
+                ).strip()
+            )
+        )
         self.answer_patterns = [
             "<Answer>:",
             "\n<Answer>:",
@@ -89,7 +96,6 @@ class MUR:
             "- Step",
             "\nStep",
             "\n\nStep",
-            "\n\*\*Step",
             "**Step",
             "## Step",
         ]
@@ -111,6 +117,12 @@ class MUR:
         self.critic_model = critic_model
         if critic_model is not None:
             self.critic_tokenizer = critic_model.get_tokenizer()
+
+    def get_system_prompt(self):
+        return self.system_prompt
+
+    def set_system_prompt(self, system_prompt: str):
+        self.system_prompt = system_prompt
 
     def generate_trajectory(
         self, input: Union[str, List[Dict[str, str]]]
@@ -144,10 +156,8 @@ class MUR:
 
         for step_num in range(self.max_steps):
             log.info(f"\n=== Step {step_num} ===")
-            input_prompt = build_policy_input(
-                self.model.tokenizer, prompt, trajectory, step_num
-            )
-            # print(input_prompt)
+            input_prompt = self._prepare_input_prompt(prompt, trajectory)
+
             deps = {"input_texts": [input_prompt]}
             deps.update(
                 self.calc_infer_llm(deps, texts=[input_prompt], model=self.model)
@@ -170,29 +180,30 @@ class MUR:
                 < np.exp(momentum_uncertainty) * self.scaling_rate
             ):
                 # log.info("Generating candidates MUR ....")
-                deps = {"input_texts": [input_prompt]}
-                deps.update(
+                state_dict = {"input_texts": [input_prompt]}
+                # Generate candidates
+                state_dict.update(
                     self.calc_infer_llm(
-                        deps,
+                        state_dict,
                         texts=[input_prompt] * self.candidate_num,
                         model=self.model,
                     )
                 )
-                candidates = deps["greedy_texts"]
+                candidates = state_dict["greedy_texts"]
 
-                # count real tokens
-                for row in deps["greedy_log_likelihoods"]:
+                # Count real tokens
+                for row in state_dict["greedy_log_likelihoods"]:
                     count = sum(
                         1 for x in row if x not in (float("inf"), float("-inf"))
                     )
                     all_policy_output_tokens += count
 
-                # replace inf with 0
-                deps["greedy_log_likelihoods"] = [
+                # Replace inf with 0
+                state_dict["greedy_log_likelihoods"] = [
                     [0 if x in (float("inf"), float("-inf")) else x for x in row]
-                    for row in deps["greedy_log_likelihoods"]
+                    for row in state_dict["greedy_log_likelihoods"]
                 ]
-                candidate_validity_scores = self.estimators(deps)
+                candidate_validity_scores = self.estimators(state_dict)
 
                 # Select best candidate
                 if self.critic_model is not None:
@@ -209,7 +220,7 @@ class MUR:
 
             # filter step text and add to trajectory
             step_text = self.normalize_step_text(step_text)
-            trajectory.append(f"Step{str(step_num)}: {step_text}")
+            trajectory.append(f"Step: {step_text}")
             selected_steps.append(step_text)
             log.info(f"Step {step_num}: {step_text}")
             # Update momentum uncertainty
@@ -227,15 +238,15 @@ class MUR:
         # Generate final answer
         if not get_answer:
             try:
-                input_prompt = build_policy_input(
-                    self.model.tokenizer, prompt, trajectory, step_num
+                input_prompt = self._prepare_input_prompt(prompt, trajectory)
+                state_dict = {"input_texts": [input_prompt]}
+                state_dict.update(
+                    self.calc_infer_llm(
+                        state_dict, texts=[input_prompt], model=self.model
+                    )
                 )
-                deps = {"input_texts": [input_prompt]}
-                deps.update(
-                    self.calc_infer_llm(deps, texts=[input_prompt], model=self.model)
-                )
-                all_policy_output_tokens += len(deps["greedy_log_likelihoods"][0])
-                final_answer = deps["greedy_texts"][0]
+                all_policy_output_tokens += len(state_dict["greedy_log_likelihoods"][0])
+                final_answer = state_dict["greedy_texts"][0]
                 trajectory.append(f"Step{str(step_num)}: {final_answer}")
                 selected_steps.append(final_answer)
             except Exception as e:
@@ -326,6 +337,39 @@ class MUR:
             if pattern.lower() in generated_text.lower():
                 return True
 
+    def _prepare_chat_template(self, question: str):
+        """
+        Prepare chat template based on dataset type
+        Args:
+            question: Input question
+        Returns:
+            List of chat messages
+        """
+        chat = [
+            {"role": "system", "content": self.system_prompt},
+            {
+                "role": "user",
+                "content": question,
+            },
+            {"role": "assistant", "content": ""},
+        ]
+        return chat
+
+    def _prepare_input_prompt(self, question: str, traj: List[str]):
+        chat = self._prepare_chat_template(question)
+
+        input_prompt = (
+            self.model.tokenizer.apply_chat_template(
+                chat, tokenize=False, enable_thinking=False, add_generation_prompt=True
+            )
+            .rstrip(self.model.tokenizer.eos_token)
+            .rstrip()
+            + "\n".join(traj)
+            + "\nStep: "
+        )
+
+        return input_prompt
+
     def normalize_step_text(self, step_text: str) -> str:
         step_text = step_text.replace("<think>", "").strip()
         step_text = step_text.replace("</think>", "").strip()
@@ -334,5 +378,5 @@ class MUR:
             try:
                 step_text = re.sub(f"{pattern}$", "", step_text)
             except:
-                pass
+                continue
         return step_text.strip()
