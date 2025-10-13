@@ -37,13 +37,8 @@ class BaseModel(ABC):
         pass
 
     def generate_with_confidence(
-        self,
-        prompt: str,
-        max_tokens: int = 512,
-        temperature: float = 0.7,
-        n: int = 1,
-        **kwargs,
-    ) -> List[Tuple[str, Optional[List[Dict]]]]:
+        self, prompt: str, max_tokens: int = 512, temperature: float = 0.7, **kwargs
+    ) -> Tuple[str, Optional[List[Dict]]]:
         """
         Generate text with token-level confidence data.
 
@@ -51,22 +46,17 @@ class BaseModel(ABC):
             prompt: Input prompt
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature
-            n: Number of completions to generate
             **kwargs: Additional provider-specific parameters
 
         Returns:
-            List of (generated_text, token_confidence_data) tuples, one per completion.
+            Tuple of (generated_text, token_confidence_data)
             token_confidence_data is None if logprobs not supported
         """
         if not self.supports_logprobs():
             # Fallback: generate without confidence
-            texts = self.generate(
-                prompt, max_tokens, temperature, num_return_sequences=n, **kwargs
-            )
-            return [(text, None) for text in texts]
+            text = self.generate(prompt, max_tokens, temperature, **kwargs)[0]
+            return text, None
 
         # Default implementation - override in subclasses that support logprobs
-        texts = self.generate(
-            prompt, max_tokens, temperature, num_return_sequences=n, **kwargs
-        )
-        return [(text, None) for text in texts]
+        text = self.generate(prompt, max_tokens, temperature, **kwargs)[0]
+        return text, None
