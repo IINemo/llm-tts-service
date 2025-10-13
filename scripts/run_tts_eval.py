@@ -169,7 +169,6 @@ def create_model(config):
             top_k=config.generation.top_k,
             disable_thinking_mode=config.model.disable_thinking_mode,
         )
-        return model, step_generator
 
     elif config.model.type == "openai_api":
         log.info(f"Using OpenAI API model: {config.model.model_path}")
@@ -199,27 +198,32 @@ def create_model(config):
             detector=detector,
             prefill_mode=config.model.prefill_mode,
         )
-        return model, step_generator
 
     elif config.model.type in ("together_ai", "openrouter"):
-        # API-based models for uncertainty-guided CoT
-        log.info(f"Using {config.model.type} model: {config.model.model_path}")
 
-        api_key = getattr(config.model, "api_key", None)
-        if config.model.type == "together_ai":
-            model = TogetherAIModel(model_name=config.model.model_path, api_key=api_key)
-        else:  # openrouter
-            model = OpenRouterModel(
-                model_name=config.model.model_path,
-                api_key=api_key,
-                base_url=getattr(
-                    config.model, "api_base", "https://openrouter.ai/api/v1"
-                ),
+        if config.strategy.type == "uncertainty_guided_pd":
+            log.info(f"Using {config.model.type} model: {config.model.model_path}")
+
+            if config.model.type == "together_ai":
+                api_key = config.model.get("api_key") or os.getenv("TOGETHER_API_KEY")
+                model = TogetherAIModel(
+                    model_name=config.model.model_path, api_key=api_key
+                )
+            else:
+                api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+                base_url = config.model.get("api_base", "https://openrouter.ai/api/v1")
+                model = OpenRouterModel(
+                    model_name=config.model.model_path,
+                    api_key=api_key,
+                    base_url=base_url,
+                )
+            step_generator = None
+
+        else:
+            # TODO: think of implementing step generator for other strategies
+            raise ValueError(
+                f"Model type {config.model.type} not supported for strategy {config.strategy.type}"
             )
-
-        # For uncertainty-guided strategy, we return model without step_generator
-        return model, None
-
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
@@ -237,9 +241,11 @@ def create_tts_strategy(config, model, step_generator, scorer):
         )
 
     elif config.strategy.type == "uncertainty_guided_pd":
-        if step_generator is not None:
+        if not isinstance(model, TogetherAIModel) and not isinstance(
+            model, OpenRouterModel
+        ):
             raise ValueError(
-                "uncertainty_guided_pd strategy requires API model (together_ai or openrouter)"
+                f"UnCertCoT requires TogetherAIModel or OpenRouterModel, got {type(model).__name__}"
             )
 
         strategy = UncertaintyGuidedCoT_PD(
