@@ -1,0 +1,15 @@
+You will be given a <Problem> and its proposed <Solution>. Your task is to assess whether the solution is **correct** or **incorrect**. Take into account the golden answer to the given problem.
+
+Respond using the **exact format** below, do not include any text outside this template.
+Output format:
+<start of response>
+Solution comments:
+... your comments on the solution, explaining reasoning, pointing out any errors or confirming correctness ...
+<Grade>: (Correct|Incorrect)
+<end of response>
+
+<Problem>: {problem}
+
+<Solution>: {solution}
+
+<Gold Answer>: {gold_answer}
