@@ -16,15 +16,46 @@ This service exposes TTS strategies (DeepConf, Best-of-N, etc.) through an **Ope
 
 ## Quick Start
 
+### Automated Docker Setup (Recommended)
+
+```bash
+# From repository root
+./start_service_app.sh
+```
+
+This automated script:
+- ✅ Checks Docker is running
+- ✅ Creates `.env` if needed
+- ✅ Validates API keys
+- ✅ Builds and starts the service
+- ✅ Waits for health check
+- ✅ Shows helpful URLs and commands
+
+The service will start on `http://localhost:8001`
+
+Open http://localhost:8001/docs for interactive API documentation.
+
+### Manual Docker
+
 ```bash
 # From repository root
 export OPENROUTER_API_KEY="your-key"
 docker-compose up -d
 ```
 
-The service will start on `http://localhost:8001`
+### Local Development (Without Docker)
 
-Open http://localhost:8001/docs for interactive API documentation.
+```bash
+# Install service dependencies
+pip install -e ".[service]"
+
+# Set environment variables
+export OPENROUTER_API_KEY="your-key"
+export PORT=8001
+
+# Run the service
+python service_app/main.py
+```
 
 ## Usage
 
@@ -191,11 +222,30 @@ response = client.chat.completions.create(
 )
 ```
 
+## Dependencies
+
+Service dependencies are managed in the root `pyproject.toml` under `[project.optional-dependencies.service]`.
+
+**What gets installed:**
+- **FastAPI** - Web framework
+- **Uvicorn** - ASGI server
+- **Pydantic** - Data validation
+- **httpx** - HTTP client
+- **python-json-logger** - Structured logging
+
+**Installation:**
+```bash
+# From repository root
+pip install -e ".[service]"
+```
+
+This installs the main package plus all service-specific dependencies.
+
 ## Configuration
 
 ### Environment Variables
 
-Create a `.env` file in the `service/` directory:
+Create a `.env` file in the `service_app/` directory:
 
 ```bash
 # API Keys
@@ -214,7 +264,7 @@ DEEPCONF_TEMPERATURE=0.7
 
 ### Settings
 
-All settings can be configured via environment variables or in `service/core/config.py`:
+All settings can be configured via environment variables or in `service_app/core/config.py`:
 
 - `API_TITLE`: Service title
 - `API_VERSION`: API version
@@ -251,7 +301,7 @@ DEEPCONF_FILTER_METHOD=top5
 
 ```bash
 # Build image
-docker build -f service/Dockerfile -t llm-tts-service .
+docker build -f service_app/Dockerfile -t llm-tts-service .
 
 # Run container
 docker run -d \
@@ -293,7 +343,7 @@ class StrategyYourMethod(StrategyBase):
         }
 ```
 
-**2. Add to strategy manager** in `service/core/strategy_manager.py`:
+**2. Add to strategy manager** in `service_app/core/strategy_manager.py`:
 
 ```python
 # Import your strategy
@@ -344,7 +394,7 @@ def test_your_method_strategy():
 ### Project Structure
 
 ```
-service/
+service_app/
 ├── api/
 │   ├── routes/              # API endpoint handlers
 │   │   ├── chat.py         # /v1/chat/completions
@@ -355,9 +405,11 @@ service/
 │   ├── config.py           # Configuration
 │   └── strategy_manager.py # TTS strategy management
 ├── main.py                 # FastAPI app
-├── requirements.txt        # Dependencies
+├── Dockerfile             # Docker configuration
 └── README.md              # This file
 ```
+
+**Note:** Dependencies are defined in root `pyproject.toml` - see [Dependencies](#dependencies) section above.
 
 ## Troubleshooting
 
@@ -379,12 +431,12 @@ Make sure you're running from the repository root:
 
 ```bash
 # From llm-tts-service/ directory
-PYTHONPATH=. python service/main.py
+PYTHONPATH=. python service_app/main.py
 ```
 
 ## Examples
 
-See `service/examples/` for complete examples:
+See `service_app/examples/` for complete examples:
 - `simple_client.py` - Basic usage with OpenAI SDK
 - `batch_requests.py` - Processing multiple prompts
 - `compare_strategies.py` - Comparing different TTS strategies

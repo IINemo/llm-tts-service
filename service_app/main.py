@@ -8,8 +8,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from service.api.routes import chat, models
-from service.core.config import settings
+from service_app.api.routes import chat, models
+from service_app.core.config import settings
 
 # Configure logging
 logging.basicConfig(
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     log.info(f"OpenAPI docs: http://{settings.host}:{settings.port}/docs")
 
     uvicorn.run(
-        "service.main:app",
+        "service_app.main:app",
         host=settings.host,
         port=settings.port,
         reload=True,  # Enable auto-reload for development
