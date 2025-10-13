@@ -4,6 +4,7 @@ OpenRouter model adapter with token probability support.
 
 import logging
 import os
+import time
 from typing import Dict, List, Optional, Tuple
 
 try:
@@ -120,8 +121,7 @@ class OpenRouterModel(BaseModel):
         prompt: str,
         max_tokens: int = 512,
         temperature: float = 0.7,
-        n: int = 1,
-        top_k: Optional[int] = None,
+        num_return_sequences: int = 1,
         top_logprobs: Optional[int] = None,
         stop: Optional[List[str]] = None,
         **kwargs,
@@ -133,8 +133,7 @@ class OpenRouterModel(BaseModel):
             prompt: Input text prompt
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature
-            n: Number of completions to generate
-            top_k: Override default top_logprobs for this call
+            num_return_sequences: Number of completions to generate
             stop: Stop sequences
             **kwargs: Additional API parameters
 
@@ -145,10 +144,6 @@ class OpenRouterModel(BaseModel):
         Note: For backward compatibility, when called without reading the return as a list,
               it will still work for n=1 (returns list with one tuple).
         """
-        # Normalize top-k argument name
-        k = top_logprobs if top_logprobs is not None else top_k
-        k = self.top_logprobs if k is None else max(0, min(int(k), 20))
-
         for attempt in range(self.max_retries):
             try:
                 response = self.client.chat.completions.create(
@@ -156,15 +151,15 @@ class OpenRouterModel(BaseModel):
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    n=n,
-                    logprobs=(k > 0),
-                    top_logprobs=k,
+                    n=num_return_sequences,
+                    logprobs=True,
+                    top_logprobs=top_logprobs,
                     stop=stop,
                     **kwargs,
                 )
 
                 # Validate logprobs if requested
-                if k > 0:
+                if top_logprobs > 0:
                     missing = False
                     for choice in response.choices:
                         lp = getattr(choice, "logprobs", None)
@@ -182,40 +177,30 @@ class OpenRouterModel(BaseModel):
                             self.max_retries,
                         )
                         if attempt < self.max_retries - 1:
-                            import time as _time
-
-                            _time.sleep(self.retry_delay)
+                            time.sleep(self.retry_delay)
                             continue
                         raise RuntimeError(
                             f"OpenRouter did not return logprobs for model '{self.model_name}'"
                         )
 
-                results: List[Tuple[str, Optional[List[Dict]]]] = []
+                results = []
                 for choice in response.choices:
+                    logprobs_obj = choice.logprobs
                     generated_text = choice.message.content or ""
+                    token_confidence_data = []
 
-                    token_confidence_data: List[Dict] = []
-                    lp = getattr(choice, "logprobs", None)
-                    if lp is not None:
-                        content_items = getattr(lp, "content", None)
-                        if content_items:
-                            for token_info in content_items:
-                                top_items = (
-                                    getattr(token_info, "top_logprobs", None) or []
-                                )
-                                token_confidence_data.append(
-                                    {
-                                        "token": getattr(token_info, "token", None),
-                                        "logprob": getattr(token_info, "logprob", None),
-                                        "top_logprobs": [
-                                            {
-                                                "token": getattr(t, "token", None),
-                                                "logprob": getattr(t, "logprob", None),
-                                            }
-                                            for t in top_items
-                                        ],
-                                    }
-                                )
+                    if hasattr(logprobs_obj, "content") and logprobs_obj.content:
+                        for token_info in logprobs_obj.content:
+                            token_confidence_data.append(
+                                {
+                                    "token": token_info.token,
+                                    "logprob": token_info.logprob,
+                                    "top_logprobs": [
+                                        {"token": t.token, "logprob": t.logprob}
+                                        for t in token_info.top_logprobs
+                                    ],
+                                }
+                            )
 
                     results.append(
                         (
@@ -228,33 +213,7 @@ class OpenRouterModel(BaseModel):
 
             except Exception as e:
                 if attempt < self.max_retries - 1:
-                    import time as _time
-
-                    _time.sleep(self.retry_delay)
+                    time.sleep(self.retry_delay)
                     continue
                 log.error(f"Generation with confidence failed: {e}")
                 raise
-
-    def generate_texts(
-        self,
-        prompt: str,
-        n: int = 1,
-        temperature: float = 0.7,
-        max_new_tokens: int = 128,
-        stop: Optional[List[str]] = None,
-    ) -> List[str]:
-        """
-        Generate text completions and return as list of strings (without logprobs).
-
-        This is a convenience wrapper around generate_with_confidence that discards
-        the confidence/logprob information.
-        """
-        results = self.generate_with_confidence(
-            prompt=prompt,
-            max_tokens=max_new_tokens,
-            temperature=temperature,
-            n=n,
-            top_k=0,  # Don't need logprobs for this method
-            stop=stop,
-        )
-        return [text for text, _ in results]
