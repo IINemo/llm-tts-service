@@ -1,6 +1,7 @@
-from typing import Dict, List
-import numpy as np
 from collections.abc import Iterable
+from typing import Dict, List
+
+import numpy as np
 
 from .step_scorer_reward_base import CandidateScore, StepScorerBase
 
@@ -15,7 +16,7 @@ class StepScorerUncertainty(StepScorerBase):
         result = []
         for candidate in candidates:
             uncertainty_score = candidate.other_data["uncertainty_score"]
-            
+
             if not isinstance(uncertainty_score, Iterable):
                 uncertainty_score = [uncertainty_score]
 
@@ -28,5 +29,5 @@ class StepScorerUncertainty(StepScorerBase):
                     metadata={"scorer_type": "uncertainty"},
                 )
             )
-            
+
         return result
