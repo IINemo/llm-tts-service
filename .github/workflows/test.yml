@@ -25,6 +25,9 @@ jobs:
         python -m pip install --upgrade pip
         pip install pytest pytest-cov hydra-core==1.3.2
         pip install .
+    - name: Run setup.sh
+      run: |
+        ./setup.sh
     - name: Test with pytest
       run: |
         pytest tests/online_best_of_n tests/run_tts_eval
