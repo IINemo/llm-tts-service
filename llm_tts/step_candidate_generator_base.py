@@ -1,10 +1,9 @@
+import logging
 from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import torch
-
-import logging
 
 log = logging.getLogger(__name__)
 
