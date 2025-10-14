@@ -72,7 +72,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         generation_batch_size: int,
     ):
         super().__init__(generation_batch_size)
-        
+
         self.model = model
         self.detector = detector or StepBoundaryDetector()
         self.temperature = temperature

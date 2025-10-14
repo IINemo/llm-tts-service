@@ -53,7 +53,7 @@ def test_online_gest_of_n():
     answer_patterns = ["<Answer>:", "\n<Answer>:"]
     candidates_per_step = 3
     max_steps = 3
-    generation_batch_size = 1
+    generation_batch_size = 2
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     model_path = "Qwen/Qwen3-0.6B"
@@ -75,6 +75,7 @@ def test_online_gest_of_n():
         top_p=1.0,
         top_k=50,
         max_new_tokens=max_new_tokens,
+        generation_batch_size=generation_batch_size,
         disable_thinking_mode=True,
     )
     scorer = StepScorerUncertainty()
@@ -83,7 +84,6 @@ def test_online_gest_of_n():
         scorer=scorer,
         candidates_per_step=candidates_per_step,
         max_steps=max_steps,
-        generation_batch_size=generation_batch_size,
     )
 
     question = "Tom had 8 apples. He gave 3 to his friend and bought 5 more. How many apples does Tom have now?"

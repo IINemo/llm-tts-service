@@ -29,8 +29,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         prefill_mode: bool,
         generation_batch_size: int,
     ):
-        super().__init__(1) # TODO:
-        
+        super().__init__(1)  # TODO:
+
         self.model = model
         self.detector = detector or StepBoundaryDetector()
         self.prefill_mode = prefill_mode
