@@ -142,7 +142,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
     def generate_with_confidence(
         self,
         prompt: str,
-        max_tokens: int = 512,
+        max_tokens: int,
         temperature: float = 0.7,
         num_return_sequences: int = 1,
         **kwargs,
