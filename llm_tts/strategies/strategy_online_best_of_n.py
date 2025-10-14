@@ -1,8 +1,6 @@
 import logging
 from typing import Dict, List
 
-import torch
-
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
     covert_trajectory_to_string,
