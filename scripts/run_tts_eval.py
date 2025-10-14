@@ -258,15 +258,13 @@ def create_tts_strategy(config, step_generator, scorer, model):
             max_empty_steps=config.strategy.max_empty_steps,
             max_new_tokens=config.generation.max_new_tokens,
             temperature=config.generation.temperature,
-            uncertainty_threshold=config.strategy.get("uncertainty_threshold", 0.3),
-            uncertainty_metric=config.strategy.get("uncertainty_metric", "pd"),
-            uncertainty_top_k=config.strategy.get("uncertainty_top_k", 5),
-            step_marker_patterns=config.strategy.get("step_marker_patterns", None),
-            detector_step_patterns=config.strategy.get("detector_step_patterns", None),
-            detector_answer_patterns=config.strategy.get(
-                "detector_answer_patterns", None
-            ),
-            eos_token=config.model.get("eos_token", None),
+            uncertainty_threshold=config.strategy.uncertainty_threshold,
+            uncertainty_metric=config.strategy.uncertainty_metric,
+            uncertainty_top_k=config.strategy.uncertainty_top_k,
+            step_marker_patterns=config.strategy.step_marker_patterns,
+            detector_step_patterns=config.strategy.detector_step_patterns,
+            detector_answer_patterns=config.strategy.detector_answer_patterns,
+            eos_token=config.model.eos_token,
         )
 
     else:

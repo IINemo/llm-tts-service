@@ -13,13 +13,13 @@ class UncertaintyGuidedCoT_PD:
         self,
         api_client: Optional[object] = None,
         model_name: Optional[str] = "",
-        candidates_per_step: int = 3,
-        max_steps: int = 10,
-        max_empty_steps: int = 5,
-        max_new_tokens: int = 128,
-        temperature: float = 0.7,
-        uncertainty_threshold: Optional[float] = 0.35,
-        uncertainty_metric: str = "pd",
+        candidates_per_step: Optional[int] = None,
+        max_steps: Optional[int] = None,
+        max_empty_steps: Optional[int] = None,
+        max_new_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        uncertainty_threshold: Optional[float] = None,
+        uncertainty_metric: Optional[str] = None,
         uncertainty_top_k: Optional[int] = None,
         step_marker_patterns: Optional[List[str]] = None,
         detector_step_patterns: Optional[List[str]] = None,
@@ -55,55 +55,18 @@ class UncertaintyGuidedCoT_PD:
         self.max_empty_steps = max_empty_steps
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
-        self.uncertainty_metric = (uncertainty_metric or "pd").lower()
-        self.uncertainty_top_k = (
-            int(uncertainty_top_k) if uncertainty_top_k is not None else None
-        )
-        self.step_marker_patterns = step_marker_patterns or [
-            "## Step {n}:",
-            "Step {n}:",
-            "- Step {n}:",
-        ]
-        self.eos_token = eos_token
-
-        if uncertainty_threshold is None:
-            if self.uncertainty_metric == "entropy":
-                self.uncertainty_threshold = 1.2
-            else:
-                self.uncertainty_threshold = 0.45
-        else:
-            self.uncertainty_threshold = uncertainty_threshold
-
-        # Create detector (use original StepBoundaryDetector), but supply
-        # patterns that preserve the behavior previously used by the
-        # uncert-specific detector (including lowercase answer variants).
-        self.detector = StepBoundaryDetector(
-            step_patterns=self._build_detector_step_patterns(detector_step_patterns),
-            answer_patterns=self._build_detector_answer_patterns(
-                detector_answer_patterns
-            ),
-            max_tokens_per_step=max_new_tokens,
-        )
-
-    def _build_detector_step_patterns(self, override: Optional[List[str]]) -> List[str]:
-        # Preserve flexible step headers; originals are case-sensitive
-        if override:
-            return override
-        return [
+        self.uncertainty_threshold = uncertainty_threshold
+        self.uncertainty_metric = uncertainty_metric.lower()
+        self.uncertainty_top_k = uncertainty_top_k
+        self.step_marker_patterns = step_marker_patterns
+        self.detector_step_patterns = detector_step_patterns or [
             "\n**Step",
             "\n## Step",
             "\n- Step",
             "- Step",
             "\nStep",
         ]
-
-    def _build_detector_answer_patterns(
-        self, override: Optional[List[str]]
-    ) -> List[str]:
-        # Merge classic and uncert-specific answer markers (case-sensitive).
-        if override:
-            return override
-        return [
+        self.detector_answer_patterns = detector_answer_patterns or [
             "<Answer>:",
             "<answer>:",
             "final answer",
@@ -114,6 +77,21 @@ class UncertaintyGuidedCoT_PD:
             "Answer is",
             "answer is",
         ]
+        self.step_marker_patterns = step_marker_patterns or [
+            "## Step {n}:",
+            "Step {n}:",
+            "- Step {n}:",
+        ]
+        self.eos_token = eos_token
+
+        # Create detector (use original StepBoundaryDetector), but supply
+        # patterns that preserve the behavior previously used by the
+        # uncert-specific detector (including lowercase answer variants).
+        self.detector = StepBoundaryDetector(
+            step_patterns=self.detector_step_patterns,
+            answer_patterns=self.detector_answer_patterns,
+            max_tokens_per_step=self.max_new_tokens,
+        )
 
     def _normalize_to_prompt(
         self, prompt_or_chat: Union[str, List[Dict[str, str]]]
