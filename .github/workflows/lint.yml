@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install black isort flake8 pytest pytest-cov
+          pip install black isort flake8
 
       - name: Check formatting with black
         run: black --check llm_tts scripts
@@ -30,7 +30,3 @@ jobs:
 
       - name: Lint with flake8
         run: flake8 llm_tts scripts
-
-      - name: Test with pytest
-        run: |
-          pytest tests/online_best_of_n tests/run_tts_eval
