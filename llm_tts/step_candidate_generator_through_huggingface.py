@@ -69,7 +69,10 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         top_k: int,
         max_new_tokens: int,
         disable_thinking_mode: bool,
+        generation_batch_size: int,
     ):
+        super().__init__(generation_batch_size)
+        
         self.model = model
         self.detector = detector or StepBoundaryDetector()
         self.temperature = temperature
