@@ -30,3 +30,7 @@ jobs:
 
       - name: Lint with flake8
         run: flake8 llm_tts scripts
+
+      - name: Test with pytest
+        run: |
+          pytest tests/online_best_of_n tests/run_tts_eval
