@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 import torch
 
 import logging
+
 log = logging.getLogger(__name__)
 
 
@@ -59,13 +60,19 @@ class StepCandidateGeneratorBase:
         """Generate answer for a given trajectory"""
         pass
 
-
-    def __call__(self, request: List[Dict[str, str]], trajectory: List[StepCandidate], candidates_per_step: int) -> List[StepCandidate]:
+    def __call__(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
+    ) -> List[StepCandidate]:
         """Generate candidates for a given trajectory"""
 
         if self.generation_batch_size < candidates_per_step:
             candidates = self._generate_candidates_in_batches(
-                request, trajectory=trajectory
+                request,
+                trajectory=trajectory,
+                candidates_per_step=candidates_per_step,
             )
         else:
             candidates = self.generate_candidates(
@@ -73,11 +80,14 @@ class StepCandidateGeneratorBase:
                 trajectory=trajectory,
                 candidates_per_step=candidates_per_step,
             )
-        
+
         return candidates
-    
+
     def _generate_candidates_in_batches(
-        self, request: List[Dict[str, str]], trajectory: List[StepCandidate], candidates_per_step: int
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
     ) -> List:
         """Generate candidates in smaller batches to avoid OOM"""
 
@@ -85,7 +95,7 @@ class StepCandidateGeneratorBase:
 
         # Calculate number of batches needed
         num_batches = (
-            self.candidates_per_step + self.generation_batch_size - 1
+            candidates_per_step + self.generation_batch_size - 1
         ) // self.generation_batch_size
 
         for batch_idx in range(num_batches):
