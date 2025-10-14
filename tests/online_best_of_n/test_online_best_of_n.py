@@ -1,6 +1,8 @@
 import torch
 
-from llm_tts.step_candidate_generator_through_huggingface import StepCandidateGeneratorThroughHuggingface
+from llm_tts.step_candidate_generator_through_huggingface import (
+    StepCandidateGeneratorThroughHuggingface,
+)
 from llm_tts.scorers.step_scorer_uncertainty import StepScorerUncertainty
 from llm_tts.strategies import StrategyOnlineBestOfN
 from llm_tts.step_boundary_detector import StepBoundaryDetector
@@ -8,6 +10,7 @@ from llm_tts.step_boundary_detector import StepBoundaryDetector
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 
 import sys
+
 sys.path.insert(0, ".")
 from config.scorer.uncertainty_entropy import create_uncertainty_model
 
@@ -38,12 +41,9 @@ Now answer:
 
 def create_request(question):
     request = [
-                {"role": "system", "content": ""},
-                {
-                    "role": "user",
-                    "content": prompt_template.format(question=question)
-                },
-            ]
+        {"role": "system", "content": ""},
+        {"role": "user", "content": prompt_template.format(question=question)},
+    ]
     return request
 
 
@@ -58,38 +58,34 @@ def test_online_gest_of_n():
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     model_path = "Qwen/Qwen3-0.6B"
     omega_config = OmegaConf.create(
-        {
-            "model": {
-                "model_path": model_path,
-                "device": device
-            }
-        }
+        {"model": {"model_path": model_path, "device": device}}
     )
     polygraph_model = create_uncertainty_model(omega_config)
     polygraph_model.generation_parameters = GenerationParameters()
 
-
     step_boundary_detector = StepBoundaryDetector(
-        step_patterns=step_patterns, 
-        answer_patterns=answer_patterns, 
-        max_tokens_per_step=max_new_tokens)
+        step_patterns=step_patterns,
+        answer_patterns=answer_patterns,
+        max_tokens_per_step=max_new_tokens,
+    )
     step_generator = StepCandidateGeneratorThroughHuggingface(
-        polygraph_model, 
+        polygraph_model,
         step_boundary_detector,
         temperature=0.5,
         top_p=1.0,
         top_k=50,
         max_new_tokens=max_new_tokens,
-        disable_thinking_mode=True)
+        disable_thinking_mode=True,
+    )
     scorer = StepScorerUncertainty()
     strategy = StrategyOnlineBestOfN(
-        step_generator=step_generator, 
-        scorer=scorer, 
-        candidates_per_step=candidates_per_step, 
+        step_generator=step_generator,
+        scorer=scorer,
+        candidates_per_step=candidates_per_step,
         max_steps=max_steps,
-        generation_batch_size=generation_batch_size)
+        generation_batch_size=generation_batch_size,
+    )
 
-    
     question = "Tom had 8 apples. He gave 3 to his friend and bought 5 more. How many apples does Tom have now?"
     request = create_request(question)
     result = strategy.generate_trajectory(request)
