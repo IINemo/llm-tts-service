@@ -58,17 +58,6 @@ class StrategyOnlineBestOfN(StrategyBase):
         for step_num in range(self.max_steps):
             log.info(f"\n=== Step {step_num} ===")
 
-            # Generate candidates in batches if needed
-            # if self.generation_batch_size < self.candidates_per_step:
-            #     candidates = self._generate_candidates_in_batches(
-            #         request, trajectory=trajectory
-            #     )
-            # else:
-            #     candidates = self.step_generator.generate_candidates(
-            #         request,
-            #         trajectory=trajectory,
-            #         candidates_per_step=self.candidates_per_step,
-            #     )
             candidates = self.step_generator(
                 request,
                 trajectory=trajectory,
@@ -123,43 +112,6 @@ class StrategyOnlineBestOfN(StrategyBase):
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,
         }
-
-    # def _generate_candidates_in_batches(
-    #     self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
-    # ) -> List:
-    #     """Generate candidates in smaller batches to avoid OOM"""
-
-    #     all_candidates = []
-
-    #     # Calculate number of batches needed
-    #     num_batches = (
-    #         self.candidates_per_step + self.generation_batch_size - 1
-    #     ) // self.generation_batch_size
-
-    #     for batch_idx in range(num_batches):
-    #         # Calculate batch size for this iteration
-    #         start_idx = batch_idx * self.generation_batch_size
-    #         end_idx = min(
-    #             (batch_idx + 1) * self.generation_batch_size,
-    #             self.candidates_per_step,
-    #         )
-    #         batch_size = end_idx - start_idx
-
-    #         log.info(
-    #             f"Generating batch {batch_idx+1}/{num_batches} ({batch_size} candidates)"
-    #         )
-
-    #         # Generate batch
-    #         batch_candidates = self.step_generator.generate_candidates(
-    #             request, trajectory=trajectory, candidates_per_step=batch_size
-    #         )
-    #         if batch_candidates:
-    #             all_candidates.extend(batch_candidates)
-
-    #         # Clear GPU cache after each batch
-    #         torch.cuda.empty_cache()
-
-    #     return all_candidates
 
     def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
         """Select the best candidate based on scores"""
