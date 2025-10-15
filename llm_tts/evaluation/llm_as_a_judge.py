@@ -31,7 +31,7 @@ Solution comments:
 """
 
 
-class EvaluatorGoldStandard:
+class EvaluatorLLMAsAJudge:
     def __init__(
         self, prompt: str, cache_path: str, base_url: str, model: str, n_threads: int
     ):
