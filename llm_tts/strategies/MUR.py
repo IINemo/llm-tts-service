@@ -3,11 +3,7 @@ import re
 from typing import Dict, List, Union
 
 import numpy as np
-from lm_polygraph.model_adapters import WhiteboxModelvLLM
-from lm_polygraph.stat_calculators.greedy_probs import GreedyProbsCalculator
-from lm_polygraph.utils.generation_parameters import GenerationParameters
 from vllm import SamplingParams
-
 from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
@@ -45,8 +41,7 @@ class MUR(StrategyBase):
 
     def __init__(
         self,
-        vllm_model,
-        estimators,
+        step_candidate_generator,
         max_steps: int,
         temperature: float,
         candidate_num: int = 4,
@@ -57,14 +52,13 @@ class MUR(StrategyBase):
         device: str = "cuda:0",
         critic_model: str = None,
         system_prompt: str = None,
+        select_best: str = "perplexity",
     ):
         super().__init__()
         self.max_steps = max_steps
         self.temperature = temperature
         self.momentum_rate = momentum_rate
         self.scaling_rate = scaling_rate
-        self.calc_infer_llm = GreedyProbsCalculator()
-        self.estimators = estimators
         self.candidate_num = candidate_num
         self.max_tokens = max_tokens
         self.system_prompt = (
@@ -84,39 +78,16 @@ class MUR(StrategyBase):
                 ).strip()
             )
         )
-        self.answer_patterns = [
-            "<Answer>:",
-            "\n<Answer>:",
-            "\n\nAnswer:",
-            "Final Answer:",
-            "The answer is",
-        ]
-        self.step_patterns = [
-            "\n- Step",
-            "- Step",
-            "\nStep",
-            "\n\nStep",
-            "**Step",
-            "## Step",
-        ]
-        self.sampling_params = SamplingParams(
-            max_tokens=self.max_tokens,
-            logprobs=logprobs,
-            stop=self.step_patterns,
-            temperature=self.temperature,
-        )
-        self.generation_parameters = GenerationParameters(
-            stop_strings=self.step_patterns
-        )
-        self.model = WhiteboxModelvLLM(
-            vllm_model,
-            sampling_params=self.sampling_params,
-            generation_parameters=self.generation_parameters,
-            device=device,
-        )
+
+        self.step_candidate_generator = step_candidate_generator
+        self.tokenizer = step_candidate_generator.model.get_tokenizer()
         self.critic_model = critic_model
         if critic_model is not None:
             self.critic_tokenizer = critic_model.get_tokenizer()
+        self.step_patterns = step_candidate_generator.detector.step_patterns
+        self.answer_patterns = step_candidate_generator.detector.answer_patterns
+        self.max_tokens = max_tokens
+        self.select_best = select_best
 
     def get_system_prompt(self):
         return self.system_prompt
@@ -158,63 +129,57 @@ class MUR(StrategyBase):
             log.info(f"\n=== Step {step_num} ===")
             input_prompt = self._prepare_input_prompt(prompt, trajectory)
 
-            deps = {"input_texts": [input_prompt]}
-            deps.update(
-                self.calc_infer_llm(deps, texts=[input_prompt], model=self.model)
+            step_candidate = self.step_candidate_generator.generate_candidates(
+                input_prompt, 1
             )
-            all_policy_output_tokens += len(deps["greedy_log_likelihoods"][0])
-            perplexity = self.estimators(deps)[0]
-
-            step_text = deps["greedy_texts"][0]
-            if not step_text:
-                log.info("No output generated, stopping")
-                break
-
-            cur_signal = -1.0 * perplexity
-            log.info(f"Current signal: {cur_signal:.3f}")
-            log.info(f"Momentum uncertainty: {momentum_uncertainty:.3f}")
+            perplexity = step_candidate[0].generation_scores["perplexity"]
+            mean_entropy = step_candidate[0].generation_scores["mean_entropy"]
+            step_text = step_candidate[0].text.strip()
+            all_policy_output_tokens += len(step_candidate[0].token_ids)
+            if self.select_best == "perplexity":
+                cur_signal = -1.0 * perplexity
+            elif self.select_best == "entropy":
+                cur_signal = -1.0 * mean_entropy
+            else:
+                raise ValueError(f"Invalid select_best value: {self.select_best}")
 
             if (
                 step_num > 0
                 and np.exp(cur_signal)
                 < np.exp(momentum_uncertainty) * self.scaling_rate
             ):
-                # log.info("Generating candidates MUR ....")
-                state_dict = {"input_texts": [input_prompt]}
-                # Generate candidates
-                state_dict.update(
-                    self.calc_infer_llm(
-                        state_dict,
-                        texts=[input_prompt] * self.candidate_num,
-                        model=self.model,
-                    )
+                candidates = self.step_candidate_generator.generate_candidates(
+                    input_prompt, self.candidate_num
                 )
-                candidates = state_dict["greedy_texts"]
-
-                # Count real tokens
-                for row in state_dict["greedy_log_likelihoods"]:
-                    count = sum(
-                        1 for x in row if x not in (float("inf"), float("-inf"))
-                    )
-                    all_policy_output_tokens += count
-
-                # Replace inf with 0
-                state_dict["greedy_log_likelihoods"] = [
-                    [0 if x in (float("inf"), float("-inf")) else x for x in row]
-                    for row in state_dict["greedy_log_likelihoods"]
+                all_policy_output_tokens += sum(
+                    [len(candidate.token_ids) for candidate in candidates]
+                )
+                candidate_perplexity_scores = [
+                    candidate.generation_scores["perplexity"]
+                    for candidate in candidates
                 ]
-                candidate_validity_scores = self.estimators(state_dict)
+                candidate_entropy_scores = [
+                    candidate.generation_scores["mean_entropy"]
+                    for candidate in candidates
+                ]
+
+                if self.select_best == "perplexity":
+                    candidate_selection_scores = candidate_perplexity_scores
+                elif self.select_best == "entropy":
+                    candidate_selection_scores = candidate_entropy_scores
+
+                candidate_texts = [candidate.text for candidate in candidates]
 
                 # Select best candidate
                 if self.critic_model is not None:
                     best_idx, step_text = self._select_best_candidate_with_critic(
-                        candidates, prompt, trajectory, step_num
+                        candidate_texts, prompt, trajectory, step_num
                     )
                 else:
                     best_idx, step_text = self._select_best_candidate(
-                        candidates, candidate_validity_scores
+                        candidate_texts, candidate_selection_scores
                     )
-                cur_signal = candidate_validity_scores[best_idx] * -1.0
+                cur_signal = candidate_selection_scores[best_idx] * -1.0
 
             validity_scores.append(cur_signal)
 
@@ -237,20 +202,14 @@ class MUR(StrategyBase):
 
         # Generate final answer
         if not get_answer:
-            try:
-                input_prompt = self._prepare_input_prompt(prompt, trajectory)
-                state_dict = {"input_texts": [input_prompt]}
-                state_dict.update(
-                    self.calc_infer_llm(
-                        state_dict, texts=[input_prompt], model=self.model
-                    )
-                )
-                all_policy_output_tokens += len(state_dict["greedy_log_likelihoods"][0])
-                final_answer = state_dict["greedy_texts"][0]
-                trajectory.append(f"Step{str(step_num)}: {final_answer}")
-                selected_steps.append(final_answer)
-            except Exception as e:
-                log.error(f"Error generating final answer: {e}")
+            input_prompt = self._prepare_input_prompt(prompt, trajectory)
+            candidate = self.step_candidate_generator.generate_candidates(
+                input_prompt, 1
+            )
+            all_policy_output_tokens += len(candidate[0].token_ids)
+            final_answer = candidate[0].text
+            trajectory.append(f"Step{str(step_num)}: {final_answer}")
+            selected_steps.append(final_answer)
 
         return {
             "trajectory": "\n".join(trajectory),
@@ -359,10 +318,10 @@ class MUR(StrategyBase):
         chat = self._prepare_chat_template(question)
 
         input_prompt = (
-            self.model.tokenizer.apply_chat_template(
+            self.tokenizer.apply_chat_template(
                 chat, tokenize=False, enable_thinking=False, add_generation_prompt=True
             )
-            .rstrip(self.model.tokenizer.eos_token)
+            .rstrip(self.tokenizer.eos_token)
             .rstrip()
             + "\n".join(traj)
             + "\nStep: "
