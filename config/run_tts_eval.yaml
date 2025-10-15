@@ -9,11 +9,21 @@ defaults:
   - scorer: prm
   - _self_
 
-evaluator:
-  base_url: https://openrouter.ai/api/v1
-  model: deepseek/deepseek-r1-0528
-  n_threads: 1
-  prompt_file: ""
+evaluation:
+  evaluators: [llm_judge, exact_match, alignscore]
+  llm_judge:
+    base_url: https://openrouter.ai/api/v1
+    model: deepseek/deepseek-r1-0528
+    n_threads: 1
+    prompt_file: ""
+  alignscore:
+    threshold: 0.5
+    lang: "en"
+    ckpt_path: "https://huggingface.co/yzha/AlignScore/resolve/main/AlignScore-large.ckpt"
+    batch_size: 16
+    target_is_claims: true
+    source_ignore_regex: null
+    source_as_target: false
 
 strategy:
   type: online_best_of_n
