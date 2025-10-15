@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import logging
 import os
 import random
@@ -16,10 +17,11 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from llm_tts.evaluator_gold_standard import EvaluatorGoldStandard
+from llm_tts.evaluation import EvaluatorExactMatch, EvaluatorLLMAsAJudge
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_candidate_generator_base import StepCandidate
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
 )
@@ -51,11 +53,55 @@ def load_prompt_template(prompt_file: str) -> str:
         return f.read().strip()
 
 
+def _safe_serialize(obj):
+    """Convert arbitrary Python objects (including tensors, numpy) to JSON-safe types."""
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, dict):
+        return {str(k): _safe_serialize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_safe_serialize(v) for v in obj]
+    if isinstance(obj, StepCandidate):
+        return {
+            "text": obj.text,
+            "token_ids": list(obj.token_ids) if obj.token_ids is not None else None,
+            "is_complete": obj.is_complete,
+            "is_trajectory_complete": obj.is_trajectory_complete,
+            "generation_scores": _safe_serialize(obj.generation_scores),
+            "raw_text": obj.raw_text,
+            "other_data": _safe_serialize(obj.other_data) if obj.other_data else None,
+        }
+    if hasattr(obj, "tolist"):
+        try:
+            return obj.tolist()
+        except Exception:
+            pass
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.ndarray,)):
+        return obj.tolist()
+    if hasattr(obj, "__dict__"):
+        return _safe_serialize(vars(obj))
+
+    # Fallback to string representation
+    return str(obj)
+
+
+def _save_results_json(results, json_path: Path):
+    json_path = Path(json_path)
+    json_data = [_safe_serialize(r) for r in results]
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(json_data, f, ensure_ascii=False, indent=2)
+
+
 def load_existing_results(save_path: str, dataset):
     log.info(f"Loading existing results from {save_path}")
 
     try:
-        results = torch.load(save_path)
+        with open(save_path, "r", encoding="utf-8") as f:
+            results = json.load(f)
         processed_indices = {r["index"] for r in results}
         log.info(f"Loaded {len(results)} existing results")
         log.info(f"Already processed indices: {sorted(processed_indices)}")
@@ -233,7 +279,7 @@ def generate_trajectories(
     log.info("Phase 1: Generating trajectories")
     log.info("=" * 60)
 
-    save_path_file = Path(save_path) / "results.pt"
+    save_path_file = Path(save_path) / "results.json"
 
     subset_size = len(dataset)
     for i in tqdm(range(subset_size), desc="Generating trajectories"):
@@ -287,11 +333,11 @@ def generate_trajectories(
 
         # Save periodically
         if len(results) % 10 == 0:
-            torch.save(results, save_path_file)
+            _save_results_json(results, save_path_file)
             log.info(f"Saved {len(results)} results to {save_path_file}")
 
     # Final save after generation
-    torch.save(results, save_path_file)
+    _save_results_json(results, save_path_file)
     log.info(f"Final save after generation: {len(results)} results to {save_path_file}")
 
     return results
@@ -307,8 +353,8 @@ def evaluate_results(
     log.info("Phase 2: Checking correctness")
     log.info("=" * 60)
 
-    # Use DeepSeek verification
-    log.info(f"Using DeepSeek verification with {config.evaluator.n_threads} threads")
+    # Build evaluators pipeline (LLM judge always, exact match optional)
+    log.info(f"Using LLM judge with {config.evaluator.n_threads} threads")
 
     # Load prompt template and ensure compatibility
     prompt_template = (
@@ -320,13 +366,22 @@ def evaluate_results(
     if "{question}" in prompt_template:
         prompt_template = prompt_template.replace("{question}", "{q}")
 
-    # Create evaluator
-    evaluator = EvaluatorGoldStandard(
+    # Create evaluators
+    llm_evaluator = EvaluatorLLMAsAJudge(
         prompt=prompt_template,
         base_url=config.evaluator.base_url,
         model=config.evaluator.model,
         n_threads=config.evaluator.n_threads,
         cache_path=os.path.expanduser("~/.cache"),
+    )
+    evaluators = {
+        "llm_judge": llm_evaluator,
+    }
+    # Optional exact match evaluator enabled via config flag (no branching in loop)
+    evaluators.update(
+        {"exact_match": EvaluatorExactMatch()}
+        if getattr(config.evaluator, "use_exact_match", False)
+        else {}
     )
 
     # Prepare data for batch processing
@@ -344,54 +399,74 @@ def evaluate_results(
             result_indices.append(i)
 
     if problems:
-        log.info(f"Verifying {len(problems)} solutions with DeepSeek...")
+        log.info(
+            f"Verifying {len(problems)} solutions with {list(evaluators.keys())}..."
+        )
 
-        # Get annotations from DeepSeek
-        try:
-            annotations = evaluator(problems, solutions, gold_answers)
+        for eval_name, evaluator_fn in evaluators.items():
+            try:
+                annotations = evaluator_fn(problems, solutions, gold_answers)
+                for idx, annotation in zip(result_indices, annotations):
+                    if np.isnan(annotation):
+                        log.warning(
+                            f"{eval_name} returned unclear result for sample "
+                            f"{results[idx]['index']}, marking as incorrect"
+                        )
+                        is_correct = False
+                    else:
+                        is_correct = annotation == 0  # 0 = correct, 1 = incorrect
 
-            # Update results with correctness
-            for idx, annotation in zip(result_indices, annotations):
-                if np.isnan(annotation):
-                    log.warning(
-                        f"DeepSeek returned unclear result for sample "
-                        f"{results[idx]['index']}, marking as incorrect"
-                    )
-                    results[idx]["is_correct"] = False
-                else:
-                    results[idx]["is_correct"] = (
-                        annotation == 0
-                    )  # 0 = correct, 1 = incorrect
+                    results[idx].setdefault("eval", {})[eval_name] = {
+                        "label": None if np.isnan(annotation) else int(annotation),
+                        "is_correct": bool(is_correct),
+                    }
 
-                if (idx - result_indices[0]) % 10 == 0:
-                    log.info(f"\nSample {results[idx]['index']}:")
-                    log.info(f"DeepSeek annotation: {annotation}")
-                    log.info(f"Correct: {results[idx]['is_correct']}")
+                    if (idx - result_indices[0]) % 10 == 0:
+                        log.info(f"\nSample {results[idx]['index']} [{eval_name}]:")
+                        log.info(f"Annotation: {annotation}")
+                        log.info(f"Correct: {is_correct}")
 
-        except Exception as e:
-            log.error(f"Error during DeepSeek verification: {e}")
-            # Fall back to marking all as incorrect
-            for idx in result_indices:
-                results[idx]["is_correct"] = False
+            except Exception as e:
+                log.error(f"Error during {eval_name} verification: {e}")
+                for idx in result_indices:
+                    results[idx].setdefault("eval", {})[eval_name] = {
+                        "label": None,
+                        "is_correct": False,
+                    }
 
     # Final save with correctness results
-    save_path_file = Path(save_path) / "results.pt"
-    torch.save(results, save_path_file)
+    save_path_file = Path(save_path) / "results.json"
+    _save_results_json(results, save_path_file)
     log.info(f"Final save with correctness: {len(results)} results to {save_path_file}")
 
     # Print summary
-    correct = sum(r.get("is_correct", False) for r in results)
+    # Summaries per evaluator if present
+    eval_names = set()
+    for r in results:
+        if "eval" in r:
+            eval_names.update(r["eval"].keys())
+
+    summary_correct = {name: 0 for name in eval_names}
+    for r in results:
+        for name in eval_names:
+            if r.get("eval", {}).get(name, {}).get("is_correct", False):
+                summary_correct[name] += 1
+
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
 
     log.info("\nSummary:")
     log.info(f"  - Total samples: {len(results)}")
     log.info(f"  - Completed: {completed} ({completed/len(results):.1%})")
-    log.info(f"  - Correct: {correct} ({correct/len(results):.1%})")
+    for name in sorted(eval_names):
+        correct = summary_correct[name]
+        log.info(f"  - Correct [{name}]: {correct} ({correct/len(results):.1%})")
     log.info(f"  - Errors: {errors}")
 
     if completed > 0:
-        log.info(f"  - Accuracy (of completed): {correct/completed:.1%}")
+        for name in sorted(eval_names):
+            correct = summary_correct[name]
+            log.info(f"  - Accuracy (of completed) [{name}]: {correct/completed:.1%}")
 
     # Average statistics
     all_validities = []
@@ -472,7 +547,7 @@ def main(config):
     # Load existing results if resuming
     if config.output.resume:
         results, processed_indices = load_existing_results(
-            Path(output_dir) / "results.pt", dataset
+            Path(output_dir) / "results.json", dataset
         )
     else:
         results = []
