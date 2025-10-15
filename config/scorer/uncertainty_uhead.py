@@ -41,7 +41,10 @@ class ReasonStepClaimExtractor(StatCalculator):
 
 
 def create_uncertainty_model(config):
-    llm = AutoModelForCausalLM.from_pretrained(config.model.model_path)
+    llm = AutoModelForCausalLM.from_pretrained(
+        config.model.model_path,
+        attn_implementation="eager",
+    )
     tokenizer = AutoTokenizer.from_pretrained(config.model.model_path)
     tokenizer.pad_token = tokenizer.eos_token
     llm = llm.to(config.model.device)

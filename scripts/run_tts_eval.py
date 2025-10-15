@@ -171,6 +171,7 @@ def create_model(config):
             top_p=config.generation.top_p,
             top_k=config.generation.top_k,
             disable_thinking_mode=config.model.disable_thinking_mode,
+            generation_batch_size=config.generation.batch_size,
         )
 
     elif config.model.type == "openai_api":
@@ -239,7 +240,6 @@ def create_tts_strategy(config, step_generator, scorer, model):
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
-            generation_batch_size=config.generation.batch_size,
         )
 
     elif config.strategy.type == "uncertainty_guided_pd":
