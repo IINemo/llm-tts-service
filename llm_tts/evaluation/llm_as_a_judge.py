@@ -61,9 +61,9 @@ class EvaluatorLLMAsAJudge:
         )
         reply = self.chat.ask(prompt)
         if "<Grade>: Correct" in reply:
-            return 0
-        elif "<Grade>: Incorrect" in reply:
             return 1
+        elif "<Grade>: Incorrect" in reply:
+            return 0
         else:
             return np.nan
 
