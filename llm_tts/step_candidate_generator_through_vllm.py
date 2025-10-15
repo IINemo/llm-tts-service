@@ -1,15 +1,15 @@
 import logging
 from typing import List
-import sys
+
 import numpy as np
-from vllm import LLM
+from vllm import LLM, SamplingParams
+from vllm.outputs import CompletionOutput
+
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
     StepCandidateGeneratorBase,
 )
-from vllm import SamplingParams
-from vllm.outputs import CompletionOutput
 
 log = logging.getLogger(__name__)
 

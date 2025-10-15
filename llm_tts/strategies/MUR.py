@@ -4,6 +4,7 @@ from typing import Dict, List, Union
 
 import numpy as np
 from vllm import SamplingParams
+
 from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
@@ -42,16 +43,13 @@ class MUR(StrategyBase):
     def __init__(
         self,
         step_candidate_generator,
-        max_steps: int,
-        temperature: float,
+        max_steps: int = 20,
+        temperature: float = 0.6,
         candidate_num: int = 4,
         max_tokens: int = 512,
         momentum_rate: float = 0.9,
         scaling_rate: float = 0.9,
-        logprobs: int = 1,
-        device: str = "cuda:0",
         critic_model: str = None,
-        system_prompt: str = None,
         select_best: str = "perplexity",
     ):
         super().__init__()
@@ -61,24 +59,6 @@ class MUR(StrategyBase):
         self.scaling_rate = scaling_rate
         self.candidate_num = candidate_num
         self.max_tokens = max_tokens
-        self.system_prompt = (
-            system_prompt
-            if system_prompt is not None
-            else (
-                (
-                    "Break problem and solve it step by step.\n"
-                    "Example:\n"
-                    "Question: Michael had 58 golf balls. On Tuesday, he lost 23 golf balls. "
-                    "On Wednesday, he lost 2 more. How many golf balls did he have at the end of Wednesday?\n"
-                    "Step: Michael started with 58 golf balls.\n"
-                    "Step: After losing 23 on Tuesday, he had 58 - 23 = 35.\n"
-                    "After losing 2 more, he had 35 - 2 = 33 golf balls.\n"
-                    "So the answer is: 33.\n"
-                    "NOTE: Always end your solution with the phrase 'the answer is' followed by your final answer."
-                ).strip()
-            )
-        )
-
         self.step_candidate_generator = step_candidate_generator
         self.tokenizer = step_candidate_generator.model.get_tokenizer()
         self.critic_model = critic_model
@@ -88,12 +68,6 @@ class MUR(StrategyBase):
         self.answer_patterns = step_candidate_generator.detector.answer_patterns
         self.max_tokens = max_tokens
         self.select_best = select_best
-
-    def get_system_prompt(self):
-        return self.system_prompt
-
-    def set_system_prompt(self, system_prompt: str):
-        self.system_prompt = system_prompt
 
     def generate_trajectory(
         self, input: Union[str, List[Dict[str, str]]]
@@ -125,9 +99,9 @@ class MUR(StrategyBase):
         momentum_uncertainty, get_answer = 0.0, False
         all_policy_output_tokens = 0
 
-        for step_num in range(self.max_steps):
+        for step_num in range(1, self.max_steps + 1):
             log.info(f"\n=== Step {step_num} ===")
-            input_prompt = self._prepare_input_prompt(prompt, trajectory)
+            input_prompt = self._prepare_input_prompt(prompt, trajectory, step_num)
 
             step_candidate = self.step_candidate_generator.generate_candidates(
                 input_prompt, 1
@@ -185,7 +159,7 @@ class MUR(StrategyBase):
 
             # filter step text and add to trajectory
             step_text = self.normalize_step_text(step_text)
-            trajectory.append(f"Step: {step_text}")
+            trajectory.append(f"- Step {step_num}: {step_text}")
             selected_steps.append(step_text)
             log.info(f"Step {step_num}: {step_text}")
             # Update momentum uncertainty
@@ -202,13 +176,13 @@ class MUR(StrategyBase):
 
         # Generate final answer
         if not get_answer:
-            input_prompt = self._prepare_input_prompt(prompt, trajectory)
+            input_prompt = self._prepare_input_prompt(prompt, trajectory, step_num + 1)
             candidate = self.step_candidate_generator.generate_candidates(
                 input_prompt, 1
             )
             all_policy_output_tokens += len(candidate[0].token_ids)
             final_answer = candidate[0].text
-            trajectory.append(f"Step{str(step_num)}: {final_answer}")
+            trajectory.append(f"- Step {str(step_num)}: {final_answer}")
             selected_steps.append(final_answer)
 
         return {
@@ -225,6 +199,7 @@ class MUR(StrategyBase):
         best_idx = min(range(len(scores)), key=lambda i: scores[i])
         return best_idx, candidates[best_idx]
 
+    # TODO: Optimize later. Use _select_best_candidate instead.
     def _select_best_candidate_with_critic(
         self, candidates: List, question: str, traj: List, step_idx: int
     ) -> tuple:
@@ -297,15 +272,7 @@ class MUR(StrategyBase):
                 return True
 
     def _prepare_chat_template(self, question: str):
-        """
-        Prepare chat template based on dataset type
-        Args:
-            question: Input question
-        Returns:
-            List of chat messages
-        """
         chat = [
-            {"role": "system", "content": self.system_prompt},
             {
                 "role": "user",
                 "content": question,
@@ -314,7 +281,7 @@ class MUR(StrategyBase):
         ]
         return chat
 
-    def _prepare_input_prompt(self, question: str, traj: List[str]):
+    def _prepare_input_prompt(self, question: str, traj: List[str], step_num: int):
         chat = self._prepare_chat_template(question)
 
         input_prompt = (
@@ -324,7 +291,7 @@ class MUR(StrategyBase):
             .rstrip(self.tokenizer.eos_token)
             .rstrip()
             + "\n".join(traj)
-            + "\nStep: "
+            + f"\n - Step {step_num}:"
         )
 
         return input_prompt
@@ -334,8 +301,5 @@ class MUR(StrategyBase):
         step_text = step_text.replace("</think>", "").strip()
         step_text = step_text.replace("---", "").strip()
         for pattern in self.step_patterns:
-            try:
-                step_text = re.sub(f"{pattern}$", "", step_text)
-            except:
-                continue
+            step_text = re.sub(f"{pattern}$", "", step_text)
         return step_text.strip()

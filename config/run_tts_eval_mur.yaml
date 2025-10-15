@@ -10,12 +10,12 @@ dataset:
   dataset_path: "gsm8k"
   dataset_config: "main"
   dataset_split: "test"
-  subset: 1
+  subset: 5
   prompt_file: "./config/prompts/default.txt"
 
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen3-1.7B"
+  model_path: "Qwen/Qwen3-4B"
   gpu_memory_utilization: 0.6
   max_model_len: 16384
 
@@ -23,6 +23,7 @@ generation:
   temperature: 0.6  # Generation temperature
   max_new_tokens: 2048  # Max tokens per step
   sequential_generation: false  # Generate candidates one by one to save memory
+  logprobs: 20
 
 scorer:
   type: perplexity
@@ -34,12 +35,12 @@ evaluator:
 
 strategy:
   type: mur
-  max_steps: 30
+  max_steps: 10
   momentum_rate: 0.9
   scaling_rate: 0.9
-  logprobs: 1
+  select_best: "entropy" # perplexity or entropy
   candidate_num: 4
-  critic_model_path: None
+  # critic_model_path: None
 
 system:
   device: "cuda:0"  # Device to use for base model
