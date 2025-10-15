@@ -379,7 +379,7 @@ def evaluate_results(
     }
     # Optional exact match evaluator enabled via config flag (no branching in loop)
     evaluators.update(
-        {"exact_match": EvaluatorExactMatch()}
+        {"exact_match": EvaluatorExactMatch(dataset_name=config.dataset.dataset_path)}
         if getattr(config.evaluator, "use_exact_match", False)
         else {}
     )
@@ -414,7 +414,7 @@ def evaluate_results(
                         )
                         is_correct = False
                     else:
-                        is_correct = annotation == 0  # 0 = correct, 1 = incorrect
+                        is_correct = annotation == 1  # 1 = correct, 0 = incorrect
 
                     results[idx].setdefault("eval", {})[eval_name] = {
                         "label": None if np.isnan(annotation) else int(annotation),
@@ -422,7 +422,7 @@ def evaluate_results(
                     }
 
                     if (idx - result_indices[0]) % 10 == 0:
-                        log.info(f"\nSample {results[idx]['index']} [{eval_name}]:")
+                        log.info(f"Sample {results[idx]['index']} [{eval_name}]:")
                         log.info(f"Annotation: {annotation}")
                         log.info(f"Correct: {is_correct}")
 
@@ -439,34 +439,29 @@ def evaluate_results(
     _save_results_json(results, save_path_file)
     log.info(f"Final save with correctness: {len(results)} results to {save_path_file}")
 
-    # Print summary
-    # Summaries per evaluator if present
-    eval_names = set()
-    for r in results:
-        if "eval" in r:
-            eval_names.update(r["eval"].keys())
-
-    summary_correct = {name: 0 for name in eval_names}
-    for r in results:
-        for name in eval_names:
-            if r.get("eval", {}).get(name, {}).get("is_correct", False):
-                summary_correct[name] += 1
-
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
+    summary_correct = {name: 0 for name in evaluators.keys()}
+    summary_incorrect = {name: 0 for name in evaluators.keys()}
 
-    log.info("\nSummary:")
-    log.info(f"  - Total samples: {len(results)}")
-    log.info(f"  - Completed: {completed} ({completed/len(results):.1%})")
-    for name in sorted(eval_names):
+    for r in results:
+        for name in evaluators.keys():
+            if r.get("eval", {}).get(name, {}).get("is_correct", True):
+                summary_correct[name] += 1
+            elif r.get("eval", {}).get(name, {}).get("is_correct", False):
+                summary_incorrect[name] += 1
+
+    log.info("Summary:")
+    log.info(f"Total samples: {len(results)}")
+    log.info(f"Completed: {completed} ({completed/len(results):.1%})")
+    log.info(f"Errors: {errors} ({errors/len(results):.1%})")
+    for name in sorted(list(evaluators.keys())):
         correct = summary_correct[name]
-        log.info(f"  - Correct [{name}]: {correct} ({correct/len(results):.1%})")
-    log.info(f"  - Errors: {errors}")
-
-    if completed > 0:
-        for name in sorted(eval_names):
-            correct = summary_correct[name]
-            log.info(f"  - Accuracy (of completed) [{name}]: {correct/completed:.1%}")
+        log.info(f"[{name}]")
+        log.info(f"Correct: {correct} ({correct/len(results):.1%})")
+        log.info(
+            f"Incorrect: {summary_incorrect[name]} ({summary_incorrect[name]/len(results):.1%})"
+        )
 
     # Average statistics
     all_validities = []
@@ -476,9 +471,9 @@ def evaluate_results(
             all_validities.extend(r["validity_scores"])
             all_steps.append(len(r["steps"]))
 
-    log.info("\nStep Statistics:")
-    log.info(f"  - Avg steps per trajectory: {np.mean(all_steps):.1f}")
-    log.info(f"  - Avg validity score: {np.mean(all_validities):.3f}")
+    log.info("Step Statistics:")
+    log.info(f"Avg steps per trajectory: {np.mean(all_steps):.1f}")
+    log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
 
 
 @hydra.main(
