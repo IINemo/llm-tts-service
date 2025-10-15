@@ -8,7 +8,12 @@ from pathlib import Path
 import hydra
 import numpy as np
 import torch
-from datasets import Dataset, load_dataset
+from datasets import (
+    Dataset,
+    load_dataset,
+    get_dataset_config_names,
+    concatenate_datasets,
+)
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
 from lm_polygraph.utils.generation_parameters import GenerationParameters
@@ -245,7 +250,7 @@ def generate_trajectories(
         instance = dataset[i]
 
         log.info("\n" + "=" * 60)
-        log.info(f"Sample {i+1}/{subset_size}")
+        log.info(f"Sample {i + 1}/{subset_size}")
         log.info(f"Question: {instance['question'][:200]}...")
 
         # Generate trajectory
@@ -386,12 +391,12 @@ def evaluate_results(
 
     log.info("\nSummary:")
     log.info(f"  - Total samples: {len(results)}")
-    log.info(f"  - Completed: {completed} ({completed/len(results):.1%})")
-    log.info(f"  - Correct: {correct} ({correct/len(results):.1%})")
+    log.info(f"  - Completed: {completed} ({completed / len(results):.1%})")
+    log.info(f"  - Correct: {correct} ({correct / len(results):.1%})")
     log.info(f"  - Errors: {errors}")
 
     if completed > 0:
-        log.info(f"  - Accuracy (of completed): {correct/completed:.1%}")
+        log.info(f"  - Accuracy (of completed): {correct / completed:.1%}")
 
     # Average statistics
     all_validities = []
@@ -442,12 +447,35 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
-    dataset = load_dataset(
-        config.dataset.dataset_path,
-        config.dataset.dataset_config,
-        split=config.dataset.dataset_split,
-        cache_dir=config.system.hf_cache,
-    )
+    # MATH dataset
+    if config.dataset.dataset_path == "EleutherAI/hendrycks_math":
+        configs = get_dataset_config_names(config.dataset.dataset_path)
+        datasets_by_subset = {
+            cfg: load_dataset(
+                config.dataset.dataset_path, cfg, split=config.dataset.dataset_split
+            )
+            for cfg in configs
+        }
+        dataset = concatenate_datasets(list(datasets_by_subset.values()))
+        dataset = dataset.rename_columns({"problem": "question", "solution": "answer"})
+    # proofNet dataset
+    elif config.dataset.dataset_path == "hoskinson-center/proofnet":
+        dataset = load_dataset(
+            config.dataset.dataset_path,
+            split=config.dataset.dataset_split,
+            cache_dir=config.system.hf_cache,
+        )
+        dataset = dataset.rename_columns(
+            {"nl_statement": "question", "nl_proof": "answer"}
+        )
+    else:
+        dataset = load_dataset(
+            config.dataset.dataset_path,
+            config.dataset.dataset_config,
+            split=config.dataset.dataset_split,
+            cache_dir=config.system.hf_cache,
+        )
+
     if config.dataset.subset:
         dataset = dataset.select(range(min(config.dataset.subset, len(dataset))))
 
