@@ -17,7 +17,11 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from llm_tts.evaluation import EvaluatorExactMatch, EvaluatorLLMAsAJudge
+from llm_tts.evaluation import (
+    EvaluatorAlignScore,
+    EvaluatorExactMatch,
+    EvaluatorLLMAsAJudge,
+)
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
@@ -51,6 +55,56 @@ def load_prompt_template(prompt_file: str) -> str:
     """Load prompt template from file"""
     with open(prompt_file, "r") as f:
         return f.read().strip()
+
+
+def build_evaluators(config):
+    """
+    Create evaluators from config.
+    The list of evaluator names in config.evaluation.evaluators
+    """
+    evaluators = {}
+
+    for evaluator_name in config.evaluation.evaluators:
+        if evaluator_name == "llm_judge":
+            prompt_template = (
+                load_prompt_template(config.evaluation.llm_judge.prompt_file)
+                if config.evaluation.llm_judge.prompt_file
+                else ""
+            )
+            if "{question}" in prompt_template:
+                prompt_template = prompt_template.replace("{question}", "{q}")
+
+            evaluator = EvaluatorLLMAsAJudge(
+                prompt=prompt_template,
+                base_url=config.evaluation.llm_judge.base_url,
+                model=config.evaluation.llm_judge.model,
+                n_threads=config.evaluation.llm_judge.n_threads,
+                cache_path=os.path.expanduser("~/.cache"),
+            )
+            evaluators["llm_judge"] = evaluator
+
+        elif evaluator_name == "exact_match":
+            evaluators[evaluator_name] = EvaluatorExactMatch(
+                dataset_name=config.dataset.dataset_path
+            )
+            evaluators["exact_match"] = evaluator
+
+        elif evaluator_name == "alignscore":
+            evaluators[evaluator_name] = EvaluatorAlignScore(
+                threshold=config.evaluation.alignscore.threshold,
+                lang=config.evaluation.alignscore.lang,
+                ckpt_path=config.evaluation.alignscore.ckpt_path,
+                batch_size=config.evaluation.alignscore.batch_size,
+                target_is_claims=config.evaluation.alignscore.target_is_claims,
+                source_ignore_regex=config.evaluation.alignscore.source_ignore_regex,
+                source_as_target=config.evaluation.alignscore.source_as_target,
+            )
+            evaluators["alignscore"] = evaluator
+
+        else:
+            log.warning(f"Unknown evaluator type '{evaluator_name}', skipping")
+
+    return evaluators
 
 
 def _safe_serialize(obj):
@@ -353,36 +407,9 @@ def evaluate_results(
     log.info("Phase 2: Checking correctness")
     log.info("=" * 60)
 
-    # Build evaluators pipeline (LLM judge always, exact match optional)
-    log.info(f"Using LLM judge with {config.evaluator.n_threads} threads")
-
-    # Load prompt template and ensure compatibility
-    prompt_template = (
-        load_prompt_template(config.evaluator.prompt_file)
-        if config.evaluator.prompt_file
-        else ""
-    )
-
-    if "{question}" in prompt_template:
-        prompt_template = prompt_template.replace("{question}", "{q}")
-
-    # Create evaluators
-    llm_evaluator = EvaluatorLLMAsAJudge(
-        prompt=prompt_template,
-        base_url=config.evaluator.base_url,
-        model=config.evaluator.model,
-        n_threads=config.evaluator.n_threads,
-        cache_path=os.path.expanduser("~/.cache"),
-    )
-    evaluators = {
-        "llm_judge": llm_evaluator,
-    }
-    # Optional exact match evaluator enabled via config flag (no branching in loop)
-    evaluators.update(
-        {"exact_match": EvaluatorExactMatch(dataset_name=config.dataset.dataset_path)}
-        if getattr(config.evaluator, "use_exact_match", False)
-        else {}
-    )
+    # Build evaluators dynamically
+    evaluators = build_evaluators(config)
+    log.info(f"Using evaluators: {list(evaluators.keys())}")
 
     # Prepare data for batch processing
     problems = []
@@ -441,6 +468,8 @@ def evaluate_results(
 
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
+
+    # Compute per-evaluator correctness
     summary_correct = {name: 0 for name in evaluators.keys()}
     summary_incorrect = {name: 0 for name in evaluators.keys()}
 
