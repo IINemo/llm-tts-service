@@ -203,7 +203,11 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
 
             # Get generation scores if available
             gen_scores = None
-            if self.return_generation_scores and hasattr(outputs, "scores") and outputs.scores:
+            if (
+                self.return_generation_scores
+                and hasattr(outputs, "scores")
+                and outputs.scores
+            ):
                 gen_scores = (
                     torch.stack(outputs.scores, dim=1)[i]
                     if i < len(outputs.scores)
