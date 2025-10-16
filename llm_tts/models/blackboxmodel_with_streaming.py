@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import openai
 from lm_polygraph import BlackboxModel
@@ -190,81 +190,6 @@ class BlackboxModelWithStreaming(BlackboxModel):
             results.append(result)
 
         return results
-
-    def generate_with_confidence(
-        self, prompt: str, max_tokens: int = 512, temperature: float = 0.7, **kwargs
-    ) -> Tuple[str, Optional[List[Dict]]]:
-        """
-        Generate text and extract token-level confidence scores.
-
-        Args:
-            prompt: Input prompt (string or message list)
-            max_tokens: Maximum tokens to generate
-            temperature: Sampling temperature
-            **kwargs: Additional provider-specific parameters
-
-        Returns:
-            Tuple of (generated_text, token_confidence_data)
-            where token_confidence_data contains logprobs for each token
-        """
-        try:
-            # Use openai_api (parent's client) if available, otherwise use self.client
-            client = getattr(self, "openai_api", self.client)
-
-            # Handle both string prompts and message lists
-            if isinstance(prompt, list):
-                messages = prompt
-            else:
-                messages = [{"role": "user", "content": prompt}]
-
-            response = client.chat.completions.create(
-                model=self.model_path,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                logprobs=True,
-                top_logprobs=20,  # Max allowed by OpenAI
-                **kwargs,
-            )
-
-            # Extract generated text
-            generated_text = response.choices[0].message.content
-
-            # Extract token confidence data
-            token_confidence_data = []
-            if (
-                hasattr(response.choices[0], "logprobs")
-                and response.choices[0].logprobs
-            ):
-                logprobs_obj = response.choices[0].logprobs
-
-                # Check if it has 'content' attribute
-                if hasattr(logprobs_obj, "content") and logprobs_obj.content:
-                    for token_info in logprobs_obj.content:
-                        token_data = {
-                            "token": token_info.token,
-                            "logprob": token_info.logprob,
-                            "top_logprobs": [
-                                {"token": t.token, "logprob": t.logprob}
-                                for t in token_info.top_logprobs
-                            ],
-                        }
-                        token_confidence_data.append(token_data)
-                else:
-                    log.warning(
-                        "Logprobs object exists but has no 'content' attribute or it's empty"
-                    )
-            else:
-                log.warning(
-                    f"No logprobs in response! Model '{self.model_path}' "
-                    "may not support logprobs"
-                )
-
-            return generated_text, token_confidence_data
-
-        except Exception as e:
-            log.error(f"Generation with confidence failed: {e}")
-            raise
 
     def tokenize(self, texts: List[str]) -> List[List[str]]:
         return [e.split() for e in texts]

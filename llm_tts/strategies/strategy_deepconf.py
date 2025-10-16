@@ -95,9 +95,6 @@ class StrategyDeepConf(StrategyBase):
         if not hasattr(model, "supports_logprobs") or not model.supports_logprobs:
             raise ValueError("Model must support logprobs for DeepConf")
 
-        if not hasattr(model, "generate_with_confidence"):
-            raise ValueError("Model must have generate_with_confidence() method")
-
         log.info(
             f"✅ DeepConf initialized: mode={mode}, "
             f"budget={budget if mode == 'offline' else total_budget}, "

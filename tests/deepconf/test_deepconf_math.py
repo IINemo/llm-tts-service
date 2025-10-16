@@ -99,10 +99,13 @@ def run_math_test(
 
     strategy = StrategyDeepConf(
         model=model,
+        mode="offline",
         budget=budget,
         window_size=16,
         temperature=0.7,
+        top_p=1.0,
         max_tokens=500,
+        top_logprobs=20,
         filter_method="none",  # Use all traces
     )
 
@@ -111,26 +114,15 @@ def run_math_test(
 
         selected = result["metadata"]["selected_answer"]
         confidence = result["metadata"]["confidence_score"]
-        num_used = result["metadata"]["num_paths_used"]
-        num_total = result["metadata"]["num_paths_generated"]
+        num_used = result["metadata"]["filtered_traces"]
+        num_total = result["metadata"]["total_traces"]
 
         is_correct = selected == expected
 
-        # Log full reasoning paths if verbose
+        # TODO: Verbose mode disabled - strategy doesn't return all_traces in metadata
+        # To enable verbose mode, update strategy to include full trace data
         if verbose:
-            log.info("\n📝 Full Reasoning Paths:")
-            log.info("-" * 70)
-            for i, trace in enumerate(result["metadata"]["all_traces"], 1):
-                log.info(f"\n🧠 Trace {i}/{num_total}:")
-                log.info(f"   Answer: {trace.get('extracted_answer', 'N/A')}")
-                log.info(f"   Min confidence: {trace.get('min_conf', 0):.3f}")
-                log.info(f"   Tokens: {trace.get('num_tokens', 0)}")
-                log.info("\n   Reasoning:")
-                reasoning_text = trace.get("text", "")
-                for line_num, line in enumerate(reasoning_text.split("\n"), 1):
-                    if line.strip():
-                        log.info(f"     {line_num:2d}: {line.strip()}")
-                log.info("-" * 70)
+            log.info("\n⚠️  Verbose mode not available (all_traces not in metadata)")
 
         log.info("\n📊 Results:")
         log.info(f"   Selected answer: {selected}")
