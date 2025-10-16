@@ -7,20 +7,12 @@ defaults:
   - output: default
   - system: default
   - scorer: prm
+  - evaluation/llm_judge: default
+  - evaluation/alignscore: default
   - _self_
 
 evaluation:
   evaluators: [llm_judge, exact_match, alignscore]
-  llm_judge:
-    base_url: https://openrouter.ai/api/v1
-    model: deepseek/deepseek-r1-0528
-    n_threads: 1
-    prompt_file: ""
-  alignscore:
-    threshold: 0.5
-    ckpt_path: "https://huggingface.co/yzha/AlignScore/resolve/main/AlignScore-large.ckpt"
-    batch_size: 16
-    target_is_claims: true
 
 strategy:
   type: online_best_of_n
