@@ -463,7 +463,7 @@ def evaluate_results(
             evaluate_gsm8k_answer,
             extract_answer_from_gsm8k,
         )
-        from llm_tts.utils.confidence import extract_answer
+        from llm_tts.strategies.deepconf.utils import extract_answer
 
         for i, result in enumerate(results):
             if "error" not in result:
