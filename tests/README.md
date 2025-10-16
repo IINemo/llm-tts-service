@@ -347,7 +347,7 @@ touch tests/your_strategy/test_your_strategy_math.py
 
 import pytest
 from llm_tts.strategies import YourStrategy
-from llm_tts.utils.confidence import extract_answer
+from llm_tts.strategies.deepconf.utils import extract_answer
 
 def test_answer_extraction():
     """Test answer extraction logic"""
@@ -434,7 +434,7 @@ import os
 import pytest
 from llm_tts.models import BlackboxModelWithStreaming
 from llm_tts.strategies import YourStrategy
-from llm_tts.utils.confidence import extract_answer
+from llm_tts.strategies.deepconf.utils import extract_answer
 
 MATH_PROBLEMS = [
     {"problem": "Calculate 15² - 8². Put answer in \\boxed{}.", "expected": "161"},
