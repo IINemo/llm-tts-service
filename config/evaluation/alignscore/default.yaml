@@ -1,0 +1,6 @@
+# @package evaluation.alignscore
+
+threshold: 0.5
+ckpt_path: https://huggingface.co/yzha/AlignScore/resolve/main/AlignScore-large.ckpt
+batch_size: 16
+target_is_claims: true
