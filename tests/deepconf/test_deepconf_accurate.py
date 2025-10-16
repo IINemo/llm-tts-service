@@ -74,7 +74,6 @@ def test_2_model_with_logprobs():
         )
 
         assert model.supports_logprobs is True
-        assert hasattr(model, "generate_with_confidence")
 
         log.info(f"✅ Model: {model.model_path}")
         log.info(f"✅ Supports logprobs: {model.supports_logprobs}")
@@ -109,10 +108,13 @@ def test_3_deepconf_generation():
 
         strategy = StrategyDeepConf(
             model=model,
+            mode="offline",
             budget=3,
             window_size=16,
             temperature=0.7,
+            top_p=1.0,
             max_tokens=500,
+            top_logprobs=20,
             filter_method="none",
         )
 
@@ -123,12 +125,12 @@ def test_3_deepconf_generation():
 
         result = strategy.generate_trajectory(prompt)
 
-        log.info(f"✅ Generated {result['metadata']['num_paths_generated']} traces")
-        log.info(f"✅ Valid traces: {result['metadata']['num_paths_used']}")
+        log.info(f"✅ Generated {result['metadata']['total_traces']} traces")
+        log.info(f"✅ Valid traces: {result['metadata']['filtered_traces']}")
         log.info(f"✅ Selected answer: {result['metadata']['selected_answer']}")
         log.info(f"✅ Confidence: {result['metadata']['confidence_score']:.3f}")
 
-        assert result["metadata"]["num_paths_generated"] == 3
+        assert result["metadata"]["total_traces"] == 3
         assert result["completed"] is True
 
         return True
@@ -162,10 +164,13 @@ def test_4_deepconf_voting():
 
         strategy = StrategyDeepConf(
             model=model,
+            mode="offline",
             budget=5,
             window_size=16,
             temperature=0.8,
+            top_p=1.0,
             max_tokens=500,
+            top_logprobs=20,
             filter_method="top10",  # Filter to top 10% by confidence
         )
 
@@ -173,8 +178,8 @@ def test_4_deepconf_voting():
 
         result = strategy.generate_trajectory(prompt)
 
-        log.info(f"✅ Total generated: {result['metadata']['num_paths_generated']}")
-        log.info(f"✅ After filtering: {result['metadata']['num_paths_used']}")
+        log.info(f"✅ Total generated: {result['metadata']['total_traces']}")
+        log.info(f"✅ After filtering: {result['metadata']['filtered_traces']}")
         log.info(f"✅ Selected answer: '{result['metadata']['selected_answer']}'")
         log.info(f"✅ Confidence: {result['metadata']['confidence_score']:.3f}")
 
