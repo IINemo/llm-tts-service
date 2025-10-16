@@ -7,13 +7,12 @@ Run with:
     python tests/test_deepconf_accurate.py
 """
 
+import importlib.util
+import logging
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath("."))
-
-import importlib.util
-import logging
 
 # Import models normally (no lm-polygraph issue)
 from llm_tts.models import create_model
@@ -83,7 +82,7 @@ def test_2_model_with_logprobs():
             top_logprobs=20,
         )
 
-        assert model.supports_logprobs() == True
+        assert model.supports_logprobs() is True
         assert hasattr(model, "generate_with_confidence")
 
         log.info(f"✅ Model: {model.model_name}")
@@ -139,7 +138,7 @@ def test_3_deepconf_generation():
         log.info(f"✅ Confidence: {result['metadata']['confidence_score']:.3f}")
 
         assert result["metadata"]["num_paths_generated"] == 3
-        assert result["completed"] == True
+        assert result["completed"] is True
 
         return True
 
@@ -189,7 +188,7 @@ def test_4_deepconf_voting():
         log.info(f"✅ Confidence: {result['metadata']['confidence_score']:.3f}")
 
         # Show vote distribution
-        log.info(f"✅ Vote distribution:")
+        log.info("✅ Vote distribution:")
         for ans, pct in result["metadata"]["vote_distribution"].items():
             log.info(f"   {ans}: {pct:.1f}%")
 
@@ -198,12 +197,12 @@ def test_4_deepconf_voting():
         is_correct = result["metadata"]["selected_answer"] == expected
 
         if is_correct:
-            log.info(f"✅ Answer is correct!")
+            log.info("✅ Answer is correct!")
         else:
             log.warning(
                 f"⚠️  Answer '{result['metadata']['selected_answer']}' != expected '{expected}'"
             )
-            log.warning(f"   (This may be due to answer extraction format)")
+            log.warning("   (This may be due to answer extraction format)")
 
         return True  # Test passes even if answer is wrong (testing integration)
 
