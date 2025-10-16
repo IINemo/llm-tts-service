@@ -31,7 +31,7 @@ Solution comments:
 """
 
 
-class EvaluatorGoldStandard:
+class EvaluatorLLMAsAJudge:
     def __init__(
         self, prompt: str, cache_path: str, base_url: str, model: str, n_threads: int
     ):
@@ -61,9 +61,9 @@ class EvaluatorGoldStandard:
         )
         reply = self.chat.ask(prompt)
         if "<Grade>: Correct" in reply:
-            return 0
-        elif "<Grade>: Incorrect" in reply:
             return 1
+        elif "<Grade>: Incorrect" in reply:
+            return 0
         else:
             return np.nan
 
