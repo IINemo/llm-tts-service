@@ -31,7 +31,7 @@ Solution comments:
 """
 
 
-class EvaluatorGoldStandard:
+class EvaluatorLLMAsAJudge:
     def __init__(
         self, prompt: str, cache_path: str, base_url: str, model: str, n_threads: int
     ):
@@ -60,16 +60,12 @@ class EvaluatorGoldStandard:
             problem=problem, solution=solution, gold_answer=gold_answer
         )
         reply = self.chat.ask(prompt)
-
-        # Check for both formats: "<Grade>: Correct" and "Grade: Correct"
-        if "<Grade>: Correct" in reply or "Grade: Correct" in reply:
-            score = 0
-        elif "<Grade>: Incorrect" in reply or "Grade: Incorrect" in reply:
-            score = 1
+        if "<Grade>: Correct" in reply:
+            return 1
+        elif "<Grade>: Incorrect" in reply:
+            return 0
         else:
-            score = np.nan
-
-        return score
+            return np.nan
 
     def __call__(
         self, problems: list[str], solutions: list[str], gold_answers: list[str]
