@@ -57,15 +57,37 @@ print(f"Answer: {result['metadata']['selected_answer']}")
 print(f"Confidence: {result['metadata']['confidence_score']:.2%}")
 ```
 
-### Run Tests
+### Running Experiments
 
+**Offline mode** (generate all traces, then filter & vote):
 ```bash
-# Integration tests
-python tests/deepconf/test_deepconf_accurate.py
-
-# Math problems with verbose output
-python tests/deepconf/test_deepconf_math.py --verbose
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name experiments/deepconf/run_gsm8k_deepconf \
+  dataset.subset=10 \
+  strategy.mode=offline \
+  strategy.budget=8
 ```
+
+**Online mode** (warmup phase + adaptive generation):
+```bash
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name experiments/deepconf/run_gsm8k_deepconf \
+  dataset.subset=10 \
+  strategy.mode=online \
+  strategy.warmup_traces=4 \
+  strategy.total_budget=16
+```
+
+**Key parameters:**
+- `strategy.mode`: `offline` or `online`
+- `strategy.budget`: Number of traces (offline mode)
+- `strategy.warmup_traces`: Warmup traces (online mode)
+- `strategy.total_budget`: Total traces including warmup (online mode)
+- `strategy.filter_method`: `top10`, `top5`, or `threshold`
+- `strategy.window_size`: Sliding window for confidence (default: 2048)
+- `eval_method`: `simple` (numeric comparison) or `llm_judge` (LLM-based verification)
 
 ---
 

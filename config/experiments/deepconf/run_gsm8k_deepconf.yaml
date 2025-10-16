@@ -11,6 +11,9 @@ defaults:
 # Main configuration
 verbose: false
 
+# Evaluation method: "simple" (numeric comparison) or "llm_judge" (LLM-based verification)
+eval_method: llm_judge
+
 # Model configuration (API-based)
 model:
   provider: openrouter
@@ -44,8 +47,9 @@ strategy:
 
 # Evaluator for correctness checking
 evaluator:
-  base_url: https://api.deepseek.com/v1
-  model: deepseek-reasoner
+  provider: openrouter
+  base_url: https://openrouter.ai/api/v1
+  model: openai/gpt-3.5-turbo
   n_threads: 1
 
 # Dataset settings (inherited from dataset/gsm8k.yaml)

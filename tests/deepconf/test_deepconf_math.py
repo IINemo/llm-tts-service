@@ -21,13 +21,12 @@ Examples:
     python tests/test_deepconf_math.py --budget 10 --verbose
 """
 
+import importlib.util
+import logging
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath("."))
-
-import importlib.util
-import logging
 
 # Import models normally
 from llm_tts.models import create_model
@@ -55,17 +54,26 @@ MATH_PROBLEMS = [
         "description": "Difference of squares",
     },
     {
-        "problem": "A rectangle has length 12 cm and width 8 cm. What is its area in square centimeters? Put answer in \\boxed{}.",
+        "problem": (
+            "A rectangle has length 12 cm and width 8 cm. "
+            "What is its area in square centimeters? Put answer in \\boxed{}."
+        ),
         "expected": "96",
         "description": "Rectangle area",
     },
     {
-        "problem": "If a train travels 120 km in 2 hours at constant speed, how far will it travel in 5 hours? Put answer in \\boxed{}.",
+        "problem": (
+            "If a train travels 120 km in 2 hours at constant speed, "
+            "how far will it travel in 5 hours? Put answer in \\boxed{}."
+        ),
         "expected": "300",
         "description": "Speed-distance problem",
     },
     {
-        "problem": "What is the sum of the first 10 positive integers (1+2+3+...+10)? Put answer in \\boxed{}.",
+        "problem": (
+            "What is the sum of the first 10 positive integers (1+2+3+...+10)? "
+            "Put answer in \\boxed{}."
+        ),
         "expected": "55",
         "description": "Arithmetic series",
     },
@@ -119,21 +127,21 @@ def run_math_test(
 
         # Log full reasoning paths if verbose
         if verbose:
-            log.info(f"\n📝 Full Reasoning Paths:")
+            log.info("\n📝 Full Reasoning Paths:")
             log.info("-" * 70)
             for i, trace in enumerate(result["metadata"]["all_traces"], 1):
                 log.info(f"\n🧠 Trace {i}/{num_total}:")
                 log.info(f"   Answer: {trace.get('extracted_answer', 'N/A')}")
                 log.info(f"   Min confidence: {trace.get('min_conf', 0):.3f}")
                 log.info(f"   Tokens: {trace.get('num_tokens', 0)}")
-                log.info(f"\n   Reasoning:")
+                log.info("\n   Reasoning:")
                 reasoning_text = trace.get("text", "")
                 for line_num, line in enumerate(reasoning_text.split("\n"), 1):
                     if line.strip():
                         log.info(f"     {line_num:2d}: {line.strip()}")
                 log.info("-" * 70)
 
-        log.info(f"\n📊 Results:")
+        log.info("\n📊 Results:")
         log.info(f"   Selected answer: {selected}")
         log.info(f"   Expected answer: {expected}")
         log.info(f"   Correct: {'✅ YES' if is_correct else '❌ NO'}")
@@ -141,7 +149,7 @@ def run_math_test(
         log.info(f"   Traces used: {num_used}/{num_total}")
 
         if result["metadata"]["vote_distribution"]:
-            log.info(f"   Vote distribution:")
+            log.info("   Vote distribution:")
             for ans, pct in sorted(
                 result["metadata"]["vote_distribution"].items(),
                 key=lambda x: x[1],
@@ -239,13 +247,18 @@ def main():
     accuracy = correct_count / total_count if total_count > 0 else 0
 
     log.info(f"\nOverall Accuracy: {correct_count}/{total_count} ({accuracy:.1%})")
-    log.info(f"\nDetailed Results:")
+    log.info("\nDetailed Results:")
     log.info("-" * 70)
 
     for r in results:
         status = "✅" if r["correct"] else "❌"
+        problem = r["problem"][:30]
+        expected = r["expected"]
+        selected = r["selected"]
+        conf = r["confidence"]
         log.info(
-            f"{status} {r['problem']:<30} Expected: {r['expected']:<10} Got: {r['selected']:<10} Conf: {r['confidence']:.3f}"
+            f"{status} {problem:<30} Expected: {expected:<10} "
+            f"Got: {selected:<10} Conf: {conf:.3f}"
         )
 
     # Confidence analysis

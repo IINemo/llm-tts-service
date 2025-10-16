@@ -55,14 +55,22 @@ class BlackboxModelWithStreaming(BlackboxModel):
         """
         Streams completions for each input text, returning step/trajectory info per input.
 
+        If output_scores=True is in args, delegates to parent's non-streaming method
+        for logprobs support (used by DeepConf).
+
         Args:
-            input_texts (List[str]): List of user prompts.
-            **args: Additional arguments (currently unused).
+            chats (List[List[Dict[str, str]]]): List of chat message lists.
+            **args: Additional arguments.
 
         Returns:
-            List[dict]: List of dicts with step/trajectory info for each input.
+            List[dict] with step info (streaming) or List[str] (non-streaming with logprobs)
         """
+        # Check if logprobs are requested (DeepConf offline mode)
+        if args.get("output_scores", False):
+            # Use parent's non-streaming method with logprobs support
+            return super().generate_texts(chats, **args)
 
+        # Otherwise use streaming mode
         results = []
         for chat in chats:
             buffer = []
