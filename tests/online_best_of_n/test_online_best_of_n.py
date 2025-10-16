@@ -1,21 +1,19 @@
-import torch
+import sys
 
+import torch
+from lm_polygraph.utils.generation_parameters import GenerationParameters
+
+from llm_tts.scorers.step_scorer_uncertainty import StepScorerUncertainty
+from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.scorers.step_scorer_uncertainty import StepScorerUncertainty
 from llm_tts.strategies import StrategyOnlineBestOfN
-from llm_tts.step_boundary_detector import StepBoundaryDetector
-
-from lm_polygraph.utils.generation_parameters import GenerationParameters
-
-import sys
 
 sys.path.insert(0, ".")
-from config.scorer.uncertainty_entropy import create_uncertainty_model
-
 from omegaconf import OmegaConf
 
+from config.scorer.uncertainty_entropy import create_uncertainty_model
 
 prompt_template = """You will be presented with a <Question>. Before providing the [Answer], you should first think step-by-step carefully.
 
