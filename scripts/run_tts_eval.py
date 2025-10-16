@@ -325,7 +325,11 @@ def evaluate_results(
         base_url=config.evaluator.base_url,
         model=config.evaluator.model,
         n_threads=config.evaluator.n_threads,
-        cache_path=getattr(config.evaluator, "cache_path", os.path.expanduser("~/.cache")),
+        cache_path=getattr(
+            config.evaluator,
+            "cache_path",
+            os.path.expanduser("~/.cache"),
+        ),
     )
 
     # Prepare data for batch processing
