@@ -79,7 +79,21 @@ def build_evaluators(config):
             if "{question}" in prompt_template:
                 prompt_template = prompt_template.replace("{question}", "{q}")
 
+            # Set API key in environment based on provider
+            provider = llm_cfg.get("provider")
+            if provider == "openrouter":
+                api_key = os.getenv("OPENROUTER_API_KEY")
+            elif provider == "deepseek":
+                api_key = os.getenv("DEEPSEEK_API_KEY")
+            else:
+                api_key = os.getenv("OPENAI_API_KEY")
+
+            if api_key:
+                os.environ["OPENAI_API_KEY"] = api_key
+
+            # Remove config-only params not needed by evaluator
             llm_cfg.pop("prompt_file", None)
+            llm_cfg.pop("provider", None)
             llm_cfg["prompt"] = prompt_template
 
             evaluators["llm_judge"] = EvaluatorLLMAsAJudge(**llm_cfg)

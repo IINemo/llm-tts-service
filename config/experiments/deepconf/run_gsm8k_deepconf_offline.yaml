@@ -14,9 +14,6 @@ defaults:
 # Main configuration
 verbose: false
 
-# Evaluation method: "simple" (numeric comparison) or "llm_judge" (LLM-based verification)
-eval_method: llm_judge
-
 # Model configuration (API-based)
 model:
   provider: openrouter
@@ -50,12 +47,17 @@ strategy:
   # Filtering and voting
   filter_method: "top5"  # Use top-5 traces by confidence
 
-# Evaluator for correctness checking
-evaluator:
-  provider: openrouter
-  base_url: https://openrouter.ai/api/v1
-  model: openai/gpt-3.5-turbo
-  n_threads: 1
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - llm_judge
+  llm_judge:
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: openai/gpt-3.5-turbo
+    cache_path: ~/.cache
+    n_threads: 1
+    prompt_file: null
 
 # Dataset settings
 dataset:
