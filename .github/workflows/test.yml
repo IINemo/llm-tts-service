@@ -5,6 +5,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -28,6 +29,12 @@ jobs:
     - name: Run setup.sh
       run: |
         ./setup.sh
-    - name: Test with pytest
+    - name: Validate strategy registry
       run: |
-        pytest tests/online_best_of_n tests/run_tts_eval
+        python tests/strategy_registry.py --validate
+    - name: Test with pytest (all strategies)
+      env:
+        OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      run: |
+        pytest tests/ -v
