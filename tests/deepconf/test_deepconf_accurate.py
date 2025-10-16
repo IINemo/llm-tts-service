@@ -7,13 +7,13 @@ Run with:
     python tests/test_deepconf_accurate.py
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.abspath("."))
 
-import logging
 import importlib.util
+import logging
 
 # Import models normally (no lm-polygraph issue)
 from llm_tts.models import create_model

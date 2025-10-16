@@ -21,13 +21,13 @@ Examples:
     python tests/test_deepconf_math.py --budget 10 --verbose
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.abspath("."))
 
-import logging
 import importlib.util
+import logging
 
 # Import models normally
 from llm_tts.models import create_model

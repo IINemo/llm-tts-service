@@ -1,5 +1,5 @@
-import subprocess
 import os
+import subprocess
 
 
 def test_run_tts_eval():
