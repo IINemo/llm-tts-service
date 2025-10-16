@@ -431,6 +431,33 @@ def generate_trajectories(
         if instance["question"] in generated_text:
             generated_text = generated_text.replace(instance["question"], "").strip()
 
+        # Log detailed traces
+        log.info("\n" + "-" * 60)
+        log.info("GENERATED TRACES:")
+        log.info("-" * 60)
+
+        # For DeepConf, steps contain the individual traces
+        if result["steps"] and isinstance(result["steps"], list):
+            for step_idx, step in enumerate(result["steps"]):
+                validity = (
+                    result["validity_scores"][step_idx]
+                    if step_idx < len(result["validity_scores"])
+                    else "N/A"
+                )
+                log.info(f"\nTrace {step_idx + 1} (confidence: {validity:.3f}):")
+                log.info(step)
+        else:
+            # Fallback: show full trajectory
+            log.info(f"\nFull trajectory:\n{result['trajectory']}")
+
+        log.info("\n" + "-" * 60)
+        log.info("FINAL ANSWER:")
+        log.info("-" * 60)
+        log.info(f"Generated: {generated_text}")
+        log.info(f"Num traces: {len(result['steps'])}")
+        log.info(f"Avg confidence: {np.mean(result['validity_scores']):.3f}")
+        log.info("-" * 60)
+
         # Store result WITHOUT correctness check
         results.append(
             {
@@ -444,10 +471,6 @@ def generate_trajectories(
                 "completed": result["completed"],
             }
         )
-
-        log.info(f"Generated: {generated_text}")
-        log.info(f"Num steps: {len(result['steps'])}")
-        log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
 
         # Save periodically
         if len(results) % 10 == 0:
