@@ -444,7 +444,13 @@ def generate_trajectories(
                     if step_idx < len(result["validity_scores"])
                     else "N/A"
                 )
-                log.info(f"\nTrace {step_idx + 1} (confidence: {validity:.3f}):")
+                # Format confidence score (handle both numeric and "N/A")
+                confidence_str = (
+                    f"{validity:.3f}"
+                    if isinstance(validity, (int, float))
+                    else validity
+                )
+                log.info(f"\nTrace {step_idx + 1} (confidence: {confidence_str}):")
                 log.info(step)
         else:
             # Fallback: show full trajectory
