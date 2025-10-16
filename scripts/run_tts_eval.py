@@ -71,37 +71,30 @@ def build_evaluators(config):
 
     for evaluator_name in config.evaluation.evaluators:
         if evaluator_name == "llm_judge":
+            llm_cfg = OmegaConf.to_container(config.evaluation.llm_judge, resolve=True)
             prompt_template = (
-                load_prompt_template(config.evaluation.llm_judge.prompt_file)
-                if config.evaluation.llm_judge.prompt_file
+                load_prompt_template(llm_cfg.get("prompt_file"))
+                if llm_cfg.get("prompt_file")
                 else ""
             )
             if "{question}" in prompt_template:
                 prompt_template = prompt_template.replace("{question}", "{q}")
 
-            evaluator = EvaluatorLLMAsAJudge(
-                prompt=prompt_template,
-                base_url=config.evaluation.llm_judge.get("base_url"),
-                model=config.evaluation.llm_judge.get("model"),
-                n_threads=config.evaluation.llm_judge.get("n_threads"),
-                cache_path=os.path.expanduser("~/.cache"),
-            )
-            evaluators["llm_judge"] = evaluator
+            llm_cfg.pop("prompt_file", None)
+            llm_cfg["prompt"] = prompt_template
+
+            evaluators["llm_judge"] = EvaluatorLLMAsAJudge(**llm_cfg)
 
         elif evaluator_name == "exact_match":
-            evaluators[evaluator_name] = EvaluatorExactMatch(
+            evaluators["exact_match"] = EvaluatorExactMatch(
                 dataset_name=config.dataset.get("dataset_path")
             )
-            evaluators["exact_match"] = evaluator
 
         elif evaluator_name == "alignscore":
-            evaluators[evaluator_name] = EvaluatorAlignScore(
-                threshold=config.evaluation.alignscore.get("threshold"),
-                ckpt_path=config.evaluation.alignscore.get("ckpt_path"),
-                batch_size=config.evaluation.alignscore.get("batch_size"),
-                target_is_claims=config.evaluation.alignscore.get("target_is_claims"),
+            align_cfg = OmegaConf.to_container(
+                config.evaluation.alignscore, resolve=True
             )
-            evaluators["alignscore"] = evaluator
+            evaluators["alignscore"] = EvaluatorAlignScore(**align_cfg)
 
         else:
             log.warning(f"Unknown evaluator type '{evaluator_name}', skipping")
