@@ -12,7 +12,7 @@ defaults:
   - _self_
 
 evaluation:
-  evaluators: [llm_judge, exact_match, alignscore]
+  evaluators: [llm_judge, exact_match]
 
 strategy:
   type: online_best_of_n
