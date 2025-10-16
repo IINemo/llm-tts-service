@@ -7,25 +7,16 @@ Run with:
     python tests/test_deepconf_accurate.py
 """
 
-import importlib.util
 import logging
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath("."))
 
-# Import models normally (no lm-polygraph issue)
-from llm_tts.models import create_model  # noqa: E402
-
-# Import deepconf_strategy directly without triggering strategies/__init__.py
-spec = importlib.util.spec_from_file_location(
-    "llm_tts.strategies.deepconf_strategy", "llm_tts/strategies/deepconf_strategy.py"
-)
-deepconf_module = importlib.util.module_from_spec(spec)
-sys.modules["llm_tts.strategies.deepconf_strategy"] = deepconf_module
-spec.loader.exec_module(deepconf_module)
-DeepConfStrategy = deepconf_module.DeepConfStrategy
-extract_answer = deepconf_module.extract_answer
+# Import models and strategies normally
+from llm_tts.models import BlackboxModelWithStreaming  # noqa: E402
+from llm_tts.strategies import StrategyDeepConf  # noqa: E402
+from llm_tts.utils.confidence import extract_answer  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -75,18 +66,18 @@ def test_2_model_with_logprobs():
         return False
 
     try:
-        model = create_model(
-            provider="openrouter",
-            model_name="openai/gpt-4o-mini",
-            api_key=api_key,
-            top_logprobs=20,
+        model = BlackboxModelWithStreaming(
+            openai_api_key=api_key,
+            model_path="openai/gpt-4o-mini",
+            supports_logprobs=True,
+            base_url="https://openrouter.ai/api/v1",
         )
 
-        assert model.supports_logprobs() is True
+        assert model.supports_logprobs is True
         assert hasattr(model, "generate_with_confidence")
 
-        log.info(f"✅ Model: {model.model_name}")
-        log.info(f"✅ Supports logprobs: {model.supports_logprobs()}")
+        log.info(f"✅ Model: {model.model_path}")
+        log.info(f"✅ Supports logprobs: {model.supports_logprobs}")
         return True
 
     except Exception as e:
@@ -109,14 +100,14 @@ def test_3_deepconf_generation():
         return False
 
     try:
-        model = create_model(
-            provider="openrouter",
-            model_name="openai/gpt-4o-mini",
-            api_key=api_key,
-            top_logprobs=20,
+        model = BlackboxModelWithStreaming(
+            openai_api_key=api_key,
+            model_path="openai/gpt-4o-mini",
+            supports_logprobs=True,
+            base_url="https://openrouter.ai/api/v1",
         )
 
-        strategy = DeepConfStrategy(
+        strategy = StrategyDeepConf(
             model=model,
             budget=3,
             window_size=16,
@@ -162,14 +153,14 @@ def test_4_deepconf_voting():
         return False
 
     try:
-        model = create_model(
-            provider="openrouter",
-            model_name="openai/gpt-4o-mini",
-            api_key=api_key,
-            top_logprobs=20,
+        model = BlackboxModelWithStreaming(
+            openai_api_key=api_key,
+            model_path="openai/gpt-4o-mini",
+            supports_logprobs=True,
+            base_url="https://openrouter.ai/api/v1",
         )
 
-        strategy = DeepConfStrategy(
+        strategy = StrategyDeepConf(
             model=model,
             budget=5,
             window_size=16,

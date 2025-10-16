@@ -21,24 +21,15 @@ Examples:
     python tests/test_deepconf_math.py --budget 10 --verbose
 """
 
-import importlib.util
 import logging
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath("."))
 
-# Import models normally
-from llm_tts.models import create_model  # noqa: E402
-
-# Import deepconf_strategy directly without triggering strategies/__init__.py
-spec = importlib.util.spec_from_file_location(
-    "llm_tts.strategies.deepconf_strategy", "llm_tts/strategies/deepconf_strategy.py"
-)
-deepconf_module = importlib.util.module_from_spec(spec)
-sys.modules["llm_tts.strategies.deepconf_strategy"] = deepconf_module
-spec.loader.exec_module(deepconf_module)
-DeepConfStrategy = deepconf_module.DeepConfStrategy
+# Import models and strategies normally
+from llm_tts.models import BlackboxModelWithStreaming  # noqa: E402
+from llm_tts.strategies import StrategyDeepConf  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -106,7 +97,7 @@ def run_math_test(
     log.info(f"Expected: {expected}")
     log.info("=" * 70)
 
-    strategy = DeepConfStrategy(
+    strategy = StrategyDeepConf(
         model=model,
         budget=budget,
         window_size=16,
@@ -217,11 +208,11 @@ def main():
     # Create model
     log.info("Initializing model...")
     try:
-        model = create_model(
-            provider="openrouter",
-            model_name="openai/gpt-4o-mini",
-            api_key=api_key,
-            top_logprobs=20,
+        model = BlackboxModelWithStreaming(
+            openai_api_key=api_key,
+            model_path="openai/gpt-4o-mini",
+            supports_logprobs=True,
+            base_url="https://openrouter.ai/api/v1",
         )
         log.info("✅ Model initialized\n")
     except Exception as e:

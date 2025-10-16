@@ -31,15 +31,15 @@ export OPENROUTER_API_KEY="your-key"
 ### Basic Usage
 
 ```python
-from llm_tts.models import create_model
+from llm_tts.models import BlackboxModelWithStreaming
 from llm_tts.strategies.deepconf_strategy import DeepConfStrategy
 
 # Create model
-model = create_model(
-    provider="openrouter",
-    model_name="openai/gpt-4o-mini",
-    api_key="your-key",
-    top_logprobs=20
+model = BlackboxModelWithStreaming(
+    openai_api_key="your-key",
+    model_path="openai/gpt-4o-mini",
+    supports_logprobs=True,
+    base_url="https://openrouter.ai/api/v1"
 )
 
 # Create strategy
