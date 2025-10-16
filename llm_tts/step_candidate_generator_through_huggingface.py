@@ -197,7 +197,8 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             # Extract step using detector
             step_text = self.detector.extract_step_text(raw_generated_text)
             is_complete = self.detector.is_step_complete(raw_generated_text)
-            is_trajectory_complete = self.detector.is_trajectory_complete(  # TODO: does not work even if it generates <end of response>
+            is_trajectory_complete = self.detector.is_trajectory_complete(
+                # TODO: does not work even if it generates <end of response>
                 raw_generated_text
             )
 

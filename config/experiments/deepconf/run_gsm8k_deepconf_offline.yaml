@@ -4,11 +4,11 @@
 # This demonstrates standard weighted voting without early stopping
 
 defaults:
-  - dataset: gsm8k
-  - model: openrouter
-  - generation: default
-  - output: default
-  - system: default
+  - /dataset/gsm8k
+  - /model/openrouter
+  - /generation/default
+  - /output/default
+  - /system/default
   - _self_
 
 # Main configuration

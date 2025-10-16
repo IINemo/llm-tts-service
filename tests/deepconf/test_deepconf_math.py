@@ -29,7 +29,7 @@ import sys
 sys.path.insert(0, os.path.abspath("."))
 
 # Import models normally
-from llm_tts.models import create_model
+from llm_tts.models import create_model  # noqa: E402
 
 # Import deepconf_strategy directly without triggering strategies/__init__.py
 spec = importlib.util.spec_from_file_location(

@@ -115,6 +115,10 @@ def set_random_seeds(seed):
 
 
 def create_scorer(config, model):
+    # DeepConf doesn't use a scorer
+    if config.scorer is None:
+        return None
+
     if config.scorer.type == "prm":
         scorer = StepScorerPRM(
             model=model,
@@ -175,46 +179,33 @@ def create_model(config):
         )
 
     elif config.model.type == "openai_api":
-        # Check if DeepConf strategy - use BlackboxModelWithStreaming
+        # Use model_name if available, otherwise fall back to model_path
+        model_path = config.model.get("model_name") or config.model.get("model_path")
+        log.info(f"Using OpenAI API model: {model_path}")
+
+        # Check if DeepConf strategy
         if config.strategy.type == "deepconf":
-            log.info(f"Using API model for DeepConf: {config.model.model_name}")
+            # DeepConf uses streaming with logprobs but no boundary detector
+            import os
 
-            # Determine API provider
+            # Check provider for API key and base URL
             if config.model.get("provider") == "openrouter":
-                import os
-
                 api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
-                if not api_key:
-                    raise ValueError(
-                        "OpenRouter API key required. Set via config or "
-                        "OPENROUTER_API_KEY env var"
-                    )
-
-                # Use BlackboxModelWithStreaming with OpenRouter base_url
-                model = BlackboxModelWithStreaming(
-                    openai_api_key=api_key,
-                    model_path=config.model.model_name,
-                    supports_logprobs=True,
-                    base_url="https://openrouter.ai/api/v1",
-                )
-
-                log.info(f"Using OpenRouter with model: {config.model.model_name}")
+                base_url = "https://openrouter.ai/api/v1"
             else:
-                # Standard OpenAI
-                import os
-
                 api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
-                model = BlackboxModelWithStreaming(
-                    openai_api_key=api_key,
-                    model_path=config.model.model_path,
-                    supports_logprobs=True,
-                )
+                base_url = None
 
+            model = BlackboxModelWithStreaming(
+                openai_api_key=api_key,
+                model_path=model_path,
+                supports_logprobs=True,
+                base_url=base_url,
+            )
             step_generator = None  # DeepConf doesn't use step generator
-
         else:
-            # Standard API model with streaming for other strategies
-            log.info(f"Using OpenAI API model: {config.model.model_path}")
+            # Other strategies use boundary detection via early stopping
+            from llm_tts.early_stopping import BoundaryEarlyStopping
 
             detector = StepBoundaryDetector(
                 step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
@@ -228,11 +219,14 @@ def create_model(config):
             generation_parameters.top_p = config.generation.top_p
             generation_parameters.top_k = config.generation.top_k
 
+            # Create boundary-based early stopping
+            early_stopping = BoundaryEarlyStopping(detector=detector)
+
             model = BlackboxModelWithStreaming(
                 openai_api_key=config.model.api_key,
-                model_path=config.model.model_path,
+                model_path=model_path,
                 supports_logprobs=config.model.supports_logprobs,
-                boundary_detector=detector,
+                early_stopping=early_stopping,
                 generation_parameters=generation_parameters,
             )
 
@@ -266,17 +260,16 @@ def create_tts_strategy(config, model, step_generator, scorer):
         strategy = StrategyDeepConf(
             model=model,
             mode=config.strategy.mode,
-            budget=config.strategy.budget,
-            window_size=config.strategy.get("window_size", 5),
-            temperature=config.generation.temperature,
-            top_p=config.generation.top_p,
-            max_tokens=config.generation.max_new_tokens,
-            top_logprobs=config.model.top_logprobs,
-            filter_method=config.strategy.filter_method,
-            warmup_traces=config.strategy.get("warmup_traces"),
-            total_budget=config.strategy.get("total_budget"),
-            confidence_percentile=config.strategy.get("confidence_percentile"),
-            confidence_threshold=config.strategy.get("confidence_threshold"),
+            budget=config.strategy.get("budget", 8),
+            warmup_traces=config.strategy.get("warmup_traces", 4),
+            total_budget=config.strategy.get("total_budget", 10),
+            confidence_percentile=config.strategy.get("confidence_percentile", 90),
+            window_size=config.strategy.get("window_size", 2048),
+            filter_method=config.strategy.get("filter_method", "top10"),
+            temperature=config.strategy.get("temperature", 0.7),
+            top_p=config.strategy.get("top_p", 1.0),
+            max_tokens=config.strategy.get("max_tokens", 512),
+            top_logprobs=config.strategy.get("top_logprobs", 20),
         )
 
     else:
@@ -375,19 +368,22 @@ def evaluate_results(
     log.info("Phase 2: Checking correctness")
     log.info("=" * 60)
 
-    # Load prompt template and ensure compatibility
-    prompt_file = config.evaluator.get("prompt_file")
-    prompt_template = load_prompt_template(prompt_file) if prompt_file else ""
-
-    if "{question}" in prompt_template:
-        prompt_template = prompt_template.replace("{question}", "{q}")
-
     # Check evaluation method from config (default: simple for GSM8K)
     eval_method = config.get("eval_method", "simple")
 
     if eval_method == "llm_judge":
         # Use LLM-as-a-judge for verification
         log.info(f"Using LLM-as-a-judge for verification: {config.evaluator.model}")
+
+        # Load prompt template from config (try evaluator first, then dataset)
+        prompt_file = config.evaluator.get("prompt_file") or config.dataset.get(
+            "prompt_file"
+        )
+        prompt_template = load_prompt_template(prompt_file) if prompt_file else ""
+
+        # For evaluator, we need to use {q} format
+        if "{question}" in prompt_template:
+            prompt_template = prompt_template.replace("{question}", "{q}")
 
         # Determine which API key to use based on provider (if specified) or base_url
         provider = config.evaluator.get("provider", None)
