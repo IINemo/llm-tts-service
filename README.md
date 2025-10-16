@@ -1,3 +1,6 @@
+<img width="130" height="130" alt="image" src="https://github.com/user-attachments/assets/588610f9-f0e2-4bcc-8a71-aa3ffd6af91e" />
+
+
 # LLM Test-Time Scaling Service
 
 ## Install
