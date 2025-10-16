@@ -1,39 +1,45 @@
 """
 DeepConf-specific utilities for confidence computation and answer extraction.
 
-This module consolidates DeepConf-specific functionality and leverages
-lm-polygraph methods where possible for confidence computation.
+This module consolidates DeepConf-specific functionality and directly uses
+lm-polygraph's uncertainty estimation methods for confidence computation.
 
 Based on Facebook Research's DeepConf:
 https://github.com/facebookresearch/deepconf
+
+Leverages lm-polygraph's token-level uncertainty methods:
+https://github.com/IINemo/lm-polygraph/tree/dev
+See: lm_polygraph/utils/token_restoration.py:96-105
 """
 
 import logging
 from collections import deque
 from typing import Dict, List, Optional
 
+import numpy as np
 import torch
-from torch.distributions.categorical import Categorical
+
+# Use lm-polygraph's uncertainty estimation methods
+from lm_polygraph.estimators import MaximumTokenProbability, Perplexity
+from lm_polygraph.utils.token_restoration import Categorical
 
 log = logging.getLogger(__name__)
+
+# Reuse estimator instances to avoid creating new ones per token
+_perplexity = Perplexity()
+_max_token_prob = MaximumTokenProbability()
 
 
 def compute_token_confidence_from_logprobs(
     top_logprobs: List[Dict[str, float]], topk: int = 20, method: str = "mean_logprob"
 ) -> float:
     """
-    Compute confidence score for a single token from its top-k logprobs.
-
-    Leverages lm-polygraph's approach for confidence computation.
+    Compute confidence score for a single token using lm-polygraph methods.
 
     Args:
         top_logprobs: List of dicts with 'token' and 'logprob' keys
         topk: Number of top tokens considered
-        method: Confidence computation method:
-            - 'mean_logprob': Negative mean logprob (Perplexity-based)
-            - 'max_prob': Negative max logprob (Maximum probability)
-            - 'entropy': Shannon entropy over top-k distribution
-            - 'margin': Difference between top-2 probabilities
+        method: 'entropy' | 'mean_logprob' | 'max_prob' | 'margin'
 
     Returns:
         Confidence score (higher = more confident)
@@ -41,37 +47,39 @@ def compute_token_confidence_from_logprobs(
     if not top_logprobs:
         return 0.0
 
-    # Extract logprobs and convert to tensor
-    logprobs_values = torch.tensor(
+    logprobs_values = np.array(
         [item.get("logprob", -100.0) for item in top_logprobs[:topk]],
-        dtype=torch.float32,
+        dtype=np.float32,
     )
 
-    if method == "mean_logprob":
-        # Based on lm-polygraph's Perplexity estimator
-        # perplexity.py: return np.array([-np.mean(ll) for ll in log_likelihoods])
-        return float(-logprobs_values.mean())
+    if method == "entropy":
+        posterior = torch.from_numpy(np.exp(logprobs_values))
+        entropy = Categorical(posterior).entropy()
+        return float(entropy.item())
+
+    elif method == "mean_logprob":
+        stats = {"greedy_log_likelihoods": [logprobs_values.tolist()]}
+        result = _perplexity(stats)
+        return float(result[0])
 
     elif method == "max_prob":
-        # Based on lm-polygraph's MaximumTokenProbability
-        # max_probability.py: return [-np.array(log_likelihood[:-1])]
-        return float(-logprobs_values.max())
-
-    elif method == "entropy":
-        # Based on lm-polygraph's token_restoration.py:96-105
-        # Uses torch.distributions.categorical.Categorical
-        probs = torch.exp(logprobs_values)
-        probs = probs / probs.sum()  # Normalize
-        return float(Categorical(probs=probs).entropy())
+        stats = {"greedy_log_likelihoods": [logprobs_values.tolist()]}
+        result = _max_token_prob(stats)
+        return float(-np.mean(result[0]))
 
     elif method == "margin":
-        # Top-2 probability margin
         if len(logprobs_values) < 2:
             return 0.0
-        probs = torch.exp(logprobs_values)
+        probs = np.exp(logprobs_values)
         probs = probs / probs.sum()
-        top2 = torch.topk(probs, min(2, len(probs))).values
-        return float(top2[0] - top2[1]) if len(top2) >= 2 else float(top2[0])
+        top2_indices = np.argpartition(probs, -2)[-2:]
+        top2_probs = probs[top2_indices]
+        top2_sorted = np.sort(top2_probs)[::-1]
+        return (
+            float(top2_sorted[0] - top2_sorted[1])
+            if len(top2_sorted) >= 2
+            else float(top2_sorted[0])
+        )
 
     else:
         raise ValueError(f"Unknown method: {method}")
@@ -83,24 +91,19 @@ def compute_sliding_window_confidence(
     """
     Compute sliding window average of token confidences.
 
-    Uses fixed-size windows (returns fewer values than input).
-    Based on deepconf/utils.py:52-61 (compute_least_grouped)
-
     Args:
-        token_confidences: List of per-token confidence scores
-        window_size: Size of sliding window
+        token_confidences: Per-token confidence scores
+        window_size: Window size
 
     Returns:
-        List of window-averaged confidences (length = len(input) - window_size + 1)
+        Window-averaged confidences
     """
     if not token_confidences or window_size <= 0:
         return []
 
-    # If sequence is shorter than window, return mean of all
     if len(token_confidences) < window_size:
         return [sum(token_confidences) / len(token_confidences)]
 
-    # Fixed-size sliding windows only
     window_confs = []
     for i in range(len(token_confidences) - window_size + 1):
         window = token_confidences[i : i + window_size]
@@ -112,10 +115,7 @@ def compute_sliding_window_confidence(
 
 def extract_answer(text: str) -> str:
     """
-    Extract answer from generated text (looks for \\boxed{answer} format).
-
-    Handles nested braces correctly.
-    Based on deepconf/utils.py:12-36
+    Extract answer from \\boxed{answer} format with nested braces support.
 
     Args:
         text: Generated text
@@ -126,12 +126,10 @@ def extract_answer(text: str) -> str:
     if "boxed" not in text:
         return ""
 
-    # Find the part after "boxed"
     ans = text.split("boxed")[-1]
     if len(ans) == 0:
         return ""
 
-    # Handle \boxed{...} format with nested braces
     if ans[0] == "{":
         stack = 1
         a = ""
@@ -148,18 +146,12 @@ def extract_answer(text: str) -> str:
                 a += c
         return a.strip()
 
-    # Handle \boxed answer$ format
     a = ans.split("$")[0].strip()
     return a.strip()
 
 
 class ConfidenceProcessor:
-    """
-    Processes token-level confidence scores and triggers early stopping
-    when confidence drops below threshold.
-
-    Uses lm-polygraph-based confidence computation methods.
-    """
+    """Token-level confidence processor with early stopping."""
 
     def __init__(
         self,
@@ -168,25 +160,13 @@ class ConfidenceProcessor:
         top_k: int = 20,
         method: str = "mean_logprob",
     ):
-        """
-        Initialize confidence processor.
-
-        Args:
-            threshold: Confidence threshold below which to stop
-            window_size: Size of sliding window for confidence averaging
-            top_k: Number of top logprobs to consider
-            method: Confidence computation method (see compute_token_confidence_from_logprobs)
-        """
         self.threshold = threshold
         self.window_size = window_size
         self.top_k = top_k
         self.method = method
 
-        # Sliding window of confidences
         self.conf_window: deque = deque(maxlen=window_size)
         self.conf_sum = 0.0
-
-        # Track all confidences
         self.all_confidences: List[float] = []
 
         log.info(
@@ -195,33 +175,19 @@ class ConfidenceProcessor:
         )
 
     def process_token(self, logprob: float, top_logprobs: List[dict]) -> bool:
-        """
-        Process a single token's logprobs and check if we should stop.
-
-        Args:
-            logprob: Token's logprob
-            top_logprobs: List of top-k logprobs for this token
-
-        Returns:
-            True if confidence dropped below threshold (should stop)
-        """
-        # Compute confidence using lm-polygraph-based method
+        """Process token and check if confidence dropped below threshold."""
         confidence = compute_token_confidence_from_logprobs(
             top_logprobs, self.top_k, self.method
         )
 
-        # Track confidence
         self.all_confidences.append(confidence)
 
-        # Update sliding window
         if len(self.conf_window) == self.window_size:
-            # Remove oldest from sum
             self.conf_sum -= self.conf_window[0]
 
         self.conf_window.append(confidence)
         self.conf_sum += confidence
 
-        # Check threshold once window is full
         if len(self.conf_window) == self.window_size:
             avg_confidence = self.conf_sum / self.window_size
             if avg_confidence < self.threshold:
