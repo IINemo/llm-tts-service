@@ -7,13 +7,11 @@ import sys
 
 import pytest
 
-# Add project root to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))  # noqa: E402
+from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
+from llm_tts.strategies.deepconf import StrategyDeepConf
 
-from llm_tts.models.blackboxmodel_with_streaming import (  # noqa: E402
-    BlackboxModelWithStreaming,
-)
-from llm_tts.strategies.strategy_deepconf import StrategyDeepConf  # noqa: E402
+# Add project root to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 
 @pytest.mark.skipif(

@@ -8,7 +8,6 @@ text generation (confidence-based, boundary-based, etc.).
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
-from llm_tts.confidence_processor import ConfidenceProcessor
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 
 
@@ -52,6 +51,9 @@ class ConfidenceEarlyStopping(EarlyStopping):
         top_k: int = 20,
         method: str = "mean_logprob",
     ):
+        # Import here to avoid circular dependency
+        from llm_tts.strategies.deepconf.utils import ConfidenceProcessor
+
         self.processor = ConfidenceProcessor(
             threshold=threshold, window_size=window_size, top_k=top_k, method=method
         )

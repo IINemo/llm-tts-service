@@ -16,13 +16,13 @@ import numpy as np
 from lm_polygraph import BlackboxModel
 
 from llm_tts.early_stopping import ConfidenceEarlyStopping
-from llm_tts.utils.confidence import (
+
+from ..strategy_base import StrategyBase
+from .utils import (
     compute_sliding_window_confidence,
     compute_token_confidence_from_logprobs,
     extract_answer,
 )
-
-from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 
