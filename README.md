@@ -1,3 +1,5 @@
+<img width="120" height="120" alt="ai-flies-on-the-rocket-" src="https://github.com/user-attachments/assets/0ad1c870-b8e1-4b1d-94ae-e75dd5bd583e" />
+
 # LLM Test-Time Scaling Service
 
 ## Install
