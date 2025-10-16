@@ -10,9 +10,9 @@ import numpy as np
 import torch
 from datasets import (
     Dataset,
-    load_dataset,
-    get_dataset_config_names,
     concatenate_datasets,
+    get_dataset_config_names,
+    load_dataset,
 )
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
