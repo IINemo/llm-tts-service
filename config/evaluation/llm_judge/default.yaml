@@ -1,0 +1,7 @@
+# @package evaluation.llm_judge
+
+base_url: https://openrouter.ai/api/v1
+model: deepseek/deepseek-r1-0528
+n_threads: 1
+prompt_file: ""
+cache_path: ${oc.env:HOME}/.cache
