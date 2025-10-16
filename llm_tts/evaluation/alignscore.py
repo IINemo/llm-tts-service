@@ -73,16 +73,9 @@ class EvaluatorAlignScore(GenerationMetric):
             stats = {
                 "solutions": np.array([s if s is not None else "" for s in solutions])
             }
-            # When source_as_target is True, metric ignores provided targets and
-            # uses stats["input_texts"] filtered by regex
-            if self.source_as_target:
-                stats["problems"] = np.array(
-                    [p if p is not None else "" for p in problems]
-                )
-            else:
-                stats["gold_answers"] = np.array(
-                    [g if g is not None else "" for g in gold_answers]
-                )
+            stats["gold_answers"] = np.array(
+                [g if g is not None else "" for g in gold_answers]
+            )
 
             scores = self.compute_scores(stats)
             labels = [1.0 if s >= self.threshold else 0.0 for s in scores]
