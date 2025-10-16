@@ -36,7 +36,7 @@ REGISTERED_STRATEGIES = [
     StrategyInfo(
         name="deepconf",
         class_name="StrategyDeepConf",
-        module_path="llm_tts/strategies/strategy_deepconf.py",
+        module_path="llm_tts/strategies/deepconf/strategy.py",
         test_dir="tests/deepconf",
         required_tests=[
             "test_deepconf_accurate.py",  # Unit tests (pytest)
