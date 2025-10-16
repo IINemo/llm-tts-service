@@ -18,12 +18,9 @@ evaluation:
     prompt_file: ""
   alignscore:
     threshold: 0.5
-    lang: "en"
     ckpt_path: "https://huggingface.co/yzha/AlignScore/resolve/main/AlignScore-large.ckpt"
     batch_size: 16
     target_is_claims: true
-    source_ignore_regex: null
-    source_as_target: false
 
 strategy:
   type: online_best_of_n

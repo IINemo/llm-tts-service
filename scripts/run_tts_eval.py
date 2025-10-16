@@ -76,28 +76,25 @@ def build_evaluators(config):
 
             evaluator = EvaluatorLLMAsAJudge(
                 prompt=prompt_template,
-                base_url=config.evaluation.llm_judge.base_url,
-                model=config.evaluation.llm_judge.model,
-                n_threads=config.evaluation.llm_judge.n_threads,
+                base_url=config.evaluation.llm_judge.get("base_url"),
+                model=config.evaluation.llm_judge.get("model"),
+                n_threads=config.evaluation.llm_judge.get("n_threads"),
                 cache_path=os.path.expanduser("~/.cache"),
             )
             evaluators["llm_judge"] = evaluator
 
         elif evaluator_name == "exact_match":
             evaluators[evaluator_name] = EvaluatorExactMatch(
-                dataset_name=config.dataset.dataset_path
+                dataset_name=config.dataset.get("dataset_path")
             )
             evaluators["exact_match"] = evaluator
 
         elif evaluator_name == "alignscore":
             evaluators[evaluator_name] = EvaluatorAlignScore(
-                threshold=config.evaluation.alignscore.threshold,
-                lang=config.evaluation.alignscore.lang,
-                ckpt_path=config.evaluation.alignscore.ckpt_path,
-                batch_size=config.evaluation.alignscore.batch_size,
-                target_is_claims=config.evaluation.alignscore.target_is_claims,
-                source_ignore_regex=config.evaluation.alignscore.source_ignore_regex,
-                source_as_target=config.evaluation.alignscore.source_as_target,
+                threshold=config.evaluation.alignscore.get("threshold"),
+                ckpt_path=config.evaluation.alignscore.get("ckpt_path"),
+                batch_size=config.evaluation.alignscore.get("batch_size"),
+                target_is_claims=config.evaluation.alignscore.get("target_is_claims"),
             )
             evaluators["alignscore"] = evaluator
 
@@ -475,9 +472,9 @@ def evaluate_results(
 
     for r in results:
         for name in evaluators.keys():
-            if r.get("eval", {}).get(name, {}).get("is_correct", True):
+            if r.get("eval").get(name).get("is_correct"):
                 summary_correct[name] += 1
-            elif r.get("eval", {}).get(name, {}).get("is_correct", False):
+            elif not r.get("eval").get(name).get("is_correct"):
                 summary_incorrect[name] += 1
 
     log.info("Summary:")
@@ -486,11 +483,10 @@ def evaluate_results(
     log.info(f"Errors: {errors} ({errors/len(results):.1%})")
     for name in sorted(list(evaluators.keys())):
         correct = summary_correct[name]
+        incorrect = summary_incorrect[name]
         log.info(f"[{name}]")
         log.info(f"Correct: {correct} ({correct/len(results):.1%})")
-        log.info(
-            f"Incorrect: {summary_incorrect[name]} ({summary_incorrect[name]/len(results):.1%})"
-        )
+        log.info(f"Incorrect: {incorrect} ({incorrect/len(results):.1%})")
 
     # Average statistics
     all_validities = []
