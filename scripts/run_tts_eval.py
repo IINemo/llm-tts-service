@@ -55,7 +55,7 @@ def load_existing_results(save_path: str, dataset):
     log.info(f"Loading existing results from {save_path}")
 
     try:
-        results = torch.load(save_path)
+        results = torch.load(save_path, weights_only=False)
         processed_indices = {r["index"] for r in results}
         log.info(f"Loaded {len(results)} existing results")
         log.info(f"Already processed indices: {sorted(processed_indices)}")
@@ -113,7 +113,6 @@ def set_random_seeds(seed):
 def create_scorer(config, model):
     if config.scorer.type == "prm":
         scorer = StepScorerPRM(
-            model=model,
             prm_model_path=config.scorer.model_path,
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
@@ -326,7 +325,7 @@ def evaluate_results(
         base_url=config.evaluator.base_url,
         model=config.evaluator.model,
         n_threads=config.evaluator.n_threads,
-        cache_path=os.path.expanduser("~/.cache"),
+        cache_path=getattr(config.evaluator, "cache_path", os.path.expanduser("~/.cache")),
     )
 
     # Prepare data for batch processing
