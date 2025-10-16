@@ -91,11 +91,9 @@ class StrategyDeepConf(StrategyBase):
         self.filter_method = filter_method
         self.confidence_threshold = confidence_threshold
 
-        # Check model supports logprobs
+        # Validate model supports logprobs
         if not hasattr(model, "supports_logprobs") or not model.supports_logprobs:
-            log.warning(
-                "⚠️  Model does not support logprobs - DeepConf will not work correctly"
-            )
+            raise ValueError("Model must support logprobs for DeepConf")
 
         if not hasattr(model, "generate_with_confidence"):
             raise ValueError("Model must have generate_with_confidence() method")
