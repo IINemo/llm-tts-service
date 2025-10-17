@@ -562,6 +562,42 @@ def evaluate_results(
     log.info(f"Avg steps per trajectory: {np.mean(all_steps):.1f}")
     log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
 
+    # Log key metrics to wandb if enabled
+    try:
+        import wandb
+        
+        if wandb.run is not None:
+            metrics = {
+                "total_samples": len(results),
+                "completed": completed,
+                "completed_pct": completed / len(results),
+                "errors": errors,
+                "errors_pct": errors / len(results),
+            }
+            
+            # Add per-evaluator metrics
+            for name in evaluators.keys():
+                correct = summary_correct[name]
+                incorrect = summary_incorrect[name]
+                metrics[f"{name}/correct"] = correct
+                metrics[f"{name}/correct_pct"] = correct / len(results)
+                metrics[f"{name}/incorrect"] = incorrect
+                metrics[f"{name}/incorrect_pct"] = incorrect / len(results)
+                metrics[f"{name}/accuracy"] = correct / len(results)
+            
+            # Add step statistics
+            if all_steps:
+                metrics["avg_steps_per_trajectory"] = np.mean(all_steps)
+            if all_validities:
+                metrics["avg_validity_score"] = np.mean(all_validities)
+            
+            wandb.log(metrics)
+            log.info("Logged metrics to wandb")
+    except ImportError:
+        pass  # wandb not installed
+    except Exception as e:
+        log.warning(f"Failed to log metrics to wandb: {e}")
+
 
 @hydra.main(
     version_base=None,
