@@ -12,3 +12,5 @@ exclude =
     venv
 per-file-ignores =
     __init__.py:F401
+    tests/deepconf/test_deepconf_accurate.py:E402
+    tests/deepconf/test_deepconf_math.py:E402

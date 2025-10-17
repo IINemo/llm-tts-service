@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import logging
 import os
 import random
@@ -8,12 +9,8 @@ from pathlib import Path
 import hydra
 import numpy as np
 import torch
-from datasets import (
-    Dataset,
-    concatenate_datasets,
-    get_dataset_config_names,
-    load_dataset,
-)
+from datasets import Dataset, load_dataset
+from dotenv import load_dotenv
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
 from lm_polygraph.utils.generation_parameters import GenerationParameters
@@ -21,17 +18,25 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from llm_tts.evaluator_gold_standard import EvaluatorGoldStandard
+from llm_tts.evaluation import (
+    EvaluatorAlignScore,
+    EvaluatorExactMatch,
+    EvaluatorLLMAsAJudge,
+)
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_candidate_generator_base import StepCandidate
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
 )
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyOnlineBestOfN
+from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN
+
+# Load environment variables from .env file
+load_dotenv()
 
 log = logging.getLogger(__name__)
 
@@ -56,11 +61,109 @@ def load_prompt_template(prompt_file: str) -> str:
         return f.read().strip()
 
 
+def build_evaluators(config):
+    """
+    Create evaluators from config.
+    The list of evaluator names in config.evaluation.evaluators
+    """
+    evaluators = {}
+
+    for evaluator_name in config.evaluation.evaluators:
+        if evaluator_name == "llm_judge":
+            llm_cfg = OmegaConf.to_container(config.evaluation.llm_judge, resolve=True)
+            prompt_template = (
+                load_prompt_template(llm_cfg.get("prompt_file"))
+                if llm_cfg.get("prompt_file")
+                else ""
+            )
+            if "{question}" in prompt_template:
+                prompt_template = prompt_template.replace("{question}", "{q}")
+
+            # Set API key in environment based on provider
+            provider = llm_cfg.get("provider")
+            if provider == "openrouter":
+                api_key = os.getenv("OPENROUTER_API_KEY")
+            elif provider == "deepseek":
+                api_key = os.getenv("DEEPSEEK_API_KEY")
+            else:
+                api_key = os.getenv("OPENAI_API_KEY")
+
+            if api_key:
+                os.environ["OPENAI_API_KEY"] = api_key
+
+            # Remove config-only params not needed by evaluator
+            llm_cfg.pop("prompt_file", None)
+            llm_cfg.pop("provider", None)
+            llm_cfg["prompt"] = prompt_template
+
+            evaluators["llm_judge"] = EvaluatorLLMAsAJudge(**llm_cfg)
+
+        elif evaluator_name == "exact_match":
+            evaluators["exact_match"] = EvaluatorExactMatch(
+                dataset_name=config.dataset.get("dataset_path")
+            )
+
+        elif evaluator_name == "alignscore":
+            align_cfg = OmegaConf.to_container(
+                config.evaluation.alignscore, resolve=True
+            )
+            evaluators["alignscore"] = EvaluatorAlignScore(**align_cfg)
+
+        else:
+            log.warning(f"Unknown evaluator type '{evaluator_name}', skipping")
+
+    return evaluators
+
+
+def _safe_serialize(obj):
+    """Convert arbitrary Python objects (including tensors, numpy) to JSON-safe types."""
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, dict):
+        return {str(k): _safe_serialize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_safe_serialize(v) for v in obj]
+    if isinstance(obj, StepCandidate):
+        return {
+            "text": obj.text,
+            "token_ids": list(obj.token_ids) if obj.token_ids is not None else None,
+            "is_complete": obj.is_complete,
+            "is_trajectory_complete": obj.is_trajectory_complete,
+            "generation_scores": _safe_serialize(obj.generation_scores),
+            "raw_text": obj.raw_text,
+            "other_data": _safe_serialize(obj.other_data) if obj.other_data else None,
+        }
+    if hasattr(obj, "tolist"):
+        try:
+            return obj.tolist()
+        except Exception:
+            pass
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.ndarray,)):
+        return obj.tolist()
+    if hasattr(obj, "__dict__"):
+        return _safe_serialize(vars(obj))
+
+    # Fallback to string representation
+    return str(obj)
+
+
+def _save_results_json(results, json_path: Path):
+    json_path = Path(json_path)
+    json_data = [_safe_serialize(r) for r in results]
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(json_data, f, ensure_ascii=False, indent=2)
+
+
 def load_existing_results(save_path: str, dataset):
     log.info(f"Loading existing results from {save_path}")
 
     try:
-        results = torch.load(save_path)
+        with open(save_path, "r", encoding="utf-8") as f:
+            results = json.load(f)
         processed_indices = {r["index"] for r in results}
         log.info(f"Loaded {len(results)} existing results")
         log.info(f"Already processed indices: {sorted(processed_indices)}")
@@ -116,9 +219,12 @@ def set_random_seeds(seed):
 
 
 def create_scorer(config, model):
+    # DeepConf doesn't use a scorer
+    if config.scorer is None:
+        return None
+
     if config.scorer.type == "prm":
         scorer = StepScorerPRM(
-            model=model,
             prm_model_path=config.scorer.model_path,
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
@@ -176,47 +282,97 @@ def create_model(config):
         )
 
     elif config.model.type == "openai_api":
-        log.info(f"Using OpenAI API model: {config.model.model_path}")
+        # Use model_name if available, otherwise fall back to model_path
+        model_path = config.model.get("model_name") or config.model.get("model_path")
+        log.info(f"Using OpenAI API model: {model_path}")
 
-        detector = StepBoundaryDetector(
-            step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
-            answer_patterns=["<Answer>:", "\n<Answer>:"],
-            max_tokens_per_step=config.generation.max_new_tokens,
-        )
+        # Check if DeepConf strategy
+        if config.strategy.type == "deepconf":
+            # DeepConf uses streaming with logprobs but no boundary detector
+            import os
 
-        generation_parameters = GenerationParameters()
-        generation_parameters.temperature = config.generation.temperature
-        generation_parameters.max_new_tokens = config.generation.max_new_tokens
-        generation_parameters.top_p = config.generation.top_p
-        generation_parameters.top_k = config.generation.top_k
+            # Check provider for API key and base URL
+            if config.model.get("provider") == "openrouter":
+                api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+                base_url = "https://openrouter.ai/api/v1"
+            else:
+                api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
+                base_url = None
 
-        model = BlackboxModelWithStreaming(
-            openai_api_key=config.model.api_key,
-            model_path=config.model.model_path,
-            supports_logprobs=config.model.supports_logprobs,
-            boundary_detector=detector,
-            generation_parameters=generation_parameters,
-        )
+            model = BlackboxModelWithStreaming(
+                openai_api_key=api_key,
+                model_path=model_path,
+                supports_logprobs=True,
+                base_url=base_url,
+            )
+            step_generator = None  # DeepConf doesn't use step generator
+        else:
+            # Other strategies use boundary detection via early stopping
+            from llm_tts.early_stopping import BoundaryEarlyStopping
 
-        step_generator = StepCandidateGeneratorThroughAPI(
-            model=model,
-            detector=detector,
-            prefill_mode=config.model.prefill_mode,
-        )
+            detector = StepBoundaryDetector(
+                step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
+                answer_patterns=["<Answer>:", "\n<Answer>:"],
+                max_tokens_per_step=config.generation.max_new_tokens,
+            )
 
+            generation_parameters = GenerationParameters()
+            generation_parameters.temperature = config.generation.temperature
+            generation_parameters.max_new_tokens = config.generation.max_new_tokens
+            generation_parameters.top_p = config.generation.top_p
+            generation_parameters.top_k = config.generation.top_k
+
+            # Create boundary-based early stopping
+            early_stopping = BoundaryEarlyStopping(detector=detector)
+
+            model = BlackboxModelWithStreaming(
+                openai_api_key=config.model.api_key,
+                model_path=model_path,
+                supports_logprobs=config.model.supports_logprobs,
+                early_stopping=early_stopping,
+                generation_parameters=generation_parameters,
+            )
+
+            step_generator = StepCandidateGeneratorThroughAPI(
+                model=model,
+                detector=detector,
+                prefill_mode=config.model.prefill_mode,
+            )
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
     return model, step_generator
 
 
-def create_tts_strategy(config, step_generator, scorer):
+def create_tts_strategy(config, model, step_generator, scorer):
     if config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
+        )
+
+    elif config.strategy.type == "deepconf":
+        # DeepConf requires BlackboxModel with logprobs support
+        if not isinstance(model, BlackboxModelWithStreaming):
+            raise ValueError(
+                f"DeepConf requires BlackboxModelWithStreaming, got {type(model).__name__}"
+            )
+
+        strategy = StrategyDeepConf(
+            model=model,
+            mode=config.strategy.mode,
+            budget=config.strategy.get("budget", 8),
+            warmup_traces=config.strategy.get("warmup_traces", 4),
+            total_budget=config.strategy.get("total_budget", 10),
+            confidence_percentile=config.strategy.get("confidence_percentile", 90),
+            window_size=config.strategy.get("window_size", 2048),
+            filter_method=config.strategy.get("filter_method", "top10"),
+            temperature=config.strategy.get("temperature", 0.7),
+            top_p=config.strategy.get("top_p", 1.0),
+            max_tokens=config.strategy.get("max_tokens", 512),
+            top_logprobs=config.strategy.get("top_logprobs", 20),
         )
 
     else:
@@ -238,7 +394,7 @@ def generate_trajectories(
     log.info("Phase 1: Generating trajectories")
     log.info("=" * 60)
 
-    save_path_file = Path(save_path) / "results.pt"
+    save_path_file = Path(save_path) / "results.json"
 
     subset_size = len(dataset)
     for i in tqdm(range(subset_size), desc="Generating trajectories"):
@@ -253,24 +409,60 @@ def generate_trajectories(
         log.info(f"Sample {i + 1}/{subset_size}")
         log.info(f"Question: {instance['question'][:200]}...")
 
+        # Extract and log gold answer
+        from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
+
+        gold_answer_num = extract_answer_from_gsm8k(instance["answer"])
+        log.info(f"Gold answer: {gold_answer_num}")
+
         # Generate trajectory
-        request = [
-            {"role": "system", "content": ""},
-            {
-                "role": "user",
-                "content": (
-                    prompt_template.format(question=instance["question"])
-                    if prompt_template
-                    else instance["question"]
-                ),
-            },
-        ]
+        if prompt_template:
+            request = prompt_template.format(question=instance["question"])
+        else:
+            request = [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": instance["question"]},
+            ]
+
         result = strategy.generate_trajectory(request)
 
         # Extract generated answer (but don't check correctness yet)
         generated_text = result["trajectory"]
         if instance["question"] in generated_text:
             generated_text = generated_text.replace(instance["question"], "").strip()
+
+        # Log detailed traces
+        log.info("\n" + "-" * 60)
+        log.info("GENERATED TRACES:")
+        log.info("-" * 60)
+
+        # For DeepConf, steps contain the individual traces
+        if result["steps"] and isinstance(result["steps"], list):
+            for step_idx, step in enumerate(result["steps"]):
+                validity = (
+                    result["validity_scores"][step_idx]
+                    if step_idx < len(result["validity_scores"])
+                    else "N/A"
+                )
+                # Format confidence score (handle both numeric and "N/A")
+                confidence_str = (
+                    f"{validity:.3f}"
+                    if isinstance(validity, (int, float))
+                    else validity
+                )
+                log.info(f"\nTrace {step_idx + 1} (confidence: {confidence_str}):")
+                log.info(step)
+        else:
+            # Fallback: show full trajectory
+            log.info(f"\nFull trajectory:\n{result['trajectory']}")
+
+        log.info("\n" + "-" * 60)
+        log.info("FINAL ANSWER:")
+        log.info("-" * 60)
+        log.info(f"Generated: {generated_text}")
+        log.info(f"Num traces: {len(result['steps'])}")
+        log.info(f"Avg confidence: {np.mean(result['validity_scores']):.3f}")
+        log.info("-" * 60)
 
         # Store result WITHOUT correctness check
         results.append(
@@ -286,17 +478,13 @@ def generate_trajectories(
             }
         )
 
-        log.info(f"Generated: {generated_text}")
-        log.info(f"Num steps: {len(result['steps'])}")
-        log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
-
         # Save periodically
         if len(results) % 10 == 0:
-            torch.save(results, save_path_file)
+            _save_results_json(results, save_path_file)
             log.info(f"Saved {len(results)} results to {save_path_file}")
 
     # Final save after generation
-    torch.save(results, save_path_file)
+    _save_results_json(results, save_path_file)
     log.info(f"Final save after generation: {len(results)} results to {save_path_file}")
 
     return results
@@ -312,27 +500,9 @@ def evaluate_results(
     log.info("Phase 2: Checking correctness")
     log.info("=" * 60)
 
-    # Use DeepSeek verification
-    log.info(f"Using DeepSeek verification with {config.evaluator.n_threads} threads")
-
-    # Load prompt template and ensure compatibility
-    prompt_template = (
-        load_prompt_template(config.evaluator.prompt_file)
-        if config.evaluator.prompt_file
-        else ""
-    )
-
-    if "{question}" in prompt_template:
-        prompt_template = prompt_template.replace("{question}", "{q}")
-
-    # Create evaluator
-    evaluator = EvaluatorGoldStandard(
-        prompt=prompt_template,
-        base_url=config.evaluator.base_url,
-        model=config.evaluator.model,
-        n_threads=config.evaluator.n_threads,
-        cache_path=os.path.expanduser("~/.cache"),
-    )
+    # Build evaluators dynamically
+    evaluators = build_evaluators(config)
+    log.info(f"Using evaluators: {list(evaluators.keys())}")
 
     # Prepare data for batch processing
     problems = []
@@ -340,7 +510,6 @@ def evaluate_results(
     gold_answers = []
     result_indices = []
 
-    # always process all results, since we have deepseek cache.
     for i, result in enumerate(results):
         if "error" not in result:
             problems.append(result["question"])
@@ -349,54 +518,70 @@ def evaluate_results(
             result_indices.append(i)
 
     if problems:
-        log.info(f"Verifying {len(problems)} solutions with DeepSeek...")
+        log.info(
+            f"Verifying {len(problems)} solutions with {list(evaluators.keys())}..."
+        )
 
-        # Get annotations from DeepSeek
-        try:
-            annotations = evaluator(problems, solutions, gold_answers)
+        for eval_name, evaluator_fn in evaluators.items():
+            try:
+                annotations = evaluator_fn(problems, solutions, gold_answers)
+                for idx, annotation in zip(result_indices, annotations):
+                    if np.isnan(annotation):
+                        log.warning(
+                            f"{eval_name} returned unclear result for sample "
+                            f"{results[idx]['index']}, marking as incorrect"
+                        )
+                        is_correct = False
+                    else:
+                        is_correct = annotation == 1  # 1 = correct, 0 = incorrect
 
-            # Update results with correctness
-            for idx, annotation in zip(result_indices, annotations):
-                if np.isnan(annotation):
-                    log.warning(
-                        f"DeepSeek returned unclear result for sample "
-                        f"{results[idx]['index']}, marking as incorrect"
-                    )
-                    results[idx]["is_correct"] = False
-                else:
-                    results[idx]["is_correct"] = (
-                        annotation == 0
-                    )  # 0 = correct, 1 = incorrect
+                    results[idx].setdefault("eval", {})[eval_name] = {
+                        "label": None if np.isnan(annotation) else int(annotation),
+                        "is_correct": bool(is_correct),
+                    }
 
-                if (idx - result_indices[0]) % 10 == 0:
-                    log.info(f"\nSample {results[idx]['index']}:")
-                    log.info(f"DeepSeek annotation: {annotation}")
-                    log.info(f"Correct: {results[idx]['is_correct']}")
+                    if (idx - result_indices[0]) % 10 == 0:
+                        log.info(f"Sample {results[idx]['index']} [{eval_name}]:")
+                        log.info(f"Annotation: {annotation}")
+                        log.info(f"Correct: {is_correct}")
 
-        except Exception as e:
-            log.error(f"Error during DeepSeek verification: {e}")
-            # Fall back to marking all as incorrect
-            for idx in result_indices:
-                results[idx]["is_correct"] = False
+            except Exception as e:
+                log.error(f"Error during {eval_name} verification: {e}")
+                for idx in result_indices:
+                    results[idx].setdefault("eval", {})[eval_name] = {
+                        "label": None,
+                        "is_correct": False,
+                    }
 
     # Final save with correctness results
-    save_path_file = Path(save_path) / "results.pt"
-    torch.save(results, save_path_file)
+    save_path_file = Path(save_path) / "results.json"
+    _save_results_json(results, save_path_file)
     log.info(f"Final save with correctness: {len(results)} results to {save_path_file}")
 
-    # Print summary
-    correct = sum(r.get("is_correct", False) for r in results)
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
 
-    log.info("\nSummary:")
-    log.info(f"  - Total samples: {len(results)}")
-    log.info(f"  - Completed: {completed} ({completed / len(results):.1%})")
-    log.info(f"  - Correct: {correct} ({correct / len(results):.1%})")
-    log.info(f"  - Errors: {errors}")
+    # Compute per-evaluator correctness
+    summary_correct = {name: 0 for name in evaluators.keys()}
+    summary_incorrect = {name: 0 for name in evaluators.keys()}
 
-    if completed > 0:
-        log.info(f"  - Accuracy (of completed): {correct / completed:.1%}")
+    for r in results:
+        for name in evaluators.keys():
+            if r.get("eval").get(name).get("is_correct"):
+                summary_correct[name] += 1
+            elif not r.get("eval").get(name).get("is_correct"):
+                summary_incorrect[name] += 1
+
+    log.info("Summary:")
+    log.info(f"Total samples: {len(results)}")
+    log.info(f"Completed: {completed} ({completed/len(results):.1%})")
+    log.info(f"Errors: {errors} ({errors/len(results):.1%})")
+    for name in sorted(list(evaluators.keys())):
+        correct = summary_correct[name]
+        incorrect = summary_incorrect[name]
+        log.info(f"[{name}]")
+        log.info(f"Correct: {correct} ({correct/len(results):.1%})")
+        log.info(f"Incorrect: {incorrect} ({incorrect/len(results):.1%})")
 
     # Average statistics
     all_validities = []
@@ -406,9 +591,9 @@ def evaluate_results(
             all_validities.extend(r["validity_scores"])
             all_steps.append(len(r["steps"]))
 
-    log.info("\nStep Statistics:")
-    log.info(f"  - Avg steps per trajectory: {np.mean(all_steps):.1f}")
-    log.info(f"  - Avg validity score: {np.mean(all_validities):.3f}")
+    log.info("Step Statistics:")
+    log.info(f"Avg steps per trajectory: {np.mean(all_steps):.1f}")
+    log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
 
 
 @hydra.main(
@@ -463,15 +648,19 @@ def main(config):
     )
 
     # Load model
-    log.info(f"Loading model: {config.model.model_path}")
+    model_name = config.model.get("model_name") or config.model.get("model_path")
+    log.info(f"Loading model: {model_name}")
     model, step_generator = create_model(config)
 
-    # Create scorer
-    scorer = create_scorer(config, model)
+    # Create scorer (skip for DeepConf)
+    if config.strategy.type != "deepconf":
+        scorer = create_scorer(config, model)
+    else:
+        scorer = None
 
     # Create tts strategy
     generator = create_tts_strategy(
-        config=config, step_generator=step_generator, scorer=scorer
+        config=config, model=model, step_generator=step_generator, scorer=scorer
     )
     
     processed_indices = set()

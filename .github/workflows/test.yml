@@ -5,21 +5,24 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
 
 jobs:
-  build:
-
+  build-and-test:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: recursive
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
           python-version: '3.10'
+          cache: 'pip'
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -28,6 +31,12 @@ jobs:
     - name: Run setup.sh
       run: |
         ./setup.sh
-    - name: Test with pytest
+    - name: Validate strategy registry
       run: |
-        pytest tests/online_best_of_n tests/run_tts_eval
+        python tests/strategy_registry.py --validate
+    - name: Test with pytest (all strategies)
+      env:
+        OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      run: |
+        pytest tests/ -v

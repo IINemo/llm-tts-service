@@ -98,6 +98,10 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         inputs = self.model.tokenizer.apply_chat_template(
             [request], tokenize=False, add_generation_prompt=True
         )
+        # Ensure inputs is a list (some tokenizers return str, some return list)
+        if isinstance(inputs, str):
+            inputs = [inputs]
+
         if self.disable_thinking_mode:  # TODO: it is wrong
             inputs[
                 0
@@ -197,7 +201,8 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             # Extract step using detector
             step_text = self.detector.extract_step_text(raw_generated_text)
             is_complete = self.detector.is_step_complete(raw_generated_text)
-            is_trajectory_complete = self.detector.is_trajectory_complete(  # TODO: does not work even if it generates <end of response>
+            is_trajectory_complete = self.detector.is_trajectory_complete(
+                # TODO: does not work even if it generates <end of response>
                 raw_generated_text
             )
 
