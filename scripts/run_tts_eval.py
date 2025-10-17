@@ -565,7 +565,7 @@ def evaluate_results(
     # Log key metrics to wandb if enabled
     try:
         import wandb
-        
+
         if wandb.run is not None:
             metrics = {
                 "total_samples": len(results),
@@ -574,7 +574,7 @@ def evaluate_results(
                 "errors": errors,
                 "errors_pct": errors / len(results),
             }
-            
+
             # Add per-evaluator metrics
             for name in evaluators.keys():
                 correct = summary_correct[name]
@@ -584,13 +584,13 @@ def evaluate_results(
                 metrics[f"{name}/incorrect"] = incorrect
                 metrics[f"{name}/incorrect_pct"] = incorrect / len(results)
                 metrics[f"{name}/accuracy"] = correct / len(results)
-            
+
             # Add step statistics
             if all_steps:
                 metrics["avg_steps_per_trajectory"] = np.mean(all_steps)
             if all_validities:
                 metrics["avg_validity_score"] = np.mean(all_validities)
-            
+
             wandb.log(metrics)
             log.info("Logged metrics to wandb")
     except ImportError:
