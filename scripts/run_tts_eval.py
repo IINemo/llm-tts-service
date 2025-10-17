@@ -663,9 +663,9 @@ def main(config):
     generator = create_tts_strategy(
         config=config, model=model, step_generator=step_generator, scorer=scorer
     )
-    
+
     processed_indices = set()
-    results = [] # TODO: add logic for resuming from existing results
+    results = []  # TODO: add logic for resuming from existing results
     # Generate trajectories
     results = generate_trajectories(
         results=results,
