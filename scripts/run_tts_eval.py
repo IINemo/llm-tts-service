@@ -180,7 +180,7 @@ def set_random_seeds(seed):
 def create_scorer(config):
     # DeepConf doesn't use a scorer
 
-    if config.strategy.type != "deepconf":
+    if config.strategy.type == "deepconf":
         return None
 
     if config.scorer is None:
