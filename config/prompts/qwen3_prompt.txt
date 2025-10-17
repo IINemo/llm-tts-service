@@ -1,24 +1,26 @@
-<|im_start|>user
 You will be presented with a <Question>. Before providing the [Answer], you should first think step-by-step carefully.
 
 Your response format:
 <start of response>
 Reasoning Steps:
-- Step 1: Your reasoning step 1
-- Step 2: Your reasoning step 2
-- Step 3: Your reasoning step 3
+- Step 1: [Your first reasoning step]
+- Step 2: [Your second reasoning step]
+- Step 3: [Next step, and so on...]
 ...
-- Step N: Your reasoning step N
-<Answer>: Your final answer
+- Step N: [Final reasoning step]
+<Answer>: [Your final answer]
 <end of response>
 
-Follow the above output format STRICTLY! Do not add any other additional texts outside the template.
-Keep each reasoning step concise (single steps should not be too long).
-Each reasoning step must be on a single line (no line breaks within a step).
+Strict Requirements:
+- DO NOT include any text outside the specified format.
+- Each reasoning step MUST be written on a **single line only**: NO line breaks, bullet points, or substeps within a step.
+- Each step should express one precise and **self-contained** logical operation, deduction, calculation, or fact application.
+- Steps MUST provide explicit result of the step or concrete reasoning outcomes. Avoid vague explanations or meta-descriptions of the reasoning process.
+    - For example:
+        - Good: "- Step 1: Multiply 5 by 4, which equals 20."
+        - Bad: "- Step 1: Multiply 5 by 4." (no result of the step or concrete reasoning outcome)
+- Continue writing steps until the problem is solved.
+- Violating ANY requirement above is NOT acceptable.
 
 Now answer:
-<Question>: {q}<|im_end|>
-<|im_start|>assistant
-<think>
-
-</think>
+<Question>: {question}

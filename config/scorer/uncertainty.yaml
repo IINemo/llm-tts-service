@@ -2,5 +2,4 @@ type: uncertainty
 uncertainty_model_creator: config.scorer.uncertainty_entropy
 uncertainty: 
   test: 1
-device: cuda:1
 batch_size: 1

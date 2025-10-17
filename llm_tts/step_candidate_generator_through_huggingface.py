@@ -69,7 +69,11 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         top_k: int,
         max_new_tokens: int,
         disable_thinking_mode: bool,
+        generation_batch_size: int,
+        return_generation_scores: bool = False,
     ):
+        super().__init__(generation_batch_size)
+
         self.model = model
         self.detector = detector or StepBoundaryDetector()
         self.temperature = temperature
@@ -78,6 +82,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         self.max_new_tokens = max_new_tokens
         self.device = model.device()
         self.disable_thinking_mode = disable_thinking_mode
+        self.return_generation_scores = return_generation_scores
 
     def generate_candidates(
         self,
@@ -198,7 +203,11 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
 
             # Get generation scores if available
             gen_scores = None
-            if hasattr(outputs, "scores") and outputs.scores:
+            if (
+                self.return_generation_scores
+                and hasattr(outputs, "scores")
+                and outputs.scores
+            ):
                 gen_scores = (
                     torch.stack(outputs.scores, dim=1)[i]
                     if i < len(outputs.scores)

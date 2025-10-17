@@ -1,8 +1,11 @@
+import logging
 from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import torch
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,6 +42,9 @@ def covert_trajectory_to_string(trajectory: List[StepCandidate]) -> str:
 class StepCandidateGeneratorBase:
     """Base class for step candidate generator"""
 
+    def __init__(self, generation_batch_size: int):
+        self.generation_batch_size = generation_batch_size
+
     @abstractmethod
     def generate_candidates(
         self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
@@ -52,3 +58,66 @@ class StepCandidateGeneratorBase:
     ) -> List[StepCandidate]:
         """Generate answer for a given trajectory"""
         pass
+
+    def __call__(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
+    ) -> List[StepCandidate]:
+        """Generate candidates for a given trajectory"""
+
+        if self.generation_batch_size < candidates_per_step:
+            candidates = self._generate_candidates_in_batches(
+                request,
+                trajectory=trajectory,
+                candidates_per_step=candidates_per_step,
+            )
+        else:
+            candidates = self.generate_candidates(
+                request,
+                trajectory=trajectory,
+                candidates_per_step=candidates_per_step,
+            )
+
+        return candidates
+
+    def _generate_candidates_in_batches(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
+    ) -> List:
+        """Generate candidates in smaller batches to avoid OOM"""
+
+        all_candidates = []
+
+        # Calculate number of batches needed
+        num_batches = (
+            candidates_per_step + self.generation_batch_size - 1
+        ) // self.generation_batch_size
+
+        for batch_idx in range(num_batches):
+            # Calculate batch size for this iteration
+            start_idx = batch_idx * self.generation_batch_size
+            end_idx = min(
+                (batch_idx + 1) * self.generation_batch_size,
+                candidates_per_step,
+            )
+            batch_size = end_idx - start_idx
+
+            log.info(
+                f"Generating batch {batch_idx+1}/{num_batches} ({batch_size} candidates)"
+            )
+
+            # Generate batch
+            batch_candidates = self.generate_candidates(
+                request, trajectory=trajectory, candidates_per_step=batch_size
+            )
+            if batch_candidates:
+                all_candidates.extend(batch_candidates)
+
+            # Clear GPU cache after each batch
+            torch.cuda.empty_cache()
+
+        return all_candidates

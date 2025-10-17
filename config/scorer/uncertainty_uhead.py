@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from typing import List, Dict
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -41,7 +42,10 @@ class ReasonStepClaimExtractor(StatCalculator):
 
 
 def create_uncertainty_model(config):
-    llm = AutoModelForCausalLM.from_pretrained(config.model.model_path)
+    llm = AutoModelForCausalLM.from_pretrained(
+        config.model.model_path,
+        attn_implementation="eager",
+    )
     tokenizer = AutoTokenizer.from_pretrained(config.model.model_path)
     tokenizer.pad_token = tokenizer.eos_token
     llm = llm.to(config.model.device)
@@ -55,7 +59,7 @@ def create_uncertainty_model(config):
         uncertainty_head,
         tokenize=True,
         # args_generate=args_generate, TODO:
-        device="cuda",
+        device="cuda" if torch.cuda.is_available() else "cpu",
         generations_cache_dir="",
         predict_token_uncertainties=False,
     )
