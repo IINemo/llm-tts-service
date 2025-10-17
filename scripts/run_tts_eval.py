@@ -21,7 +21,7 @@ from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from vllm import LLM
+from vllm import LLM, SamplingParams
 
 from llm_tts.evaluation import (
     EvaluatorAlignScore,
@@ -37,6 +37,9 @@ from llm_tts.step_candidate_generator_through_api import (
 )
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
+)
+from llm_tts.step_candidate_generator_through_vllm import (
+    StepCandidateGeneratorThroughVLLM,
 )
 from llm_tts.strategies import MUR, StrategyOnlineBestOfN
 
@@ -303,7 +306,35 @@ def create_model(config):
             gpu_memory_utilization=config.model.gpu_memory_utilization,
             max_model_len=config.model.max_model_len,
         )
-        return model, model
+        answer_patterns = [
+            "<Answer>:",
+            "\n<Answer>:",
+            "\n\nAnswer:",
+            "Final Answer:",
+            "The answer is",
+        ]
+        step_patterns = [
+            "\n- Step",
+            "- Step",
+            "\nStep",
+            "\n\nStep",
+            "## Step",
+        ]
+
+        detector = StepBoundaryDetector(
+            answer_patterns=answer_patterns,
+            step_patterns=step_patterns,
+            max_tokens_per_step=2048,
+        )
+
+        step_candidate_generator = StepCandidateGeneratorThroughVLLM(
+            model=model,
+            detector=detector,
+            sampling_params=SamplingParams(
+                max_tokens=2048, logprobs=20, stop=step_patterns, temperature=0.6
+            ),
+        )
+        return model, step_candidate_generator
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
@@ -327,16 +358,15 @@ def create_tts_strategy(config, step_generator, scorer):
                 max_model_len=config.model.max_model_len,
             )
         strategy = MUR(
-            vllm_model=step_generator,
+            step_candidate_generator=step_generator,
             critic_model=critic_model,
-            estimators=scorer,
             max_steps=config.strategy.max_steps,
             max_tokens=config.generation.max_new_tokens,
             momentum_rate=config.strategy.momentum_rate,
             scaling_rate=config.strategy.scaling_rate,
             temperature=config.generation.temperature,
             candidate_num=config.strategy.candidate_num,
-            logprobs=config.strategy.logprobs,
+            select_best=config.strategy.select_best,
         )
 
     else:

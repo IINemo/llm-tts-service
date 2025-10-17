@@ -15,7 +15,7 @@ dataset:
 
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen3-4B"
+  model_path: "Qwen/Qwen3-1.7B"
   gpu_memory_utilization: 0.6
   max_model_len: 16384
 
@@ -26,7 +26,7 @@ generation:
   logprobs: 20
 
 scorer:
-  type: perplexity
+  type: uncertainty
 
 evaluator:
   base_url: https://api.deepseek.com/v1
@@ -40,7 +40,7 @@ strategy:
   scaling_rate: 0.9
   select_best: "entropy" # perplexity or entropy
   candidate_num: 4
-  # critic_model_path: None
+  critic_model_path: "None"
 
 system:
   device: "cuda:0"  # Device to use for base model
