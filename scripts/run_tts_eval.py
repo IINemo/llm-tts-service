@@ -158,47 +158,6 @@ def _save_results_json(results, json_path: Path):
         json.dump(json_data, f, ensure_ascii=False, indent=2)
 
 
-def load_existing_results(save_path: str, dataset):
-    log.info(f"Loading existing results from {save_path}")
-
-    try:
-        with open(save_path, "r", encoding="utf-8") as f:
-            results = json.load(f)
-        processed_indices = {r["index"] for r in results}
-        log.info(f"Loaded {len(results)} existing results")
-        log.info(f"Already processed indices: {sorted(processed_indices)}")
-
-        # Validate all existing results match current dataset
-        log.info("Validating existing results against current dataset...")
-        for result in results:
-            idx = result["index"]
-            if idx < len(dataset):
-                sample = dataset[idx]
-                if (
-                    result["question"] != sample["question"]
-                    or result["gold_answer"] != sample["answer"]
-                ):
-                    raise ValueError(
-                        f"Sample mismatch at index {idx}!\n"
-                        f"Existing question: {result['question']}...\n"
-                        f"Current question: {sample['question']}...\n"
-                        f"Existing answer: {result['gold_answer']}\n"
-                        f"Current answer: {sample['answer']}\n"
-                        f"The saved results appear to be from a different dataset!"
-                    )
-        log.info("Validation passed - all existing results match current dataset")
-
-    except Exception as e:
-        if "Sample mismatch" in str(e):
-            raise  # Re-raise validation errors
-
-        log.warning(f"Failed to load existing results: {e}")
-        results = []
-        processed_indices = set()
-
-    return results, processed_indices
-
-
 def wandb_save_directory(directory_path):
     import wandb
 
@@ -218,7 +177,7 @@ def set_random_seeds(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def create_scorer(config, model):
+def create_scorer(config):
     # DeepConf doesn't use a scorer
 
     if config.strategy.type != "deepconf":
@@ -420,13 +379,17 @@ def generate_trajectories(
         log.info(f"Gold answer: {gold_answer_num}")
 
         # Generate trajectory
-        if prompt_template:
-            request = prompt_template.format(question=instance["question"])
-        else:
-            request = [
-                {"role": "system", "content": ""},
-                {"role": "user", "content": instance["question"]},
-            ]
+        request = [
+            {"role": "system", "content": ""},
+            {
+                "role": "user",
+                "content": (
+                    prompt_template.format(question=instance["question"])
+                    if prompt_template
+                    else instance["question"]
+                ),
+            },
+        ]
 
         result = strategy.generate_trajectory(request)
 
@@ -657,7 +620,7 @@ def main(config):
     model, step_generator = create_model(config)
 
     # Create scorer (skip for DeepConf)
-    scorer = create_scorer(config, model)
+    scorer = create_scorer(config)
 
     # Create tts strategy
     generator = create_tts_strategy(
