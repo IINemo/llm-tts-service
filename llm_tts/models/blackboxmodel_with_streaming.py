@@ -104,7 +104,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
                 temperature=temperature,
                 stream=True,
                 logprobs=needs_logprobs,
-                top_logprobs=20 if needs_logprobs else None, # TODO:
+                top_logprobs=20 if needs_logprobs else None,  # TODO:
             )
 
             accumulated_text = ""
