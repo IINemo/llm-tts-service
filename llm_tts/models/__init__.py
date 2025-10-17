@@ -1,10 +1,8 @@
 """
-Model adapters for different providers (Together AI, OpenRouter, Local models).
+Model adapters for LLM providers.
 """
 
 from .base import BaseModel
-from .factory import create_model
-from .openrouter import OpenRouterModel
-from .together_ai import TogetherAIModel
+from .blackboxmodel_with_streaming import BlackboxModelWithStreaming
 
-__all__ = ["BaseModel", "TogetherAIModel", "OpenRouterModel", "create_model"]
+__all__ = ["BaseModel", "BlackboxModelWithStreaming"]

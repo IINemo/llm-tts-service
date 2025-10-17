@@ -2,4 +2,4 @@
 
 device: "cuda:0"  # Device to use for base model
 seed: 42  # Random seed
-hf_cache: null  # HuggingFace cache directory
+hf_cache: ".cache/huggingface"  # HuggingFace cache directory (local to repo)

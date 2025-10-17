@@ -153,7 +153,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         continuation_promt = (
             "Continue the assistant message from the EXACT prefix below. "
             "Begin immediately after the last character of the prefix. "
-            "Output ONLY the final answer text; do NOT include steps, chain-of-thought, or any preface. "
+            "Output ONLY the final answer text; "
+            "do NOT include steps, chain-of-thought, or any preface. "
             "Do NOT repeat the prefix.\n"
             "----- PREFIX START -----\n"
             f"{prefix}\n"

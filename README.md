@@ -1,4 +1,5 @@
-<img width="120" height="120" alt="ai-flies-on-the-rocket-" src="https://github.com/user-attachments/assets/0ad1c870-b8e1-4b1d-94ae-e75dd5bd583e" />
+<img width="130" height="130" alt="image" src="https://github.com/user-attachments/assets/588610f9-f0e2-4bcc-8a71-aa3ffd6af91e" />
+
 
 # LLM Test-Time Scaling Service
 
@@ -16,6 +17,20 @@ Update lm-polygraph later:
 ```bash
 ./setup.sh --update
 ```
+
+## Configuration
+
+**API Keys:**
+```bash
+# Copy example env file
+cp .env.example .env
+
+# Edit .env and add your API keys
+# OPENROUTER_API_KEY=your-key-here
+# DEEPSEEK_API_KEY=your-key-here
+```
+
+The script will automatically load API keys from `.env` file.
 
 ## Development
 
@@ -90,15 +105,65 @@ Pre-commit hooks run automatically on `git commit` and will block commits that f
 2. Add tree of thought
 
 
-# Examples:
-- Reasoner Qwen-3 local:
-```OPENAI_API_KEY=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 PYTHONPATH=./ python ./scripts/run_tts_eval.py --config-path=../config/ --config-name=run_tts_eval.yaml dataset=small_gsm8k dataset.subset=1 model=hf_qwen3```
-- Reasoner ChatGPT: ```OPENAI_API_KEY=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 PYTHONPATH=./ python ./scripts/run_tts_eval.py --config-path=../config/ --config-name=run_tts_eval.yaml dataset=small_gsm8k dataset.subset=1 model=openai model.api_key=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 model.model_path="gpt-4o-mini"```
-- With uncertainty:
+## Running Experiments
+
+See strategy-specific documentation:
+- [DeepConf Strategy](docs/deepconf/DeepConf.md) - Confidence-based test-time scaling
+
+## Examples
+
+**Note:** API keys are loaded from `.env` file - no need to specify them in the command.
+
+### Online Best-of-N Strategy
+
+Reasoner with Qwen-3 (local):
+```bash
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name run_tts_eval \
+  dataset=small_gsm8k \
+  dataset.subset=1 \
+  model=hf_qwen3
 ```
-OPENAI_API_KEY=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 PYTHONPATH=./ python ./scripts/run_tts_eval.py --config-path=../config/ --config-name=run_tts_eval.yaml dataset=small_gsm8k dataset.subset=1 model=hf_qwen3 scorer=uncertainty
+
+Reasoner with ChatGPT:
+```bash
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name run_tts_eval \
+  dataset=small_gsm8k \
+  dataset.subset=1 \
+  model=openai \
+  model.model_path="gpt-4o-mini"
 ```
-- Uhead:
+
+With uncertainty scorer:
+```bash
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name run_tts_eval \
+  dataset=small_gsm8k \
+  dataset.subset=1 \
+  model=hf_qwen3 \
+  scorer=uncertainty
 ```
-OPENAI_API_KEY=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 PYTHONPATH=./ python ./scripts/run_tts_eval.py --config-path=../config/ --config-name=run_tts_eval.yaml dataset=small_gsm8k dataset.subset=1 model=hf_qwen3 scorer=uncertainty_uhead
+
+### DeepConf Strategy
+
+**Offline mode** (generate N traces, filter by confidence, majority vote):
+```bash
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
+  model.model_path="openai/gpt-3.5-turbo" \
+  dataset.subset=10
+```
+
+**Online mode** (adaptive generation with confidence-based early stopping):
+```bash
+python scripts/run_tts_eval.py \
+  --config-path ../config \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_online \
+  model.model_path="openai/gpt-3.5-turbo" \
+  dataset.subset=10
 ```

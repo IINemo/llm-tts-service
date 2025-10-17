@@ -1,0 +1,26 @@
+# @package _global_
+
+defaults:
+  - dataset: gsm8k
+  - model: openrouter
+  - generation: default
+  - output: default
+  - system: default
+  - strategy: chain_of_thought
+  - _self_
+
+# Chain-of-thought doesn't need a scorer
+scorer: null
+verbose: true
+eval_method: llm_judge
+
+# API-specific overrides
+generation:
+  max_new_tokens: 300  # Shorter for faster API calls
+
+# Evaluator for correctness checking
+evaluator:
+  provider: openrouter
+  base_url: https://openrouter.ai/api/v1
+  model: openai/gpt-3.5-turbo
+  n_threads: 1
