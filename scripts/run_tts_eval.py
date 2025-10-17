@@ -35,9 +35,9 @@ from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.strategies import (
+    StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
-    StrategyBeamSearch,
 )
 
 # Load environment variables from .env file

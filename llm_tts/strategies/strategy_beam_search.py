@@ -1,6 +1,7 @@
 import logging
-import numpy as np
 from typing import Any, Dict, List
+
+import numpy as np
 
 from llm_tts.step_candidate_generator_base import covert_trajectory_to_string
 from llm_tts.step_candidate_generator_through_api import (
