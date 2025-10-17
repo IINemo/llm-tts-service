@@ -1,122 +1,241 @@
 <img width="130" height="130" alt="image" src="https://github.com/user-attachments/assets/588610f9-f0e2-4bcc-8a71-aa3ffd6af91e" />
 
-
 # LLM Test-Time Scaling Service
 
-## Install
+A research framework for implementing and evaluating test-time scaling strategies for large language models. Includes implementations of DeepConf, Best-of-N, Self-Consistency, and Chain-of-Thought strategies.
+
+---
+
+## 🚀 Quick Start
+
+### For Users (Run Experiments)
 
 ```bash
+# 1. Install
 ./setup.sh
-```
 
-This installs:
-- Package dependencies (via pip install -e .)
-- lm-polygraph dev branch
-
-Update lm-polygraph later:
-```bash
-./setup.sh --update
-```
-
-## Configuration
-
-**API Keys:**
-```bash
-# Copy example env file
+# 2. Configure API keys
 cp .env.example .env
+# Edit .env and add your OPENROUTER_API_KEY
 
-# Edit .env and add your API keys
-# OPENROUTER_API_KEY=your-key-here
-# DEEPSEEK_API_KEY=your-key-here
+# 3. Run DeepConf on GSM8K
+python scripts/run_tts_eval.py \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
+  dataset.subset=10
 ```
 
-The script will automatically load API keys from `.env` file.
+### For Developers (Contribute Code)
 
-## Development
+See [Onboarding Guide](#-onboarding-for-developers) below.
 
-Install dev dependencies and pre-commit hooks:
+---
+
+## 📚 Onboarding for Developers
+
+**Welcome!** Follow these steps to get started with development:
+
+### Step 1: Understand the Project
+
+**Read the documentation:**
+- **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Architecture overview, components, design patterns
+- **[Strategy Registration](docs/STRATEGY_REGISTRATION.md)** - How to add new strategies with tests
+- **[DeepConf Guide](docs/deepconf/DeepConf.md)** - Example strategy implementation
+
+**Quick architecture overview:**
+```
+llm_tts/strategies/     → TTS strategy implementations
+llm_tts/models/         → Model wrappers with streaming support
+llm_tts/scorers/        → Step scoring functions (PRM, uncertainty)
+llm_tts/evaluation/     → Correctness evaluation methods
+config/                 → Hydra configuration system
+tests/                  → Test suite with strategy registry
+```
+
+### Step 2: Set Up Development Environment
+
 ```bash
+# Clone the repository
+git clone https://github.com/IINemo/llm-tts-service.git
+cd llm-tts-service
+
+# Install dependencies and lm-polygraph
+./setup.sh
+
+# Install dev dependencies and git hooks
 pip install -e ".[dev]"
 make hooks
 ```
 
-## Running the REST API Service
+**What this does:**
+- Installs package in editable mode (`-e`)
+- Installs lm-polygraph dev branch (submodule)
+- Sets up pre-commit hooks (black, isort, flake8)
 
-### Quick Start (Recommended)
-
-```bash
-./start_service_app.sh
-```
-
-This automated script handles everything:
-- Checks Docker is running
-- Creates `.env` if needed
-- Validates API keys
-- Builds and starts the service
-- Waits for health check
-
-### Manual Docker
+### Step 3: Configure API Keys
 
 ```bash
-export OPENROUTER_API_KEY="your-key"
-docker-compose up -d
+# Copy example env file
+cp .env.example .env
+
+# Edit .env and add your keys:
+# OPENROUTER_API_KEY=sk-or-v1-...
+# DEEPSEEK_API_KEY=sk-...
 ```
 
-### Local Development
+**Required for:**
+- Running experiments (OPENROUTER_API_KEY)
+- Evaluation with LLM judge (DEEPSEEK_API_KEY or OPENROUTER_API_KEY)
 
-For development without Docker:
+### Step 4: Verify Installation
+
 ```bash
-pip install -e ".[service]"
-export OPENROUTER_API_KEY="your-key"
-python service_app/main.py
+# Run tests to verify setup
+pytest tests/strategy_registry.py --validate  # Validate registry
+pytest tests/deepconf/ -v                     # Run DeepConf tests
+pytest tests/online_best_of_n/ -v             # Run Best-of-N tests
+
+# Or run all tests
+make test
 ```
 
-See `service_app/README.md` for detailed service documentation.
+**Expected result:** All tests pass (some may skip if API keys not set)
 
-**Daily workflow:**
+### Step 5: Run Your First Experiment
+
+```bash
+# Quick test with 1 sample
+python scripts/run_tts_eval.py \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
+  dataset.subset=1 \
+  strategy.budget=4
+
+# Check the output
+ls outputs/  # Results saved here with timestamp
+```
+
+### Step 6: Make Your First Change
+
+**Example: Add a new strategy**
+
+```bash
+# 1. Create strategy file
+touch llm_tts/strategies/strategy_my_new.py
+
+# 2. Implement your strategy (inherit from StrategyBase)
+
+# 3. Create tests
+mkdir tests/my_new
+touch tests/my_new/test_my_new.py
+
+# 4. Register in strategy registry
+# Edit tests/strategy_registry.py
+
+# 5. Validate
+python tests/strategy_registry.py --validate
+
+# 6. Run tests
+pytest tests/my_new/ -v
+```
+
+**See [Strategy Registration Guide](docs/STRATEGY_REGISTRATION.md) for detailed steps.**
+
+### Step 7: Daily Development Workflow
+
 ```bash
 # Make your changes...
 
-# Before committing - auto-fix all issues
-make fix     # Runs pre-commit on all files (black, isort, etc.)
-
-# Check for remaining issues
-make lint    # Run flake8
-
-# Commit (hooks will run automatically)
-git commit -m "your message"
-```
-
-**Manual formatting:**
-```bash
-make format  # Just run black + isort (without other hooks)
+# Format and check before committing
+make fix     # Auto-fix with black, isort
 make lint    # Check with flake8
+
+# Run relevant tests
+pytest tests/your_module/ -v
+
+# Commit (hooks run automatically)
+git commit -m "feat: add new feature"
+
+# Push
+git push origin your-branch
 ```
 
-Pre-commit hooks run automatically on `git commit` and will block commits that fail checks.
+**Pre-commit hooks will:**
+- Format code with black and isort
+- Check for trailing whitespace, large files
+- Run flake8 linting
+- Block commit if checks fail
 
-## Structure
-* config -- hydra configuration files.
-* llm_tts -- the library with test time scaling strategies.
-* scripts/run_tts_eval.py -- the script for running evaluation of test time scaling methods.
+---
 
-# TODO:
-1. Add new scorers
-2. Add tree of thought
+## 📁 Project Structure
 
+```
+llm-tts-service/
+├── config/              # Hydra configuration (experiments, models, strategies)
+├── llm_tts/             # Main library
+│   ├── strategies/      # TTS strategy implementations (DeepConf, Best-of-N, etc.)
+│   ├── models/          # Model wrappers (streaming, early stopping)
+│   ├── scorers/         # Step scoring (PRM, uncertainty, voting)
+│   ├── evaluation/      # Correctness evaluation (LLM judge, exact match)
+│   └── datasets/        # Dataset utilities (GSM8K, etc.)
+├── scripts/             # Main evaluation script (run_tts_eval.py)
+├── tests/               # Test suite with strategy registry
+├── docs/                # Documentation
+└── lm-polygraph/        # Submodule: uncertainty estimation
+```
 
-## Running Experiments
+**Quick Overview:**
+- **Strategies**: DeepConf (confidence-based), Best-of-N (PRM scoring), Self-Consistency, Chain-of-Thought
+- **Configuration**: Hierarchical Hydra configs - see `config/README.md`
+- **Evaluation**: Two-phase pipeline (generation → evaluation) with multi-evaluator support
+- **Testing**: Strategy registry enforces test coverage - see [Strategy Registration Guide](docs/STRATEGY_REGISTRATION.md)
 
-See strategy-specific documentation:
-- [DeepConf Strategy](docs/deepconf/DeepConf.md) - Confidence-based test-time scaling
+**📖 For detailed architecture and component descriptions, see [Project Structure Documentation](docs/PROJECT_STRUCTURE.md)**
 
-## Examples
+---
+
+## 🔧 Development Commands
+
+```bash
+# Testing
+make test              # Run all tests
+pytest tests/path/ -v  # Run specific tests
+
+# Code Quality
+make fix               # Auto-fix formatting (black, isort)
+make format            # Format only (no other hooks)
+make lint              # Check with flake8
+make hooks             # Install pre-commit hooks
+
+# Validation
+python tests/strategy_registry.py --validate  # Validate all strategies
+python tests/strategy_registry.py --list      # List registered strategies
+```
+
+## 💡 Usage Examples
 
 **Note:** API keys are loaded from `.env` file - no need to specify them in the command.
 
-### Online Best-of-N Strategy
+### DeepConf Strategy
 
-Reasoner with Qwen-3 (local):
+**Offline mode** (generate N traces, filter by confidence, majority vote):
+```bash
+python scripts/run_tts_eval.py \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
+  model.model_path="openai/gpt-3.5-turbo" \
+  dataset.subset=10
+```
+
+**Online mode** (adaptive generation with confidence-based early stopping):
+```bash
+python scripts/run_tts_eval.py \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_online \
+  model.model_path="openai/gpt-3.5-turbo" \
+  dataset.subset=10
+```
+
+### Best-of-N Strategy
+
+With Qwen-3 (local model):
 ```bash
 WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py \
   --config-path ../config \
@@ -126,7 +245,7 @@ WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py 
   model=hf_qwen3
 ```
 
-Reasoner with ChatGPT:
+With ChatGPT via OpenRouter:
 ```bash
 WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py \
   --config-path ../config \
@@ -148,24 +267,57 @@ WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py 
   scorer=uncertainty
 ```
 
-### DeepConf Strategy
+---
 
-**Offline mode** (generate N traces, filter by confidence, majority vote):
+## 🌐 REST API Service (Optional)
+
+Deploy strategies as a REST API for production use.
+
+### Quick Start
+
 ```bash
-WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py \
-  --config-path ../config \
-  --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
-  model.model_path="openai/gpt-3.5-turbo" \
-  dataset.subset=10
+./start_service_app.sh  # Automated setup with Docker
 ```
 
-**Online mode** (adaptive generation with confidence-based early stopping):
+### Manual Setup
+
 ```bash
-WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py \
-  --config-path ../config \
-  --config-name experiments/deepconf/run_gsm8k_deepconf_online \
-  model.model_path="openai/gpt-3.5-turbo" \
-  dataset.subset=10
+# With Docker
+export OPENROUTER_API_KEY="your-key"
+docker-compose up -d
+
+# Without Docker (local dev)
+pip install -e ".[service]"
+export OPENROUTER_API_KEY="your-key"
+python service_app/main.py
 ```
 
+**See `service_app/README.md` for API documentation.**
 
+---
+
+## 📖 Documentation
+
+- **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Detailed architecture and components
+- **[Strategy Registration](docs/STRATEGY_REGISTRATION.md)** - Adding new strategies with tests
+- **[DeepConf Guide](docs/deepconf/DeepConf.md)** - Confidence-based test-time scaling
+- **[GSM8K Dataset](docs/datasets/GSM8K/)** - Dataset usage examples
+- **[Configuration Guide](config/README.md)** - Hydra config system
+
+---
+
+## 🤝 Contributing
+
+1. Read the [Onboarding Guide](#-onboarding-for-developers)
+2. Check [Strategy Registration](docs/STRATEGY_REGISTRATION.md) for requirements
+3. Follow the [Daily Workflow](#step-7-daily-development-workflow)
+4. Ensure tests pass: `make test`
+5. Submit a PR
+
+---
+
+## 📝 TODO
+
+- Add new scorers (semantic similarity, calibration-based)
+- Implement Tree of Thought strategy
+- Add MATH dataset support
