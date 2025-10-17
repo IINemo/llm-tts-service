@@ -195,6 +195,12 @@ llm-tts-service/
 - Pre-configured experiments in `experiments/`
 - See `config/README.md` for detailed guide
 
+**Testing & Quality Assurance** (`tests/strategy_registry.py`)
+- Centralized registry of all TTS strategies
+- Validates each strategy has required tests before merge
+- Runs automatically in CI/CD pipeline
+- See [Strategy Registration Guide](docs/STRATEGY_REGISTRATION.md) for details
+
 # TODO:
 1. Add new scorers
 2. Add tree of thought
