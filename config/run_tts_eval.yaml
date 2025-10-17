@@ -1,10 +1,15 @@
 # @package _global_
 
+hydra:
+  run:
+    dir: ${save_dir}/eval/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+save_dir: "./workdir"  # Directory to save results (will create validity/redundancy subdirs)
+
 defaults:
   - dataset: default
   - model: hf_qwen3
   - generation: default
-  - output: default
   - system: default
   - scorer: prm
   - evaluation/llm_judge: default
@@ -18,3 +23,5 @@ strategy:
   type: online_best_of_n
   candidates_per_step: 3
   max_steps: 3
+
+report_to: wandb
