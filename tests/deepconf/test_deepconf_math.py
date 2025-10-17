@@ -21,25 +21,15 @@ Examples:
     python tests/test_deepconf_math.py --budget 10 --verbose
 """
 
+import logging
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath("."))
 
-import importlib.util
-import logging
-
-# Import models normally
-from llm_tts.models import create_model
-
-# Import deepconf_strategy directly without triggering strategies/__init__.py
-spec = importlib.util.spec_from_file_location(
-    "llm_tts.strategies.deepconf_strategy", "llm_tts/strategies/deepconf_strategy.py"
-)
-deepconf_module = importlib.util.module_from_spec(spec)
-sys.modules["llm_tts.strategies.deepconf_strategy"] = deepconf_module
-spec.loader.exec_module(deepconf_module)
-DeepConfStrategy = deepconf_module.DeepConfStrategy
+# Import models and strategies normally
+from llm_tts.models import BlackboxModelWithStreaming
+from llm_tts.strategies import StrategyDeepConf
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -55,17 +45,26 @@ MATH_PROBLEMS = [
         "description": "Difference of squares",
     },
     {
-        "problem": "A rectangle has length 12 cm and width 8 cm. What is its area in square centimeters? Put answer in \\boxed{}.",
+        "problem": (
+            "A rectangle has length 12 cm and width 8 cm. "
+            "What is its area in square centimeters? Put answer in \\boxed{}."
+        ),
         "expected": "96",
         "description": "Rectangle area",
     },
     {
-        "problem": "If a train travels 120 km in 2 hours at constant speed, how far will it travel in 5 hours? Put answer in \\boxed{}.",
+        "problem": (
+            "If a train travels 120 km in 2 hours at constant speed, "
+            "how far will it travel in 5 hours? Put answer in \\boxed{}."
+        ),
         "expected": "300",
         "description": "Speed-distance problem",
     },
     {
-        "problem": "What is the sum of the first 10 positive integers (1+2+3+...+10)? Put answer in \\boxed{}.",
+        "problem": (
+            "What is the sum of the first 10 positive integers (1+2+3+...+10)? "
+            "Put answer in \\boxed{}."
+        ),
         "expected": "55",
         "description": "Arithmetic series",
     },
@@ -98,12 +97,15 @@ def run_math_test(
     log.info(f"Expected: {expected}")
     log.info("=" * 70)
 
-    strategy = DeepConfStrategy(
+    strategy = StrategyDeepConf(
         model=model,
+        mode="offline",
         budget=budget,
         window_size=16,
         temperature=0.7,
+        top_p=1.0,
         max_tokens=500,
+        top_logprobs=20,
         filter_method="none",  # Use all traces
     )
 
@@ -112,28 +114,17 @@ def run_math_test(
 
         selected = result["metadata"]["selected_answer"]
         confidence = result["metadata"]["confidence_score"]
-        num_used = result["metadata"]["num_paths_used"]
-        num_total = result["metadata"]["num_paths_generated"]
+        num_used = result["metadata"]["filtered_traces"]
+        num_total = result["metadata"]["total_traces"]
 
         is_correct = selected == expected
 
-        # Log full reasoning paths if verbose
+        # TODO: Verbose mode disabled - strategy doesn't return all_traces in metadata
+        # To enable verbose mode, update strategy to include full trace data
         if verbose:
-            log.info(f"\n📝 Full Reasoning Paths:")
-            log.info("-" * 70)
-            for i, trace in enumerate(result["metadata"]["all_traces"], 1):
-                log.info(f"\n🧠 Trace {i}/{num_total}:")
-                log.info(f"   Answer: {trace.get('extracted_answer', 'N/A')}")
-                log.info(f"   Min confidence: {trace.get('min_conf', 0):.3f}")
-                log.info(f"   Tokens: {trace.get('num_tokens', 0)}")
-                log.info(f"\n   Reasoning:")
-                reasoning_text = trace.get("text", "")
-                for line_num, line in enumerate(reasoning_text.split("\n"), 1):
-                    if line.strip():
-                        log.info(f"     {line_num:2d}: {line.strip()}")
-                log.info("-" * 70)
+            log.info("\n⚠️  Verbose mode not available (all_traces not in metadata)")
 
-        log.info(f"\n📊 Results:")
+        log.info("\n📊 Results:")
         log.info(f"   Selected answer: {selected}")
         log.info(f"   Expected answer: {expected}")
         log.info(f"   Correct: {'✅ YES' if is_correct else '❌ NO'}")
@@ -141,7 +132,7 @@ def run_math_test(
         log.info(f"   Traces used: {num_used}/{num_total}")
 
         if result["metadata"]["vote_distribution"]:
-            log.info(f"   Vote distribution:")
+            log.info("   Vote distribution:")
             for ans, pct in sorted(
                 result["metadata"]["vote_distribution"].items(),
                 key=lambda x: x[1],
@@ -209,11 +200,11 @@ def main():
     # Create model
     log.info("Initializing model...")
     try:
-        model = create_model(
-            provider="openrouter",
-            model_name="openai/gpt-4o-mini",
-            api_key=api_key,
-            top_logprobs=20,
+        model = BlackboxModelWithStreaming(
+            openai_api_key=api_key,
+            model_path="openai/gpt-4o-mini",
+            supports_logprobs=True,
+            base_url="https://openrouter.ai/api/v1",
         )
         log.info("✅ Model initialized\n")
     except Exception as e:
@@ -239,13 +230,18 @@ def main():
     accuracy = correct_count / total_count if total_count > 0 else 0
 
     log.info(f"\nOverall Accuracy: {correct_count}/{total_count} ({accuracy:.1%})")
-    log.info(f"\nDetailed Results:")
+    log.info("\nDetailed Results:")
     log.info("-" * 70)
 
     for r in results:
         status = "✅" if r["correct"] else "❌"
+        problem = r["problem"][:30]
+        expected = r["expected"]
+        selected = r["selected"]
+        conf = r["confidence"]
         log.info(
-            f"{status} {r['problem']:<30} Expected: {r['expected']:<10} Got: {r['selected']:<10} Conf: {r['confidence']:.3f}"
+            f"{status} {problem:<30} Expected: {expected:<10} "
+            f"Got: {selected:<10} Conf: {conf:.3f}"
         )
 
     # Confidence analysis

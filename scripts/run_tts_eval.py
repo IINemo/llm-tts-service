@@ -9,12 +9,8 @@ from pathlib import Path
 import hydra
 import numpy as np
 import torch
-from datasets import (
-    Dataset,
-    concatenate_datasets,
-    get_dataset_config_names,
-    load_dataset,
-)
+from datasets import Dataset, load_dataset
+from dotenv import load_dotenv
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
 from lm_polygraph.utils.generation_parameters import GenerationParameters
@@ -37,7 +33,10 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyOnlineBestOfN
+from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN
+
+# Load environment variables from .env file
+load_dotenv()
 
 log = logging.getLogger(__name__)
 
@@ -80,7 +79,21 @@ def build_evaluators(config):
             if "{question}" in prompt_template:
                 prompt_template = prompt_template.replace("{question}", "{q}")
 
+            # Set API key in environment based on provider
+            provider = llm_cfg.get("provider")
+            if provider == "openrouter":
+                api_key = os.getenv("OPENROUTER_API_KEY")
+            elif provider == "deepseek":
+                api_key = os.getenv("DEEPSEEK_API_KEY")
+            else:
+                api_key = os.getenv("OPENAI_API_KEY")
+
+            if api_key:
+                os.environ["OPENAI_API_KEY"] = api_key
+
+            # Remove config-only params not needed by evaluator
             llm_cfg.pop("prompt_file", None)
+            llm_cfg.pop("provider", None)
             llm_cfg["prompt"] = prompt_template
 
             evaluators["llm_judge"] = EvaluatorLLMAsAJudge(**llm_cfg)
@@ -206,6 +219,10 @@ def set_random_seeds(seed):
 
 
 def create_scorer(config, model):
+    # DeepConf doesn't use a scorer
+    if config.scorer is None:
+        return None
+
     if config.scorer.type == "prm":
         scorer = StepScorerPRM(
             prm_model_path=config.scorer.model_path,
@@ -265,47 +282,97 @@ def create_model(config):
         )
 
     elif config.model.type == "openai_api":
-        log.info(f"Using OpenAI API model: {config.model.model_path}")
+        # Use model_name if available, otherwise fall back to model_path
+        model_path = config.model.get("model_name") or config.model.get("model_path")
+        log.info(f"Using OpenAI API model: {model_path}")
 
-        detector = StepBoundaryDetector(
-            step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
-            answer_patterns=["<Answer>:", "\n<Answer>:"],
-            max_tokens_per_step=config.generation.max_new_tokens,
-        )
+        # Check if DeepConf strategy
+        if config.strategy.type == "deepconf":
+            # DeepConf uses streaming with logprobs but no boundary detector
+            import os
 
-        generation_parameters = GenerationParameters()
-        generation_parameters.temperature = config.generation.temperature
-        generation_parameters.max_new_tokens = config.generation.max_new_tokens
-        generation_parameters.top_p = config.generation.top_p
-        generation_parameters.top_k = config.generation.top_k
+            # Check provider for API key and base URL
+            if config.model.get("provider") == "openrouter":
+                api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+                base_url = "https://openrouter.ai/api/v1"
+            else:
+                api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
+                base_url = None
 
-        model = BlackboxModelWithStreaming(
-            openai_api_key=config.model.api_key,
-            model_path=config.model.model_path,
-            supports_logprobs=config.model.supports_logprobs,
-            boundary_detector=detector,
-            generation_parameters=generation_parameters,
-        )
+            model = BlackboxModelWithStreaming(
+                openai_api_key=api_key,
+                model_path=model_path,
+                supports_logprobs=True,
+                base_url=base_url,
+            )
+            step_generator = None  # DeepConf doesn't use step generator
+        else:
+            # Other strategies use boundary detection via early stopping
+            from llm_tts.early_stopping import BoundaryEarlyStopping
 
-        step_generator = StepCandidateGeneratorThroughAPI(
-            model=model,
-            detector=detector,
-            prefill_mode=config.model.prefill_mode,
-        )
+            detector = StepBoundaryDetector(
+                step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
+                answer_patterns=["<Answer>:", "\n<Answer>:"],
+                max_tokens_per_step=config.generation.max_new_tokens,
+            )
 
+            generation_parameters = GenerationParameters()
+            generation_parameters.temperature = config.generation.temperature
+            generation_parameters.max_new_tokens = config.generation.max_new_tokens
+            generation_parameters.top_p = config.generation.top_p
+            generation_parameters.top_k = config.generation.top_k
+
+            # Create boundary-based early stopping
+            early_stopping = BoundaryEarlyStopping(detector=detector)
+
+            model = BlackboxModelWithStreaming(
+                openai_api_key=config.model.api_key,
+                model_path=model_path,
+                supports_logprobs=config.model.supports_logprobs,
+                early_stopping=early_stopping,
+                generation_parameters=generation_parameters,
+            )
+
+            step_generator = StepCandidateGeneratorThroughAPI(
+                model=model,
+                detector=detector,
+                prefill_mode=config.model.prefill_mode,
+            )
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
     return model, step_generator
 
 
-def create_tts_strategy(config, step_generator, scorer):
+def create_tts_strategy(config, model, step_generator, scorer):
     if config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
+        )
+
+    elif config.strategy.type == "deepconf":
+        # DeepConf requires BlackboxModel with logprobs support
+        if not isinstance(model, BlackboxModelWithStreaming):
+            raise ValueError(
+                f"DeepConf requires BlackboxModelWithStreaming, got {type(model).__name__}"
+            )
+
+        strategy = StrategyDeepConf(
+            model=model,
+            mode=config.strategy.mode,
+            budget=config.strategy.get("budget", 8),
+            warmup_traces=config.strategy.get("warmup_traces", 4),
+            total_budget=config.strategy.get("total_budget", 10),
+            confidence_percentile=config.strategy.get("confidence_percentile", 90),
+            window_size=config.strategy.get("window_size", 2048),
+            filter_method=config.strategy.get("filter_method", "top10"),
+            temperature=config.strategy.get("temperature", 0.7),
+            top_p=config.strategy.get("top_p", 1.0),
+            max_tokens=config.strategy.get("max_tokens", 512),
+            top_logprobs=config.strategy.get("top_logprobs", 20),
         )
 
     else:
@@ -342,24 +409,60 @@ def generate_trajectories(
         log.info(f"Sample {i + 1}/{subset_size}")
         log.info(f"Question: {instance['question'][:200]}...")
 
+        # Extract and log gold answer
+        from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
+
+        gold_answer_num = extract_answer_from_gsm8k(instance["answer"])
+        log.info(f"Gold answer: {gold_answer_num}")
+
         # Generate trajectory
-        request = [
-            {"role": "system", "content": ""},
-            {
-                "role": "user",
-                "content": (
-                    prompt_template.format(question=instance["question"])
-                    if prompt_template
-                    else instance["question"]
-                ),
-            },
-        ]
+        if prompt_template:
+            request = prompt_template.format(question=instance["question"])
+        else:
+            request = [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": instance["question"]},
+            ]
+
         result = strategy.generate_trajectory(request)
 
         # Extract generated answer (but don't check correctness yet)
         generated_text = result["trajectory"]
         if instance["question"] in generated_text:
             generated_text = generated_text.replace(instance["question"], "").strip()
+
+        # Log detailed traces
+        log.info("\n" + "-" * 60)
+        log.info("GENERATED TRACES:")
+        log.info("-" * 60)
+
+        # For DeepConf, steps contain the individual traces
+        if result["steps"] and isinstance(result["steps"], list):
+            for step_idx, step in enumerate(result["steps"]):
+                validity = (
+                    result["validity_scores"][step_idx]
+                    if step_idx < len(result["validity_scores"])
+                    else "N/A"
+                )
+                # Format confidence score (handle both numeric and "N/A")
+                confidence_str = (
+                    f"{validity:.3f}"
+                    if isinstance(validity, (int, float))
+                    else validity
+                )
+                log.info(f"\nTrace {step_idx + 1} (confidence: {confidence_str}):")
+                log.info(step)
+        else:
+            # Fallback: show full trajectory
+            log.info(f"\nFull trajectory:\n{result['trajectory']}")
+
+        log.info("\n" + "-" * 60)
+        log.info("FINAL ANSWER:")
+        log.info("-" * 60)
+        log.info(f"Generated: {generated_text}")
+        log.info(f"Num traces: {len(result['steps'])}")
+        log.info(f"Avg confidence: {np.mean(result['validity_scores']):.3f}")
+        log.info("-" * 60)
 
         # Store result WITHOUT correctness check
         results.append(
@@ -374,10 +477,6 @@ def generate_trajectories(
                 "completed": result["completed"],
             }
         )
-
-        log.info(f"Generated: {generated_text}")
-        log.info(f"Num steps: {len(result['steps'])}")
-        log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
 
         # Save periodically
         if len(results) % 10 == 0:
@@ -411,7 +510,6 @@ def evaluate_results(
     gold_answers = []
     result_indices = []
 
-    # always process all results, since we have deepseek cache.
     for i, result in enumerate(results):
         if "error" not in result:
             problems.append(result["question"])
@@ -534,18 +632,39 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
-    # MATH dataset
+
+    # Check if dataset is cached
+    cache_dir = config.system.hf_cache or os.path.expanduser(
+        "~/.cache/huggingface/datasets"
+    )
+    dataset_cache_name = config.dataset.dataset_path.replace("/", "___")
+    cache_exists = os.path.exists(os.path.join(cache_dir, dataset_cache_name))
+    if cache_exists:
+        log.info(f"Using cached dataset from: {cache_dir}")
+    else:
+        log.info(f"Downloading dataset to cache: {cache_dir}")
+
+    # Set offline mode to avoid network requests for cached datasets
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
+
+    # MATH dataset - needs special handling (concatenate multiple configs)
     if config.dataset.dataset_path == "EleutherAI/hendrycks_math":
+        from datasets import concatenate_datasets, get_dataset_config_names
+
         configs = get_dataset_config_names(config.dataset.dataset_path)
         datasets_by_subset = {
             cfg: load_dataset(
-                config.dataset.dataset_path, cfg, split=config.dataset.dataset_split
+                config.dataset.dataset_path,
+                cfg,
+                split=config.dataset.dataset_split,
+                cache_dir=config.system.hf_cache,
             )
             for cfg in configs
         }
         dataset = concatenate_datasets(list(datasets_by_subset.values()))
         dataset = dataset.rename_columns({"problem": "question", "solution": "answer"})
-    # proofNet dataset
+
+    # ProofNet dataset - needs column renaming
     elif config.dataset.dataset_path == "hoskinson-center/proofnet":
         dataset = load_dataset(
             config.dataset.dataset_path,
@@ -555,6 +674,8 @@ def main(config):
         dataset = dataset.rename_columns(
             {"nl_statement": "question", "nl_proof": "answer"}
         )
+
+    # Default: GSM8K and other standard datasets
     else:
         dataset = load_dataset(
             config.dataset.dataset_path,
@@ -562,7 +683,6 @@ def main(config):
             split=config.dataset.dataset_split,
             cache_dir=config.system.hf_cache,
         )
-
     if config.dataset.subset:
         dataset = dataset.select(range(min(config.dataset.subset, len(dataset))))
 
@@ -573,15 +693,19 @@ def main(config):
     )
 
     # Load model
-    log.info(f"Loading model: {config.model.model_path}")
+    model_name = config.model.get("model_name") or config.model.get("model_path")
+    log.info(f"Loading model: {model_name}")
     model, step_generator = create_model(config)
 
-    # Create scorer
-    scorer = create_scorer(config, model)
+    # Create scorer (skip for DeepConf)
+    if config.strategy.type != "deepconf":
+        scorer = create_scorer(config, model)
+    else:
+        scorer = None
 
     # Create tts strategy
     generator = create_tts_strategy(
-        config=config, step_generator=step_generator, scorer=scorer
+        config=config, model=model, step_generator=step_generator, scorer=scorer
     )
 
     # Load existing results if resuming

@@ -1,0 +1,7 @@
+# GSM8K dataset configuration
+
+dataset_path: "openai/gsm8k"
+dataset_config: "main"
+dataset_split: "test"
+subset: null  # Set to number to use subset (e.g., 100 for first 100 samples)
+prompt_file: "./config/prompts/gsm8k_deepconf.txt"
