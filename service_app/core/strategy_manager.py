@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.strategies.strategy_deepconf import StrategyDeepConf
 from llm_tts.strategies.strategy_online_best_of_n import StrategyOnlineBestOfN
+from llm_tts.strategies.strategy_cot_uq import StrategyCoTUQ
 
 from .config import settings
 
@@ -81,6 +82,8 @@ class StrategyManager:
             return self._create_deepconf_strategy(model_name, strategy_config)
         elif strategy_type == "online_best_of_n":
             return self._create_online_best_of_n_strategy(model_name, strategy_config)
+        elif strategy_type == "cot_uq":
+            return self._create_cot_uq_strategy(model_name, strategy_config)
         else:
             raise ValueError(f"Unknown strategy type: {strategy_type}")
 
@@ -112,6 +115,24 @@ class StrategyManager:
         """Create Online Best-of-N strategy instance."""
         # TODO: Implement when needed
         raise NotImplementedError("Online Best-of-N strategy not yet implemented")
+
+    def _create_cot_uq_strategy(self, model_name: str, config: Dict[str, Any]) -> StrategyCoTUQ:
+        """Create CoT-UQ strategy instance."""
+        model = self._get_or_create_model(
+            model_name=model_name,
+            provider=config.get("provider", "openrouter"),
+            supports_logprobs=True,
+        )
+
+        return StrategyCoTUQ(
+            model=model,
+            budget=config.get("budget", 6),
+            temperature=config.get("temperature", 0.7),
+            top_p=config.get("top_p", 0.95),
+            max_tokens=config.get("max_tokens", 512),
+            top_logprobs=config.get("top_logprobs", 10),
+            alpha=config.get("alpha", 0.5),
+        )
 
     def clear_cache(self):
         """Clear model cache."""

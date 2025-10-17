@@ -33,7 +33,7 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN
+from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN, StrategyOfflineBestOfN, StrategyCoTUQ
 
 # Load environment variables from .env file
 load_dotenv()
@@ -338,6 +338,31 @@ def create_tts_strategy(config, model, step_generator, scorer):
             top_logprobs=config.strategy.get("top_logprobs", 20),
         )
 
+    elif config.strategy.type == "offline_best_of_n":
+        strategy = StrategyOfflineBestOfN(
+            step_generator=step_generator,
+            scorer=scorer,
+            trajectories=config.strategy.get("trajectories", 10),
+            max_steps=config.strategy.get("max_steps", 10),
+        )
+
+    elif config.strategy.type == "cot_uq":
+        # CoT-UQ uses BlackboxModelWithStreaming to obtain logprobs
+        if not isinstance(model, BlackboxModelWithStreaming):
+            raise ValueError(
+                f"CoT-UQ requires BlackboxModelWithStreaming, got {type(model).__name__}"
+            )
+
+        strategy = StrategyCoTUQ(
+            model=model,
+            budget=config.strategy.get("budget", 6),
+            temperature=config.strategy.get("temperature", config.generation.temperature),
+            top_p=config.strategy.get("top_p", config.generation.top_p),
+            max_tokens=config.strategy.get("max_tokens", config.generation.max_new_tokens),
+            top_logprobs=config.strategy.get("top_logprobs", 10),
+            alpha=config.strategy.get("alpha", 0.5),
+        )
+    
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
 
