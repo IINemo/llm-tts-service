@@ -32,7 +32,7 @@ export OPENROUTER_API_KEY="your-key"
 
 ```python
 from llm_tts.models import BlackboxModelWithStreaming
-from llm_tts.strategies.deepconf_strategy import DeepConfStrategy
+from llm_tts.strategies.deepconf import StrategyDeepConf
 
 # Create model
 model = BlackboxModelWithStreaming(
@@ -43,7 +43,7 @@ model = BlackboxModelWithStreaming(
 )
 
 # Create strategy
-strategy = DeepConfStrategy(
+strategy = StrategyDeepConf(
     model=model,
     budget=8,              # Number of reasoning traces
     window_size=2048,      # Sliding window size
@@ -264,21 +264,25 @@ strategy:
 ```
 llm_tts/
 ├── models/
-│   ├── openrouter.py                   # OpenRouter model with streaming + logprobs
-│   ├── blackboxmodel_with_streaming.py # Unified streaming implementation
-│   └── together_ai.py                  # Together AI model
+│   ├── blackboxmodel_with_streaming.py # Unified streaming with logprobs support
+│   └── base.py                         # Base model interface
 ├── strategies/
-│   └── strategy_deepconf.py            # DeepConf strategy (offline & online)
-├── confidence_processor.py             # Sliding window confidence + early stopping
+│   └── deepconf/                       # DeepConf implementation
+│       ├── strategy.py                 # Main strategy (offline & online modes)
+│       └── utils.py                    # Confidence computation utilities
+├── early_stopping.py                   # Early stopping conditions
+├── step_boundary_detector.py           # Detects step/answer boundaries
 └── scorers/
     └── majority_voting.py              # Weighted voting implementation
 
-config/experiments/
+config/experiments/deepconf/
 ├── run_gsm8k_deepconf_offline.yaml     # Offline mode config
 └── run_gsm8k_deepconf_online.yaml      # Online mode config
 
 tests/deepconf/
-└── test_online_mode.py                 # Online mode tests
+├── test_deepconf_accurate.py           # Unit tests
+├── test_online_mode.py                 # Online mode tests
+└── test_deepconf_math.py               # Math validation tests
 ```
 
 ### Streaming + Logprobs Architecture
@@ -335,7 +339,7 @@ DeepConf expects **LaTeX boxed format**:
 ### Strategy Parameters
 
 ```python
-DeepConfStrategy(
+StrategyDeepConf(
     model=model,
     budget=8,              # Number of traces (8-512)
     window_size=2048,      # Sliding window (16, 32, 2048)
@@ -357,17 +361,17 @@ DeepConfStrategy(
 
 **High Accuracy**:
 ```python
-strategy = DeepConfStrategy(model, budget=16, filter_method="top10")
+strategy = StrategyDeepConf(model, budget=16, filter_method="top10")
 ```
 
 **Fast Prototyping**:
 ```python
-strategy = DeepConfStrategy(model, budget=5, filter_method="none")
+strategy = StrategyDeepConf(model, budget=5, filter_method="none")
 ```
 
 **Custom Threshold**:
 ```python
-strategy = DeepConfStrategy(
+strategy = StrategyDeepConf(
     model,
     budget=8,
     filter_method="threshold",
@@ -433,7 +437,7 @@ prompt = "Calculate X. Put answer in \\boxed{}."
 
 **Solution**: Increase temperature for diversity:
 ```python
-strategy = DeepConfStrategy(model, temperature=0.9)
+strategy = StrategyDeepConf(model, temperature=0.9)
 ```
 
 ### Import Errors
