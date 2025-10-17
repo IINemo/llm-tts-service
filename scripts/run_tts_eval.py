@@ -17,7 +17,7 @@ from datasets import (
 )
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
-from lm_polygraph.estimators import Perplexity
+from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -29,7 +29,7 @@ from llm_tts.evaluation import (
     EvaluatorLLMAsAJudge,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import StepScorerPRM
+from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_base import StepCandidate
 from llm_tts.step_candidate_generator_through_api import (
@@ -213,11 +213,9 @@ def create_scorer(config, model):
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
         )
-    elif config.scorer.type == "perplexity":
-        scorer = Perplexity()
 
     elif config.scorer.type == "uncertainty":
-        raise NotImplementedError("Uncertainty scorer not implemented")
+        scorer = StepScorerUncertainty()
 
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
@@ -227,11 +225,29 @@ def create_scorer(config, model):
 
 def create_model(config):
     if config.model.type == "local":
-        log.info(f"Loading model: {config.model.model_path}")
-        tokenizer = load_tokenizer(config.model.model_path)
-        base_model = load_model(config.model.model_path, config.system.device)
-        base_model.eval()
-        model = WhiteboxModel(base_model, tokenizer)
+        if config.scorer.type == "uncertainty":
+            log.info(
+                f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
+            )
+
+            import importlib
+
+            mod = importlib.import_module(config.scorer.uncertainty_model_creator)
+            model = mod.create_uncertainty_model(config)
+            model.generation_parameters = GenerationParameters()
+            model.generation_parameters.temperature = config.generation.temperature
+            model.generation_parameters.max_new_tokens = (
+                config.generation.max_new_tokens
+            )
+            model.generation_parameters.top_p = config.generation.top_p
+            model.generation_parameters.top_k = config.generation.top_k
+
+        else:
+            log.info(f"Loading model: {config.model.model_path}")
+            tokenizer = load_tokenizer(config.model.model_path)
+            base_model = load_model(config.model.model_path, config.system.device)
+            base_model.eval()
+            model = WhiteboxModel(base_model, tokenizer)
 
         detector = StepBoundaryDetector(
             step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
@@ -257,13 +273,21 @@ def create_model(config):
             answer_patterns=["<Answer>:", "\n<Answer>:"],
             max_tokens_per_step=config.generation.max_new_tokens,
         )
+
+        generation_parameters = GenerationParameters()
+        generation_parameters.temperature = config.generation.temperature
+        generation_parameters.max_new_tokens = config.generation.max_new_tokens
+        generation_parameters.top_p = config.generation.top_p
+        generation_parameters.top_k = config.generation.top_k
+
         model = BlackboxModelWithStreaming(
             openai_api_key=config.model.api_key,
             model_path=config.model.model_path,
             supports_logprobs=config.model.supports_logprobs,
             boundary_detector=detector,
-            # generation_parameters=config.model.generation_parameters,
+            generation_parameters=generation_parameters,
         )
+
         step_generator = StepCandidateGeneratorThroughAPI(
             model=model,
             detector=detector,
@@ -287,7 +311,7 @@ def create_model(config):
 
 
 def create_tts_strategy(config, step_generator, scorer):
-    if config.strategy.type == "direct_online_best_of_n_reason_eval_separate":
+    if config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
             scorer=scorer,
