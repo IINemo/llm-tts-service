@@ -1,0 +1,64 @@
+# @package _global_
+
+# DeepConf Offline Mode Configuration
+# This demonstrates standard weighted voting without early stopping
+
+defaults:
+  - /dataset/gsm8k
+  - /model/openrouter
+  - /generation/default
+  - /output/default
+  - /system/default
+  - _self_
+
+# Main configuration
+verbose: false
+
+# Model configuration (API-based)
+model:
+  provider: openrouter
+  model_name: "openai/gpt-4o-mini"
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  top_logprobs: 20  # Required for DeepConf
+
+# Generation settings
+generation:
+  max_new_tokens: 512
+  temperature: 0.7
+  top_p: 1.0
+  batch_size: 1
+
+# DeepConf strategy (no scorer needed)
+scorer: null
+
+# DeepConf offline mode strategy
+strategy:
+  type: deepconf
+  mode: "offline"  # Standard weighted voting mode
+  budget: 8  # Number of traces to generate
+
+  # Generation parameters
+  window_size: 2048  # Sliding window (algorithmic parameter - DO NOT CHANGE)
+  temperature: 0.7
+  top_p: 1.0
+  max_tokens: 512
+  top_logprobs: 20
+
+  # Filtering and voting
+  filter_method: "top5"  # Use top-5 traces by confidence
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - llm_judge
+  llm_judge:
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: openai/gpt-3.5-turbo
+    cache_path: ~/.cache
+    n_threads: 1
+    prompt_file: null
+
+# Dataset settings
+dataset:
+  subset: 10  # Number of examples to evaluate

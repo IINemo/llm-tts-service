@@ -9,12 +9,8 @@ from pathlib import Path
 import hydra
 import numpy as np
 import torch
-from datasets import (
-    Dataset,
-    concatenate_datasets,
-    get_dataset_config_names,
-    load_dataset,
-)
+from datasets import Dataset, load_dataset
+from dotenv import load_dotenv
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
 from lm_polygraph.utils.generation_parameters import GenerationParameters
@@ -28,7 +24,6 @@ from llm_tts.evaluation import (
     EvaluatorLLMAsAJudge,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.models.together_ai import TogetherAIModel
 from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_base import StepCandidate
@@ -38,7 +33,10 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyOnlineBestOfN, UncertaintyGuidedCoT_PD
+from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN
+
+# Load environment variables from .env file
+load_dotenv()
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +79,21 @@ def build_evaluators(config):
             if "{question}" in prompt_template:
                 prompt_template = prompt_template.replace("{question}", "{q}")
 
+            # Set API key in environment based on provider
+            provider = llm_cfg.get("provider")
+            if provider == "openrouter":
+                api_key = os.getenv("OPENROUTER_API_KEY")
+            elif provider == "deepseek":
+                api_key = os.getenv("DEEPSEEK_API_KEY")
+            else:
+                api_key = os.getenv("OPENAI_API_KEY")
+
+            if api_key:
+                os.environ["OPENAI_API_KEY"] = api_key
+
+            # Remove config-only params not needed by evaluator
             llm_cfg.pop("prompt_file", None)
+            llm_cfg.pop("provider", None)
             llm_cfg["prompt"] = prompt_template
 
             evaluators["llm_judge"] = EvaluatorLLMAsAJudge(**llm_cfg)
@@ -146,47 +158,6 @@ def _save_results_json(results, json_path: Path):
         json.dump(json_data, f, ensure_ascii=False, indent=2)
 
 
-def load_existing_results(save_path: str, dataset):
-    log.info(f"Loading existing results from {save_path}")
-
-    try:
-        with open(save_path, "r", encoding="utf-8") as f:
-            results = json.load(f)
-        processed_indices = {r["index"] for r in results}
-        log.info(f"Loaded {len(results)} existing results")
-        log.info(f"Already processed indices: {sorted(processed_indices)}")
-
-        # Validate all existing results match current dataset
-        log.info("Validating existing results against current dataset...")
-        for result in results:
-            idx = result["index"]
-            if idx < len(dataset):
-                sample = dataset[idx]
-                if (
-                    result["question"] != sample["question"]
-                    or result["gold_answer"] != sample["answer"]
-                ):
-                    raise ValueError(
-                        f"Sample mismatch at index {idx}!\n"
-                        f"Existing question: {result['question']}...\n"
-                        f"Current question: {sample['question']}...\n"
-                        f"Existing answer: {result['gold_answer']}\n"
-                        f"Current answer: {sample['answer']}\n"
-                        f"The saved results appear to be from a different dataset!"
-                    )
-        log.info("Validation passed - all existing results match current dataset")
-
-    except Exception as e:
-        if "Sample mismatch" in str(e):
-            raise  # Re-raise validation errors
-
-        log.warning(f"Failed to load existing results: {e}")
-        results = []
-        processed_indices = set()
-
-    return results, processed_indices
-
-
 def wandb_save_directory(directory_path):
     import wandb
 
@@ -206,7 +177,11 @@ def set_random_seeds(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def create_scorer(config, model):
+def create_scorer(config):
+    # DeepConf doesn't use a scorer
+
+    if config.strategy.type == "deepconf":
+        return None
     if config.scorer is None:
         return None
 
@@ -269,65 +244,69 @@ def create_model(config):
         )
 
     elif config.model.type == "openai_api":
-        log.info(f"Using OpenAI API model: {config.model.model_path}")
+        # Use model_name if available, otherwise fall back to model_path
+        model_path = config.model.get("model_name") or config.model.get("model_path")
+        log.info(f"Using OpenAI API model: {model_path}")
 
-        detector = StepBoundaryDetector(
-            step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
-            answer_patterns=["<Answer>:", "\n<Answer>:"],
-            max_tokens_per_step=config.generation.max_new_tokens,
-        )
+        # Check if DeepConf strategy
+        if config.strategy.type == "deepconf":
+            # DeepConf uses streaming with logprobs but no boundary detector
+            import os
 
-        generation_parameters = GenerationParameters()
-        generation_parameters.temperature = config.generation.temperature
-        generation_parameters.max_new_tokens = config.generation.max_new_tokens
-        generation_parameters.top_p = config.generation.top_p
-        generation_parameters.top_k = config.generation.top_k
+            # Check provider for API key and base URL
+            if config.model.get("provider") == "openrouter":
+                api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+                base_url = "https://openrouter.ai/api/v1"
+            else:
+                api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
+                base_url = None
 
-        model = BlackboxModelWithStreaming(
-            openai_api_key=config.model.api_key,
-            model_path=config.model.model_path,
-            supports_logprobs=config.model.supports_logprobs,
-            boundary_detector=detector,
-            generation_parameters=generation_parameters,
-        )
+            model = BlackboxModelWithStreaming(
+                openai_api_key=api_key,
+                model_path=model_path,
+                supports_logprobs=True,
+                base_url=base_url,
+            )
+            step_generator = None  # DeepConf doesn't use step generator
+        else:
+            # Other strategies use boundary detection via early stopping
+            from llm_tts.early_stopping import BoundaryEarlyStopping
 
-        step_generator = StepCandidateGeneratorThroughAPI(
-            model=model,
-            detector=detector,
-            prefill_mode=config.model.prefill_mode,
-        )
+            detector = StepBoundaryDetector(
+                step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
+                answer_patterns=["<Answer>:", "\n<Answer>:"],
+                max_tokens_per_step=config.generation.max_new_tokens,
+            )
 
-    elif config.model.type == "openrouter":
-        log.info(f"Using OpenRouter API model: {config.model.model_path}")
+            generation_parameters = GenerationParameters()
+            generation_parameters.temperature = config.generation.temperature
+            generation_parameters.max_new_tokens = config.generation.max_new_tokens
+            generation_parameters.top_p = config.generation.top_p
+            generation_parameters.top_k = config.generation.top_k
 
-        model = BlackboxModelWithStreaming(
-            openai_api_key=config.model.api_key,
-            base_url=config.model.base_url,
-            model_path=config.model.model_path,
-            supports_logprobs=config.model.supports_logprobs,
-        )
-        step_generator = None
+            # Create boundary-based early stopping
+            early_stopping = BoundaryEarlyStopping(detector=detector)
 
-    elif config.model.type == "together_ai":
-        log.info(f"Using Together AI model: {config.model.model_path}")
+            model = BlackboxModelWithStreaming(
+                openai_api_key=config.model.api_key,
+                model_path=model_path,
+                supports_logprobs=config.model.supports_logprobs,
+                early_stopping=early_stopping,
+                generation_parameters=generation_parameters,
+            )
 
-        api_key = config.model.get("api_key") or os.getenv("TOGETHER_API_KEY")
-        model = TogetherAIModel(
-            model_name=config.model.model_path,
-            api_key=api_key,
-            base_url=config.model.get("base_url", "https://api.together.xyz/v1"),
-            max_retries=config.model.get("max_retries", 3),
-            retry_delay=config.model.get("retry_delay", 1.0),
-        )
-        step_generator = None
-
+            step_generator = StepCandidateGeneratorThroughAPI(
+                model=model,
+                detector=detector,
+                prefill_mode=config.model.prefill_mode,
+            )
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
     return model, step_generator
 
 
-def create_tts_strategy(config, step_generator, scorer, model):
+def create_tts_strategy(config, model, step_generator, scorer):
     if config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
@@ -336,29 +315,26 @@ def create_tts_strategy(config, step_generator, scorer, model):
             max_steps=config.strategy.max_steps,
         )
 
-    elif config.strategy.type == "uncertainty_guided_pd":
-        if not isinstance(model, TogetherAIModel) and not isinstance(
-            model, BlackboxModelWithStreaming
-        ):
+    elif config.strategy.type == "deepconf":
+        # DeepConf requires BlackboxModel with logprobs support
+        if not isinstance(model, BlackboxModelWithStreaming):
             raise ValueError(
-                f"UnCertCoT requires TogetherAIModel or BlackboxModelWithStreaming, got {type(model).__name__}"
+                f"DeepConf requires BlackboxModelWithStreaming, got {type(model).__name__}"
             )
 
-        strategy = UncertaintyGuidedCoT_PD(
-            api_client=model,
-            model_name=config.model.model_path,
-            candidates_per_step=config.strategy.candidates_per_step,
-            max_steps=config.strategy.max_steps,
-            max_empty_steps=config.strategy.max_empty_steps,
-            max_new_tokens=config.generation.max_new_tokens,
-            temperature=config.generation.temperature,
-            uncertainty_threshold=config.strategy.uncertainty_threshold,
-            uncertainty_metric=config.strategy.uncertainty_metric,
-            uncertainty_top_k=config.strategy.uncertainty_top_k,
-            step_marker_patterns=config.strategy.step_marker_patterns,
-            detector_step_patterns=config.strategy.detector_step_patterns,
-            detector_answer_patterns=config.strategy.detector_answer_patterns,
-            eos_token=config.model.eos_token,
+        strategy = StrategyDeepConf(
+            model=model,
+            mode=config.strategy.mode,
+            budget=config.strategy.get("budget", 8),
+            warmup_traces=config.strategy.get("warmup_traces", 4),
+            total_budget=config.strategy.get("total_budget", 10),
+            confidence_percentile=config.strategy.get("confidence_percentile", 90),
+            window_size=config.strategy.get("window_size", 2048),
+            filter_method=config.strategy.get("filter_method", "top10"),
+            temperature=config.strategy.get("temperature", 0.7),
+            top_p=config.strategy.get("top_p", 1.0),
+            max_tokens=config.strategy.get("max_tokens", 512),
+            top_logprobs=config.strategy.get("top_logprobs", 20),
         )
 
     else:
@@ -395,6 +371,12 @@ def generate_trajectories(
         log.info(f"Sample {i + 1}/{subset_size}")
         log.info(f"Question: {instance['question'][:200]}...")
 
+        # Extract and log gold answer
+        from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
+
+        gold_answer_num = extract_answer_from_gsm8k(instance["answer"])
+        log.info(f"Gold answer: {gold_answer_num}")
+
         # Generate trajectory
         request = [
             {"role": "system", "content": ""},
@@ -407,12 +389,46 @@ def generate_trajectories(
                 ),
             },
         ]
+
         result = strategy.generate_trajectory(request)
 
         # Extract generated answer (but don't check correctness yet)
         generated_text = result["trajectory"]
         if instance["question"] in generated_text:
             generated_text = generated_text.replace(instance["question"], "").strip()
+
+        # Log detailed traces
+        log.info("\n" + "-" * 60)
+        log.info("GENERATED TRACES:")
+        log.info("-" * 60)
+
+        # For DeepConf, steps contain the individual traces
+        if result["steps"] and isinstance(result["steps"], list):
+            for step_idx, step in enumerate(result["steps"]):
+                validity = (
+                    result["validity_scores"][step_idx]
+                    if step_idx < len(result["validity_scores"])
+                    else "N/A"
+                )
+                # Format confidence score (handle both numeric and "N/A")
+                confidence_str = (
+                    f"{validity:.3f}"
+                    if isinstance(validity, (int, float))
+                    else validity
+                )
+                log.info(f"\nTrace {step_idx + 1} (confidence: {confidence_str}):")
+                log.info(step)
+        else:
+            # Fallback: show full trajectory
+            log.info(f"\nFull trajectory:\n{result['trajectory']}")
+
+        log.info("\n" + "-" * 60)
+        log.info("FINAL ANSWER:")
+        log.info("-" * 60)
+        log.info(f"Generated: {generated_text}")
+        log.info(f"Num traces: {len(result['steps'])}")
+        log.info(f"Avg confidence: {np.mean(result['validity_scores']):.3f}")
+        log.info("-" * 60)
 
         # Store result WITHOUT correctness check
         results.append(
@@ -427,10 +443,6 @@ def generate_trajectories(
                 "completed": result["completed"],
             }
         )
-
-        log.info(f"Generated: {generated_text}")
-        log.info(f"Num steps: {len(result['steps'])}")
-        log.info(f"Avg validity: {np.mean(result['validity_scores']):.3f}")
 
         # Save periodically
         if len(results) % 10 == 0:
@@ -464,7 +476,6 @@ def evaluate_results(
     gold_answers = []
     result_indices = []
 
-    # always process all results, since we have deepseek cache.
     for i, result in enumerate(results):
         if "error" not in result:
             problems.append(result["question"])
@@ -587,35 +598,12 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
-    # MATH dataset
-    if config.dataset.dataset_path == "EleutherAI/hendrycks_math":
-        configs = get_dataset_config_names(config.dataset.dataset_path)
-        datasets_by_subset = {
-            cfg: load_dataset(
-                config.dataset.dataset_path, cfg, split=config.dataset.dataset_split
-            )
-            for cfg in configs
-        }
-        dataset = concatenate_datasets(list(datasets_by_subset.values()))
-        dataset = dataset.rename_columns({"problem": "question", "solution": "answer"})
-    # proofNet dataset
-    elif config.dataset.dataset_path == "hoskinson-center/proofnet":
-        dataset = load_dataset(
-            config.dataset.dataset_path,
-            split=config.dataset.dataset_split,
-            cache_dir=config.system.hf_cache,
-        )
-        dataset = dataset.rename_columns(
-            {"nl_statement": "question", "nl_proof": "answer"}
-        )
-    else:
-        dataset = load_dataset(
-            config.dataset.dataset_path,
-            config.dataset.dataset_config,
-            split=config.dataset.dataset_split,
-            cache_dir=config.system.hf_cache,
-        )
-
+    dataset = load_dataset(
+        config.dataset.dataset_path,
+        config.dataset.dataset_config,
+        split=config.dataset.dataset_split,
+        cache_dir=config.system.hf_cache,
+    )
     if config.dataset.subset:
         dataset = dataset.select(range(min(config.dataset.subset, len(dataset))))
 
@@ -626,26 +614,20 @@ def main(config):
     )
 
     # Load model
-    log.info(f"Loading model: {config.model.model_path}")
+    model_name = config.model.get("model_name") or config.model.get("model_path")
+    log.info(f"Loading model: {model_name}")
     model, step_generator = create_model(config)
 
-    # Create scorer
-    scorer = create_scorer(config, model)
+    # Create scorer (skip for DeepConf)
+    scorer = create_scorer(config)
 
     # Create tts strategy
     generator = create_tts_strategy(
-        config=config, step_generator=step_generator, scorer=scorer, model=model
+        config=config, model=model, step_generator=step_generator, scorer=scorer
     )
 
-    # Load existing results if resuming
-    if config.output.resume:
-        results, processed_indices = load_existing_results(
-            Path(output_dir) / "results.json", dataset
-        )
-    else:
-        results = []
-        processed_indices = set()
-
+    processed_indices = set()
+    results = []  # TODO: add logic for resuming from existing results
     # Generate trajectories
     results = generate_trajectories(
         results=results,

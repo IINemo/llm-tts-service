@@ -1,9 +1,8 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 # ============== Addition Imports ===============
 from lm_polygraph.estimators import MeanTokenEntropy
-from lm_polygraph.stat_calculators import InferCausalLMCalculator, EntropyCalculator
+from lm_polygraph.stat_calculators import EntropyCalculator, InferCausalLMCalculator
 from lm_polygraph.utils.causal_lm_with_uncertainty import CausalLMWithUncertainty
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # ===============================================
 

@@ -1,0 +1,3 @@
+Question: {question}
+
+Please solve this math problem step by step. Show your reasoning and put your final numerical answer in \boxed{{}}.
