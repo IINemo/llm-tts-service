@@ -601,7 +601,7 @@ def main(config):
     )
     dataset = load_dataset(
         config.dataset.dataset_path,
-        config.dataset.dataset_config,
+        config.dataset.get("dataset_config", None),
         split=config.dataset.dataset_split,
         cache_dir=config.system.hf_cache,
     )
