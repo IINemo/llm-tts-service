@@ -118,7 +118,7 @@ See strategy-specific documentation:
 
 Reasoner with Qwen-3 (local):
 ```bash
-python scripts/run_tts_eval.py \
+WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py \
   --config-path ../config \
   --config-name run_tts_eval \
   dataset=small_gsm8k \
@@ -128,7 +128,7 @@ python scripts/run_tts_eval.py \
 
 Reasoner with ChatGPT:
 ```bash
-python scripts/run_tts_eval.py \
+WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py \
   --config-path ../config \
   --config-name run_tts_eval \
   dataset=small_gsm8k \
@@ -139,7 +139,7 @@ python scripts/run_tts_eval.py \
 
 With uncertainty scorer:
 ```bash
-python scripts/run_tts_eval.py \
+WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py \
   --config-path ../config \
   --config-name run_tts_eval \
   dataset=small_gsm8k \
@@ -152,7 +152,7 @@ python scripts/run_tts_eval.py \
 
 **Offline mode** (generate N traces, filter by confidence, majority vote):
 ```bash
-python scripts/run_tts_eval.py \
+WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py \
   --config-path ../config \
   --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
   model.model_path="openai/gpt-3.5-turbo" \
@@ -161,9 +161,11 @@ python scripts/run_tts_eval.py \
 
 **Online mode** (adaptive generation with confidence-based early stopping):
 ```bash
-python scripts/run_tts_eval.py \
+WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py \
   --config-path ../config \
   --config-name experiments/deepconf/run_gsm8k_deepconf_online \
   model.model_path="openai/gpt-3.5-turbo" \
   dataset.subset=10
 ```
+
+
