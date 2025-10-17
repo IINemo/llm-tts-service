@@ -95,10 +95,105 @@ make lint    # Check with flake8
 
 Pre-commit hooks run automatically on `git commit` and will block commits that fail checks.
 
-## Structure
-* config -- hydra configuration files.
-* llm_tts -- the library with test time scaling strategies.
-* scripts/run_tts_eval.py -- the script for running evaluation of test time scaling methods.
+## Project Structure
+
+```
+llm-tts-service/
+├── config/                           # Hydra configuration files
+│   ├── experiments/                  # Complete experiment configs
+│   │   ├── deepconf/                # DeepConf experiments (offline/online)
+│   │   ├── chain_of_thought/        # Chain-of-thought experiments
+│   │   └── self_consistency/        # Self-consistency experiments
+│   ├── dataset/                      # Dataset configs (gsm8k, math, etc.)
+│   ├── model/                        # Model configs (openai, openrouter, hf, etc.)
+│   ├── strategy/                     # Strategy-specific parameters
+│   ├── scorer/                       # Scorer configs (PRM, uncertainty, etc.)
+│   ├── generation/                   # Generation parameters
+│   ├── evaluation/                   # Evaluation configs (llm_judge, alignscore)
+│   └── system/                       # System settings (device, seed, etc.)
+│
+├── llm_tts/                          # Main library package
+│   ├── strategies/                   # TTS strategy implementations
+│   │   ├── deepconf/                # DeepConf strategy (offline/online modes)
+│   │   │   ├── strategy.py          # Main strategy implementation
+│   │   │   └── utils.py             # Confidence computation utilities
+│   │   ├── strategy_base.py         # Abstract base class for all strategies
+│   │   ├── strategy_online_best_of_n.py
+│   │   ├── strategy_self_consistency.py
+│   │   └── strategy_chain_of_thought.py
+│   │
+│   ├── models/                       # Model wrappers
+│   │   ├── blackboxmodel_with_streaming.py  # OpenAI-compatible model with streaming
+│   │   └── base.py                  # Base model interface
+│   │
+│   ├── scorers/                      # Step scoring implementations
+│   │   ├── step_scorer_base.py      # Base scorer interface
+│   │   ├── step_scorer_prm.py       # Process Reward Model scorer
+│   │   ├── step_scorer_uncertainty.py # Uncertainty-based scorer
+│   │   └── majority_voting.py       # Majority voting scorer
+│   │
+│   ├── evaluation/                   # Evaluation methods
+│   │   ├── llm_as_a_judge.py       # LLM-based correctness verification
+│   │   ├── exact_match.py          # Direct answer comparison
+│   │   └── alignscore.py           # Semantic similarity evaluation
+│   │
+│   ├── datasets/                     # Dataset utilities
+│   │   └── gsm8k.py                # GSM8K dataset loading and processing
+│   │
+│   ├── early_stopping.py            # Early stopping conditions for streaming
+│   ├── step_boundary_detector.py    # Detects step/answer boundaries
+│   ├── step_candidate_generator_base.py
+│   ├── step_candidate_generator_through_api.py
+│   └── step_candidate_generator_through_huggingface.py
+│
+├── scripts/
+│   └── run_tts_eval.py              # Main evaluation script
+│
+├── tests/                            # Test suite
+│   ├── strategy_registry.py         # Strategy registry and validation
+│   ├── deepconf/                    # DeepConf strategy tests
+│   │   ├── test_deepconf_accurate.py
+│   │   ├── test_online_mode.py
+│   │   └── test_deepconf_math.py
+│   ├── online_best_of_n/            # Best-of-N strategy tests
+│   └── run_tts_eval/                # Integration tests
+│
+├── docs/                             # Documentation
+│   ├── deepconf/                    # DeepConf strategy guide
+│   │   └── DeepConf.md
+│   └── datasets/                    # Dataset documentation
+│       └── GSM8K/
+│
+├── lm-polygraph/                     # Submodule: uncertainty estimation library
+│
+├── Makefile                          # Development commands (format, lint, test)
+├── pyproject.toml                    # Package configuration and dependencies
+├── setup.py                          # Package setup
+├── setup.sh                          # Installation script
+└── .github/workflows/                # CI/CD pipelines
+    └── test.yml
+```
+
+### Key Components
+
+**Strategies** (`llm_tts/strategies/`)
+- `deepconf/` - Confidence-based test-time scaling with offline/online modes
+- `strategy_online_best_of_n.py` - Step-by-step generation with PRM scoring
+- `strategy_self_consistency.py` - Majority voting across reasoning paths
+- `strategy_chain_of_thought.py` - Single-pass step-by-step reasoning
+
+**Models** (`llm_tts/models/`)
+- `blackboxmodel_with_streaming.py` - Unified streaming model with early stopping support
+
+**Evaluation** (`scripts/run_tts_eval.py`)
+- Two-phase pipeline: generation → evaluation
+- Multi-evaluator support (LLM Judge, Exact Match, AlignScore)
+- Resume support for long-running experiments
+
+**Configuration** (`config/`)
+- Hierarchical Hydra configs with composition
+- Pre-configured experiments in `experiments/`
+- See `config/README.md` for detailed guide
 
 # TODO:
 1. Add new scorers
