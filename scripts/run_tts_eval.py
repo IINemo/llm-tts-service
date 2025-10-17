@@ -220,6 +220,10 @@ def set_random_seeds(seed):
 
 def create_scorer(config, model):
     # DeepConf doesn't use a scorer
+
+    if config.strategy.type != "deepconf":
+        return None
+
     if config.scorer is None:
         return None
 
@@ -653,10 +657,7 @@ def main(config):
     model, step_generator = create_model(config)
 
     # Create scorer (skip for DeepConf)
-    if config.strategy.type != "deepconf":
-        scorer = create_scorer(config, model)
-    else:
-        scorer = None
+    scorer = create_scorer(config, model)
 
     # Create tts strategy
     generator = create_tts_strategy(
