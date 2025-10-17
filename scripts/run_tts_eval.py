@@ -447,35 +447,12 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
-    # MATH dataset
-    if config.dataset.dataset_path == "EleutherAI/hendrycks_math":
-        configs = get_dataset_config_names(config.dataset.dataset_path)
-        datasets_by_subset = {
-            cfg: load_dataset(
-                config.dataset.dataset_path, cfg, split=config.dataset.dataset_split
-            )
-            for cfg in configs
-        }
-        dataset = concatenate_datasets(list(datasets_by_subset.values()))
-        dataset = dataset.rename_columns({"problem": "question", "solution": "answer"})
-    # proofNet dataset
-    elif config.dataset.dataset_path == "hoskinson-center/proofnet":
-        dataset = load_dataset(
-            config.dataset.dataset_path,
-            split=config.dataset.dataset_split,
-            cache_dir=config.system.hf_cache,
-        )
-        dataset = dataset.rename_columns(
-            {"nl_statement": "question", "nl_proof": "answer"}
-        )
-    else:
-        dataset = load_dataset(
-            config.dataset.dataset_path,
-            config.dataset.dataset_config,
-            split=config.dataset.dataset_split,
-            cache_dir=config.system.hf_cache,
-        )
-
+    dataset = load_dataset(
+        config.dataset.dataset_path,
+        config.dataset.dataset_config,
+        split=config.dataset.dataset_split,
+        cache_dir=config.system.hf_cache,
+    )
     if config.dataset.subset:
         dataset = dataset.select(range(min(config.dataset.subset, len(dataset))))
 
@@ -496,16 +473,9 @@ def main(config):
     generator = create_tts_strategy(
         config=config, step_generator=step_generator, scorer=scorer
     )
-
-    # Load existing results if resuming
-    if config.output.resume:
-        results, processed_indices = load_existing_results(
-            Path(output_dir) / "results.pt", dataset
-        )
-    else:
-        results = []
-        processed_indices = set()
-
+    
+    processed_indices = set()
+    results = [] # TODO: add logic for resuming from existing results
     # Generate trajectories
     results = generate_trajectories(
         results=results,
