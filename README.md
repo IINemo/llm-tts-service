@@ -269,6 +269,86 @@ WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py 
 
 ---
 
+## 🛡️ Robustness Features
+
+### Incremental Saving
+
+**All evaluations save results after each sample** - no more lost work from crashes or interruptions!
+
+**What's saved:**
+- ✅ Generation phase: Results saved after each sample (not every 10)
+- ✅ Evaluation phase: Results saved after each sample is evaluated
+- ✅ At most 1 sample lost if process is interrupted
+
+**Output structure:**
+```
+outputs/YYYY-MM-DD/HH-MM-SS/
+├── results.json           # Incrementally updated results
+├── run_tts_eval.log       # Execution logs
+└── .hydra/                # Full experiment configuration
+    ├── config.yaml        # Resolved config with all parameters
+    ├── overrides.yaml     # Command-line overrides used
+    └── hydra.yaml         # Hydra settings
+```
+
+### Resume Interrupted Evaluations
+
+If your evaluation is interrupted, you can resume from where it left off:
+
+**Resume from latest run:**
+```bash
+python scripts/run_tts_eval.py \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
+  --resume
+```
+
+**Resume from specific directory:**
+```bash
+python scripts/run_tts_eval.py \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
+  --resume-from outputs/2025-10-18/23-50-46
+```
+
+**What gets resumed:**
+- ✅ Skips already processed samples during generation
+- ✅ Skips already evaluated samples during evaluation
+- ✅ Uses same output directory (no duplicate work)
+- ✅ Preserves original configuration
+
+**Example workflow:**
+```bash
+# Start evaluation
+python scripts/run_tts_eval.py \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
+  dataset.subset=100
+
+# Process interrupted after 60 samples? No problem!
+# Just add --resume and it continues from sample 61
+python scripts/run_tts_eval.py \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
+  --resume
+```
+
+### Experiment Reproducibility
+
+Every experiment automatically saves:
+- **Full configuration**: `.hydra/config.yaml` contains all parameters
+- **Command-line overrides**: `.hydra/overrides.yaml` shows what you changed
+- **Logs**: Complete execution trace in `run_tts_eval.log`
+
+**Reproduce any experiment:**
+```bash
+# Check what parameters were used
+cat outputs/2025-10-18/23-50-46/.hydra/config.yaml
+
+# Re-run with exact same config
+python scripts/run_tts_eval.py \
+  --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
+  dataset.subset=20 strategy.budget=4
+```
+
+---
+
 ## 🌐 REST API Service (Optional)
 
 Deploy strategies as a REST API for production use.
