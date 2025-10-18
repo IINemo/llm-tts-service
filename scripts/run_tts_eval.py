@@ -218,13 +218,6 @@ def create_model(config):
             )
 
             import importlib
-            import sys
-            from pathlib import Path
-
-            # Add the current directory to Python path to allow importing config modules
-            current_dir = Path.cwd()
-            if str(current_dir) not in sys.path:
-                sys.path.insert(0, str(current_dir))
 
             mod = importlib.import_module(config.scorer.uncertainty_model_creator)
             model = mod.create_uncertainty_model(config)
