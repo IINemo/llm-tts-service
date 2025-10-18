@@ -633,7 +633,10 @@ def main(config):
             Path(config_path_hydra) / HydraConfig.get().job.config_name
         )
         os.environ["WANDB_DIR"] = str(Path(output_dir))
-        project = os.environ.get("WANDB_PROJECT", "llm-tts-eval")
+        # Project name: config > env var > default
+        project = getattr(config, "wandb_project", None) or os.environ.get(
+            "WANDB_PROJECT", "llm-tts-eval"
+        )
         wandb.init(project=project, dir=output_dir, config=wandb_cfg)
         wandb_save_directory(Path(output_dir) / ".hydra")
 
