@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import random
+import traceback
 from pathlib import Path
 
 import hydra
@@ -34,6 +35,7 @@ from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.strategies import (
+    StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
     StrategyUncertaintyCoT,
@@ -332,7 +334,6 @@ def create_tts_strategy(config, model, step_generator, scorer):
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
         )
-
     elif config.strategy.type == "deepconf":
         # DeepConf requires BlackboxModel with logprobs support
         if not isinstance(model, BlackboxModelWithStreaming):
@@ -353,6 +354,16 @@ def create_tts_strategy(config, model, step_generator, scorer):
             top_p=config.strategy.get("top_p", 1.0),
             max_tokens=config.strategy.get("max_tokens", 512),
             top_logprobs=config.strategy.get("top_logprobs", 20),
+        )
+
+    elif config.strategy.type == "beam_search":
+        strategy = StrategyBeamSearch(
+            step_generator=step_generator,
+            scorer=scorer,
+            beam_size=config.strategy.beam_size,
+            candidates_per_beam=config.strategy.candidates_per_beam,
+            max_steps=config.strategy.max_steps,
+            aggregation=getattr(config.strategy, "aggregation", "mean"),
         )
 
     elif config.strategy.type == "uncertainty_cot":
@@ -539,6 +550,7 @@ def evaluate_results(
                         log.info(f"Correct: {is_correct}")
 
             except Exception as e:
+                traceback.print_exc()
                 log.error(f"Error during {eval_name} verification: {e}")
                 for idx in result_indices:
                     results[idx].setdefault("eval", {})[eval_name] = {
