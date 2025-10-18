@@ -2,6 +2,6 @@
 
 dataset_path: "test-time-compute/aime_2025"
 dataset_config: "default"
-dataset_split: "test"
+dataset_split: "test"  # Use test split for evaluation
 subset: null  # Set to number to use subset (e.g., 10 for first 10 samples)
-prompt_file: "./config/prompts/gsm8k_deepconf.txt"
+prompt_file: "./config/prompts/aime_2025_deepconf.txt"
