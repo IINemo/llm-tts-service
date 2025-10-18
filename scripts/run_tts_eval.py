@@ -348,7 +348,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
             beam_size=config.strategy.beam_size,
             candidates_per_beam=config.strategy.candidates_per_beam,
             max_steps=config.strategy.max_steps,
-            aggregation=config.strategy.aggregation,
+            aggregation=getattr(config.strategy, "aggregation", "mean"),
         )
 
     else:
