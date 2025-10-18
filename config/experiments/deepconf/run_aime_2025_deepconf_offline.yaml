@@ -8,6 +8,7 @@ defaults:
   - /dataset/aime_2025
   - /model/openrouter
   - /generation/default
+  - /output/default
   - /system/default
   - _self_
 
