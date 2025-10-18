@@ -37,7 +37,7 @@ class StrategyUncertaintyCoT:
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
         self.max_empty_steps = max_empty_steps
-        self.max_new_tokens = config.generation.max_new_tokens
+        self.max_new_tokens = step_generator.max_new_tokens
         self.uncertainty_threshold = uncertainty_threshold
 
     def _normalize_to_prompt(

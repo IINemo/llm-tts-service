@@ -55,6 +55,16 @@ REGISTERED_STRATEGIES = [
         ],
         description="Step-by-step generation with PRM scoring",
     ),
+    StrategyInfo(
+        name="uncert_cot",
+        class_name="StrategyUncertaintyCoT",
+        module_path="llm_tts/strategies/strategy_uncertainty_cot.py",
+        test_dir="tests/uncert_cot",
+        required_tests=[
+            "test_uncert_cot.py",
+        ],
+        description="Uncertainty-guided chain-of-thought with PD",
+    ),
     # TODO: Add tests for self_consistency strategy
     # StrategyInfo(
     #     name="self_consistency",
