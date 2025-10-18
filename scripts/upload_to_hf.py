@@ -111,7 +111,7 @@ from datasets import load_dataset
 dataset = load_dataset("test-time-compute/aime_2025")
 
 # Access examples
-for example in dataset["train"]:
+for example in dataset["test"]:
     question = example["question"]
     answer = example["answer"]
     print(f"Q: {{question}}")
@@ -177,22 +177,22 @@ def upload_dataset(
     # Load dataset
     dataset = load_converted_dataset(dataset_name, data_dir)
 
-    # Create DatasetDict with train split
-    dataset_dict = DatasetDict({"train": dataset})
+    # Create DatasetDict with test split (evaluation datasets)
+    dataset_dict = DatasetDict({"test": dataset})
 
     # Preview
     print("\nDataset Preview:")
     print(f"  Splits: {list(dataset_dict.keys())}")
-    print(f"  Train examples: {len(dataset_dict['train'])}")
-    print(f"  Features: {dataset_dict['train'].features}")
+    print(f"  Test examples: {len(dataset_dict['test'])}")
+    print(f"  Features: {dataset_dict['test'].features}")
     print("\nFirst example:")
-    print(f"  Question: {dataset_dict['train'][0]['question'][:100]}...")
-    print(f"  Answer: {dataset_dict['train'][0]['answer']}")
+    print(f"  Question: {dataset_dict['test'][0]['question'][:100]}...")
+    print(f"  Answer: {dataset_dict['test'][0]['answer']}")
 
     if dry_run:
         print("\n[DRY RUN] Would upload dataset to HuggingFace Hub")
         print(f"  Repository: {org_name}/{dataset_name}")
-        print(f"  Examples: {len(dataset_dict['train'])}")
+        print(f"  Examples: {len(dataset_dict['test'])}")
         return
 
     # Upload to Hub
@@ -207,7 +207,7 @@ def upload_dataset(
         )
 
         # Upload README.md separately
-        card_content = create_dataset_card(dataset_name, len(dataset_dict["train"]))
+        card_content = create_dataset_card(dataset_name, len(dataset_dict["test"]))
         api = HfApi()
 
         # Write card to temporary file and upload
