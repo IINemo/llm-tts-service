@@ -16,6 +16,7 @@ run_name: "gsm8k_deepconf_gpt4omini_b${strategy.budget}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: false
+report_to: wandb  # Enable wandb logging (optional)
 
 # Model configuration (API-based)
 model:
