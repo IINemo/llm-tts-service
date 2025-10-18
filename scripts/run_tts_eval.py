@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 
-import json
 import logging
 import os
 import random
-import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +18,7 @@ from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from utils.results import load_results_json, parse_resume_arguments, save_results_json
 
 from llm_tts.evaluation import (
     EvaluatorAlignScore,
@@ -29,7 +28,6 @@ from llm_tts.evaluation import (
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
-from llm_tts.step_candidate_generator_base import StepCandidate
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
 )
@@ -103,7 +101,12 @@ def build_evaluators(config):
             llm_cfg.pop("provider", None)
             llm_cfg["prompt"] = prompt_template
 
-            evaluators["llm_judge"] = EvaluatorLLMAsAJudge(**llm_cfg)
+            # Include model name in evaluator key to support multiple LLM judge models
+            model_name = llm_cfg.get("model", "unknown")
+            # Sanitize model name (remove slashes, colons, etc.)
+            sanitized_model = model_name.replace("/", "_").replace(":", "_")
+            eval_key = f"llm_judge_{sanitized_model}"
+            evaluators[eval_key] = EvaluatorLLMAsAJudge(**llm_cfg)
 
         elif evaluator_name == "exact_match":
             evaluators["exact_match"] = EvaluatorExactMatch(
@@ -120,81 +123,6 @@ def build_evaluators(config):
             log.warning(f"Unknown evaluator type '{evaluator_name}', skipping")
 
     return evaluators
-
-
-def _safe_serialize(obj):
-    """Convert arbitrary Python objects (including tensors, numpy) to JSON-safe types."""
-    if obj is None or isinstance(obj, (bool, int, float, str)):
-        return obj
-    if isinstance(obj, dict):
-        return {str(k): _safe_serialize(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple, set)):
-        return [_safe_serialize(v) for v in obj]
-    if isinstance(obj, StepCandidate):
-        return {
-            "text": obj.text,
-            "token_ids": list(obj.token_ids) if obj.token_ids is not None else None,
-            "is_complete": obj.is_complete,
-            "is_trajectory_complete": obj.is_trajectory_complete,
-            "generation_scores": _safe_serialize(obj.generation_scores),
-            "raw_text": obj.raw_text,
-            "other_data": _safe_serialize(obj.other_data) if obj.other_data else None,
-        }
-    if hasattr(obj, "tolist"):
-        try:
-            return obj.tolist()
-        except Exception:
-            pass
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, (np.ndarray,)):
-        return obj.tolist()
-    if hasattr(obj, "__dict__"):
-        return _safe_serialize(vars(obj))
-
-    # Fallback to string representation
-    return str(obj)
-
-
-def _save_results_json(results, json_path: Path):
-    json_path = Path(json_path)
-    json_data = [_safe_serialize(r) for r in results]
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(json_data, f, ensure_ascii=False, indent=2)
-
-
-def _load_results_json(json_path: Path):
-    """
-    Load existing results from a JSON file for resuming evaluation.
-
-    Args:
-        json_path: Path to the results.json file
-
-    Returns:
-        Tuple of (results, processed_indices)
-    """
-    json_path = Path(json_path)
-
-    if not json_path.exists():
-        return [], set()
-
-    try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            results = json.load(f)
-
-        # Extract processed indices
-        processed_indices = {r["index"] for r in results if "index" in r}
-
-        log.info(f"Loaded {len(results)} existing results from {json_path}")
-        log.info(f"Resuming from {len(processed_indices)} processed samples")
-
-        return results, processed_indices
-
-    except Exception as e:
-        log.warning(f"Failed to load existing results from {json_path}: {e}")
-        return [], set()
 
 
 def wandb_save_directory(directory_path):
@@ -498,11 +426,11 @@ def generate_trajectories(
 
         # Save periodically
         if len(results) % 10 == 0:
-            _save_results_json(results, save_path_file)
+            save_results_json(results, save_path_file)
             log.info(f"Saved {len(results)} results to {save_path_file}")
 
     # Final save after generation
-    _save_results_json(results, save_path_file)
+    save_results_json(results, save_path_file)
     log.info(f"Final save after generation: {len(results)} results to {save_path_file}")
 
     return results
@@ -558,8 +486,20 @@ def evaluate_results(
         log.info(f"Evaluating {len(problems)} samples with {eval_name}...")
 
         try:
-            annotations = evaluator_fn(problems, solutions, gold_answers)
-            for idx, annotation in zip(result_indices, annotations):
+            # Get both annotations and raw responses from evaluator
+            eval_result = evaluator_fn(problems, solutions, gold_answers)
+
+            # Handle both old format (list) and new format (tuple of lists)
+            if isinstance(eval_result, tuple):
+                annotations, responses = eval_result
+            else:
+                # Backward compatibility: old evaluators return just annotations
+                annotations = eval_result
+                responses = [None] * len(annotations)
+
+            for idx, annotation, response in zip(
+                result_indices, annotations, responses
+            ):
                 if np.isnan(annotation):
                     log.warning(
                         f"{eval_name} returned unclear result for sample "
@@ -569,10 +509,16 @@ def evaluate_results(
                 else:
                     is_correct = annotation == 1  # 1 = correct, 0 = incorrect
 
-                results[idx].setdefault("eval", {})[eval_name] = {
+                eval_data = {
                     "label": None if np.isnan(annotation) else int(annotation),
                     "is_correct": bool(is_correct),
                 }
+
+                # Add raw response if available
+                if response is not None:
+                    eval_data["response"] = response
+
+                results[idx].setdefault("eval", {})[eval_name] = eval_data
 
                 if (idx - result_indices[0]) % 10 == 0:
                     log.info(f"Sample {results[idx]['index']} [{eval_name}]:")
@@ -589,7 +535,7 @@ def evaluate_results(
                 }
 
         # Save after each evaluator completes (enables resuming per-evaluator)
-        _save_results_json(results, save_path_file)
+        save_results_json(results, save_path_file)
         log.info(
             f"Saved evaluation results for {eval_name} ({len(result_indices)} samples evaluated)"
         )
@@ -670,74 +616,6 @@ def evaluate_results(
         log.warning(f"Failed to log metrics to wandb: {e}")
 
 
-def _find_latest_output_dir():
-    """Find the most recent output directory."""
-    outputs_root = Path("outputs")
-    if not outputs_root.exists():
-        return None
-
-    # Find all timestamped directories (YYYY-MM-DD/HH-MM-SS)
-    all_dirs = []
-    for date_dir in outputs_root.iterdir():
-        if date_dir.is_dir() and date_dir.name.count("-") == 2:  # YYYY-MM-DD format
-            for time_dir in date_dir.iterdir():
-                if (
-                    time_dir.is_dir() and time_dir.name.count("-") == 2
-                ):  # HH-MM-SS format
-                    all_dirs.append(time_dir)
-
-    if not all_dirs:
-        return None
-
-    # Sort by modification time, return most recent
-    latest_dir = max(all_dirs, key=lambda p: p.stat().st_mtime)
-    return latest_dir
-
-
-def _parse_resume_arguments():
-    """
-    Parse custom --resume and --resume-from arguments.
-
-    Returns the resume directory path if found, otherwise None.
-    Modifies sys.argv to remove custom arguments and inject hydra.run.dir override.
-    """
-    resume_dir = None
-    args_to_remove = []
-
-    for i, arg in enumerate(sys.argv):
-        if arg == "--resume":
-            # Find latest directory
-            resume_dir = _find_latest_output_dir()
-            if not resume_dir:
-                print("ERROR: No previous output directories found to resume from.")
-                sys.exit(1)
-            args_to_remove.append(i)
-            print(f"Resuming from latest directory: {resume_dir}")
-
-        elif arg == "--resume-from":
-            # Get the next argument as the directory path
-            if i + 1 >= len(sys.argv):
-                print("ERROR: --resume-from requires a directory path argument")
-                sys.exit(1)
-            resume_dir = Path(sys.argv[i + 1])
-            if not resume_dir.exists():
-                print(f"ERROR: Resume directory does not exist: {resume_dir}")
-                sys.exit(1)
-            args_to_remove.extend([i, i + 1])
-            print(f"Resuming from specified directory: {resume_dir}")
-
-    # Remove custom arguments from sys.argv
-    for idx in sorted(args_to_remove, reverse=True):
-        sys.argv.pop(idx)
-
-    # If resuming, inject hydra.run.dir override
-    if resume_dir:
-        hydra_override = f"hydra.run.dir={resume_dir}"
-        sys.argv.append(hydra_override)
-
-    return resume_dir
-
-
 @hydra.main(
     version_base=None,
     config_path=None,
@@ -815,7 +693,7 @@ def main(config):
 
     # Load existing results if available (for resuming interrupted runs)
     results_path = Path(output_dir) / "results.json"
-    results, processed_indices = _load_results_json(results_path)
+    results, processed_indices = load_results_json(results_path)
 
     # Generate trajectories
     results = generate_trajectories(
@@ -837,5 +715,5 @@ def main(config):
 
 if __name__ == "__main__":
     # Parse custom resume arguments before Hydra processes sys.argv
-    _parse_resume_arguments()
+    parse_resume_arguments()
     main()
