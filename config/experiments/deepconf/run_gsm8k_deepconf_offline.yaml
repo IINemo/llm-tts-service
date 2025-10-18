@@ -7,7 +7,6 @@ defaults:
   - /dataset/gsm8k
   - /model/openrouter
   - /generation/default
-  - /output/default
   - /system/default
   - _self_
 

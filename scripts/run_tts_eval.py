@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import random
+import sys
 import traceback
 from pathlib import Path
 
@@ -161,6 +162,38 @@ def _save_results_json(results, json_path: Path):
     json_data = [_safe_serialize(r) for r in results]
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(json_data, f, ensure_ascii=False, indent=2)
+
+
+def _load_results_json(json_path: Path):
+    """
+    Load existing results from a JSON file for resuming evaluation.
+
+    Args:
+        json_path: Path to the results.json file
+
+    Returns:
+        Tuple of (results, processed_indices)
+    """
+    json_path = Path(json_path)
+
+    if not json_path.exists():
+        return [], set()
+
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            results = json.load(f)
+
+        # Extract processed indices
+        processed_indices = {r["index"] for r in results if "index" in r}
+
+        log.info(f"Loaded {len(results)} existing results from {json_path}")
+        log.info(f"Resuming from {len(processed_indices)} processed samples")
+
+        return results, processed_indices
+
+    except Exception as e:
+        log.warning(f"Failed to load existing results from {json_path}: {e}")
+        return [], set()
 
 
 def wandb_save_directory(directory_path):
@@ -484,60 +517,77 @@ def evaluate_results(
     evaluators = build_evaluators(config)
     log.info(f"Using evaluators: {list(evaluators.keys())}")
 
-    # Prepare data for batch processing
-    problems = []
-    solutions = []
-    gold_answers = []
-    result_indices = []
+    save_path_file = Path(save_path) / "results.json"
 
-    for i, result in enumerate(results):
-        if "error" not in result:
+    # Process each evaluator separately (allows resuming per-evaluator)
+    for eval_name, evaluator_fn in evaluators.items():
+        log.info(f"\n--- Evaluator: {eval_name} ---")
+
+        # Prepare data for batch processing - ONLY for samples not yet evaluated by THIS evaluator
+        problems = []
+        solutions = []
+        gold_answers = []
+        result_indices = []
+
+        for i, result in enumerate(results):
+            if "error" in result:
+                continue
+
+            # Check if this evaluator has already processed this sample
+            if "eval" in result and eval_name in result["eval"]:
+                log.info(
+                    f"Skipping sample {result['index']} (already evaluated by {eval_name})"
+                )
+                continue
+
+            # This sample needs evaluation
             problems.append(result["question"])
             solutions.append(result["generated_answer"])
             gold_answers.append(result["gold_answer"])
             result_indices.append(i)
 
-    if problems:
+        if not problems:
+            log.info(f"All samples already evaluated by {eval_name}, skipping")
+            continue
+
+        log.info(f"Evaluating {len(problems)} samples with {eval_name}...")
+
+        try:
+            annotations = evaluator_fn(problems, solutions, gold_answers)
+            for idx, annotation in zip(result_indices, annotations):
+                if np.isnan(annotation):
+                    log.warning(
+                        f"{eval_name} returned unclear result for sample "
+                        f"{results[idx]['index']}, marking as incorrect"
+                    )
+                    is_correct = False
+                else:
+                    is_correct = annotation == 1  # 1 = correct, 0 = incorrect
+
+                results[idx].setdefault("eval", {})[eval_name] = {
+                    "label": None if np.isnan(annotation) else int(annotation),
+                    "is_correct": bool(is_correct),
+                }
+
+                if (idx - result_indices[0]) % 10 == 0:
+                    log.info(f"Sample {results[idx]['index']} [{eval_name}]:")
+                    log.info(f"Annotation: {annotation}")
+                    log.info(f"Correct: {is_correct}")
+
+        except Exception as e:
+            traceback.print_exc()
+            log.error(f"Error during {eval_name} verification: {e}")
+            for idx in result_indices:
+                results[idx].setdefault("eval", {})[eval_name] = {
+                    "label": None,
+                    "is_correct": False,
+                }
+
+        # Save after each evaluator completes (enables resuming per-evaluator)
+        _save_results_json(results, save_path_file)
         log.info(
-            f"Verifying {len(problems)} solutions with {list(evaluators.keys())}..."
+            f"Saved evaluation results for {eval_name} ({len(result_indices)} samples evaluated)"
         )
-
-        for eval_name, evaluator_fn in evaluators.items():
-            try:
-                annotations = evaluator_fn(problems, solutions, gold_answers)
-                for idx, annotation in zip(result_indices, annotations):
-                    if np.isnan(annotation):
-                        log.warning(
-                            f"{eval_name} returned unclear result for sample "
-                            f"{results[idx]['index']}, marking as incorrect"
-                        )
-                        is_correct = False
-                    else:
-                        is_correct = annotation == 1  # 1 = correct, 0 = incorrect
-
-                    results[idx].setdefault("eval", {})[eval_name] = {
-                        "label": None if np.isnan(annotation) else int(annotation),
-                        "is_correct": bool(is_correct),
-                    }
-
-                    if (idx - result_indices[0]) % 10 == 0:
-                        log.info(f"Sample {results[idx]['index']} [{eval_name}]:")
-                        log.info(f"Annotation: {annotation}")
-                        log.info(f"Correct: {is_correct}")
-
-            except Exception as e:
-                traceback.print_exc()
-                log.error(f"Error during {eval_name} verification: {e}")
-                for idx in result_indices:
-                    results[idx].setdefault("eval", {})[eval_name] = {
-                        "label": None,
-                        "is_correct": False,
-                    }
-
-    # Final save with correctness results
-    save_path_file = Path(save_path) / "results.json"
-    _save_results_json(results, save_path_file)
-    log.info(f"Final save with correctness: {len(results)} results to {save_path_file}")
 
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
@@ -548,10 +598,12 @@ def evaluate_results(
 
     for r in results:
         for name in evaluators.keys():
-            if r.get("eval").get(name).get("is_correct"):
-                summary_correct[name] += 1
-            elif not r.get("eval").get(name).get("is_correct"):
-                summary_incorrect[name] += 1
+            # Check if this result has been evaluated by this evaluator
+            if "eval" in r and name in r["eval"]:
+                if r["eval"][name].get("is_correct"):
+                    summary_correct[name] += 1
+                else:
+                    summary_incorrect[name] += 1
 
     log.info("Summary:")
     log.info(f"Total samples: {len(results)}")
@@ -611,6 +663,74 @@ def evaluate_results(
         pass  # wandb not installed
     except Exception as e:
         log.warning(f"Failed to log metrics to wandb: {e}")
+
+
+def _find_latest_output_dir():
+    """Find the most recent output directory."""
+    outputs_root = Path("outputs")
+    if not outputs_root.exists():
+        return None
+
+    # Find all timestamped directories (YYYY-MM-DD/HH-MM-SS)
+    all_dirs = []
+    for date_dir in outputs_root.iterdir():
+        if date_dir.is_dir() and date_dir.name.count("-") == 2:  # YYYY-MM-DD format
+            for time_dir in date_dir.iterdir():
+                if (
+                    time_dir.is_dir() and time_dir.name.count("-") == 2
+                ):  # HH-MM-SS format
+                    all_dirs.append(time_dir)
+
+    if not all_dirs:
+        return None
+
+    # Sort by modification time, return most recent
+    latest_dir = max(all_dirs, key=lambda p: p.stat().st_mtime)
+    return latest_dir
+
+
+def _parse_resume_arguments():
+    """
+    Parse custom --resume and --resume-from arguments.
+
+    Returns the resume directory path if found, otherwise None.
+    Modifies sys.argv to remove custom arguments and inject hydra.run.dir override.
+    """
+    resume_dir = None
+    args_to_remove = []
+
+    for i, arg in enumerate(sys.argv):
+        if arg == "--resume":
+            # Find latest directory
+            resume_dir = _find_latest_output_dir()
+            if not resume_dir:
+                print("ERROR: No previous output directories found to resume from.")
+                sys.exit(1)
+            args_to_remove.append(i)
+            print(f"Resuming from latest directory: {resume_dir}")
+
+        elif arg == "--resume-from":
+            # Get the next argument as the directory path
+            if i + 1 >= len(sys.argv):
+                print("ERROR: --resume-from requires a directory path argument")
+                sys.exit(1)
+            resume_dir = Path(sys.argv[i + 1])
+            if not resume_dir.exists():
+                print(f"ERROR: Resume directory does not exist: {resume_dir}")
+                sys.exit(1)
+            args_to_remove.extend([i, i + 1])
+            print(f"Resuming from specified directory: {resume_dir}")
+
+    # Remove custom arguments from sys.argv
+    for idx in sorted(args_to_remove, reverse=True):
+        sys.argv.pop(idx)
+
+    # If resuming, inject hydra.run.dir override
+    if resume_dir:
+        hydra_override = f"hydra.run.dir={resume_dir}"
+        sys.argv.append(hydra_override)
+
+    return resume_dir
 
 
 @hydra.main(
@@ -677,8 +797,10 @@ def main(config):
         config=config, model=model, step_generator=step_generator, scorer=scorer
     )
 
-    processed_indices = set()
-    results = []  # TODO: add logic for resuming from existing results
+    # Load existing results if available (for resuming interrupted runs)
+    results_path = Path(output_dir) / "results.json"
+    results, processed_indices = _load_results_json(results_path)
+
     # Generate trajectories
     results = generate_trajectories(
         results=results,
@@ -698,4 +820,6 @@ def main(config):
 
 
 if __name__ == "__main__":
+    # Parse custom resume arguments before Hydra processes sys.argv
+    _parse_resume_arguments()
     main()
