@@ -60,11 +60,14 @@ class EvaluatorLLMAsAJudge:
             problem=problem, solution=solution, gold_answer=gold_answer
         )
         reply = self.chat.ask(prompt)
-        if "<Grade>: Correct" in reply:
+
+        # Handle both <Grade>: and Grade: formats (with/without angle brackets)
+        if "<Grade>: Correct" in reply or "Grade: Correct" in reply:
             return 1
-        elif "<Grade>: Incorrect" in reply:
+        elif "<Grade>: Incorrect" in reply or "Grade: Incorrect" in reply:
             return 0
         else:
+            log.warning(f"LLM judge returned unclear result. Reply: {reply[:200]}")
             return np.nan
 
     def __call__(
