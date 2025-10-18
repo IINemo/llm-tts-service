@@ -12,6 +12,7 @@ defaults:
 
 # Main configuration
 verbose: false
+report_to: wandb  # Enable wandb logging (optional)
 
 # Model configuration (API-based)
 model:
