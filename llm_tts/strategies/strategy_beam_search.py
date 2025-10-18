@@ -48,7 +48,7 @@ class StrategyBeamSearch(StrategyBase):
         beam_size: int = 5,
         candidates_per_beam: int = 3,
         max_steps: int = 10,
-        aggregation: str = "min",
+        aggregation: str = "mean",
     ):
         self.step_generator = step_generator
         self.scorer = scorer
@@ -134,16 +134,8 @@ class StrategyBeamSearch(StrategyBase):
         return {
             "trajectory": covert_trajectory_to_string(best_beam["steps"]),
             "steps": best_beam["steps"],
-            "scores": best_beam["scores"],
+            "validity_scores": best_beam["scores"],
             "completed": len(completed_beams) > 0,
-            "metadata": {
-                "beam_size": self.beam_size,
-                "candidates_per_beam": self.candidates_per_beam,
-                "max_steps": self.max_steps,
-                "aggregation": self.aggregation,
-                "num_completed_beams": len(completed_beams),
-                "num_final_beams": len(beams),
-            },
         }
 
     def _aggregate_scores(self, scores: list[float]) -> float:
@@ -152,7 +144,7 @@ class StrategyBeamSearch(StrategyBase):
             return 0
         if self.aggregation == "sum":
             return sum(scores)
-        elif self.aggregation == "avg":
+        elif self.aggregation == "mean":
             return np.mean(scores).item()
         elif self.aggregation == "product":
             return np.prod(scores).item()
