@@ -42,9 +42,9 @@ strategy:
 
   # Generation parameters
   window_size: 2048  # Sliding window (algorithmic parameter - DO NOT CHANGE)
-  temperature: 0.7
-  top_p: 1.0
-  max_tokens: 512
+  temperature: 0.6  # Match original wrapper.py default
+  top_p: 0.95  # Match original wrapper.py default
+  max_tokens: 32000  # Match original wrapper.py default
   top_logprobs: 20
 
   # Filtering and voting
