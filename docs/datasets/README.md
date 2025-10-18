@@ -4,10 +4,12 @@ This directory documents the datasets supported by the TTS evaluation framework 
 
 ## Supported Datasets
 
-| Dataset | HuggingFace Link | Problems | Difficulty | Description |
-|---------|------------------|----------|------------|-------------|
-| **GSM8K** | [test-time-compute/test_gsm8k](https://huggingface.co/datasets/test-time-compute/test_gsm8k) | 1,319 | Grade School | Grade school math word problems |
-| **AIME 2025** | [test-time-compute/aime_2025](https://huggingface.co/datasets/test-time-compute/aime_2025) | 30 | Competition | American Invitational Mathematics Examination |
+| Dataset | HuggingFace Link | Problems | Difficulty | Status | Description |
+|---------|------------------|----------|------------|--------|-------------|
+| **GSM8K** | [test-time-compute/test_gsm8k](https://huggingface.co/datasets/test-time-compute/test_gsm8k) | 1,319 | Grade School | ✅ Configured | Grade school math word problems |
+| **AIME 2025** | [test-time-compute/aime_2025](https://huggingface.co/datasets/test-time-compute/aime_2025) | 30 | Competition | ✅ Configured | American Invitational Mathematics Examination |
+| **MATH** | [test-time-compute/test_MATH](https://huggingface.co/datasets/test-time-compute/test_MATH) | 5,000 | High School+ | 🔜 Available | Competition mathematics problems (MATH dataset) |
+| **Proofnet** | [test-time-compute/test_Proofnet](https://huggingface.co/datasets/test-time-compute/test_Proofnet) | 186 | Proof-based | 🔜 Available | Formal proof generation problems |
 
 ---
 
