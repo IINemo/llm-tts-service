@@ -33,7 +33,11 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN
+from llm_tts.strategies import (
+    StrategyDeepConf,
+    StrategyOnlineBestOfN,
+    StrategyUncertaintyCoT,
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -192,7 +196,7 @@ def create_scorer(config):
             batch_size=config.scorer.batch_size,
         )
 
-    elif config.scorer.type == "uncertainty":
+    elif config.scorer.type == "uncertainty" or config.scorer.type == "uncertainty_pd":
         scorer = StepScorerUncertainty()
 
     else:
@@ -203,12 +207,22 @@ def create_scorer(config):
 
 def create_model(config):
     if config.model.type == "local":
-        if config.scorer.type == "uncertainty":
+        if (
+            config.scorer.type == "uncertainty"
+            or config.scorer.type == "uncertainty_pd"
+        ):
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
 
             import importlib
+            import sys
+            from pathlib import Path
+
+            # Add the current directory to Python path to allow importing config modules
+            current_dir = Path.cwd()
+            if str(current_dir) not in sys.path:
+                sys.path.insert(0, str(current_dir))
 
             mod = importlib.import_module(config.scorer.uncertainty_model_creator)
             model = mod.create_uncertainty_model(config)
@@ -228,8 +242,12 @@ def create_model(config):
             model = WhiteboxModel(base_model, tokenizer)
 
         detector = StepBoundaryDetector(
-            step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
-            answer_patterns=["<Answer>:", "\n<Answer>:"],
+            step_patterns=config.strategy.get(
+                "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+            ),
+            answer_patterns=config.strategy.get(
+                "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+            ),
             max_tokens_per_step=config.generation.max_new_tokens,
         )
         step_generator = StepCandidateGeneratorThroughHuggingface(
@@ -337,6 +355,15 @@ def create_tts_strategy(config, model, step_generator, scorer):
             top_logprobs=config.strategy.get("top_logprobs", 20),
         )
 
+    elif config.strategy.type == "uncertainty_cot":
+        strategy = StrategyUncertaintyCoT(
+            config=config,
+            step_generator=step_generator,
+            candidates_per_step=config.strategy.candidates_per_step,
+            max_steps=config.strategy.max_steps,
+            max_empty_steps=config.strategy.max_empty_steps,
+            uncertainty_threshold=config.strategy.uncertainty_threshold,
+        )
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
 
