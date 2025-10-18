@@ -27,7 +27,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         model: BlackboxModel,
         detector: StepBoundaryDetector,
         prefill_mode: bool,
-        generation_batch_size: int,
     ):
         super().__init__(1)  # TODO:
 

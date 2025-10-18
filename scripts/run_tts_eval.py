@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import random
+import traceback
 from pathlib import Path
 
 import hydra
@@ -33,7 +34,11 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN
+from llm_tts.strategies import (
+    StrategyBeamSearch,
+    StrategyDeepConf,
+    StrategyOnlineBestOfN,
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -158,47 +163,6 @@ def _save_results_json(results, json_path: Path):
         json.dump(json_data, f, ensure_ascii=False, indent=2)
 
 
-def load_existing_results(save_path: str, dataset):
-    log.info(f"Loading existing results from {save_path}")
-
-    try:
-        with open(save_path, "r", encoding="utf-8") as f:
-            results = json.load(f)
-        processed_indices = {r["index"] for r in results}
-        log.info(f"Loaded {len(results)} existing results")
-        log.info(f"Already processed indices: {sorted(processed_indices)}")
-
-        # Validate all existing results match current dataset
-        log.info("Validating existing results against current dataset...")
-        for result in results:
-            idx = result["index"]
-            if idx < len(dataset):
-                sample = dataset[idx]
-                if (
-                    result["question"] != sample["question"]
-                    or result["gold_answer"] != sample["answer"]
-                ):
-                    raise ValueError(
-                        f"Sample mismatch at index {idx}!\n"
-                        f"Existing question: {result['question']}...\n"
-                        f"Current question: {sample['question']}...\n"
-                        f"Existing answer: {result['gold_answer']}\n"
-                        f"Current answer: {sample['answer']}\n"
-                        f"The saved results appear to be from a different dataset!"
-                    )
-        log.info("Validation passed - all existing results match current dataset")
-
-    except Exception as e:
-        if "Sample mismatch" in str(e):
-            raise  # Re-raise validation errors
-
-        log.warning(f"Failed to load existing results: {e}")
-        results = []
-        processed_indices = set()
-
-    return results, processed_indices
-
-
 def wandb_save_directory(directory_path):
     import wandb
 
@@ -218,8 +182,12 @@ def set_random_seeds(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def create_scorer(config, model):
+def create_scorer(config):
     # DeepConf doesn't use a scorer
+
+    if config.strategy.type == "deepconf":
+        return None
+
     if config.scorer is None:
         return None
 
@@ -352,7 +320,6 @@ def create_tts_strategy(config, model, step_generator, scorer):
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
         )
-
     elif config.strategy.type == "deepconf":
         # DeepConf requires BlackboxModel with logprobs support
         if not isinstance(model, BlackboxModelWithStreaming):
@@ -373,6 +340,15 @@ def create_tts_strategy(config, model, step_generator, scorer):
             top_p=config.strategy.get("top_p", 1.0),
             max_tokens=config.strategy.get("max_tokens", 512),
             top_logprobs=config.strategy.get("top_logprobs", 20),
+        )
+    elif config.strategy.type == "beam_search":
+        strategy = StrategyBeamSearch(
+            step_generator=step_generator,
+            scorer=scorer,
+            beam_size=config.strategy.beam_size,
+            candidates_per_beam=config.strategy.candidates_per_beam,
+            max_steps=config.strategy.max_steps,
+            aggregation=getattr(config.strategy, "aggregation", "mean"),
         )
 
     else:
@@ -416,13 +392,17 @@ def generate_trajectories(
         log.info(f"Gold answer: {gold_answer_num}")
 
         # Generate trajectory
-        if prompt_template:
-            request = prompt_template.format(question=instance["question"])
-        else:
-            request = [
-                {"role": "system", "content": ""},
-                {"role": "user", "content": instance["question"]},
-            ]
+        request = [
+            {"role": "system", "content": ""},
+            {
+                "role": "user",
+                "content": (
+                    prompt_template.format(question=instance["question"])
+                    if prompt_template
+                    else instance["question"]
+                ),
+            },
+        ]
 
         result = strategy.generate_trajectory(request)
 
@@ -546,6 +526,7 @@ def evaluate_results(
                         log.info(f"Correct: {is_correct}")
 
             except Exception as e:
+                traceback.print_exc()
                 log.error(f"Error during {eval_name} verification: {e}")
                 for idx in result_indices:
                     results[idx].setdefault("eval", {})[eval_name] = {
@@ -595,6 +576,42 @@ def evaluate_results(
     log.info(f"Avg steps per trajectory: {np.mean(all_steps):.1f}")
     log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
 
+    # Log key metrics to wandb if enabled
+    try:
+        import wandb
+
+        if wandb.run is not None:
+            metrics = {
+                "total_samples": len(results),
+                "completed": completed,
+                "completed_pct": completed / len(results),
+                "errors": errors,
+                "errors_pct": errors / len(results),
+            }
+
+            # Add per-evaluator metrics
+            for name in evaluators.keys():
+                correct = summary_correct[name]
+                incorrect = summary_incorrect[name]
+                metrics[f"{name}/correct"] = correct
+                metrics[f"{name}/correct_pct"] = correct / len(results)
+                metrics[f"{name}/incorrect"] = incorrect
+                metrics[f"{name}/incorrect_pct"] = incorrect / len(results)
+                metrics[f"{name}/accuracy"] = correct / len(results)
+
+            # Add step statistics
+            if all_steps:
+                metrics["avg_steps_per_trajectory"] = np.mean(all_steps)
+            if all_validities:
+                metrics["avg_validity_score"] = np.mean(all_validities)
+
+            wandb.log(metrics)
+            log.info("Logged metrics to wandb")
+    except ImportError:
+        pass  # wandb not installed
+    except Exception as e:
+        log.warning(f"Failed to log metrics to wandb: {e}")
+
 
 @hydra.main(
     version_base=None,
@@ -632,57 +649,12 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
-
-    # Check if dataset is cached
-    cache_dir = config.system.hf_cache or os.path.expanduser(
-        "~/.cache/huggingface/datasets"
+    dataset = load_dataset(
+        config.dataset.dataset_path,
+        config.dataset.get("dataset_config", None),
+        split=config.dataset.dataset_split,
+        cache_dir=config.system.hf_cache,
     )
-    dataset_cache_name = config.dataset.dataset_path.replace("/", "___")
-    cache_exists = os.path.exists(os.path.join(cache_dir, dataset_cache_name))
-    if cache_exists:
-        log.info(f"Using cached dataset from: {cache_dir}")
-    else:
-        log.info(f"Downloading dataset to cache: {cache_dir}")
-
-    # Set offline mode to avoid network requests for cached datasets
-    os.environ["HF_DATASETS_OFFLINE"] = "1"
-
-    # MATH dataset - needs special handling (concatenate multiple configs)
-    if config.dataset.dataset_path == "EleutherAI/hendrycks_math":
-        from datasets import concatenate_datasets, get_dataset_config_names
-
-        configs = get_dataset_config_names(config.dataset.dataset_path)
-        datasets_by_subset = {
-            cfg: load_dataset(
-                config.dataset.dataset_path,
-                cfg,
-                split=config.dataset.dataset_split,
-                cache_dir=config.system.hf_cache,
-            )
-            for cfg in configs
-        }
-        dataset = concatenate_datasets(list(datasets_by_subset.values()))
-        dataset = dataset.rename_columns({"problem": "question", "solution": "answer"})
-
-    # ProofNet dataset - needs column renaming
-    elif config.dataset.dataset_path == "hoskinson-center/proofnet":
-        dataset = load_dataset(
-            config.dataset.dataset_path,
-            split=config.dataset.dataset_split,
-            cache_dir=config.system.hf_cache,
-        )
-        dataset = dataset.rename_columns(
-            {"nl_statement": "question", "nl_proof": "answer"}
-        )
-
-    # Default: GSM8K and other standard datasets
-    else:
-        dataset = load_dataset(
-            config.dataset.dataset_path,
-            config.dataset.dataset_config,
-            split=config.dataset.dataset_split,
-            cache_dir=config.system.hf_cache,
-        )
     if config.dataset.subset:
         dataset = dataset.select(range(min(config.dataset.subset, len(dataset))))
 
@@ -698,25 +670,15 @@ def main(config):
     model, step_generator = create_model(config)
 
     # Create scorer (skip for DeepConf)
-    if config.strategy.type != "deepconf":
-        scorer = create_scorer(config, model)
-    else:
-        scorer = None
+    scorer = create_scorer(config)
 
     # Create tts strategy
     generator = create_tts_strategy(
         config=config, model=model, step_generator=step_generator, scorer=scorer
     )
 
-    # Load existing results if resuming
-    if config.output.resume:
-        results, processed_indices = load_existing_results(
-            Path(output_dir) / "results.json", dataset
-        )
-    else:
-        results = []
-        processed_indices = set()
-
+    processed_indices = set()
+    results = []  # TODO: add logic for resuming from existing results
     # Generate trajectories
     results = generate_trajectories(
         results=results,
