@@ -424,10 +424,9 @@ def generate_trajectories(
 
         results.append(result_dict)
 
-        # Save periodically
-        if len(results) % 10 == 0:
-            save_results_json(results, save_path_file)
-            log.info(f"Saved {len(results)} results to {save_path_file}")
+        # Save after each sample (enables resuming with minimal data loss)
+        save_results_json(results, save_path_file)
+        log.info(f"Saved result for sample {i} to {save_path_file}")
 
     # Final save after generation
     save_results_json(results, save_path_file)
@@ -456,12 +455,8 @@ def evaluate_results(
     for eval_name, evaluator_fn in evaluators.items():
         log.info(f"\n--- Evaluator: {eval_name} ---")
 
-        # Prepare data for batch processing - ONLY for samples not yet evaluated by THIS evaluator
-        problems = []
-        solutions = []
-        gold_answers = []
-        result_indices = []
-
+        # Evaluate samples one at a time and save after each
+        samples_evaluated = 0
         for i, result in enumerate(results):
             if "error" in result:
                 continue
@@ -473,37 +468,31 @@ def evaluate_results(
                 )
                 continue
 
-            # This sample needs evaluation
-            problems.append(result["question"])
-            solutions.append(result["generated_answer"])
-            gold_answers.append(result["gold_answer"])
-            result_indices.append(i)
+            log.info(f"Evaluating sample {result['index']} with {eval_name}...")
 
-        if not problems:
-            log.info(f"All samples already evaluated by {eval_name}, skipping")
-            continue
+            try:
+                # Evaluate single sample
+                eval_result = evaluator_fn(
+                    [result["question"]],
+                    [result["generated_answer"]],
+                    [result["gold_answer"]],
+                )
 
-        log.info(f"Evaluating {len(problems)} samples with {eval_name}...")
+                # Handle both old format (list) and new format (tuple of lists)
+                if isinstance(eval_result, tuple):
+                    annotations, responses = eval_result
+                else:
+                    # Backward compatibility: old evaluators return just annotations
+                    annotations = eval_result
+                    responses = [None]
 
-        try:
-            # Get both annotations and raw responses from evaluator
-            eval_result = evaluator_fn(problems, solutions, gold_answers)
+                annotation = annotations[0]
+                response = responses[0] if responses else None
 
-            # Handle both old format (list) and new format (tuple of lists)
-            if isinstance(eval_result, tuple):
-                annotations, responses = eval_result
-            else:
-                # Backward compatibility: old evaluators return just annotations
-                annotations = eval_result
-                responses = [None] * len(annotations)
-
-            for idx, annotation, response in zip(
-                result_indices, annotations, responses
-            ):
                 if np.isnan(annotation):
                     log.warning(
                         f"{eval_name} returned unclear result for sample "
-                        f"{results[idx]['index']}, marking as incorrect"
+                        f"{result['index']}, marking as incorrect"
                     )
                     is_correct = False
                 else:
@@ -518,27 +507,35 @@ def evaluate_results(
                 if response is not None:
                     eval_data["response"] = response
 
-                results[idx].setdefault("eval", {})[eval_name] = eval_data
+                results[i].setdefault("eval", {})[eval_name] = eval_data
 
-                if (idx - result_indices[0]) % 10 == 0:
-                    log.info(f"Sample {results[idx]['index']} [{eval_name}]:")
-                    log.info(f"Annotation: {annotation}")
-                    log.info(f"Correct: {is_correct}")
+                log.info(
+                    f"Sample {result['index']} [{eval_name}]: "
+                    f"{annotation} ({'Correct' if is_correct else 'Incorrect'})"
+                )
 
-        except Exception as e:
-            traceback.print_exc()
-            log.error(f"Error during {eval_name} verification: {e}")
-            for idx in result_indices:
-                results[idx].setdefault("eval", {})[eval_name] = {
+                # Save after each sample evaluation
+                save_results_json(results, save_path_file)
+                samples_evaluated += 1
+
+            except Exception as e:
+                traceback.print_exc()
+                log.error(
+                    f"Error during {eval_name} verification for sample {result['index']}: {e}"
+                )
+                results[i].setdefault("eval", {})[eval_name] = {
                     "label": None,
                     "is_correct": False,
                 }
+                # Save even after errors
+                save_results_json(results, save_path_file)
 
-        # Save after each evaluator completes (enables resuming per-evaluator)
-        save_results_json(results, save_path_file)
-        log.info(
-            f"Saved evaluation results for {eval_name} ({len(result_indices)} samples evaluated)"
-        )
+        if samples_evaluated == 0:
+            log.info(f"All samples already evaluated by {eval_name}, skipping")
+        else:
+            log.info(
+                f"Completed evaluation with {eval_name} ({samples_evaluated} samples evaluated)"
+            )
 
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
