@@ -387,8 +387,9 @@ def generate_trajectories(
         if result["steps"] and isinstance(result["steps"], list):
             for step_idx, step in enumerate(result["steps"]):
                 validity = (
-                    result["validity_scores"][step_idx]
-                    if step_idx < len(result["validity_scores"])
+                    result.get("validity_scores", [])[step_idx]
+                    if "validity_scores" in result
+                    and step_idx < len(result["validity_scores"])
                     else "N/A"
                 )
                 # Format confidence score (handle both numeric and "N/A")
@@ -408,7 +409,8 @@ def generate_trajectories(
         log.info("-" * 60)
         log.info(f"Generated: {generated_text}")
         log.info(f"Num traces: {len(result['steps'])}")
-        log.info(f"Avg confidence: {np.mean(result['validity_scores']):.3f}")
+        if "validity_scores" in result and result["validity_scores"]:
+            log.info(f"Avg confidence: {np.mean(result['validity_scores']):.3f}")
         log.info("-" * 60)
 
         # Store result WITHOUT correctness check
@@ -419,7 +421,7 @@ def generate_trajectories(
             "generated_trajectory": result["trajectory"],
             "generated_answer": generated_text,
             "steps": result["steps"],
-            "validity_scores": result["validity_scores"],
+            "validity_scores": result.get("validity_scores", []),
             "completed": result["completed"],
         }
 
