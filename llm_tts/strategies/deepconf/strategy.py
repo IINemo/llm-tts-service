@@ -17,6 +17,7 @@ from lm_polygraph import BlackboxModel
 
 from llm_tts.early_stopping import ConfidenceEarlyStopping
 
+from ..metadata_builder import StrategyMetadataBuilder
 from ..strategy_base import StrategyBase
 from .utils import (
     compute_sliding_window_confidence,
@@ -182,22 +183,46 @@ class StrategyDeepConf(StrategyBase):
                 }
             )
 
+        # Build metadata using StrategyMetadataBuilder
+        builder = StrategyMetadataBuilder("deepconf")
+
+        # Add configuration
+        builder.add_config(
+            mode="offline",
+            budget=self.budget,
+            window_size=self.window_size,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            max_tokens=self.max_tokens,
+            top_logprobs=self.top_logprobs,
+            filter_method=self.filter_method,
+            n_threads=self.n_threads,
+        )
+
+        # Add results
+        builder.add_results(
+            selected_answer=result["selected_answer"],
+            confidence_score=result["confidence_score"],
+            vote_distribution=result["vote_distribution"],
+            total_traces=len(traces),
+            filtered_traces=len(result["filtered_traces"]),
+        )
+
+        # Add generation details
+        builder.add_generation_details(
+            trace_summaries=trace_summaries,
+            filtered_trace_details=filtered_trace_details,
+        )
+
+        # Log summary to console
+        builder.log_summary(log)
+
         return {
             "trajectory": result["selected_text"],
             "steps": [result["selected_text"]],
             "validity_scores": [result["confidence_score"]],
             "completed": True,
-            "metadata": {
-                "mode": "offline",
-                "total_traces": len(traces),
-                "filtered_traces": len(result["filtered_traces"]),
-                "confidence_score": result["confidence_score"],
-                "selected_answer": result["selected_answer"],
-                "vote_distribution": result["vote_distribution"],
-                # Enhanced metadata with trace summaries
-                "trace_summaries": trace_summaries,
-                "filtered_trace_details": filtered_trace_details,
-            },
+            "metadata": builder.build(),
         }
 
     def _generate_online(self, prompt: str) -> Dict[str, Any]:
@@ -334,25 +359,53 @@ class StrategyDeepConf(StrategyBase):
                 }
             )
 
+        # Build metadata using StrategyMetadataBuilder
+        builder = StrategyMetadataBuilder("deepconf")
+
+        # Add configuration
+        builder.add_config(
+            mode="online",
+            window_size=self.window_size,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            max_tokens=self.max_tokens,
+            top_logprobs=self.top_logprobs,
+            filter_method=self.filter_method,
+            n_threads=self.n_threads,
+        )
+
+        # Add results
+        builder.add_results(
+            selected_answer=result["selected_answer"],
+            confidence_score=result["confidence_score"],
+            vote_distribution=result["vote_distribution"],
+            total_traces=len(all_traces),
+            filtered_traces=len(result["filtered_traces"]),
+        )
+
+        # Add generation details
+        builder.add_generation_details(
+            trace_summaries=trace_summaries,
+            filtered_trace_details=filtered_trace_details,
+        )
+
+        # Add online-specific metadata
+        builder.add_strategy_specific(
+            warmup_traces=len(warmup_traces),
+            adaptive_traces=len(adaptive_traces),
+            conf_threshold=conf_threshold,
+            confidence_percentile=self.confidence_percentile,
+        )
+
+        # Log summary to console
+        builder.log_summary(log)
+
         return {
             "trajectory": result["selected_text"],
             "steps": [result["selected_text"]],
             "validity_scores": [result["confidence_score"]],
             "completed": True,
-            "metadata": {
-                "mode": "online",
-                "warmup_traces": len(warmup_traces),
-                "adaptive_traces": len(adaptive_traces),
-                "total_traces": len(all_traces),
-                "filtered_traces": len(result["filtered_traces"]),
-                "conf_threshold": conf_threshold,
-                "confidence_score": result["confidence_score"],
-                "selected_answer": result["selected_answer"],
-                "vote_distribution": result["vote_distribution"],
-                # Enhanced metadata with trace summaries (consistent with offline mode)
-                "trace_summaries": trace_summaries,
-                "filtered_trace_details": filtered_trace_details,
-            },
+            "metadata": builder.build(),
         }
 
     def _generate_single_trace(self, args: tuple) -> Optional[Dict[str, Any]]:
