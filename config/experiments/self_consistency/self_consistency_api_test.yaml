@@ -16,6 +16,10 @@ verbose: true
 # It uses internal majority voting
 scorer: null
 
+# Use few-shot CoT prompt optimized for self-consistency
+dataset:
+  prompt_file: ./config/prompts/gsm8k_self_consistency.txt
+
 # API-specific overrides
 strategy:
   num_paths: 5  # Fewer paths for API testing to save costs

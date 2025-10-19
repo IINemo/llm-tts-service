@@ -15,3 +15,7 @@ verbose: true
 # Self-consistency doesn't need a scorer like ReasonEval
 # It uses internal majority voting
 scorer: null
+
+# Use few-shot CoT prompt optimized for self-consistency
+dataset:
+  prompt_file: ./config/prompts/gsm8k_self_consistency.txt

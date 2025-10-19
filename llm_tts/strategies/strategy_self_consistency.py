@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 
+from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers.majority_voting import ChainMajorityVotingScorer
 
 from .strategy_base import StrategyBase
@@ -72,41 +73,32 @@ class StrategySelfConsistency(StrategyBase):
 
         all_paths = []
 
-        # Check if this is an API model (has generate method directly)
-        if hasattr(self.model, "api_model") or self.model.device == "api":
-            log.info("Using API model for generation")
-            # Use API model directly
-            for i in range(self.num_paths):
-                log.info(f"Generating path {i+1}/{self.num_paths}")
+        # Check if this is an API-based model using proper type checking
+        if isinstance(self.model, BlackboxModelWithStreaming):
+            log.info("Using API model for batched generation")
 
-                try:
-                    if hasattr(self.model, "generate"):
-                        # Direct API model
-                        completions = self.model.generate(
-                            prompt=prompt,
-                            max_new_tokens=self.max_new_tokens,
-                            temperature=self.temperature,
-                            num_return_sequences=1,
-                        )
-                        generated_text = completions[0] if completions else ""
-                    else:
-                        # API model wrapped in adapter
-                        completions = self.model.api_model.generate(
-                            prompt=prompt,
-                            max_new_tokens=self.max_new_tokens,
-                            temperature=self.temperature,
-                            num_return_sequences=1,
-                        )
-                        generated_text = completions[0] if completions else ""
+            try:
+                # Generate all paths in a single API call for efficiency
+                completions = self.model.generate(
+                    prompt=prompt,
+                    max_new_tokens=self.max_new_tokens,
+                    temperature=self.temperature,
+                    num_return_sequences=self.num_paths,  # Generate all at once
+                )
 
-                    # Combine with original prompt
-                    full_path = prompt + generated_text
-                    all_paths.append(full_path)
+                # Process all generated completions
+                for i, generated_text in enumerate(completions):
+                    if generated_text:  # Only add non-empty generations
+                        full_path = prompt + generated_text
+                        all_paths.append(full_path)
+                        log.info(f"Generated path {i+1}/{self.num_paths}")
 
-                except Exception as e:
-                    log.warning(f"Failed to generate path {i+1}: {e}")
-                    # Add fallback path
-                    all_paths.append(prompt + f" [Generation failed: {str(e)}]")
+            except Exception as e:
+                log.error(f"Failed to generate reasoning paths via API: {e}")
+                # Don't add invalid fallback paths - just warn and continue
+                log.warning(
+                    f"Only {len(all_paths)}/{self.num_paths} paths were successfully generated"
+                )
 
         else:
             # Use local model with batched generation
