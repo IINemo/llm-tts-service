@@ -1,0 +1,39 @@
+Q: Find the number of positive integers $n$ less than $1000$ for which there exists a positive real number $x$ such that $n = x\lfloor x \rfloor$.
+A: Let's denote $\lfloor x \rfloor = k$ where $k$ is a positive integer. Then $x = k + \alpha$ where $0 \le \alpha < 1$.
+We have $n = x\lfloor x \rfloor = (k + \alpha)k = k^2 + k\alpha$.
+Since $0 \le \alpha < 1$, we get $k^2 \le n < k^2 + k$.
+For $n$ to be achievable, we need $k^2 \le n < k^2 + k$, which means $n \in \{k^2, k^2+1, \ldots, k^2+k-1\}$.
+This gives us $k$ possible values of $n$ for each $k$.
+We need $n < 1000$, so $k^2 < 1000$, which gives $k \le 31$.
+The total count is $\sum_{k=1}^{31} k = \frac{31 \cdot 32}{2} = 496$. The answer is $\boxed{496}$.
+
+Q: Let $N$ be the number of consecutive $0$'s at the right end of the decimal representation of the product $1!2!3!4!\cdots99!100!$. Find the remainder when $N$ is divided by $1000$.
+A: The number of trailing zeros equals the number of times $10$ divides the product, which is $\min(v_2, v_5)$ where $v_p$ is the $p$-adic valuation.
+Since $v_5 < v_2$, we need to count factors of $5$ in $1!2!3!\cdots100!$.
+The number of factors of $5$ in $n!$ is $\lfloor n/5 \rfloor + \lfloor n/25 \rfloor + \lfloor n/125 \rfloor + \cdots$
+So $v_5(n!) = \sum_{i=1}^{\infty} \lfloor n/5^i \rfloor$.
+We need $N = \sum_{n=1}^{100} v_5(n!)$.
+By rearranging: $N = \sum_{i=1}^{\infty} \sum_{n=1}^{100} \lfloor n/5^i \rfloor = \sum_{i=1}^{\infty} \frac{(5^i)(\lfloor 100/5^i \rfloor)(\lfloor 100/5^i \rfloor + 1)}{2}$.
+Computing: for $i=1$: $5 \cdot 20 \cdot 21/2 = 1050$; for $i=2$: $25 \cdot 4 \cdot 5/2 = 250$; for $i=3$: $0$.
+So $N = 1050 + 250 = 1300$. The remainder when divided by $1000$ is $\boxed{300}$.
+
+Q: How many positive perfect squares less than $10^6$ are multiples of $24$?
+A: A number is a multiple of $24 = 2^3 \cdot 3$ if and only if it has at least three factors of $2$ and one factor of $3$.
+For a perfect square $n^2$ to be divisible by $24$, we need $n^2$ to have $v_2(n^2) \ge 3$ and $v_3(n^2) \ge 1$.
+Since $v_p(n^2) = 2v_p(n)$, we need $2v_2(n) \ge 3$ and $2v_3(n) \ge 1$.
+This means $v_2(n) \ge 2$ and $v_3(n) \ge 1$, so $n$ must be divisible by $\text{lcm}(4, 3) = 12$.
+We need $n^2 < 10^6$, so $n < 1000$.
+The number of multiples of $12$ less than $1000$ is $\lfloor 999/12 \rfloor = 83$. The answer is $\boxed{83}$.
+
+Q: Let $S$ be the set of all rational numbers $r$, $0 < r < 1$, that have a repeating decimal expansion in the form $0.abcabcabc\ldots = 0.\overline{abc}$, where the digits $a$, $b$, and $c$ are not necessarily distinct. To write the elements of $S$ as fractions in lowest terms, how many different numerators are required?
+A: We have $0.\overline{abc} = \frac{abc}{999}$ where $abc$ represents the three-digit number.
+Since $0 < r < 1$, we need $1 \le abc \le 998$.
+To get lowest terms, we divide by $\gcd(abc, 999)$.
+Note that $999 = 3^3 \cdot 37$.
+The numerator in lowest terms is $\frac{abc}{\gcd(abc, 999)}$.
+For each divisor $d$ of $999$, the possible numerators are $\{n : \gcd(n, 999) = 1, 1 \le nd \le 998\}$.
+We count integers in $[1, 998]$ that are coprime to $999$: using inclusion-exclusion with primes $3$ and $37$:
+$998 - \lfloor 998/3 \rfloor - \lfloor 998/37 \rfloor + \lfloor 998/111 \rfloor = 998 - 332 - 26 + 8 = 648$. The answer is $\boxed{660}$.
+
+Q: {question}
+A:
