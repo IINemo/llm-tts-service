@@ -10,7 +10,6 @@ Supports both offline and online modes:
 """
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -452,20 +451,16 @@ class StrategyDeepConf(StrategyBase):
         Returns:
             List of trace dictionaries with text, confidence, and answer
         """
-        log.info(f"🔄 Generating {n} traces with {self.n_threads} parallel threads")
-
         # Prepare arguments for each trace: (prompt, index, total)
         trace_args = [(prompt, i, n) for i in range(n)]
 
-        # Use ThreadPoolExecutor to parallelize API calls
-        with ThreadPoolExecutor(max_workers=self.n_threads) as executor:
-            trace_results = list(executor.map(self._generate_single_trace, trace_args))
-
-        # Filter out None results (failed traces)
-        traces = [t for t in trace_results if t is not None]
-
-        log.info(f"📊 Generated {len(traces)}/{n} traces successfully")
-        return traces
+        # Use base class parallel generation with our trace-specific worker
+        return self._parallel_generate(
+            worker_func=self._generate_single_trace,
+            task_args=trace_args,
+            n_threads=self.n_threads,
+            desc=f"Generating {n} traces",
+        )
 
     def _generate_traces_adaptive(
         self, prompt: str, n: int, conf_threshold: float
