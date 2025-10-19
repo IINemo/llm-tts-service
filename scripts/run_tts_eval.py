@@ -36,10 +36,10 @@ from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.strategies import (
+    MUR,
     StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
-    MUR,
 )
 
 # Load environment variables from .env file
@@ -281,7 +281,13 @@ def create_model(config):
             from llm_tts.early_stopping import BoundaryEarlyStopping
 
             detector = StepBoundaryDetector(
-                step_patterns=["- Step", "<Answer>:", "\n<Answer>:", "### Step", "\nStep"],
+                step_patterns=[
+                    "- Step",
+                    "<Answer>:",
+                    "\n<Answer>:",
+                    "### Step",
+                    "\nStep",
+                ],
                 answer_patterns=["<Answer>:", "\n<Answer>:"],
                 max_tokens_per_step=config.generation.max_new_tokens,
             )

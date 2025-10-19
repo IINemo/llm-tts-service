@@ -80,10 +80,14 @@ class MUR(StrategyBase):
             selected_candidate = candidates[0]
             cur_signal = candidate_validity_scores[0]
 
-            log.info(f"Cur signal: {cur_signal}" )
+            log.info(f"Cur signal: {cur_signal}")
             log.info(f"Current candidate: {selected_candidate.text}")
 
-            if step_num > 0 and np.exp(cur_signal) > np.exp(momentum_uncertainty) / self.scaling_rate:
+            if (
+                step_num > 0
+                and np.exp(cur_signal)
+                > np.exp(momentum_uncertainty) / self.scaling_rate
+            ):
                 candidates = self.step_generator(
                     request,
                     trajectory=trajectory,
@@ -96,7 +100,10 @@ class MUR(StrategyBase):
                 )
                 cur_signal = validity_scores[best_idx]
 
-            momentum_uncertainty = momentum_uncertainty * self.momentum_rate + (1 - self.momentum_rate) * cur_signal
+            momentum_uncertainty = (
+                momentum_uncertainty * self.momentum_rate
+                + (1 - self.momentum_rate) * cur_signal
+            )
             # Update trajectory
             trajectory.append(selected_candidate)
             selected_steps.append(selected_candidate)
