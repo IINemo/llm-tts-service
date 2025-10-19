@@ -40,7 +40,7 @@ scorer: null
 strategy:
   type: deepconf
   mode: "offline"  # Standard weighted voting mode
-  budget: 16  # Increased budget for harder problems
+  budget: 8  # Number of traces to generate
 
   # Generation parameters
   window_size: 2048  # Sliding window (algorithmic parameter - DO NOT CHANGE)
@@ -66,4 +66,4 @@ evaluation:
 
 # Dataset settings
 dataset:
-  subset: 5  # Number of examples to evaluate (AIME has 30 total)
+  subset: null  # Evaluate all AIME 2025 problems (30 total)
