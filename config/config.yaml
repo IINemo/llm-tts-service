@@ -1,0 +1,11 @@
+# Main Hydra configuration for LLM TTS evaluations
+
+# Default run name (can be overridden in experiment configs)
+run_name: "${strategy.type}_${now:%H-%M-%S}"
+
+# Hydra output directory configuration
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${run_name}
+  job:
+    chdir: false  # Don't change working directory
