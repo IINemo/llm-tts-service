@@ -15,6 +15,7 @@ import torch
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers.majority_voting import ChainMajorityVotingScorer
 
+from .metadata_builder import StrategyMetadataBuilder
 from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
@@ -76,17 +77,24 @@ class StrategySelfConsistency(StrategyBase):
             # Check if this is an API-based model
             if isinstance(self.model, BlackboxModelWithStreaming):
                 # Generate single completion via API
-                completions = self.model.generate(
-                    prompt=prompt,
+                # Convert prompt to chat format
+                if isinstance(prompt, list):
+                    messages = prompt
+                else:
+                    messages = [{"role": "user", "content": prompt}]
+
+                results = self.model.generate_texts(
+                    chats=[messages],
                     max_new_tokens=self.max_new_tokens,
                     temperature=self.temperature,
-                    num_return_sequences=1,
                 )
 
-                if completions and completions[0]:
-                    full_path = prompt + completions[0]
+                if results and results[0] and results[0].get("text"):
+                    generated_text = results[0]["text"]
+                    # Return just the generated reasoning (not prompt + generation)
+                    # The scorer extracts answers from this text
                     log.info(f"  ✓ Generated path {i+1}/{total}")
-                    return full_path
+                    return generated_text
                 else:
                     log.warning(f"  ⚠ Empty generation for path {i+1}/{total}")
                     return None
@@ -117,7 +125,6 @@ class StrategySelfConsistency(StrategyBase):
                 generated_text = self.model.tokenizer.decode(
                     new_tokens, skip_special_tokens=True
                 )
-                full_path = prompt + generated_text
 
                 log.info(f"  ✓ Generated path {i+1}/{total}")
 
@@ -125,7 +132,8 @@ class StrategySelfConsistency(StrategyBase):
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-                return full_path
+                # Return just the generated reasoning
+                return generated_text
 
         except Exception as e:
             log.error(f"  ❌ Error generating path {i+1}/{total}: {e}")
@@ -142,7 +150,8 @@ class StrategySelfConsistency(StrategyBase):
             List of complete reasoning paths (prompt + generated reasoning)
         """
         log.info(
-            f"Generating {self.num_paths} reasoning paths with temperature {self.temperature}"
+            f"Generating {self.num_paths} reasoning paths "
+            f"with temperature {self.temperature}"
         )
 
         # Prepare arguments for each path: (prompt, index, total)
@@ -236,19 +245,64 @@ class StrategySelfConsistency(StrategyBase):
         # Select best answer via majority voting
         result = self.select_best_answer(reasoning_paths)
 
+        # Build metadata using StrategyMetadataBuilder
+        builder = StrategyMetadataBuilder("self_consistency")
+
+        # Add configuration
+        builder.add_config(
+            num_paths=len(reasoning_paths),
+            temperature=self.temperature,
+            max_new_tokens=self.max_new_tokens,
+            n_threads=self.n_threads,
+        )
+
+        # Add results
+        builder.add_results(
+            selected_answer=result["best_answer"],
+            consensus_score=result["consensus_score"],
+            answer_distribution=result["answer_distribution"],
+        )
+
+        # Check if we have valid paths (generation might have failed)
+        if reasoning_paths and "all_paths" in result and "all_scores" in result:
+            # Create path summaries for detailed analysis
+            selected_idx = int(
+                result["all_scores"].argmax()
+                if hasattr(result["all_scores"], "argmax")
+                else result["all_scores"].index(max(result["all_scores"]))
+            )
+            path_summaries = builder.create_path_summaries(
+                paths=result["all_paths"],
+                scores=result["all_scores"],
+                answers=result["all_answers"],
+                selected_index=selected_idx,
+            )
+
+            # Add generation details
+            builder.add_generation_details(
+                all_paths=result["all_paths"],
+                all_scores=result["all_scores"],
+                all_answers=result["all_answers"],
+                path_summaries=path_summaries,
+            )
+        else:
+            # No valid paths generated - log error
+            log.error(
+                f"Failed to generate any valid reasoning paths "
+                f"({len(reasoning_paths)} successful out of {self.num_paths})"
+            )
+
+        # Log summary to console
+        builder.log_summary(log)
+
         # Format output to match expected interface
         return {
             "trajectory": result["best_path"],
             "steps": [result["best_path"]],  # Single step containing full reasoning
-            "completed": True,
+            "validity_scores": [result["consensus_score"]],  # Consensus as validity
+            "completed": bool(reasoning_paths),
             "strategy": "self_consistency",
-            "metadata": {
-                "num_paths": len(reasoning_paths),
-                "consensus_score": result["consensus_score"],
-                "answer_distribution": result["answer_distribution"],
-                "all_answers": result["all_answers"],
-                "selected_answer": result["best_answer"],
-            },
+            "metadata": builder.build(),
         }
 
     def cleanup(self):
