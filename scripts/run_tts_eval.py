@@ -215,19 +215,19 @@ def create_model(config):
         model_path = config.model.get("model_name") or config.model.get("model_path")
         log.info(f"Using OpenAI API model: {model_path}")
 
+        # Check provider for API key and base URL (applies to all strategies)
+        import os
+
+        if config.model.get("provider") == "openrouter":
+            api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+            base_url = "https://openrouter.ai/api/v1"
+        else:
+            api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
+            base_url = None
+
         # Check if DeepConf strategy
         if config.strategy.type == "deepconf":
             # DeepConf uses streaming with logprobs but no boundary detector
-            import os
-
-            # Check provider for API key and base URL
-            if config.model.get("provider") == "openrouter":
-                api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
-                base_url = "https://openrouter.ai/api/v1"
-            else:
-                api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
-                base_url = None
-
             model = BlackboxModelWithStreaming(
                 openai_api_key=api_key,
                 model_path=model_path,
@@ -255,11 +255,12 @@ def create_model(config):
             early_stopping = BoundaryEarlyStopping(detector=detector)
 
             model = BlackboxModelWithStreaming(
-                openai_api_key=config.model.api_key,
+                openai_api_key=api_key,
                 model_path=model_path,
                 supports_logprobs=config.model.supports_logprobs,
                 early_stopping=early_stopping,
                 generation_parameters=generation_parameters,
+                base_url=base_url,
             )
 
             step_generator = StepCandidateGeneratorThroughAPI(
@@ -348,9 +349,13 @@ def generate_trajectories(
         log.info(f"Question: {instance['question'][:200]}...")
 
         # Extract and log gold answer
-        from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
+        # For GSM8K, extract from "#### X" format; for other datasets, use directly
+        if "####" in instance["answer"]:
+            from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
 
-        gold_answer_num = extract_answer_from_gsm8k(instance["answer"])
+            gold_answer_num = extract_answer_from_gsm8k(instance["answer"])
+        else:
+            gold_answer_num = instance["answer"]
         log.info(f"Gold answer: {gold_answer_num}")
 
         # Generate trajectory
