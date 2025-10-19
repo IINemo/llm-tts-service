@@ -39,6 +39,7 @@ from llm_tts.strategies import (
     StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
+    MUR,
 )
 
 # Load environment variables from .env file
@@ -280,7 +281,7 @@ def create_model(config):
             from llm_tts.early_stopping import BoundaryEarlyStopping
 
             detector = StepBoundaryDetector(
-                step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
+                step_patterns=["- Step", "<Answer>:", "\n<Answer>:", "### Step", "\nStep"],
                 answer_patterns=["<Answer>:", "\n<Answer>:"],
                 max_tokens_per_step=config.generation.max_new_tokens,
             )
@@ -320,6 +321,15 @@ def create_tts_strategy(config, model, step_generator, scorer):
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
+        )
+    elif config.strategy.type == "mur":
+        strategy = MUR(
+            step_generator=step_generator,
+            scorer=scorer,
+            candidates_per_step=config.strategy.candidates_per_step,
+            max_steps=config.strategy.max_steps,
+            scaling_rate=config.strategy.scaling_rate,
+            momentum_rate=config.strategy.momentum_rate,
         )
     elif config.strategy.type == "deepconf":
         # DeepConf requires BlackboxModel with logprobs support

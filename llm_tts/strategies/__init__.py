@@ -1,4 +1,5 @@
 from .deepconf import StrategyDeepConf
+from .mur import MUR
 from .strategy_base import StrategyBase
 from .strategy_beam_search import StrategyBeamSearch
 from .strategy_chain_of_thought import StrategyChainOfThought
@@ -11,4 +12,5 @@ __all__ = [
     "StrategyChainOfThought",
     "StrategySelfConsistency",
     "StrategyDeepConf",
+    "MUR",
 ]

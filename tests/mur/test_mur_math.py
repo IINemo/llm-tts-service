@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""
+Complex math tests for DeepConf strategy.
+
+Run with:
+    export OPENROUTER_API_KEY="your-key"
+    python tests/test_deepconf_math.py
+
+Options:
+    --verbose, -v    Show full reasoning paths for each trace
+    --budget, -b N   Number of traces per problem (default: 5)
+
+Examples:
+    # Standard run
+    python tests/test_deepconf_math.py
+
+    # Verbose mode with full reasoning
+    python tests/test_deepconf_math.py --verbose
+
+    # More traces for better accuracy
+    python tests/test_deepconf_math.py --budget 10 --verbose
+"""
+
+import logging
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath("."))
+
+# Import models and strategies normally
+from llm_tts.models import BlackboxModelWithStreaming
+from llm_tts.strategies import MUR
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+log = logging.getLogger(__name__)
+
+
+# Test problems with expected answers
+MATH_PROBLEMS = [
+    {
+        "problem": "Calculate 15^2 - 8^2. Put your answer in \\boxed{}.",
+        "expected": "161",
+        "description": "Difference of squares",
+    },
+    {
+        "problem": (
+            "A rectangle has length 12 cm and width 8 cm. "
+            "What is its area in square centimeters? Put answer in \\boxed{}."
+        ),
+        "expected": "96",
+        "description": "Rectangle area",
+    },
+    {
+        "problem": (
+            "If a train travels 120 km in 2 hours at constant speed, "
+            "how far will it travel in 5 hours? Put answer in \\boxed{}."
+        ),
+        "expected": "300",
+        "description": "Speed-distance problem",
+    },
+    {
+        "problem": (
+            "What is the sum of the first 10 positive integers (1+2+3+...+10)? "
+            "Put answer in \\boxed{}."
+        ),
+        "expected": "55",
+        "description": "Arithmetic series",
+    },
+    {
+        "problem": "Calculate (3 + 4) * (5 + 6). Put your answer in \\boxed{}.",
+        "expected": "77",
+        "description": "Order of operations",
+    },
+]
+
+
+def run_math_test(
+    model, problem_data: dict, budget: int = 5, verbose: bool = False
+) -> dict:
+    """Run a single math problem through DeepConf
+
+    Args:
+        model: Model instance
+        problem_data: Problem dict with 'problem', 'expected', 'description'
+        budget: Number of traces to generate
+        verbose: If True, log full reasoning paths
+    """
+    problem = problem_data["problem"]
+    expected = problem_data["expected"]
+    description = problem_data["description"]
+
+    log.info("=" * 70)
+    log.info(f"Problem: {description}")
+    log.info(f"Question: {problem}")
+    log.info(f"Expected: {expected}")
+    log.info("=" * 70)
+
+    strategy = MUR(
+        model=model,
+        candidates_per_step=budget,
+        max_steps=10,
+        scaling_rate=0.9,
+        momentum_rate=0.9,
+    )
+
+    try:
+        result = strategy.generate_trajectory(problem)
+
+        selected = result["metadata"]["selected_answer"]
+        confidence = result["metadata"]["confidence_score"]
+        num_used = result["metadata"]["filtered_traces"]
+        num_total = result["metadata"]["total_traces"]
+
+        is_correct = selected == expected
+
+        # TODO: Verbose mode disabled - strategy doesn't return all_traces in metadata
+        # To enable verbose mode, update strategy to include full trace data
+        if verbose:
+            log.info("\n⚠️  Verbose mode not available (all_traces not in metadata)")
+
+        log.info("\n📊 Results:")
+        log.info(f"   Selected answer: {selected}")
+        log.info(f"   Expected answer: {expected}")
+        log.info(f"   Correct: {'✅ YES' if is_correct else '❌ NO'}")
+        log.info(f"   Confidence: {confidence:.3f}")
+        log.info(f"   Traces used: {num_used}/{num_total}")
+
+        if result["metadata"]["vote_distribution"]:
+            log.info("   Vote distribution:")
+            for ans, pct in sorted(
+                result["metadata"]["vote_distribution"].items(),
+                key=lambda x: x[1],
+                reverse=True,
+            ):
+                log.info(f"     {ans}: {pct:.1f}%")
+
+        return {
+            "problem": description,
+            "correct": is_correct,
+            "selected": selected,
+            "expected": expected,
+            "confidence": confidence,
+            "num_traces": num_total,
+        }
+
+    except Exception as e:
+        log.error(f"❌ Error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return {
+            "problem": description,
+            "correct": False,
+            "selected": None,
+            "expected": expected,
+            "confidence": 0.0,
+            "num_traces": 0,
+        }
+
+
+def main():
+    """Run all math tests"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="DeepConf Complex Math Tests")
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Log full reasoning paths for each problem",
+    )
+    parser.add_argument(
+        "--budget",
+        "-b",
+        type=int,
+        default=5,
+        help="Number of reasoning traces per problem (default: 5)",
+    )
+    args = parser.parse_args()
+
+    log.info("\n" + "=" * 70)
+    log.info("🧮 DeepConf - Complex Math Problems")
+    if args.verbose:
+        log.info("   (Verbose mode: showing full reasoning paths)")
+    log.info("=" * 70 + "\n")
+
+    # Check for API key
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        log.error("❌ OPENROUTER_API_KEY environment variable not set")
+        log.info("Set it with: export OPENROUTER_API_KEY='your-key'")
+        return 1
+
+    # Create model
+    log.info("Initializing model...")
+    try:
+        model = BlackboxModelWithStreaming(
+            openai_api_key=api_key,
+            model_path="openai/gpt-4o-mini",
+            supports_logprobs=True,
+            base_url="https://openrouter.ai/api/v1",
+        )
+        log.info("✅ Model initialized\n")
+    except Exception as e:
+        log.error(f"❌ Failed to initialize model: {e}")
+        return 1
+
+    # Run all problems
+    results = []
+    for problem_data in MATH_PROBLEMS:
+        result = run_math_test(
+            model, problem_data, budget=args.budget, verbose=args.verbose
+        )
+        results.append(result)
+        log.info("")  # Blank line between problems
+
+    # Summary
+    log.info("=" * 70)
+    log.info("📊 SUMMARY")
+    log.info("=" * 70)
+
+    correct_count = sum(1 for r in results if r["correct"])
+    total_count = len(results)
+    accuracy = correct_count / total_count if total_count > 0 else 0
+
+    log.info(f"\nOverall Accuracy: {correct_count}/{total_count} ({accuracy:.1%})")
+    log.info("\nDetailed Results:")
+    log.info("-" * 70)
+
+    for r in results:
+        status = "✅" if r["correct"] else "❌"
+        problem = r["problem"][:30]
+        expected = r["expected"]
+        selected = r["selected"]
+        conf = r["confidence"]
+        log.info(
+            f"{status} {problem:<30} Expected: {expected:<10} "
+            f"Got: {selected:<10} Conf: {conf:.3f}"
+        )
+
+    # Confidence analysis
+    correct_confs = [r["confidence"] for r in results if r["correct"]]
+    incorrect_confs = [r["confidence"] for r in results if not r["correct"]]
+
+    if correct_confs:
+        avg_correct_conf = sum(correct_confs) / len(correct_confs)
+        log.info(f"\nAvg confidence (correct): {avg_correct_conf:.3f}")
+
+    if incorrect_confs:
+        avg_incorrect_conf = sum(incorrect_confs) / len(incorrect_confs)
+        log.info(f"Avg confidence (incorrect): {avg_incorrect_conf:.3f}")
+
+    log.info("\n" + "=" * 70)
+
+    if accuracy == 1.0:
+        log.info("🎉 Perfect score! All problems solved correctly!")
+        return 0
+    elif accuracy >= 0.8:
+        log.info("✅ Good performance!")
+        return 0
+    else:
+        log.warning("⚠️  Some problems were not solved correctly")
+        return 0  # Still return 0 as tests measure performance, not pass/fail
+
+
+if __name__ == "__main__":
+    sys.exit(main())

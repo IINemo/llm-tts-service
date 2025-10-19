@@ -55,6 +55,16 @@ REGISTERED_STRATEGIES = [
         ],
         description="Step-by-step generation with PRM scoring",
     ),
+    StrategyInfo(
+        name="mur",
+        class_name="MUR",
+        module_path="llm_tts/strategies/mur.py",
+        test_dir="tests/mur",
+        required_tests=[
+            "test_mur.py", 
+        ],
+        description="MUR: Momentum Uncertainty guided Reasoning for LLM",
+    ),
     # TODO: Add tests for self_consistency strategy
     # StrategyInfo(
     #     name="self_consistency",
