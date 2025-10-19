@@ -1,18 +1,18 @@
 # @package _global_
 
-# DeepConf Offline Mode Configuration
-# This demonstrates standard weighted voting without early stopping
+# DeepConf Offline Mode Configuration for AIME 2025
+# AIME (American Invitational Mathematics Examination) - challenging competition math
 
 defaults:
   - /config  # Load main Hydra config
-  - /dataset/gsm8k
+  - /dataset/aime_2025
   - /model/openrouter
   - /generation/default
   - /system/default
   - _self_
 
 # Run naming for descriptive outputs
-run_name: "gsm8k_deepconf_gpt4omini_b${strategy.budget}_${now:%H-%M-%S}"
+run_name: "aime2025_deepconf_gpt4omini_b${strategy.budget}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: false
@@ -26,7 +26,7 @@ model:
 
 # Generation settings
 generation:
-  max_new_tokens: 512
+  max_new_tokens: 32000  # Large limit for complex AIME problems
   temperature: 0.7
   top_p: 1.0
   batch_size: 1
@@ -44,7 +44,7 @@ strategy:
   window_size: 2048  # Sliding window (algorithmic parameter - DO NOT CHANGE)
   temperature: 0.7
   top_p: 1.0
-  max_tokens: 512
+  max_tokens: 32000  # Large limit for complex AIME problems
   top_logprobs: 20
 
   # Filtering and voting
@@ -64,4 +64,4 @@ evaluation:
 
 # Dataset settings
 dataset:
-  subset: 10  # Number of examples to evaluate
+  subset: null  # Use all samples (30 problems for AIME 2025)

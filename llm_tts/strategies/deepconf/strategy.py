@@ -144,6 +144,41 @@ class StrategyDeepConf(StrategyBase):
         # Filter and vote
         result = self._filter_and_vote(traces)
 
+        # Build enhanced metadata
+        filtered_set = set(id(t) for t in result["filtered_traces"])
+
+        # Summary stats for all traces
+        trace_summaries = []
+        for i, trace in enumerate(traces):
+            trace_summaries.append(
+                {
+                    "trace_id": i,
+                    "min_conf": trace["min_conf"],
+                    "mean_conf": (
+                        sum(trace["token_confs"]) / len(trace["token_confs"])
+                        if trace["token_confs"]
+                        else 0.0
+                    ),
+                    "answer": trace["extracted_answer"],
+                    "num_tokens": len(trace.get("token_data", [])),
+                    "selected": id(trace) in filtered_set,
+                }
+            )
+
+        # Full details for filtered traces only
+        filtered_trace_details = []
+        for trace in result["filtered_traces"]:
+            trace_idx = traces.index(trace)
+            filtered_trace_details.append(
+                {
+                    "trace_id": trace_idx,
+                    "text": trace["text"],
+                    "min_conf": trace["min_conf"],
+                    "answer": trace["extracted_answer"],
+                    "num_tokens": len(trace.get("token_data", [])),
+                }
+            )
+
         return {
             "trajectory": result["selected_text"],
             "steps": [result["selected_text"]],
@@ -156,6 +191,9 @@ class StrategyDeepConf(StrategyBase):
                 "confidence_score": result["confidence_score"],
                 "selected_answer": result["selected_answer"],
                 "vote_distribution": result["vote_distribution"],
+                # Enhanced metadata with trace summaries
+                "trace_summaries": trace_summaries,
+                "filtered_trace_details": filtered_trace_details,
             },
         }
 
@@ -254,6 +292,45 @@ class StrategyDeepConf(StrategyBase):
         # Filter and vote
         result = self._filter_and_vote(all_traces, conf_threshold)
 
+        # Build enhanced metadata (consistent with offline mode)
+        filtered_set = set(id(t) for t in result["filtered_traces"])
+
+        # Summary stats for all traces
+        trace_summaries = []
+        for i, trace in enumerate(all_traces):
+            trace_summaries.append(
+                {
+                    "trace_id": i,
+                    "min_conf": trace["min_conf"],
+                    "mean_conf": (
+                        sum(trace["token_confs"]) / len(trace["token_confs"])
+                        if trace["token_confs"]
+                        else 0.0
+                    ),
+                    "answer": trace["extracted_answer"],
+                    "num_tokens": len(trace.get("token_data", [])),
+                    "selected": id(trace) in filtered_set,
+                    "phase": "warmup" if i < len(warmup_traces) else "adaptive",
+                    "stopped_early": trace.get("stopped_early", False),
+                }
+            )
+
+        # Full details for filtered traces only
+        filtered_trace_details = []
+        for trace in result["filtered_traces"]:
+            trace_idx = all_traces.index(trace)
+            filtered_trace_details.append(
+                {
+                    "trace_id": trace_idx,
+                    "text": trace["text"],
+                    "min_conf": trace["min_conf"],
+                    "answer": trace["extracted_answer"],
+                    "num_tokens": len(trace.get("token_data", [])),
+                    "phase": "warmup" if trace_idx < len(warmup_traces) else "adaptive",
+                    "stopped_early": trace.get("stopped_early", False),
+                }
+            )
+
         return {
             "trajectory": result["selected_text"],
             "steps": [result["selected_text"]],
@@ -269,6 +346,9 @@ class StrategyDeepConf(StrategyBase):
                 "confidence_score": result["confidence_score"],
                 "selected_answer": result["selected_answer"],
                 "vote_distribution": result["vote_distribution"],
+                # Enhanced metadata with trace summaries (consistent with offline mode)
+                "trace_summaries": trace_summaries,
+                "filtered_trace_details": filtered_trace_details,
             },
         }
 
