@@ -55,7 +55,11 @@ class BlackboxModelWithStreaming(BlackboxModel):
             supports_logprobs=supports_logprobs,
         )
         # Create client with optional custom base_url (e.g., OpenRouter)
-        client_kwargs = {"api_key": openai_api_key}
+        # Add timeout to prevent hanging requests (60s default, 120s total)
+        client_kwargs = {
+            "api_key": openai_api_key,
+            "timeout": 120.0,  # 120 second timeout for API requests
+        }
         if base_url:
             client_kwargs["base_url"] = base_url
         self.client = openai.OpenAI(**client_kwargs)
