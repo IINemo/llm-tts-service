@@ -1,6 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List
 
 log = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class StrategyBase(ABC):
         desc: str = "Generating",
     ) -> List[Any]:
         """
-        Execute tasks in parallel using ThreadPoolExecutor.
+        Execute tasks in parallel using ThreadPoolExecutor with futures.
 
         This is a template method that handles the threading infrastructure,
         while allowing subclasses to define their own worker functions.
@@ -45,8 +45,21 @@ class StrategyBase(ABC):
         """
         log.info(f"🔄 {desc} with {n_threads} parallel threads")
 
+        results = []
         with ThreadPoolExecutor(max_workers=n_threads) as executor:
-            results = list(executor.map(worker_func, task_args))
+            # Submit all tasks and create future-to-arg mapping
+            future_to_arg = {
+                executor.submit(worker_func, arg): arg for arg in task_args
+            }
+
+            # Collect results as they complete
+            for future in as_completed(future_to_arg):
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    log.error(f"Task failed with exception: {e}")
+                    results.append(None)
 
         # Filter out None results (failed tasks)
         valid_results = [r for r in results if r is not None]
