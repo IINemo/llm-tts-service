@@ -35,7 +35,7 @@ class StrategySelfConsistency(StrategyBase):
         temperature: float = 0.7,
         generation_batch_size: int = None,
         scorer: Optional[Any] = None,
-        n_threads: int = 8,
+        n_threads: int = None,
     ):
         """
         Initialize self-consistency strategy.
@@ -47,14 +47,15 @@ class StrategySelfConsistency(StrategyBase):
             temperature: Sampling temperature (> 0 for diversity)
             generation_batch_size: Batch size for generation (None = all at once)
             scorer: Custom scorer for answer selection (defaults to majority voting)
-            n_threads: Number of parallel threads for API calls (default: 8)
+            n_threads: Number of parallel threads for API calls (None = match num_paths)
         """
         self.model = model
         self.num_paths = num_paths
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.generation_batch_size = generation_batch_size or num_paths
-        self.n_threads = n_threads
+        # Default to num_paths threads to ensure all tasks can run concurrently
+        self.n_threads = n_threads if n_threads is not None else num_paths
 
         # Use majority voting scorer by default
         self.scorer = scorer or ChainMajorityVotingScorer()
