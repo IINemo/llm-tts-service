@@ -93,7 +93,7 @@ class StrategySelfConsistency(StrategyBase):
                     generated_text = results[0]["text"]
                     # Return just the generated reasoning (not prompt + generation)
                     # The scorer extracts answers from this text
-                    log.info(f"  ✓ Generated path {i+1}/{total}")
+                    log.info(f"  Generated path {i+1}/{total}")
                     return generated_text
                 else:
                     log.warning(f"  ⚠ Empty generation for path {i+1}/{total}")
@@ -126,7 +126,7 @@ class StrategySelfConsistency(StrategyBase):
                     new_tokens, skip_special_tokens=True
                 )
 
-                log.info(f"  ✓ Generated path {i+1}/{total}")
+                log.info(f"  Generated path {i+1}/{total}")
 
                 # Clear GPU cache
                 if torch.cuda.is_available():
@@ -136,7 +136,7 @@ class StrategySelfConsistency(StrategyBase):
                 return generated_text
 
         except Exception as e:
-            log.error(f"  ❌ Error generating path {i+1}/{total}: {e}")
+            log.error(f"  Error generating path {i+1}/{total}: {e}")
             return None
 
     def generate_reasoning_paths(self, prompt: str) -> List[str]:
@@ -154,10 +154,15 @@ class StrategySelfConsistency(StrategyBase):
             f"with temperature {self.temperature}"
         )
 
-        # Prepare arguments for each path: (prompt, index, total)
-        path_args = [(prompt, i, self.num_paths) for i in range(self.num_paths)]
+        # Use parallel generation (same approach as DeepConf)
+        # OpenRouter doesn't support the n parameter for batched generation,
+        # so we generate all paths in parallel using multiple API calls
+        log.info(
+            f"Generating {self.num_paths} paths in parallel "
+            f"with {self.n_threads} threads"
+        )
 
-        # Use base class parallel generation with our path-specific worker
+        path_args = [(prompt, i, self.num_paths) for i in range(self.num_paths)]
         paths = self._parallel_generate(
             worker_func=self._generate_single_path,
             task_args=path_args,
@@ -165,7 +170,11 @@ class StrategySelfConsistency(StrategyBase):
             desc=f"Generating {self.num_paths} reasoning paths",
         )
 
-        return paths
+        # Filter out None values (failed generations)
+        valid_paths = [p for p in paths if p]
+        log.info(f"Successfully generated {len(valid_paths)}/{self.num_paths} paths")
+
+        return valid_paths
 
     def select_best_answer(self, reasoning_paths: List[str]) -> Dict[str, Any]:
         """
