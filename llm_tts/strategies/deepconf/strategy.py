@@ -138,7 +138,7 @@ class StrategyDeepConf(StrategyBase):
 
         traces = self._generate_traces_batch(prompt, self.budget)
 
-        log.info(f"📊 Generated {len(traces)} traces")
+        log.info(f"Generated {len(traces)} traces")
         for i, trace in enumerate(traces):
             log.info(
                 f"  Trace {i+1}: min_conf={trace['min_conf']:.3f}, "
@@ -249,7 +249,7 @@ class StrategyDeepConf(StrategyBase):
         )
 
         # Log warmup statistics
-        log.info(f"📊 Warmup complete: conf_threshold={conf_threshold:.3f}")
+        log.info(f"Warmup complete: conf_threshold={conf_threshold:.3f}")
         log.info(f"   Min confs: {[f'{c:.3f}' for c in warmup_min_confs]}")
         log.info(
             f"   Mean: {np.mean(warmup_min_confs):.3f}, "
@@ -275,7 +275,7 @@ class StrategyDeepConf(StrategyBase):
         adaptive_tokens = sum(len(t.get("token_data", [])) for t in adaptive_traces)
         warmup_tokens = sum(len(t.get("token_data", [])) for t in warmup_traces)
 
-        log.info(f"📊 Adaptive complete: generated {len(adaptive_traces)} traces")
+        log.info(f"Adaptive complete: generated {len(adaptive_traces)} traces")
         log.info(f"   Stopped early: {num_stopped_early}/{len(adaptive_traces)}")
         log.info(f"   Completed: {num_completed}/{len(adaptive_traces)}")
         log.info(f"   Tokens: warmup={warmup_tokens}, adaptive={adaptive_tokens}")
@@ -522,7 +522,7 @@ class StrategyDeepConf(StrategyBase):
         Uses streaming + logprobs to stop generation when confidence drops.
         """
         log.info(
-            f"🔄 Generating {n} adaptive traces with confidence "
+            f"Generating {n} adaptive traces with confidence "
             f"threshold={conf_threshold:.3f}"
         )
 
@@ -603,7 +603,7 @@ class StrategyDeepConf(StrategyBase):
                     log.warning(f"    Text ends with: ...{text[-150:]}")
 
             except Exception as e:
-                log.error(f"  ❌ Error generating adaptive trace {i+1}: {e}")
+                log.error(f"  Error generating adaptive trace {i+1}: {e}")
                 import traceback
 
                 log.error(traceback.format_exc())
@@ -689,7 +689,7 @@ class StrategyDeepConf(StrategyBase):
             log.info(f"🔍 No filtering: {len(filtered)} traces")
 
         if not filtered:
-            log.warning("⚠️  No traces passed filter, using all traces")
+            log.warning("No traces passed filter, using all traces")
             filtered = traces
 
         # Weighted majority voting (each trace votes with weight = min_conf)
@@ -697,7 +697,7 @@ class StrategyDeepConf(StrategyBase):
         weights = [t["min_conf"] for t in filtered if t["extracted_answer"]]
 
         if not answers:
-            log.warning("⚠️  No valid answers extracted")
+            log.warning("No valid answers extracted")
             return {
                 "selected_answer": "",
                 "selected_text": filtered[0]["text"] if filtered else "",
