@@ -23,6 +23,7 @@ class MajorityVotingScorer(StepScorerBase):
         super().__init__("majority_voting")
         # Patterns to extract final answers from reasoning chains
         self.answer_patterns = answer_extraction_patterns or [
+            r"\\boxed\{([^}]+)\}",  # LaTeX boxed answer (most specific)
             r"<Answer>:\s*(.+?)(?:\n|$)",
             r"The answer is\s*(.+?)(?:\n|\.|\$)",
             r"Therefore,?\s*(.+?)(?:\n|\.|\$)",
@@ -120,6 +121,7 @@ class ChainMajorityVotingScorer(StepScorerBase):
     def __init__(self, answer_extraction_patterns: List[str] = None):
         super().__init__("chain_majority_voting")
         self.answer_patterns = answer_extraction_patterns or [
+            r"\\boxed\{([^}]+)\}",  # LaTeX boxed answer (most specific)
             r"<Answer>:\s*(.+?)(?:\n|$)",
             r"The answer is\s*(.+?)(?:\n|\.|\$)",
             r"Therefore,?\s*(.+?)(?:\n|\.|\$)",
