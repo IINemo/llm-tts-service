@@ -1,4 +1,5 @@
-<img width="130" height="130" alt="image" src="https://github.com/user-attachments/assets/588610f9-f0e2-4bcc-8a71-aa3ffd6af91e" />
+<img width="130" height="130" alt="LLM_booster" src="https://github.com/user-attachments/assets/66e10a67-78a5-4854-87d9-e1acc88e8636" />
+
 
 # LLM Test-Time Scaling Service
 
