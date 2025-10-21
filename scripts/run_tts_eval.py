@@ -38,6 +38,7 @@ from llm_tts.strategies import (
     StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
+    StrategySelfConsistency,
 )
 
 # Load environment variables from .env file
@@ -312,6 +313,16 @@ def create_tts_strategy(config, model, step_generator, scorer):
             candidates_per_beam=config.strategy.candidates_per_beam,
             max_steps=config.strategy.max_steps,
             aggregation=getattr(config.strategy, "aggregation", "mean"),
+        )
+    elif config.strategy.type == "self_consistency":
+        strategy = StrategySelfConsistency(
+            model=model,
+            num_paths=config.strategy.get("num_paths", 10),
+            max_new_tokens=config.strategy.get("max_new_tokens", 512),
+            temperature=config.strategy.get("temperature", 0.7),
+            generation_batch_size=config.strategy.get("generation_batch_size", None),
+            scorer=scorer,
+            n_threads=config.strategy.get("n_threads", None),
         )
 
     else:
