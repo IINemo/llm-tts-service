@@ -108,7 +108,7 @@ class StrategyUncertaintyCoT:
             log_prompt = prompt_text.replace("\n", "\\n")
             log.info(f"Initial prompt: {log_prompt}")
 
-            trajectory_text = prompt_text
+            trajectory_text = ""
             trajectory_steps = []
             selected_steps = []
             uncertainties = []
@@ -147,13 +147,13 @@ class StrategyUncertaintyCoT:
                     cand_scores = np.array(
                         [cand.other_data["uncertainty_score"] for cand in cand_list]
                     )
-                    best_idx = np.argmin(cand_scores)
+                    best_idx = np.argmax(cand_scores)
                     chosen = cand_list[best_idx]
 
                     chosen_text = chosen.text
                     chosen_uncert = chosen.other_data["uncertainty_score"]
 
-                    branch = "cot"
+                    branch = "multi-path CoT"
                     extra = {
                         "candidates": [
                             {
@@ -179,7 +179,7 @@ class StrategyUncertaintyCoT:
 
                 # 3) Append and check for answer
                 trajectory_steps.append(chosen)
-                trajectory_text += chosen_text
+                trajectory_text += ("\n" if trajectory_text != "" else "") + chosen_text
                 log.info(
                     "Step %d generation: %s",
                     step_num + 1,
@@ -197,7 +197,7 @@ class StrategyUncertaintyCoT:
                 decision.update(extra)
                 decision_trace.append(decision)
 
-                if chosen.is_trajectory_complete:
+                if self.step_generator.detector.contains_answer_pattern(trajectory_text):
                     log.info(f"Answer found in step {step_num+1}")
                     break
 
@@ -214,12 +214,14 @@ class StrategyUncertaintyCoT:
             if not self.step_generator.detector.contains_answer_pattern(
                 trajectory_text
             ):
+                log.info("No answer pattern found, explicitly generating answer candidates")
                 answer_cands = self.step_generator.generate_answer_candidates(
                     request_chat,
                     trajectory_steps,
                     candidates_per_step=self.candidates_per_step,
                 )
                 if answer_cands:
+                    log.info("Answer candidates generated")
                     ans_scores = np.array(
                         [
                             candidate.other_data["uncertainty_score"]
