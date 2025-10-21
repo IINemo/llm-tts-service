@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import random
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 import hydra
@@ -33,7 +35,13 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN, StrategyOfflineBestOfN, StrategyCoTUQ
+from llm_tts.strategies import (
+    StrategyBeamSearch,
+    StrategyDeepConf,
+    StrategyOnlineBestOfN,
+    StrategyOfflineBestOfN,
+    StrategyCoTUQ,
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -315,7 +323,6 @@ def create_tts_strategy(config, model, step_generator, scorer):
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
         )
-
     elif config.strategy.type == "deepconf":
         # DeepConf requires BlackboxModel with logprobs support
         if not isinstance(model, BlackboxModelWithStreaming):
@@ -336,6 +343,15 @@ def create_tts_strategy(config, model, step_generator, scorer):
             top_p=config.strategy.get("top_p", 1.0),
             max_tokens=config.strategy.get("max_tokens", 512),
             top_logprobs=config.strategy.get("top_logprobs", 20),
+        )
+    elif config.strategy.type == "beam_search":
+        strategy = StrategyBeamSearch(
+            step_generator=step_generator,
+            scorer=scorer,
+            beam_size=config.strategy.beam_size,
+            candidates_per_beam=config.strategy.candidates_per_beam,
+            max_steps=config.strategy.max_steps,
+            aggregation=getattr(config.strategy, "aggregation", "mean"),
         )
 
     elif config.strategy.type == "offline_best_of_n":
@@ -457,18 +473,22 @@ def generate_trajectories(
         log.info("-" * 60)
 
         # Store result WITHOUT correctness check
-        results.append(
-            {
-                "index": i,
-                "question": instance["question"],
-                "gold_answer": instance["answer"],
-                "generated_trajectory": result["trajectory"],
-                "generated_answer": generated_text,
-                "steps": result["steps"],
-                "validity_scores": result["validity_scores"],
-                "completed": result["completed"],
-            }
-        )
+        result_dict = {
+            "index": i,
+            "question": instance["question"],
+            "gold_answer": instance["answer"],
+            "generated_trajectory": result["trajectory"],
+            "generated_answer": generated_text,
+            "steps": result["steps"],
+            "validity_scores": result["validity_scores"],
+            "completed": result["completed"],
+        }
+
+        # Include metadata if present (contains trace summaries and details)
+        if "metadata" in result:
+            result_dict["metadata"] = result["metadata"]
+
+        results.append(result_dict)
 
         # Save periodically
         if len(results) % 10 == 0:
@@ -538,6 +558,7 @@ def evaluate_results(
                         log.info(f"Correct: {is_correct}")
 
             except Exception as e:
+                traceback.print_exc()
                 log.error(f"Error during {eval_name} verification: {e}")
                 for idx in result_indices:
                     results[idx].setdefault("eval", {})[eval_name] = {
@@ -650,7 +671,18 @@ def main(config):
         )
         os.environ["WANDB_DIR"] = str(Path(output_dir))
         project = os.environ.get("WANDB_PROJECT", "llm-tts-eval")
-        wandb.init(project=project, dir=output_dir, config=wandb_cfg)
+        run_name = config.get("run_name", None)
+
+        # Prepend date to wandb run name to match directory structure
+        if run_name:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            wandb_run_name = f"{date_str}_{run_name}"
+        else:
+            wandb_run_name = None
+
+        wandb.init(
+            project=project, name=wandb_run_name, dir=output_dir, config=wandb_cfg
+        )
         wandb_save_directory(Path(output_dir) / ".hydra")
 
     # Set random seeds
