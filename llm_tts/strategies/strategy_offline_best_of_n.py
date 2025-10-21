@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
