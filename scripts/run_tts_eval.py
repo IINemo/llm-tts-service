@@ -5,6 +5,7 @@ import logging
 import os
 import random
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 import hydra
@@ -105,9 +106,7 @@ def build_evaluators(config):
             evaluators["llm_judge"] = EvaluatorLLMAsAJudge(**llm_cfg)
 
         elif evaluator_name == "exact_match":
-            evaluators["exact_match"] = EvaluatorExactMatch(
-                dataset_name=config.dataset.get("dataset_path")
-            )
+            evaluators["exact_match"] = EvaluatorExactMatch()
 
         elif evaluator_name == "alignscore":
             align_cfg = OmegaConf.to_container(
@@ -462,18 +461,22 @@ def generate_trajectories(
         log.info("-" * 60)
 
         # Store result WITHOUT correctness check
-        results.append(
-            {
-                "index": i,
-                "question": instance["question"],
-                "gold_answer": instance["answer"],
-                "generated_trajectory": result["trajectory"],
-                "generated_answer": generated_text,
-                "steps": result["steps"],
-                "validity_scores": result["validity_scores"],
-                "completed": result["completed"],
-            }
-        )
+        result_dict = {
+            "index": i,
+            "question": instance["question"],
+            "gold_answer": instance["answer"],
+            "generated_trajectory": result["trajectory"],
+            "generated_answer": generated_text,
+            "steps": result["steps"],
+            "validity_scores": result["validity_scores"],
+            "completed": result["completed"],
+        }
+
+        # Include metadata if present (contains trace summaries and details)
+        if "metadata" in result:
+            result_dict["metadata"] = result["metadata"]
+
+        results.append(result_dict)
 
         # Save periodically
         if len(results) % 10 == 0:
@@ -656,7 +659,18 @@ def main(config):
         )
         os.environ["WANDB_DIR"] = str(Path(output_dir))
         project = os.environ.get("WANDB_PROJECT", "llm-tts-eval")
-        wandb.init(project=project, dir=output_dir, config=wandb_cfg)
+        run_name = config.get("run_name", None)
+
+        # Prepend date to wandb run name to match directory structure
+        if run_name:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            wandb_run_name = f"{date_str}_{run_name}"
+        else:
+            wandb_run_name = None
+
+        wandb.init(
+            project=project, name=wandb_run_name, dir=output_dir, config=wandb_cfg
+        )
         wandb_save_directory(Path(output_dir) / ".hydra")
 
     # Set random seeds

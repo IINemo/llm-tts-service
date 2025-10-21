@@ -1,21 +1,23 @@
 # @package _global_
 
-# DeepConf Offline Mode Configuration
-# This demonstrates standard weighted voting without early stopping
+# DeepConf Offline Mode Configuration for AIME 2025
+# Competition-level mathematics problems from American Invitational Mathematics Examination
 
 defaults:
   - /config  # Load main Hydra config
-  - /dataset/gsm8k
+  - /dataset/aime_2025
   - /model/openrouter
   - /generation/default
   - /system/default
   - _self_
 
 # Run naming for descriptive outputs
-run_name: "gsm8k_deepconf_gpt4omini_b${strategy.budget}_${now:%H-%M-%S}"
+run_name: "aime2025_deepconf_gpt4omini_b${strategy.budget}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: false
+report_to: wandb  # Enable wandb logging (optional)
+wandb_project: llm-tts-eval-deepconf  # Wandb project name for DeepConf experiments
 
 # Model configuration (API-based)
 model:
@@ -26,7 +28,7 @@ model:
 
 # Generation settings
 generation:
-  max_new_tokens: 512
+  max_new_tokens: 32000  # Large limit for complex AIME problems
   temperature: 0.7
   top_p: 1.0
   batch_size: 1
@@ -38,13 +40,13 @@ scorer: null
 strategy:
   type: deepconf
   mode: "offline"  # Standard weighted voting mode
-  budget: 8  # Number of traces to generate
+  budget: 16  # Increased budget for harder problems
 
   # Generation parameters
   window_size: 2048  # Sliding window (algorithmic parameter - DO NOT CHANGE)
-  temperature: 0.7
-  top_p: 1.0
-  max_tokens: 512
+  temperature: 0.6  # Match original wrapper.py default
+  top_p: 0.95  # Match original wrapper.py default
+  max_tokens: 32000  # Match original wrapper.py default
   top_logprobs: 20
 
   # Filtering and voting
@@ -57,11 +59,11 @@ evaluation:
   llm_judge:
     provider: openrouter
     base_url: https://openrouter.ai/api/v1
-    model: openai/gpt-3.5-turbo
+    model: deepseek/deepseek-r1-0528
     cache_path: ~/.cache
     n_threads: 1
     prompt_file: null
 
 # Dataset settings
 dataset:
-  subset: 10  # Number of examples to evaluate
+  subset: 5  # Number of examples to evaluate (AIME has 30 total)
