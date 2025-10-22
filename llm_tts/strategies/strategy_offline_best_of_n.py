@@ -1,16 +1,7 @@
 import logging
 from typing import Dict, List
 
-from llm_tts.step_candidate_generator_base import (
-    StepCandidate,
-    covert_trajectory_to_string,
-)
-from llm_tts.step_candidate_generator_through_api import (
-    StepCandidateGeneratorThroughAPI,
-)
-from llm_tts.step_candidate_generator_through_huggingface import (
-    StepCandidateGeneratorThroughHuggingface,
-)
+from lm_polygraph import BlackboxModel
 
 from .strategy_base import StrategyBase
 
@@ -19,84 +10,65 @@ log = logging.getLogger(__name__)
 
 class StrategyOfflineBestOfN(StrategyBase):
     """
-    Offline best-of-n: sample complete trajectories, then select the best final answer.
+    Offline best-of-n: generate n complete trajectories directly, then select the best one.
+    This is different from online best-of-n which generates step-by-step.
     """
 
     def __init__(
         self,
-        scorer,
+        model: BlackboxModel,
         trajectories: int,
-        max_steps: int,
-        step_generator: (
-            StepCandidateGeneratorThroughAPI | StepCandidateGeneratorThroughHuggingface
-        ),
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        max_tokens: int = 512,
     ):
+        self.model = model
         self.num_trajectories = trajectories
-        self.max_steps = max_steps
-        self.scorer = scorer
-        self.step_generator = step_generator
+        self.temperature = temperature
+        self.top_p = top_p
+        self.max_tokens = max_tokens
 
     def generate_trajectory(self, request: List[Dict[str, str]]) -> Dict[str, any]:
         """
-        Generate multiple complete trajectories, score their final answers,
-        and return the best trajectory.
+        Generate multiple complete trajectories directly, then select the best one.
 
         Returns a dict with keys:
           - trajectory: stringified best trajectory
-          - steps: list of `StepCandidate` for the best trajectory
-          - validity_scores: list of scores for each final answer candidate
+          - steps: list containing the best trajectory
+          - validity_scores: list of scores for each trajectory
           - completed: whether at least one trajectory was generated
         """
 
-        all_trajectories: List[List[StepCandidate]] = []
-        final_answers: List[StepCandidate] = []
-
-        # Sample full trajectories
+        all_trajectories: List[str] = []
+        
+        # Generate complete trajectories directly using the model
         for traj_idx in range(self.num_trajectories):
             log.info(f"\n=== Trajectory {traj_idx} ===")
 
-            trajectory: List[StepCandidate] = []
-            selected_candidate: StepCandidate | None = None
-
-            for step_num in range(self.max_steps):
-                log.info(f"Step {step_num}")
-
-                # Sample exactly one candidate to extend this trajectory
-                candidates = self.step_generator(
-                    request,
-                    trajectory=trajectory,
-                    candidates_per_step=1,
+            try:
+                # Generate complete trajectory in one go using the model
+                results = self.model.generate_texts(
+                    chats=[request],
+                    max_new_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
                 )
 
-                if not candidates:
-                    log.info("No candidate generated; stopping this trajectory")
-                    break
+                if results and len(results) > 0:
+                    trajectory_text = results[0].get("text", "")
+                    if trajectory_text.strip():
+                        all_trajectories.append(trajectory_text)
+                        log.info(f"Generated trajectory {traj_idx}: {trajectory_text[:100]}...")
+                    else:
+                        log.warning(f"Empty trajectory generated for {traj_idx}")
+                else:
+                    log.warning(f"No result returned for trajectory {traj_idx}")
 
-                selected_candidate = candidates[0]
-                trajectory.append(selected_candidate)
+            except Exception as e:
+                log.error(f"Error generating trajectory {traj_idx}: {e}")
+                continue
 
-                if selected_candidate.is_trajectory_complete:
-                    log.info("Answer pattern detected - trajectory complete")
-                    break
-
-            # If not complete, explicitly generate answer segment
-            if not trajectory or not trajectory[-1].is_trajectory_complete:
-                answer_candidates = self.step_generator.generate_answer_candidates(
-                    request,
-                    trajectory=trajectory,
-                    candidates_per_step=1,
-                )
-                if answer_candidates:
-                    trajectory.append(answer_candidates[0])
-                    selected_candidate = answer_candidates[0]
-
-            # Only keep non-empty trajectories
-            if trajectory:
-                all_trajectories.append(trajectory)
-                # The final step in the trajectory is treated as the final answer
-                final_answers.append(trajectory[-1])
-
-        if not final_answers:
+        if not all_trajectories:
             log.info("No trajectories generated")
             return {
                 "trajectory": "",
@@ -105,23 +77,26 @@ class StrategyOfflineBestOfN(StrategyBase):
                 "completed": False,
             }
 
-        # Score final answers for each trajectory and select the best
-        answer_scores = self.scorer.score_candidates(request, final_answers)
-
-        best_idx = max(range(len(answer_scores)), key=lambda i: answer_scores[i])
+        # For now, we'll use a simple scoring mechanism
+        # In a real implementation, you might want to use a more sophisticated scorer
+        # For simplicity, we'll just use trajectory length as a proxy for quality
+        trajectory_scores = [len(traj) for traj in all_trajectories]
+        
+        # Select the best trajectory (longest in this simple case)
+        best_idx = max(range(len(trajectory_scores)), key=lambda i: trajectory_scores[i])
         best_trajectory = all_trajectories[best_idx]
 
         log.info(
-            f"Generated {len(all_trajectories)} trajectories; selected #{best_idx} with score {answer_scores[best_idx]:.3f}"
+            f"Generated {len(all_trajectories)} trajectories; selected #{best_idx} with score {trajectory_scores[best_idx]}"
         )
 
         return {
-            "trajectory": covert_trajectory_to_string(best_trajectory),
-            "steps": best_trajectory,
-            "validity_scores": answer_scores,
+            "trajectory": best_trajectory,
+            "steps": [best_trajectory],  # Single complete trajectory
+            "validity_scores": trajectory_scores,
             "completed": len(best_trajectory) > 0,
         }
 
     def cleanup(self):
         """Clean up resources"""
-        self.scorer.cleanup()
+        pass
