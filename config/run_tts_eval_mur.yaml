@@ -11,7 +11,7 @@ defaults:
   - model: hf_qwen3
   - generation: default
   - system: default
-  - scorer: uncertainty
+  - scorer: perplexity
   - evaluation/llm_judge: default
   - evaluation/alignscore: default
   - _self_

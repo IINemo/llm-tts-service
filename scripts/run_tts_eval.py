@@ -26,7 +26,7 @@ from llm_tts.evaluation import (
     EvaluatorLLMAsAJudge,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
+from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty, StepScorerConfidence
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_base import StepCandidate
 from llm_tts.step_candidate_generator_through_api import (
@@ -202,7 +202,8 @@ def create_scorer(config):
 
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
-
+    elif config.scorer.type == "perplexity" or config.scorer.type == "entropy":
+        scorer = StepScorerConfidence()
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
 
@@ -211,7 +212,7 @@ def create_scorer(config):
 
 def create_model(config):
     if config.model.type == "local":
-        if config.scorer.type == "uncertainty":
+        if config.scorer.type in ["uncertainty", "entropy", "perplexity"]:
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
