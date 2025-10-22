@@ -105,9 +105,7 @@ def build_evaluators(config):
             evaluators["llm_judge"] = EvaluatorLLMAsAJudge(**llm_cfg)
 
         elif evaluator_name == "exact_match":
-            evaluators["exact_match"] = EvaluatorExactMatch(
-                dataset_name=config.dataset.get("dataset_path")
-            )
+            evaluators["exact_match"] = EvaluatorExactMatch()
 
         elif evaluator_name == "alignscore":
             align_cfg = OmegaConf.to_container(
