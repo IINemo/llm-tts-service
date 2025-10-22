@@ -63,6 +63,11 @@ dataset:
 evaluation:
   evaluators: [exact_match, alignscore]
   # evaluators: [llm_judge, exact_match, alignscore]
+  alignscore:
+    threshold: 0.5
+    ckpt_path: https://huggingface.co/yzha/AlignScore/resolve/main/AlignScore-large.ckpt
+    batch_size: 16
+    target_is_claims: true
 
 output:
   resume: false

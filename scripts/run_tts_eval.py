@@ -8,6 +8,9 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import hydra
 import numpy as np
 import torch
@@ -187,6 +190,8 @@ def create_scorer(config):
 
     if config.strategy.type == "deepconf":
         return None
+    if config.scorer.type == "uncertainty_pd":
+        return None
     if config.scorer is None:
         return None
 
@@ -197,7 +202,7 @@ def create_scorer(config):
             batch_size=config.scorer.batch_size,
         )
 
-    elif config.scorer.type == "uncertainty" or config.scorer.type == "uncertainty_pd":
+    elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
 
     else:
