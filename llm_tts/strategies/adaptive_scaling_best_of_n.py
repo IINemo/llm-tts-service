@@ -1,8 +1,7 @@
 import logging
 from typing import Dict, List
 
-import numpy as np
-
+from llm_tts.scale_discriminator import ScaleDiscriminator
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
     covert_trajectory_to_string,
@@ -19,9 +18,9 @@ from .strategy_base import StrategyBase
 log = logging.getLogger(__name__)
 
 
-class MUR(StrategyBase):
+class AdaptiveScalingBestOfN(StrategyBase):
     """
-    Greedy online best-of-n strategy.
+    Adaptive scaling online best-of-n strategy.
     """
 
     def __init__(
@@ -34,6 +33,7 @@ class MUR(StrategyBase):
         ),
         scaling_rate: float = 0.9,
         momentum_rate: float = 0.9,
+        adaptive_scaling_method: str = "momentum",
     ):
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
@@ -41,6 +41,11 @@ class MUR(StrategyBase):
         self.step_generator = step_generator
         self.scaling_rate = scaling_rate
         self.momentum_rate = momentum_rate
+        self.scale_discriminator = ScaleDiscriminator(
+            criterion=adaptive_scaling_method,
+            momentum_rate=momentum_rate,
+            scaling_rate=scaling_rate,
+        )
 
     def generate_trajectory(self, request: List[Dict[str, str]]) -> Dict[str, any]:
         """
@@ -59,7 +64,6 @@ class MUR(StrategyBase):
         trajectory = []
         selected_steps = []
         validity_scores = []
-        momentum_uncertainty = 0
         for step_num in range(self.max_steps):
             log.info(f"\n=== Step {step_num} ===")
 
@@ -80,14 +84,11 @@ class MUR(StrategyBase):
             selected_candidate = candidates[0]
             cur_signal = candidate_validity_scores[0]
 
-            log.info(f"Cur signal: {cur_signal}")
+            log.info(f"Current signal: {cur_signal}")
             log.info(f"Current candidate: {selected_candidate.text}")
 
-            if (
-                step_num > 0
-                and np.exp(cur_signal)
-                > np.exp(momentum_uncertainty) / self.scaling_rate
-            ):
+            if self.scale_discriminator.should_scale(cur_signal):
+                log.info("Scaling step - generating new candidates")
                 candidates = self.step_generator(
                     request,
                     trajectory=trajectory,
@@ -100,10 +101,8 @@ class MUR(StrategyBase):
                 )
                 cur_signal = validity_scores[best_idx]
 
-            momentum_uncertainty = (
-                momentum_uncertainty * self.momentum_rate
-                + (1 - self.momentum_rate) * cur_signal
-            )
+            self.scale_discriminator.update(cur_signal)
+
             # Update trajectory
             trajectory.append(selected_candidate)
             selected_steps.append(selected_candidate)

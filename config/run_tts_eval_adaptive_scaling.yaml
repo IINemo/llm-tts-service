@@ -20,10 +20,11 @@ evaluation:
   evaluators: [llm_judge, exact_match]
 
 strategy:
-  type: mur
+  type: adaptive
   candidates_per_step: 3
   max_steps: 10
   scaling_rate: 0.9
   momentum_rate: 0.9
+  adaptive_scaling_method: momentum # momentum, random, average, always, threshold
 
 report_to: none

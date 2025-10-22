@@ -36,7 +36,7 @@ from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.strategies import (
-    MUR,
+    AdaptiveScalingBestOfN,
     StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
@@ -329,12 +329,13 @@ def create_tts_strategy(config, model, step_generator, scorer):
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
         )
-    elif config.strategy.type == "mur":
-        strategy = MUR(
+    elif config.strategy.type == "adaptive":
+        strategy = AdaptiveScalingBestOfN(
             step_generator=step_generator,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
+            adaptive_scaling_method=config.strategy.adaptive_scaling_method,
             scaling_rate=config.strategy.scaling_rate,
             momentum_rate=config.strategy.momentum_rate,
         )
