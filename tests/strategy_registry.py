@@ -56,14 +56,14 @@ REGISTERED_STRATEGIES = [
         description="Step-by-step generation with PRM scoring",
     ),
     StrategyInfo(
-        name="mur",
-        class_name="MUR",
-        module_path="llm_tts/strategies/mur.py",
-        test_dir="tests/mur",
+        name="adaptive_scaling_best_of_n",
+        class_name="AdaptiveScalingBestOfN",
+        module_path="llm_tts/strategies/adaptive_scaling_best_of_n.py",
+        test_dir="tests/adaptive_scaling_best_of_n",
         required_tests=[
-            "test_mur.py", 
+            "test_mur.py",
         ],
-        description="MUR: Momentum Uncertainty guided Reasoning for LLM",
+        description="Adaptive scaling best-of-n strategy",
     ),
     # TODO: Add tests for self_consistency strategy
     # StrategyInfo(

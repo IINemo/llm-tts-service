@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.abspath("."))
 
 # Import models and strategies normally
 from llm_tts.models import BlackboxModelWithStreaming
-from llm_tts.strategies import MUR
+from llm_tts.strategies import AdaptiveScalingBestOfN
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -97,10 +97,11 @@ def run_math_test(
     log.info(f"Expected: {expected}")
     log.info("=" * 70)
 
-    strategy = MUR(
+    strategy = AdaptiveScalingBestOfN(
         model=model,
         candidates_per_step=budget,
         max_steps=10,
+        adaptive_scaling_method="momentum",
         scaling_rate=0.9,
         momentum_rate=0.9,
     )

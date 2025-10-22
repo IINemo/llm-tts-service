@@ -8,7 +8,7 @@ from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import MUR
+from llm_tts.strategies import AdaptiveScalingBestOfN
 
 sys.path.insert(0, ".")
 from omegaconf import OmegaConf
@@ -77,11 +77,12 @@ def test_mur():
         disable_thinking_mode=True,
     )
     scorer = StepScorerUncertainty()
-    strategy = MUR(
+    strategy = AdaptiveScalingBestOfN(
         step_generator=step_generator,
         scorer=scorer,
         candidates_per_step=candidates_per_step,
         max_steps=max_steps,
+        adaptive_scaling_method="momentum",
         scaling_rate=0.9,
         momentum_rate=0.9,
     )
