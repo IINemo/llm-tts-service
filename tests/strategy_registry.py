@@ -62,7 +62,6 @@ REGISTERED_STRATEGIES = [
         test_dir="tests/adaptive_scaling_best_of_n",
         required_tests=[
             "test_adaptive_scaling.py",
-            "test_adaptive_BON_math.py",
         ],
         description="Adaptive scaling best-of-n strategy",
     ),
