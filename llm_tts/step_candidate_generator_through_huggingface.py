@@ -2,6 +2,7 @@
 Candidate step generation system for online best-of-n
 """
 
+import inspect
 import logging
 import time
 from typing import Dict, List
@@ -95,17 +96,30 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         log.info(f"Generating {candidates_per_step} candidates from trajectory")
 
         # Tokenize current trajectory
-        inputs = self.model.tokenizer.apply_chat_template(
-            [request], tokenize=False, add_generation_prompt=True
+        tokenizer_signature = inspect.signature(
+            self.model.tokenizer.apply_chat_template
         )
+        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
+
+        # Call tokenizer depending on whether it supports `enable_thinking`
+        if has_enable_thinking:
+            inputs = self.model.tokenizer.apply_chat_template(
+                [request],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=(not self.disable_thinking_mode),
+            )
+        else:
+            inputs = self.model.tokenizer.apply_chat_template(
+                [request], tokenize=False, add_generation_prompt=True
+            )
+
         # Ensure inputs is a list (some tokenizers return str, some return list)
         if isinstance(inputs, str):
             inputs = [inputs]
 
-        if self.disable_thinking_mode:  # TODO: it is wrong
-            inputs[
-                0
-            ] += "\n<think>\n\n</think>\n\n"  # TODO: incorrect usage of assistant role
+        if self.disable_thinking_mode and not has_enable_thinking:
+            inputs[0] += "\n<think>\n\n</think>\n\n"
 
         inputs[0] = inputs[0] + covert_trajectory_to_string(trajectory)
 
