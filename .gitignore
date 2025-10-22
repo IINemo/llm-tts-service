@@ -180,3 +180,5 @@ outputs/
 *.sty
 
 workdir/
+
+lm-polygraph/
