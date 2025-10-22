@@ -1,25 +1,4 @@
 #!/usr/bin/env python3
-"""
-Complex math tests for DeepConf strategy.
-
-Run with:
-    export OPENROUTER_API_KEY="your-key"
-    python tests/test_deepconf_math.py
-
-Options:
-    --verbose, -v    Show full reasoning paths for each trace
-    --budget, -b N   Number of traces per problem (default: 5)
-
-Examples:
-    # Standard run
-    python tests/test_deepconf_math.py
-
-    # Verbose mode with full reasoning
-    python tests/test_deepconf_math.py --verbose
-
-    # More traces for better accuracy
-    python tests/test_deepconf_math.py --budget 10 --verbose
-"""
 
 import logging
 import os
@@ -79,7 +58,7 @@ MATH_PROBLEMS = [
 def run_math_test(
     model, problem_data: dict, budget: int = 5, verbose: bool = False
 ) -> dict:
-    """Run a single math problem through DeepConf
+    """Run a single math problem through AdaptiveScalingBestOfN
 
     Args:
         model: Model instance
@@ -165,7 +144,7 @@ def main():
     """Run all math tests"""
     import argparse
 
-    parser = argparse.ArgumentParser(description="DeepConf Complex Math Tests")
+    parser = argparse.ArgumentParser(description="AdaptiveScalingBestOfN math tests")
     parser.add_argument(
         "--verbose",
         "-v",
@@ -182,7 +161,7 @@ def main():
     args = parser.parse_args()
 
     log.info("\n" + "=" * 70)
-    log.info("🧮 DeepConf - Complex Math Problems")
+    log.info("🧮 AdaptiveScalingBestOfN - Complex Math Problems")
     if args.verbose:
         log.info("   (Verbose mode: showing full reasoning paths)")
     log.info("=" * 70 + "\n")
