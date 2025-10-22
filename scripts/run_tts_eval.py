@@ -244,6 +244,7 @@ def create_model(config):
             detector=detector,
             temperature=config.generation.temperature,
             max_new_tokens=config.generation.max_new_tokens,
+            max_length=config.generation.max_length,
             top_p=config.generation.top_p,
             top_k=config.generation.top_k,
             disable_thinking_mode=config.model.disable_thinking_mode,
