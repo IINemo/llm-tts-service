@@ -51,7 +51,6 @@ class StrategyUncertaintyCoT:
         legacy api_client path if no step_generator is provided.
         """
         if self.step_generator is not None:
-            # New path: drive everything through the step generator
             request_chat = self._normalize_to_chat(prompt_or_chat)
             prompt_text = self._normalize_to_prompt(prompt_or_chat)
 
@@ -60,11 +59,11 @@ class StrategyUncertaintyCoT:
 
             trajectory_text = ""
             trajectory_steps = []
-            selected_steps = []
             uncertainties = []
             validity_scores = []
-            decision_trace = []
             empty_gen_count = 0
+            num_multi_path_steps = 0
+            num_greedy_steps = 0
 
             for step_num in range(self.max_steps):
                 log.info(f"\n=== PD step {step_num+1} ===")
@@ -78,8 +77,6 @@ class StrategyUncertaintyCoT:
                     raise RuntimeError("Probe generation returned no candidates")
 
                 probe_uncertainty = probe_token.other_data["uncertainty_score"]
-                uncertainties.append(probe_uncertainty)
-
                 use_cot = bool(probe_uncertainty > self.uncertainty_threshold)
                 log.info(f"probed uncertainty: {probe_uncertainty}")
 
@@ -99,66 +96,49 @@ class StrategyUncertaintyCoT:
                         [cand.other_data["uncertainty_score"] for cand in cand_list]
                     )
                     # we want to choose the candidate with the lowest uncertainty
-                    best_idx = np.argmin(cand_scores)
-                    chosen = cand_list[best_idx]
-
-                    chosen_text = chosen.text
-                    chosen_uncert = chosen.other_data["uncertainty_score"]
-
+                    chosen = cand_list[np.argmin(cand_scores)]
                     for cand_idx, cand in enumerate(cand_list):
                         log.info(f"[{cand_idx}] Uncertainty: {cand_scores[cand_idx]:.3f} | Text: {cand.text}")
 
-                    branch = "multi-path CoT"
+                    num_multi_path_steps += 1
                     extra = {
-                        "candidates": [
-                            {
-                                "text": c.text,
-                                "uncertainty": float(cand_scores[i]),
-                                "selected": i == best_idx,
-                            }
-                            for i, c in enumerate(cand_list)
-                        ]
+                        "uncert_cot_metadata": {
+                            "branch": "multi-path",
+                            "num_candidates": len(cand_list),
+                            "all_candidates": [cand.text for cand in cand_list],
+                            "all_uncertainties": [cand.other_data["uncertainty_score"] for cand in cand_list],
+                        }
                     }
 
                 else:
-                    log.info("Using greedy completion (generator)")
+                    log.info("Using greedy completion")
                     chosen = self.step_generator.generate_candidates(
                         request_chat,
                         trajectory_steps,
                         candidates_per_step=1,
                     )[0]
+                    if not chosen:
+                        raise RuntimeError("No candidate returned for greedy completion")
+                    
                     log.info(f"[{0}] Uncertainty: {chosen.other_data['uncertainty_score']:.3f} | Text: {chosen.text}")
                     
-                    chosen_text = chosen.text
-                    chosen_uncert = chosen.other_data["uncertainty_score"]
-                    branch = "greedy"
-                    extra = {}
-
+                    num_greedy_steps += 1
+                    extra = {
+                        "uncert_cot_metadata": {
+                            "branch": "greedy"
+                        }
+                    }
 
                 # 3) Append and check for answer
+                chosen_text = chosen.text
+                chosen_uncert = chosen.other_data["uncertainty_score"]
+                chosen.other_data.update(extra)
+                
                 trajectory_steps.append(chosen)
                 trajectory_text += ("\n" if trajectory_text != "" else "") + chosen_text
-                # log.info(
-                #     "Step %d generation: %s",
-                #     step_num + 1,
-                #     chosen_text.replace("\n", "\\n"),
-                # )
-                selected_steps.append(chosen)
+
+                uncertainties.append(probe_uncertainty)
                 validity_scores.append(1 - chosen_uncert)
-
-                decision = {
-                    "step": step_num + 1,
-                    "branch": branch,
-                    "uncertainty": float(chosen_uncert),
-                    "validity": float(1 - chosen_uncert),
-                    "threshold": float(self.uncertainty_threshold),
-                }
-                decision.update(extra)
-                decision_trace.append(decision)
-
-                if self.step_generator.detector.contains_answer_pattern(trajectory_text):
-                    log.info(f"Answer found in step {step_num+1}")
-                    break
 
                 if chosen_text == "":
                     empty_gen_count += 1
@@ -169,45 +149,46 @@ class StrategyUncertaintyCoT:
                         )
                         break
 
-            # If no explicit <Answer>:, try to elicit one via generator
-            if not self.step_generator.detector.contains_answer_pattern(
-                trajectory_text
-            ):
-                log.info("No answer pattern found, explicitly generating answer candidates")
-                answer_cands = self.step_generator.generate_answer_candidates(
-                    request_chat,
-                    trajectory_steps,
-                    candidates_per_step=self.candidates_per_step,
-                )
-                if answer_cands:
-                    log.info("Answer candidates generated")
-                    ans_scores = np.array(
-                        [
-                            candidate.other_data["uncertainty_score"]
-                            for candidate in answer_cands
-                        ]
+                if self.step_generator.detector.is_trajectory_complete(trajectory_text):
+                    log.info(f"Trajectory complete at step {step_num+1}; Generating answer candidates")
+                    
+                    answer_cands = self.step_generator.generate_answer_candidates(
+                        request_chat,
+                        trajectory_steps,
+                        candidates_per_step=self.candidates_per_step,
                     )
-                    chosen = answer_cands[np.argmin(ans_scores)]
-                    trajectory_steps.append(chosen)
-                    trajectory_text += chosen.text
-                    selected_steps.append(chosen.text)
-                    uncertainties.append(chosen.other_data["uncertainty_score"])
-                    validity_scores.append(1 - chosen.other_data["uncertainty_score"])
+                    if answer_cands:
+                        log.info("Answer candidates generated")
+                        answer_scores = np.array(
+                            [candidate.other_data["uncertainty_score"] for candidate in answer_cands]
+                        )
+                        chosen = answer_cands[np.argmin(answer_scores)]
+
+                        for cand_idx, cand in enumerate(answer_cands):
+                            log.info(f"[{cand_idx}] Uncertainty: {answer_scores[cand_idx]:.3f} | Text: {cand.text}")
+                        
+                        trajectory_steps.append(chosen)
+                        trajectory_text += chosen.text
+                        uncertainties.append(chosen.other_data["uncertainty_score"])
+                        validity_scores.append(1 - chosen.other_data["uncertainty_score"])
+                        
+                        break
 
             return {
                 "trajectory": trajectory_text,
-                "steps": selected_steps,
+                "steps": trajectory_steps,
                 "uncertainties": uncertainties,
                 "validity_scores": validity_scores,
                 "completed": self.step_generator.detector.contains_answer_pattern(
                     trajectory_text
                 ),
-                "decision_trace": decision_trace,
+                "metadata": {
+                    "uncert_cot_threshold": self.uncertainty_threshold,
+                    "num_steps": step_num + 1,
+                    "num_greedy_steps": num_greedy_steps,
+                    "num_multi_path_steps": num_multi_path_steps,
+                }
             }
-
-    def _calculate_step_uncertainty(self, candidates) -> float:
-        """Calculate the uncertainty score of step's content generation"""
-        
 
     def _normalize_to_chat(
         self, prompt_or_chat: Union[str, List[Dict[str, str]]]
