@@ -55,7 +55,11 @@ class BlackboxModelWithStreaming(BlackboxModel):
             supports_logprobs=supports_logprobs,
         )
         # Create client with optional custom base_url (e.g., OpenRouter)
-        client_kwargs = {"api_key": openai_api_key}
+        # Add timeout to prevent hanging requests (60s default, 120s total)
+        client_kwargs = {
+            "api_key": openai_api_key,
+            "timeout": 120.0,  # 120 second timeout for API requests
+        }
         if base_url:
             client_kwargs["base_url"] = base_url
         self.client = openai.OpenAI(**client_kwargs)
@@ -68,7 +72,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
 
     def generate_texts(self, chats: List[List[Dict[str, str]]], **args) -> List[dict]:
         """
-        Generate texts using streaming.
+        Generate texts using streaming or batched generation.
 
         Args:
             chats: List of chat message lists
@@ -76,13 +80,15 @@ class BlackboxModelWithStreaming(BlackboxModel):
                 - output_scores (bool): Request logprobs
                 - max_new_tokens (int): Max tokens to generate
                 - temperature (float): Sampling temperature
+                - n (int): Number of completions to generate per chat (default: 1)
 
         Returns:
-            List of generation results with streaming
+            List of generation results. When n>1, returns n results per input chat.
         """
         # Extract parameters
         max_new_tokens = args.get("max_new_tokens", 512)
         temperature = args.get("temperature", 0.7)
+        n = args.get("n", 1)
 
         # Use model's early_stopping (can be overridden by args)
         early_stopping = args.get("early_stopping", self.early_stopping)
@@ -94,6 +100,13 @@ class BlackboxModelWithStreaming(BlackboxModel):
             "output_scores", False
         )  # Explicit request
 
+        # If n>1, use parent's non-streaming implementation which supports batched generation
+        if n > 1:
+            log.info(f"Using batched generation with n={n} (non-streaming)")
+            # Delegate to parent's generate_texts which supports n parameter
+            return super().generate_texts(chats, **args)
+
+        # Otherwise use streaming implementation (n=1)
         results = []
         for chat in chats:
             # Create streaming request
