@@ -1,6 +1,0 @@
-Question: {question}
-Let's solve this step by step. Think carefully through each calculation.
-
-Provide your final answer in the form '<Answer>: <number>'.
-
-## Step 1:
