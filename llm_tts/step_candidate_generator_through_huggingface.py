@@ -68,6 +68,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         top_p: float,
         top_k: int,
         max_new_tokens: int,
+        max_length: int,
         disable_thinking_mode: bool,
         generation_batch_size: int,
         return_generation_scores: bool = False,
@@ -80,6 +81,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         self.top_p = top_p
         self.top_k = top_k
         self.max_new_tokens = max_new_tokens
+        self.max_length = max_length
         self.device = model.device()
         self.disable_thinking_mode = disable_thinking_mode
         self.return_generation_scores = return_generation_scores
@@ -115,7 +117,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             padding=True,
             truncation=True,
             add_special_tokens=False,
-            max_length=self.max_new_tokens,
+            max_length=self.max_length,
         )
         input_length = inputs["input_ids"].shape[1]
         inputs = {k: v.to(self.device) for k, v in inputs.items()}

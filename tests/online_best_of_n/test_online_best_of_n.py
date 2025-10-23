@@ -47,6 +47,7 @@ def create_request(question):
 
 def test_online_gest_of_n():
     max_new_tokens = 100
+    max_length = 1024
     step_patterns = ["- Step", "<Answer>:", "\n<Answer>:"]
     answer_patterns = ["<Answer>:", "\n<Answer>:"]
     candidates_per_step = 3
@@ -73,6 +74,7 @@ def test_online_gest_of_n():
         top_p=1.0,
         top_k=50,
         max_new_tokens=max_new_tokens,
+        max_length=max_length,
         generation_batch_size=generation_batch_size,
         disable_thinking_mode=True,
     )
