@@ -46,6 +46,7 @@ def create_request(question):
 
 def test_uncertainty_guided_cot_with_whitebox():
     max_new_tokens = 64
+    max_tokens = 512
     step_patterns = ["Step:"]
     answer_patterns = ["Answer:"]
     candidates_per_step = 2
@@ -73,6 +74,7 @@ def test_uncertainty_guided_cot_with_whitebox():
         top_p=1.0,
         top_k=50,
         max_new_tokens=max_new_tokens,
+        max_tokens=max_tokens,
         generation_batch_size=generation_batch_size,
         disable_thinking_mode=True,
     )
