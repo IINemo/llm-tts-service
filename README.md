@@ -1,4 +1,5 @@
-<img width="130" height="130" alt="image" src="https://github.com/user-attachments/assets/588610f9-f0e2-4bcc-8a71-aa3ffd6af91e" />
+<img width="130" height="130" alt="LLM_booster" src="https://github.com/user-attachments/assets/66e10a67-78a5-4854-87d9-e1acc88e8636" />
+
 
 # LLM Test-Time Scaling Service
 
@@ -269,6 +270,30 @@ WANDB_ENTITY=nlpresearch.group WANDB_PROJECT=tts python scripts/run_tts_eval.py 
 
 ---
 
+## 🛡️ Robustness & Resume Features
+
+**Evaluations are crash-resistant** - results saved after each sample, resume from interruptions with `--resume`.
+
+### Key Features
+
+- ✅ **Incremental Saving**: No work lost - saves after each sample (not batched)
+- ✅ **Resume Capability**: Continue from where you left off with `--resume` or `--resume-from`
+- ✅ **Full Reproducibility**: Every run saves complete config snapshot in `.hydra/`
+
+### Quick Resume
+
+```bash
+# Resume from latest
+python scripts/run_tts_eval.py --config-name your_experiment --resume
+
+# Resume from specific run
+python scripts/run_tts_eval.py --resume-from outputs/2025-10-18/23-50-46
+```
+
+**📖 For detailed documentation, troubleshooting, and best practices, see [Robustness Guide](docs/ROBUSTNESS.md)**
+
+---
+
 ## 🌐 REST API Service (Optional)
 
 Deploy strategies as a REST API for production use.
@@ -300,6 +325,7 @@ python service_app/main.py
 
 - **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Detailed architecture and components
 - **[Strategy Registration](docs/STRATEGY_REGISTRATION.md)** - Adding new strategies with tests
+- **[Robustness Guide](docs/ROBUSTNESS.md)** - Incremental saving, resume, and reproducibility
 - **[DeepConf Guide](docs/deepconf/DeepConf.md)** - Confidence-based test-time scaling
 - **[GSM8K Dataset](docs/datasets/GSM8K/)** - Dataset usage examples
 - **[Configuration Guide](config/README.md)** - Hydra config system
