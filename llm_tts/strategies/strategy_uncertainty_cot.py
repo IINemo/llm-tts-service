@@ -98,7 +98,9 @@ class StrategyUncertaintyCoT:
                     # we want to choose the candidate with the lowest uncertainty
                     chosen = cand_list[np.argmin(cand_scores)]
                     for cand_idx, cand in enumerate(cand_list):
-                        log.info(f"[{cand_idx}] Uncertainty: {cand_scores[cand_idx]:.3f} | Text: {cand.text}")
+                        log.info(
+                            f"[{cand_idx}] Uncertainty: {cand_scores[cand_idx]:.3f} | Text: {cand.text}"
+                        )
 
                     num_multi_path_steps += 1
                     extra = {
@@ -106,7 +108,10 @@ class StrategyUncertaintyCoT:
                             "branch": "multi-path",
                             "num_candidates": len(cand_list),
                             "all_candidates": [cand.text for cand in cand_list],
-                            "all_uncertainties": [cand.other_data["uncertainty_score"] for cand in cand_list],
+                            "all_uncertainties": [
+                                cand.other_data["uncertainty_score"]
+                                for cand in cand_list
+                            ],
                         }
                     }
 
@@ -118,22 +123,22 @@ class StrategyUncertaintyCoT:
                         candidates_per_step=1,
                     )[0]
                     if not chosen:
-                        raise RuntimeError("No candidate returned for greedy completion")
-                    
-                    log.info(f"[{0}] Uncertainty: {chosen.other_data['uncertainty_score']:.3f} | Text: {chosen.text}")
-                    
+                        raise RuntimeError(
+                            "No candidate returned for greedy completion"
+                        )
+
+                    log.info(
+                        f"[{0}] Uncertainty: {chosen.other_data['uncertainty_score']:.3f} | Text: {chosen.text}"
+                    )
+
                     num_greedy_steps += 1
-                    extra = {
-                        "uncert_cot_metadata": {
-                            "branch": "greedy"
-                        }
-                    }
+                    extra = {"uncert_cot_metadata": {"branch": "greedy"}}
 
                 # 3) Append and check for answer
                 chosen_text = chosen.text
                 chosen_uncert = chosen.other_data["uncertainty_score"]
                 chosen.other_data.update(extra)
-                
+
                 trajectory_steps.append(chosen)
                 trajectory_text += ("\n" if trajectory_text != "" else "") + chosen_text
 
@@ -150,8 +155,10 @@ class StrategyUncertaintyCoT:
                         break
 
                 if self.step_generator.detector.is_trajectory_complete(trajectory_text):
-                    log.info(f"Trajectory complete at step {step_num+1}; Generating answer candidates")
-                    
+                    log.info(
+                        f"Trajectory complete at step {step_num+1}; Generating answer candidates"
+                    )
+
                     answer_cands = self.step_generator.generate_answer_candidates(
                         request_chat,
                         trajectory_steps,
@@ -160,18 +167,25 @@ class StrategyUncertaintyCoT:
                     if answer_cands:
                         log.info("Answer candidates generated")
                         answer_scores = np.array(
-                            [candidate.other_data["uncertainty_score"] for candidate in answer_cands]
+                            [
+                                candidate.other_data["uncertainty_score"]
+                                for candidate in answer_cands
+                            ]
                         )
                         chosen = answer_cands[np.argmin(answer_scores)]
 
                         for cand_idx, cand in enumerate(answer_cands):
-                            log.info(f"[{cand_idx}] Uncertainty: {answer_scores[cand_idx]:.3f} | Text: {cand.text}")
-                        
+                            log.info(
+                                f"[{cand_idx}] Uncertainty: {answer_scores[cand_idx]:.3f} | Text: {cand.text}"
+                            )
+
                         trajectory_steps.append(chosen)
                         trajectory_text += chosen.text
                         uncertainties.append(chosen.other_data["uncertainty_score"])
-                        validity_scores.append(1 - chosen.other_data["uncertainty_score"])
-                        
+                        validity_scores.append(
+                            1 - chosen.other_data["uncertainty_score"]
+                        )
+
                         break
 
             return {
@@ -187,7 +201,7 @@ class StrategyUncertaintyCoT:
                     "num_steps": step_num + 1,
                     "num_greedy_steps": num_greedy_steps,
                     "num_multi_path_steps": num_multi_path_steps,
-                }
+                },
             }
 
     def _normalize_to_chat(
@@ -249,4 +263,4 @@ class StrategyUncertaintyCoT:
 
         raise TypeError(
             "generate_trajectory expects a string or chat-style List[Dict[str, str]]"
-        )    
+        )

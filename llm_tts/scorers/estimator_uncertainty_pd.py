@@ -35,13 +35,13 @@ class PDGap(Estimator):
             try:
                 probs = np.exp(lp - lp.max(axis=1, keepdims=True))
                 probs /= probs.sum(axis=1, keepdims=True)
-                
+
                 # extract top-2 probabilities per token
                 top2 = np.partition(probs, -2, axis=1)[:, -2:]
                 p1, p2 = np.sort(top2, axis=1)[:, ::-1].T
                 pd_gap_tokens = 1 - (p1 - p2)
                 uncertainties.append(np.mean(pd_gap_tokens))
-            
+
             except Exception:
                 uncertainties.append(np.nan)
 
