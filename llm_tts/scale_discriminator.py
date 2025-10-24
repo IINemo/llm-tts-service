@@ -36,7 +36,7 @@ class MURDiscriminator(DiscriminatorBase):
         """Determine if candidates should be generated based on MUR criteria"""
         return self.step_num > 0 and np.exp(
             self.momentum_uncertainty
-        ) / self.scaling_rate > np.exp(cur_signal)
+        ) / self.scaling_rate < np.exp(cur_signal)
 
     def update(self, cur_signal: float) -> float:
         """Update state of the discriminator"""
