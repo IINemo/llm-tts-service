@@ -75,6 +75,7 @@ def test_mur():
         max_new_tokens=max_new_tokens,
         generation_batch_size=generation_batch_size,
         disable_thinking_mode=True,
+        max_length=512,
     )
     scorer = StepScorerUncertainty()
     strategy = AdaptiveScalingBestOfN(
