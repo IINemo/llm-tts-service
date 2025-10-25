@@ -26,7 +26,7 @@ from llm_tts.evaluation import (
     EvaluatorLLMAsAJudge,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
+from llm_tts.scorers import StepScorerConfidence, StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
@@ -35,6 +35,7 @@ from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.strategies import (
+    AdaptiveScalingBestOfN,
     StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
@@ -160,7 +161,8 @@ def create_scorer(config):
 
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
-
+    elif config.scorer.type == "perplexity" or config.scorer.type == "entropy":
+        scorer = StepScorerConfidence()
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
 
@@ -169,7 +171,7 @@ def create_scorer(config):
 
 def create_model(config):
     if config.model.type == "local":
-        if config.scorer.type == "uncertainty":
+        if config.scorer.type in ["uncertainty", "entropy", "perplexity"]:
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
@@ -240,7 +242,13 @@ def create_model(config):
             from llm_tts.early_stopping import BoundaryEarlyStopping
 
             detector = StepBoundaryDetector(
-                step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
+                step_patterns=[
+                    "- Step",
+                    "<Answer>:",
+                    "\n<Answer>:",
+                    "### Step",
+                    "\nStep",
+                ],
                 answer_patterns=["<Answer>:", "\n<Answer>:"],
                 max_tokens_per_step=config.generation.max_new_tokens,
             )
@@ -280,6 +288,16 @@ def create_tts_strategy(config, model, step_generator, scorer):
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
+        )
+    elif config.strategy.type == "adaptive":
+        strategy = AdaptiveScalingBestOfN(
+            step_generator=step_generator,
+            scorer=scorer,
+            candidates_per_step=config.strategy.candidates_per_step,
+            max_steps=config.strategy.max_steps,
+            adaptive_scaling_method=config.strategy.adaptive_scaling_method,
+            scaling_rate=config.strategy.scaling_rate,
+            momentum_rate=config.strategy.momentum_rate,
         )
     elif config.strategy.type == "deepconf":
         # DeepConf requires BlackboxModel with logprobs support

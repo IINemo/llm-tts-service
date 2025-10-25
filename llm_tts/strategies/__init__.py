@@ -1,3 +1,4 @@
+from .adaptive_scaling_best_of_n import AdaptiveScalingBestOfN
 from .deepconf import StrategyDeepConf
 from .strategy_base import StrategyBase
 from .strategy_beam_search import StrategyBeamSearch
@@ -11,4 +12,5 @@ __all__ = [
     "StrategyChainOfThought",
     "StrategySelfConsistency",
     "StrategyDeepConf",
+    "AdaptiveScalingBestOfN",
 ]
