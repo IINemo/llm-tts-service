@@ -31,7 +31,9 @@ dependencies = [
     "parse>=1.19.0",
     "hydra-core>=1.2.0",
     "omegaconf>=2.2.0",
+    "python-dotenv>=0.19.0",
     # "lm-polygraph>=0.0.1",  # Installed separately via setup.sh (dev branch)
+    "pylatexenc>=2.10",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +49,17 @@ docs = [
     "sphinx>=5.0.0",
     "sphinx-rtd-theme>=1.0.0",
     "myst-parser>=0.18.0",
+]
+
+service = [
+    # FastAPI Service Dependencies
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "httpx>=0.25.0",
+    "python-multipart>=0.0.6",
+    "python-json-logger>=2.0.7",
 ]
 
 [project.urls]

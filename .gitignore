@@ -178,3 +178,5 @@ outputs/
 *.bib
 *.tex
 *.sty
+
+workdir/

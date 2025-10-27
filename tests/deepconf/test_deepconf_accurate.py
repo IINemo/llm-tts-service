@@ -7,26 +7,16 @@ Run with:
     python tests/test_deepconf_accurate.py
 """
 
-import sys
+import logging
 import os
+import sys
 
 sys.path.insert(0, os.path.abspath("."))
 
-import logging
-import importlib.util
-
-# Import models normally (no lm-polygraph issue)
-from llm_tts.models import create_model
-
-# Import deepconf_strategy directly without triggering strategies/__init__.py
-spec = importlib.util.spec_from_file_location(
-    "llm_tts.strategies.deepconf_strategy", "llm_tts/strategies/deepconf_strategy.py"
-)
-deepconf_module = importlib.util.module_from_spec(spec)
-sys.modules["llm_tts.strategies.deepconf_strategy"] = deepconf_module
-spec.loader.exec_module(deepconf_module)
-DeepConfStrategy = deepconf_module.DeepConfStrategy
-extract_answer = deepconf_module.extract_answer
+# Import models and strategies normally
+from llm_tts.models import BlackboxModelWithStreaming
+from llm_tts.strategies import StrategyDeepConf
+from llm_tts.strategies.deepconf.utils import extract_answer
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -76,18 +66,17 @@ def test_2_model_with_logprobs():
         return False
 
     try:
-        model = create_model(
-            provider="openrouter",
-            model_name="openai/gpt-4o-mini",
-            api_key=api_key,
-            top_logprobs=20,
+        model = BlackboxModelWithStreaming(
+            openai_api_key=api_key,
+            model_path="openai/gpt-4o-mini",
+            supports_logprobs=True,
+            base_url="https://openrouter.ai/api/v1",
         )
 
-        assert model.supports_logprobs() == True
-        assert hasattr(model, "generate_with_confidence")
+        assert model.supports_logprobs is True
 
-        log.info(f"✅ Model: {model.model_name}")
-        log.info(f"✅ Supports logprobs: {model.supports_logprobs()}")
+        log.info(f"✅ Model: {model.model_path}")
+        log.info(f"✅ Supports logprobs: {model.supports_logprobs}")
         return True
 
     except Exception as e:
@@ -110,19 +99,22 @@ def test_3_deepconf_generation():
         return False
 
     try:
-        model = create_model(
-            provider="openrouter",
-            model_name="openai/gpt-4o-mini",
-            api_key=api_key,
-            top_logprobs=20,
+        model = BlackboxModelWithStreaming(
+            openai_api_key=api_key,
+            model_path="openai/gpt-4o-mini",
+            supports_logprobs=True,
+            base_url="https://openrouter.ai/api/v1",
         )
 
-        strategy = DeepConfStrategy(
+        strategy = StrategyDeepConf(
             model=model,
+            mode="offline",
             budget=3,
             window_size=16,
             temperature=0.7,
+            top_p=1.0,
             max_tokens=500,
+            top_logprobs=20,
             filter_method="none",
         )
 
@@ -133,13 +125,13 @@ def test_3_deepconf_generation():
 
         result = strategy.generate_trajectory(prompt)
 
-        log.info(f"✅ Generated {result['metadata']['num_paths_generated']} traces")
-        log.info(f"✅ Valid traces: {result['metadata']['num_paths_used']}")
+        log.info(f"✅ Generated {result['metadata']['total_traces']} traces")
+        log.info(f"✅ Valid traces: {result['metadata']['filtered_traces']}")
         log.info(f"✅ Selected answer: {result['metadata']['selected_answer']}")
         log.info(f"✅ Confidence: {result['metadata']['confidence_score']:.3f}")
 
-        assert result["metadata"]["num_paths_generated"] == 3
-        assert result["completed"] == True
+        assert result["metadata"]["total_traces"] == 3
+        assert result["completed"] is True
 
         return True
 
@@ -163,19 +155,22 @@ def test_4_deepconf_voting():
         return False
 
     try:
-        model = create_model(
-            provider="openrouter",
-            model_name="openai/gpt-4o-mini",
-            api_key=api_key,
-            top_logprobs=20,
+        model = BlackboxModelWithStreaming(
+            openai_api_key=api_key,
+            model_path="openai/gpt-4o-mini",
+            supports_logprobs=True,
+            base_url="https://openrouter.ai/api/v1",
         )
 
-        strategy = DeepConfStrategy(
+        strategy = StrategyDeepConf(
             model=model,
+            mode="offline",
             budget=5,
             window_size=16,
             temperature=0.8,
+            top_p=1.0,
             max_tokens=500,
+            top_logprobs=20,
             filter_method="top10",  # Filter to top 10% by confidence
         )
 
@@ -183,13 +178,13 @@ def test_4_deepconf_voting():
 
         result = strategy.generate_trajectory(prompt)
 
-        log.info(f"✅ Total generated: {result['metadata']['num_paths_generated']}")
-        log.info(f"✅ After filtering: {result['metadata']['num_paths_used']}")
+        log.info(f"✅ Total generated: {result['metadata']['total_traces']}")
+        log.info(f"✅ After filtering: {result['metadata']['filtered_traces']}")
         log.info(f"✅ Selected answer: '{result['metadata']['selected_answer']}'")
         log.info(f"✅ Confidence: {result['metadata']['confidence_score']:.3f}")
 
         # Show vote distribution
-        log.info(f"✅ Vote distribution:")
+        log.info("✅ Vote distribution:")
         for ans, pct in result["metadata"]["vote_distribution"].items():
             log.info(f"   {ans}: {pct:.1f}%")
 
@@ -198,12 +193,12 @@ def test_4_deepconf_voting():
         is_correct = result["metadata"]["selected_answer"] == expected
 
         if is_correct:
-            log.info(f"✅ Answer is correct!")
+            log.info("✅ Answer is correct!")
         else:
             log.warning(
                 f"⚠️  Answer '{result['metadata']['selected_answer']}' != expected '{expected}'"
             )
-            log.warning(f"   (This may be due to answer extraction format)")
+            log.warning("   (This may be due to answer extraction format)")
 
         return True  # Test passes even if answer is wrong (testing integration)
 

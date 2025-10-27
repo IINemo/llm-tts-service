@@ -1,0 +1,69 @@
+# @package _global_
+
+# DeepConf Offline Mode Configuration for AIME 2025
+# Competition-level mathematics problems from American Invitational Mathematics Examination
+
+defaults:
+  - /config  # Load main Hydra config
+  - /dataset/aime_2025
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - _self_
+
+# Run naming for descriptive outputs
+run_name: "aime2025_deepconf_gpt4omini_b${strategy.budget}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: false
+report_to: wandb  # Enable wandb logging (optional)
+wandb_project: llm-tts-eval-deepconf  # Wandb project name for DeepConf experiments
+
+# Model configuration (API-based)
+model:
+  provider: openrouter
+  model_name: "openai/gpt-4o-mini"
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  top_logprobs: 20  # Required for DeepConf
+
+# Generation settings
+generation:
+  max_new_tokens: 32000  # Large limit for complex AIME problems
+  temperature: 0.7
+  top_p: 1.0
+  batch_size: 1
+
+# DeepConf strategy (no scorer needed)
+scorer: null
+
+# DeepConf offline mode strategy
+strategy:
+  type: deepconf
+  mode: "offline"  # Standard weighted voting mode
+  budget: 16  # Increased budget for harder problems
+
+  # Generation parameters
+  window_size: 2048  # Sliding window (algorithmic parameter - DO NOT CHANGE)
+  temperature: 0.6  # Match original wrapper.py default
+  top_p: 0.95  # Match original wrapper.py default
+  max_tokens: 32000  # Match original wrapper.py default
+  top_logprobs: 20
+
+  # Filtering and voting
+  filter_method: "top5"  # Use top-5 traces by confidence
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - llm_judge
+  llm_judge:
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: deepseek/deepseek-r1-0528
+    cache_path: ~/.cache
+    n_threads: 1
+    prompt_file: null
+
+# Dataset settings
+dataset:
+  subset: 5  # Number of examples to evaluate (AIME has 30 total)

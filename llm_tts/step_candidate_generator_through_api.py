@@ -28,6 +28,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         detector: StepBoundaryDetector,
         prefill_mode: bool,
     ):
+        super().__init__(1)  # TODO:
+
         self.model = model
         self.detector = detector or StepBoundaryDetector()
         self.prefill_mode = prefill_mode
@@ -150,7 +152,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         continuation_promt = (
             "Continue the assistant message from the EXACT prefix below. "
             "Begin immediately after the last character of the prefix. "
-            "Output ONLY the final answer text; do NOT include steps, chain-of-thought, or any preface. "
+            "Output ONLY the final answer text; "
+            "do NOT include steps, chain-of-thought, or any preface. "
             "Do NOT repeat the prefix.\n"
             "----- PREFIX START -----\n"
             f"{prefix}\n"
