@@ -22,7 +22,7 @@ evaluation:
 strategy:
   type: phi_decoding
   candidates_per_step: 3
-  max_steps: 5
+  max_steps: 20
   cluster_num: 2
 
 report_to: wandb
