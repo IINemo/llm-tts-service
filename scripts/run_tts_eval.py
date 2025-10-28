@@ -110,7 +110,9 @@ def build_evaluators(config):
             evaluators[eval_key] = EvaluatorLLMAsAJudge(**llm_cfg)
 
         elif evaluator_name == "exact_match":
-            evaluators["exact_match"] = EvaluatorExactMatch()
+            evaluators["exact_match"] = EvaluatorExactMatch(
+                config.dataset.answer_format
+            )
 
         elif evaluator_name == "alignscore":
             align_cfg = OmegaConf.to_container(
@@ -310,6 +312,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
             top_p=config.strategy.get("top_p", 1.0),
             max_tokens=config.strategy.get("max_tokens", 512),
             top_logprobs=config.strategy.get("top_logprobs", 20),
+            n_threads=config.strategy.get("n_threads", 8),
         )
 
     elif config.strategy.type == "beam_search":
