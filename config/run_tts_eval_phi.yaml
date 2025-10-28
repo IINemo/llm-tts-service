@@ -1,52 +1,28 @@
 # @package _global_
 
+hydra:
+  run:
+    dir: ${save_dir}/eval/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+save_dir: "./workdir"  # Directory to save results (will create validity/redundancy subdirs)
+
 defaults:
-  - output: default
+  - dataset: default
+  - model: hf_qwen3
+  - generation: default
+  - system: default
+  - scorer: uncertainty
+  - evaluation/llm_judge: default
+  - evaluation/alignscore: default
   - _self_
 
-# Main configuration
-
-dataset:
-  dataset_path: "gsm8k"
-  dataset_config: "main"
-  dataset_split: "test"
-  subset: 2
-  prompt_file: "./config/prompts/default.txt"
-
-model:
-  type: "vllm"
-  model_path: "Qwen/Qwen3-1.7B"
-  gpu_memory_utilization: 0.6
-  max_model_len: 16384
-
-generation:
-  temperature: 0.6  # Generation temperature
-  max_new_tokens: 2048  # Max tokens per step
-  sequential_generation: false  # Generate candidates one by one to save memory
-
-scorer:
-  type: perplexity # no need scorer for phi
-
-evaluator:
-  base_url: https://api.deepseek.com/v1
-  model: deepseek-reasoner
-  n_threads: 1
-  prompt_file: "./config/prompts/default.txt"
+evaluation:
+  evaluators: [llm_judge, exact_match]
 
 strategy:
-  type: phi
-  step_beam_size: 2
-  num_rollout: 2
-  num_foresight: 10
-  strategy: "cluster"
-  width_pruning_strategy: "low_sigma"
-  depth_pruning_strategy: "cluster"
-  cluster_num: 3
-  threshold: 0.69
-  least_foresight_num: 4
-  sigma_rate: 1.0
+  type: phi_decoding
+  candidates_per_step: 3
+  max_steps: 5
+  cluster_num: 2
 
-system:
-  device: "cuda:0"  # Device to use for base model
-  seed: 42  # Random seed
-  hf_cache: null  # HuggingFace cache directory
+report_to: wandb

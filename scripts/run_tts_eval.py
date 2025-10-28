@@ -14,7 +14,6 @@ from datasets import Dataset, load_dataset
 from dotenv import load_dotenv
 from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
-from lm_polygraph.estimators import Perplexity
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
@@ -36,6 +35,7 @@ from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.strategies import (
+    PhiDecoding,
     StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
@@ -158,8 +158,6 @@ def create_scorer(config):
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
         )
-    elif config.scorer.type == "perplexity":
-        scorer = Perplexity()
 
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
@@ -314,6 +312,14 @@ def create_tts_strategy(config, model, step_generator, scorer):
             candidates_per_beam=config.strategy.candidates_per_beam,
             max_steps=config.strategy.max_steps,
             aggregation=getattr(config.strategy, "aggregation", "mean"),
+        )
+    elif config.strategy.type == "phi_decoding":
+        strategy = PhiDecoding(
+            step_generator=step_generator,
+            scorer=scorer,
+            candidates_per_step=config.strategy.candidates_per_step,
+            max_steps=config.strategy.max_steps,
+            cluster_num=config.strategy.cluster_num,
         )
 
     else:
