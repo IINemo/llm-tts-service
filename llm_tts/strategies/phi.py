@@ -2,6 +2,8 @@ import logging
 from typing import Any, Dict, List
 
 import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
@@ -17,11 +19,18 @@ from llm_tts.step_candidate_generator_through_huggingface import (
 from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
-from sklearn.cluster import KMeans
-from sklearn.feature_extraction.text import TfidfVectorizer
 
 
-def softmax(x):
+def compute_softmax(x: List[float]) -> List[float]:
+    """
+    Compute softmax of a list of values.
+
+    Args:
+        x: List of values
+
+    Returns:
+        List of softmax values
+    """
     x = np.array(x)
     e_x = np.exp(x - np.max(x))
     return e_x / e_x.sum()
@@ -141,8 +150,8 @@ class PhiDecoding(StrategyBase):
             labels = kmeans.labels_
 
             cluster_sizes = [list[Any](labels).count(i) for i in labels]
-            cluster_probs = softmax(cluster_sizes)
-            foresight_probs = softmax(foresight_scores)
+            cluster_probs = compute_softmax(cluster_sizes)
+            foresight_probs = compute_softmax(foresight_scores)
             combined_probs = [
                 (foresight_probs[i] + cluster_probs[i]) / 2
                 for i in range(len(foresight_scores))
@@ -152,7 +161,7 @@ class PhiDecoding(StrategyBase):
             return best_idx, foresight_texts[best_idx]
         except Exception as e:
             print("Clustering failed:", e)
-            fallback_probs = softmax(foresight_scores)
+            fallback_probs = compute_softmax(foresight_scores)
             best_idx = np.random.choice(range(len(foresight_scores)), p=fallback_probs)
             return best_idx, foresight_texts[best_idx]
 
