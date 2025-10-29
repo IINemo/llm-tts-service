@@ -6,7 +6,7 @@ class TestEvaluatorExactMatch:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.evaluator = EvaluatorExactMatch()
+        self.evaluator = EvaluatorExactMatch(dataset_answer_format="numeric")
 
     def test_exact_numeric_match(self):
         problems = ["What is 2+2?"]
@@ -287,7 +287,7 @@ class TestEvaluatorExactMatch:
     def test_string_answers(self):
         """Test direct string comparison format."""
         problem = "What is the capital of France?"
-        solution = "Paris"
+        solution = "<Answer>: Paris"
         gold_answer = "Paris"
 
         # Create evaluator with string format
