@@ -5,3 +5,7 @@ dataset_config: "main"  # Dataset config name (required for some datasets like G
 dataset_split: "test"  # Dataset split to use
 subset: null  # Only process first N samples from dataset (null for all)
 prompt_file: ./config/prompts/default.txt  # Path to prompt template file (optional)
+
+# Field mappings (override in dataset-specific configs if different)
+question_field: "question"  # Field containing the question/problem
+answer_field: "answer"  # Field containing the gold answer
