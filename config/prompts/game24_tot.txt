@@ -1,1 +1,3 @@
+Input: {question}
+
 Use numbers and basic arithmetic operations (+ - * /) to obtain 24. Each step, you are only allowed to choose two of the remaining numbers to obtain a new number.
