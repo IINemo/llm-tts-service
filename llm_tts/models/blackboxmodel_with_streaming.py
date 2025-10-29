@@ -129,16 +129,17 @@ class BlackboxModelWithStreaming(BlackboxModel):
 
         Args:
             chats: List of chat message lists
-            **args: Generation parameters
+            **args: Generation parameters (including optional 'timeout' in seconds)
 
         The persistent client is used for all requests (no new clients created).
-        Timeout protection is provided by httpx client configuration.
+        Timeout can be specified per-request via 'timeout' parameter.
         Retry logic should be implemented at the strategy level.
         """
         # Extract parameters
         max_new_tokens = args.get("max_new_tokens", 512)
         temperature = args.get("temperature", 0.7)
         n = args.get("n", 1)
+        timeout = args.get("timeout", None)  # Per-request timeout override
 
         # Use model's early_stopping (can be overridden by args)
         early_stopping = args.get("early_stopping", self.early_stopping)
@@ -158,16 +159,20 @@ class BlackboxModelWithStreaming(BlackboxModel):
         # Otherwise use streaming implementation (n=1)
         results = []
         for chat in chats:
-            # Create streaming request
-            response = self.client.chat.completions.create(
-                model=self.model_path,
-                messages=chat,
-                max_tokens=max_new_tokens,
-                temperature=temperature,
-                stream=True,
-                logprobs=needs_logprobs,
-                top_logprobs=20 if needs_logprobs else None,  # TODO:
-            )
+            # Create streaming request with optional per-request timeout
+            api_kwargs = {
+                "model": self.model_path,
+                "messages": chat,
+                "max_tokens": max_new_tokens,
+                "temperature": temperature,
+                "stream": True,
+                "logprobs": needs_logprobs,
+                "top_logprobs": 20 if needs_logprobs else None,
+            }
+            if timeout is not None:
+                api_kwargs["timeout"] = timeout  # Per-request timeout override
+
+            response = self.client.chat.completions.create(**api_kwargs)
 
             accumulated_text = ""
             all_logprobs = []
