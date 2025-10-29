@@ -538,11 +538,16 @@ Continue with concrete steps and numbers (show your work):
         else:
             problem = prompt
 
-        log.info(f"Starting Tree-of-Thoughts search for problem: {problem[:100]}...")
-        log.info(
-            f"Configuration: beam_width={self.beam_width}, steps={self.steps}, "
-            f"generate={self.method_generate}, scorer={self.scorer.name}"
-        )
+        log.info("\n" + "=" * 80)
+        log.info("TREE-OF-THOUGHTS SEARCH")
+        log.info("=" * 80)
+        log.info(f"\nProblem:\n{problem}")
+        log.info("\nConfiguration:")
+        log.info(f"  - Beam width: {self.beam_width}")
+        log.info(f"  - Steps: {self.steps}")
+        log.info(f"  - Generation method: {self.method_generate}")
+        log.info(f"  - Scorer: {self.scorer.name}")
+        log.info(f"  - Temperature: {self.temperature}")
 
         # Initialize beam
         states = [""]  # Start with empty state
@@ -553,11 +558,16 @@ Continue with concrete steps and numbers (show your work):
 
         # Beam search
         for step_idx in range(self.steps):
+            log.info(f"\n{'='*80}")
             log.info(f"Step {step_idx + 1}/{self.steps}: {len(states)} states in beam")
+            log.info(f"{'='*80}")
 
             # GENERATE: Expand beam with candidates
             candidates = self._generate_candidates(problem, states)
-            log.info(f"  Generated {len(candidates)} candidates")
+            log.info(f"\n[GENERATE] Generated {len(candidates)} candidates:")
+            for i, candidate in enumerate(candidates):
+                log.info(f"  Candidate {i+1}:")
+                log.info(f"    {candidate}")
 
             if not candidates:
                 log.warning(f"  No candidates generated at step {step_idx}")
@@ -566,12 +576,18 @@ Continue with concrete steps and numbers (show your work):
             # EVALUATE: Score all candidates using scorer
             scores = self._evaluate_candidates(problem, candidates)
             log.info(
-                f"  Evaluated candidates (scores: {np.mean(scores):.2f} ± {np.std(scores):.2f})"
+                f"\n[EVALUATE] Scored {len(candidates)} candidates (mean: {np.mean(scores):.2f}, std: {np.std(scores):.2f}):"
             )
+            for i, (candidate, score) in enumerate(zip(candidates, scores)):
+                log.info(f"  Candidate {i+1} (score={score:.2f}):")
+                log.info(f"    {candidate}")
 
             # SELECT: Prune to top-k
             states, state_scores = self._select_top_states(candidates, scores)
-            log.info(f"  Selected top {len(states)} states (scores: {state_scores})")
+            log.info(f"\n[SELECT] Selected top {len(states)} states:")
+            for i, (state, score) in enumerate(zip(states, state_scores)):
+                log.info(f"  State {i+1} (score={score:.2f}):")
+                log.info(f"    {state}")
 
             # Record step
             all_steps.append(
@@ -587,22 +603,43 @@ Continue with concrete steps and numbers (show your work):
             # Check if any state has reached final answer
             final_states = [s for s in states if self._is_final_answer(s)]
             if final_states:
-                log.info(f"  Found {len(final_states)} final answer(s)")
+                log.info(f"\n[FINAL] Found {len(final_states)} final answer(s):")
+                for i, final_state in enumerate(final_states):
+                    log.info(f"  Final {i+1}: {final_state}")
                 # Could early stop here, but continue to explore
 
         # Select best final state
+        log.info("\n" + "=" * 80)
+        log.info("FINAL SELECTION")
+        log.info("=" * 80)
+
         if states:
             final_scores = self._evaluate_candidates(problem, states)
+            log.info(f"\nEvaluating {len(states)} final states:")
+            for i, (state, score) in enumerate(zip(states, final_scores)):
+                log.info(f"  Final state {i+1} (score={score:.2f}):")
+                log.info(f"    {state}")
+
             best_idx = np.argmax(final_scores)
             best_state = states[best_idx]
             best_score = final_scores[best_idx]
             best_answer = self._extract_answer(best_state)
+
+            log.info(
+                f"\n[BEST] Selected state {best_idx+1} with score {best_score:.2f}:"
+            )
+            log.info(f"  Full state:\n{best_state}")
+            log.info(f"  Extracted answer: {best_answer}")
         else:
             best_state = ""
             best_score = 0.0
             best_answer = "no_answer"
+            log.warning("No final states available!")
 
-        log.info(f"Search complete. Best state score: {best_score:.2f}")
+        log.info("\n" + "=" * 80)
+        log.info("SEARCH SUMMARY")
+        log.info("=" * 80)
+        log.info(f"Best score: {best_score:.2f}")
         log.info(f"Extracted answer: {best_answer}")
         log.info(f"API calls: {self.total_api_calls}")
         log.info(f"Scorer evaluations: {self.scorer.total_evaluations}")
