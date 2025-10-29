@@ -213,20 +213,6 @@ class EvaluatorExactMatch:
             if candidate_norm == gold_norm:
                 return 1.0
 
-            # Special handling for boolean answers
-            if self.dataset_answer_format == "boolean":
-                if self._is_boolean_answer(candidate) and self._is_boolean_answer(
-                    gold_candidate
-                ):
-                    return 1.0 if candidate_norm == gold_norm else 0.0
-
-            # Special handling for single letter answers
-            if self.dataset_answer_format == "char":
-                if self._is_single_letter_answer(
-                    candidate
-                ) and self._is_single_letter_answer(gold_candidate):
-                    return 1.0 if candidate_norm == gold_norm else 0.0
-
         # Step 3: Try mathematical comparison (for numeric datasets)
         if self.dataset_answer_format == "numeric":
             try:
