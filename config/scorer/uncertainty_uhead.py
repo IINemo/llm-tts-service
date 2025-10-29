@@ -1,19 +1,15 @@
+from typing import Dict, List
+
 import numpy as np
-import torch
-from typing import List, Dict
-
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-from lm_polygraph.utils.causal_lm_with_uncertainty import CausalLMWithUncertainty
 from lm_polygraph.stat_calculators import StatCalculator
-from lm_polygraph.utils.model import Model
-from lm_polygraph.model_adapters import WhiteboxModel
 from lm_polygraph.stat_calculators.extract_claims import Claim
-
-from luh.luh_claim_estimator_dummy import LuhClaimEstimatorDummy
-from luh.calculator_infer_luh import CalculatorInferLuh
-from luh.calculator_apply_uq_head import CalculatorApplyUQHead
+from lm_polygraph.utils.causal_lm_with_uncertainty import CausalLMWithUncertainty
+from lm_polygraph.utils.model import Model
 from luh.auto_uncertainty_head import AutoUncertaintyHead
+from luh.calculator_apply_uq_head import CalculatorApplyUQHead
+from luh.calculator_infer_luh import CalculatorInferLuh
+from luh.luh_claim_estimator_dummy import LuhClaimEstimatorDummy
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 class ReasonStepClaimExtractor(StatCalculator):
