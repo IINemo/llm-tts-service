@@ -1,6 +1,4 @@
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Dict, List, Optional
 
 import openai
@@ -83,12 +81,6 @@ class BlackboxModelWithStreaming(BlackboxModel):
         # Override parent's openai_api for non-streaming calls
         self.openai_api = self.client
 
-        # Create thread pool executor for timeout enforcement
-        # Use max_workers=10 to handle concurrent requests in strategies
-        self._executor = ThreadPoolExecutor(
-            max_workers=10, thread_name_prefix="llm_api"
-        )
-
         # Store early stopping configuration
         self.early_stopping = early_stopping
 
@@ -131,64 +123,18 @@ class BlackboxModelWithStreaming(BlackboxModel):
         # Mark old client as unreferenced (will be garbage collected)
         del old_client
 
-    def shutdown(self):
-        """
-        Shutdown the model's resources (executor, client).
-
-        Call this at the end of your program to ensure clean exit.
-        """
-        log.info("[MODEL] Shutting down model resources...")
-
-        # Shutdown executor
-        if hasattr(self, "_executor") and self._executor is not None:
-            self._executor.shutdown(wait=False)
-            log.info("[MODEL] Executor shut down")
-
-        # Don't explicitly close client as it may hang
-        # Let garbage collector handle it
-
-        log.info("[MODEL] Shutdown complete")
-
     def generate_texts(self, chats: List[List[Dict[str, str]]], **args) -> List[dict]:
         """
-        Generate texts using persistent client with timeout protection.
+        Generate texts using persistent client.
 
         Args:
             chats: List of chat message lists
-            **args: Generation parameters including:
-                - timeout: Total timeout in seconds (default: 60)
-                - Other params passed to _generate_texts_impl
+            **args: Generation parameters
 
-        Uses ThreadPoolExecutor to enforce total timeout on API calls.
         The persistent client is used for all requests (no new clients created).
+        Timeout protection is provided by httpx client configuration.
         Retry logic should be implemented at the strategy level.
         """
-        n = args.get("n", 1)
-        timeout = args.pop("timeout", 60)  # Extract timeout, default 60s
-
-        log.info(
-            f"[CALL START] generate_texts with n={n} for {len(chats)} chat(s), timeout={timeout}s"
-        )
-
-        # Submit to executor with timeout enforcement
-        future = self._executor.submit(self._generate_texts_impl, chats, **args)
-
-        try:
-            result = future.result(timeout=timeout)
-            log.info(f"[CALL SUCCESS] Returning {len(result)} results")
-            return result
-        except FuturesTimeoutError:
-            log.error(f"[TIMEOUT] API call exceeded {timeout}s timeout")
-            future.cancel()  # Attempt to cancel (may not work if already running)
-            raise openai.APITimeoutError(f"API call timed out after {timeout}s")
-        except Exception as e:
-            log.error(f"[CALL ERROR] Exception: {type(e).__name__}: {e}")
-            raise
-
-    def _generate_texts_impl(
-        self, chats: List[List[Dict[str, str]]], **args
-    ) -> List[dict]:
-        """Internal implementation of generate_texts without timeout wrapper."""
         # Extract parameters
         max_new_tokens = args.get("max_new_tokens", 512)
         temperature = args.get("temperature", 0.7)
@@ -309,17 +255,3 @@ class BlackboxModelWithStreaming(BlackboxModel):
 
     def tokenize(self, texts: List[str]) -> List[List[str]]:
         return [e.split() for e in texts]
-
-    def cleanup(self):
-        """Clean up resources (shutdown thread pool executor)."""
-        if hasattr(self, "_executor"):
-            log.info("[CLEANUP] Shutting down thread pool executor")
-            self._executor.shutdown(wait=True, cancel_futures=True)
-            log.info("[CLEANUP] Executor shutdown complete")
-
-    def __del__(self):
-        """Destructor to ensure cleanup on object deletion."""
-        try:
-            self.cleanup()
-        except Exception:
-            pass  # Ignore errors during cleanup
