@@ -1,6 +1,6 @@
 # @package dataset
 
-dataset_path: "test-time-compute/test_Proofnet" 
+dataset_path: "test-time-compute/test_Proofnet"
 dataset_split: "test"  # Dataset split to use
 subset: 200  # Only process first N samples from dataset (null for all)
 prompt_file: ./config/prompts/default.txt  # Path to prompt template file (optional)

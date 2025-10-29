@@ -26,7 +26,12 @@ from llm_tts.evaluation import (
     EvaluatorLLMAsAJudge,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
+from llm_tts.scorers import (
+    StepScorerPRM,
+    StepScorerUncertainty,
+    TotValueScorer,
+    TotVoteScorer,
+)
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
@@ -39,6 +44,7 @@ from llm_tts.strategies import (
     StrategyDeepConf,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
+    StrategyTreeOfThoughts,
 )
 
 # Load environment variables from .env file
@@ -323,6 +329,45 @@ def create_tts_strategy(config, model, step_generator, scorer):
             generation_batch_size=config.strategy.get("generation_batch_size", None),
             scorer=scorer,
             n_threads=config.strategy.get("n_threads", None),
+        )
+    elif config.strategy.type == "tree_of_thoughts":
+        # Tree-of-Thoughts requires API-based model for state evaluation
+        if not isinstance(model, BlackboxModelWithStreaming):
+            raise ValueError(
+                f"Tree-of-Thoughts requires BlackboxModelWithStreaming, got {type(model).__name__}"
+            )
+
+        # Create ToT scorer based on method_evaluate config
+        method_evaluate = config.strategy.get("method_evaluate", "value")
+        n_evaluate_sample = config.strategy.get("n_evaluate_sample", 3)
+
+        if method_evaluate == "value":
+            tot_scorer = TotValueScorer(
+                model=model,
+                n_evaluate_sample=n_evaluate_sample,
+                temperature=0.0,
+                max_tokens=50,
+            )
+        elif method_evaluate == "vote":
+            tot_scorer = TotVoteScorer(
+                model=model,
+                n_evaluate_sample=n_evaluate_sample,
+                temperature=0.5,
+                max_tokens=100,
+            )
+        else:
+            raise ValueError(f"Unknown method_evaluate: {method_evaluate}")
+
+        strategy = StrategyTreeOfThoughts(
+            model=model,
+            scorer=tot_scorer,
+            method_generate=config.strategy.get("method_generate", "propose"),
+            beam_width=config.strategy.get("beam_width", 5),
+            n_generate_sample=config.strategy.get("n_generate_sample", 5),
+            steps=config.strategy.get("steps", 4),
+            temperature=config.strategy.get("temperature", 0.7),
+            max_tokens_per_step=config.strategy.get("max_tokens_per_step", 100),
+            n_threads=config.strategy.get("n_threads", 8),
         )
 
     else:
@@ -729,6 +774,23 @@ def main(config):
         results=results,
         save_path=output_dir,
     )
+
+    # Shutdown model resources (executor, client)
+    try:
+        if hasattr(model, "shutdown"):
+            model.shutdown()
+    except Exception as e:
+        log.warning(f"Failed to shutdown model: {e}")
+
+    # Finish wandb session if it was initialized
+    if getattr(config, "report_to", None) == "wandb":
+        try:
+            import wandb
+
+            wandb.finish()
+            log.info("Finished wandb session")
+        except Exception as e:
+            log.warning(f"Failed to finish wandb session: {e}")
 
 
 if __name__ == "__main__":
