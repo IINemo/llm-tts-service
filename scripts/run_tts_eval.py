@@ -383,6 +383,8 @@ def generate_trajectories(
     dataset: Dataset,
     processed_indices: set,
     prompt_template: str,
+    question_field: str = "question",
+    answer_field: str = "answer",
 ):
     # Phase 1: Generate trajectories (without checking correctness)
     log.info("\n" + "=" * 60)
@@ -402,17 +404,23 @@ def generate_trajectories(
 
         log.info("\n" + "=" * 60)
         log.info(f"Sample {i + 1}/{subset_size}")
-        log.info(f"Question: {instance['question'][:200]}...")
 
-        # Extract and log gold answer
-        # For GSM8K, extract from "#### X" format; for other datasets, use directly
-        if "####" in instance["answer"]:
-            from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
+        # Get question using configurable field name
+        question = instance[question_field]
+        log.info(f"Question: {question[:200]}...")
 
-            gold_answer_num = extract_answer_from_gsm8k(instance["answer"])
+        # Handle answer with fallback for Game of 24
+        if answer_field and answer_field in instance and instance[answer_field]:
+            if "####" in instance[answer_field]:
+                from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
+
+                gold_answer_num = extract_answer_from_gsm8k(instance[answer_field])
+            else:
+                gold_answer_num = instance[answer_field]
+            log.info(f"Gold answer: {gold_answer_num}")
         else:
-            gold_answer_num = instance["answer"]
-        log.info(f"Gold answer: {gold_answer_num}")
+            gold_answer_num = "24"  # For Game of 24, answer is always 24
+            log.info("Gold answer: 24 (Game of 24)")
 
         # Generate trajectory
         request = [
@@ -420,9 +428,9 @@ def generate_trajectories(
             {
                 "role": "user",
                 "content": (
-                    prompt_template.format(question=instance["question"])
+                    prompt_template.format(question=question)
                     if prompt_template
-                    else instance["question"]
+                    else question
                 ),
             },
         ]
@@ -472,8 +480,8 @@ def generate_trajectories(
         # Store result WITHOUT correctness check
         result_dict = {
             "index": i,
-            "question": instance["question"],
-            "gold_answer": instance["answer"],
+            "question": question,
+            "gold_answer": gold_answer_num,
             "generated_trajectory": result["trajectory"],
             "generated_answer": generated_text,
             "steps": result["steps"],
@@ -766,6 +774,8 @@ def main(config):
         dataset=dataset,
         processed_indices=processed_indices,
         prompt_template=prompt_template,
+        question_field=config.dataset.get("question_field", "question"),
+        answer_field=config.dataset.get("answer_field", "answer"),
     )
 
     # Evaluate results
