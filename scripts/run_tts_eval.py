@@ -775,13 +775,6 @@ def main(config):
         save_path=output_dir,
     )
 
-    # Shutdown model resources (executor, client)
-    try:
-        if hasattr(model, "shutdown"):
-            model.shutdown()
-    except Exception as e:
-        log.warning(f"Failed to shutdown model: {e}")
-
     # Finish wandb session if it was initialized
     if getattr(config, "report_to", None) == "wandb":
         try:
