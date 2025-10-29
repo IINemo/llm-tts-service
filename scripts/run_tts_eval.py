@@ -439,8 +439,8 @@ def generate_trajectories(
 
         # Extract generated answer (but don't check correctness yet)
         generated_text = result["trajectory"]
-        if instance["question"] in generated_text:
-            generated_text = generated_text.replace(instance["question"], "").strip()
+        if question in generated_text:
+            generated_text = generated_text.replace(question, "").strip()
 
         # Log detailed traces
         log.info("\n" + "-" * 60)
