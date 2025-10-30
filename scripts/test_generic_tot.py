@@ -79,7 +79,7 @@ def test_generic_tot(question: str):
         temperature=0.0,
         max_tokens=50,
         timeout=120,
-        value_prompt_path="config/prompts/generic_tot_value.txt",
+        value_prompt_path="config/prompts/tot/generic_tot_value.txt",
     )
 
     # Create strategy in GENERIC mode
@@ -89,13 +89,13 @@ def test_generic_tot(question: str):
         scorer=scorer,
         mode="generic",  # Generic mode
         method_generate="propose",
-        beam_width=3,  # Smaller for faster testing
+        beam_width=1,  # Smaller for faster testing
         n_generate_sample=3,
-        steps=3,
+        steps=5,
         temperature=0.7,
         max_tokens_per_step=150,
         n_threads=4,
-        propose_prompt_path="config/prompts/generic_tot_propose.txt",
+        propose_prompt_path="config/prompts/tot/generic_tot_propose.txt",
     )
 
     print("\nRunning Tree-of-Thoughts search...")
