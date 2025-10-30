@@ -2,6 +2,9 @@
 
 type: tree_of_thoughts
 
+# Mode: "generic" (any user prompt) or "game24" (validation benchmark)
+mode: generic
+
 # Generation method: "propose" (sequential next-step) or "sample" (independent CoT)
 method_generate: propose
 
@@ -30,7 +33,8 @@ scorer_timeout: 120              # Timeout in seconds for scorer evaluation call
 cache_values: true               # Cache state evaluations to reduce API calls
 
 # Prompt paths (override in experiment configs for specific tasks)
-propose_prompt_path: null        # Path to propose prompt (for generating next steps)
+# Generic mode defaults:
+propose_prompt_path: config/prompts/generic_tot_propose.txt  # Generic propose prompt
 cot_prompt_path: null            # Path to CoT prompt (for final answer generation)
-value_prompt_path: null          # Path to value scorer prompt (for intermediate states)
+value_prompt_path: config/prompts/generic_tot_value.txt     # Generic value scorer prompt
 value_last_step_prompt_path: null  # Path to final answer validation prompt

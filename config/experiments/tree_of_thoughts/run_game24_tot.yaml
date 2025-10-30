@@ -47,6 +47,7 @@ scorer: null
 # - beam_width (n_select_sample): 5 (keep top 5 states)
 strategy:
   type: tree_of_thoughts
+  mode: game24              # Use Game24 mode (paper-exact validation benchmark)
   method_generate: propose  # Paper: "propose" for step-by-step generation
   method_evaluate: value    # Paper: "value" for state scoring
   steps: 4                  # Game of 24 requires exactly 3 steps + final answer
