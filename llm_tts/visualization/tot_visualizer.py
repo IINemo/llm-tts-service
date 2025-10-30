@@ -626,6 +626,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 startY = e.clientY;
                 myDiv.style.cursor = 'grabbing';
 
+                // Disable Plotly's dragmode to prevent box zoom during node drag
+                Plotly.relayout(myDiv, {'dragmode': false});
+
                 // Prevent text selection only during drag
                 document.body.classList.add('no-select');
                 e.preventDefault();
@@ -686,6 +689,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (isDragging) {
                 isDragging = false;
                 myDiv.style.cursor = draggedNodeIndex !== null ? 'grab' : 'default';
+
+                // Re-enable Plotly's dragmode (pan mode)
+                Plotly.relayout(myDiv, {'dragmode': 'pan'});
+
                 // Re-enable text selection
                 document.body.classList.remove('no-select');
             }
