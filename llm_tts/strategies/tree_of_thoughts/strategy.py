@@ -93,13 +93,85 @@ class StrategyTreeOfThoughts(StrategyBase):
         # Statistics tracking
         self.total_api_calls = 0
 
+    def get_current_numbers(self, state: str, problem: str) -> str:
+        """
+        Extract remaining numbers from state for Game of 24.
+
+        Looks for (left: X Y Z) pattern. If not found, returns original problem numbers.
+
+        Args:
+            state: Current partial solution
+            problem: Original problem
+
+        Returns:
+            String of remaining numbers (e.g., "3 8 10")
+        """
+        if not state.strip():
+            return problem.strip()
+
+        # Get last line of state
+        last_line = state.strip().split("\n")[-1]
+
+        # Check for (left: ...) pattern
+        if "(left: " in last_line:
+            # Extract numbers after "left: " and before ")"
+            remaining = last_line.split("left: ")[-1].split(")")[0]
+            return remaining.strip()
+
+        # No pattern found, return original problem
+        return problem.strip()
+
+    def validate_game24_answer(self, expression: str, input_numbers: str) -> bool:
+        """
+        Validate a Game of 24 answer using sympy.
+
+        Checks:
+        1. Expression uses exactly the same numbers as input (no more, no less)
+        2. Expression evaluates to 24
+
+        Args:
+            expression: Mathematical expression (e.g., "(4 + 8) * (6 - 4)")
+            input_numbers: Original input numbers (e.g., "4 4 6 8")
+
+        Returns:
+            True if answer is correct, False otherwise
+        """
+        try:
+            import sympy
+
+            # Extract numbers from expression
+            used_numbers = re.findall(r"\d+", expression)
+            problem_numbers = re.findall(r"\d+", input_numbers)
+
+            # Check if numbers match (same count and values)
+            if sorted(used_numbers) != sorted(problem_numbers):
+                log.debug(
+                    f"Number mismatch: used {used_numbers}, expected {problem_numbers}"
+                )
+                return False
+
+            # Evaluate expression using sympy
+            result = sympy.simplify(expression)
+            is_correct = result == 24
+
+            log.debug(f"Expression '{expression}' = {result}, correct={is_correct}")
+            return is_correct
+
+        except Exception as e:
+            log.debug(f"Validation error for '{expression}': {e}")
+            return False
+
     def _extract_answer(self, text: str) -> str:
         """
         Extract numerical answer from reasoning text.
 
-        Supports multiple formats:
+        For Game of 24:
+        - Looks for "Answer: expression" format
+        - Looks for final expression in parentheses
+        - Validates using sympy if possible
+
+        Other formats:
         - \\boxed{answer}
-        - Answer: answer
         - answer = value
         - Last number in text
 
@@ -111,15 +183,28 @@ class StrategyTreeOfThoughts(StrategyBase):
         """
         text = text.strip()
 
+        # Try "Answer:" format first (for Game of 24)
+        answer_match = re.search(r"Answer:\s*(.+?)(?:\n|$)", text, re.IGNORECASE)
+        if answer_match:
+            answer_expr = answer_match.group(1).strip()
+            # Remove trailing text like "= 24"
+            answer_expr = re.sub(r"\s*=\s*24\s*$", "", answer_expr)
+            return answer_expr
+
         # Try \\boxed{} format
         boxed_match = re.search(r"\\boxed\{([^}]+)\}", text)
         if boxed_match:
             return boxed_match.group(1).strip()
 
-        # Try "Answer:" format
-        answer_match = re.search(r"Answer:\s*(.+?)(?:\n|$)", text, re.IGNORECASE)
-        if answer_match:
-            return answer_match.group(1).strip()
+        # Try final line with (left: 24) pattern
+        if "(left: 24)" in text:
+            # Found solution! Extract the final expression
+            lines = text.strip().split("\n")
+            for line in reversed(lines):
+                if "answer:" in line.lower():
+                    expr = line.split(":", 1)[-1].strip()
+                    expr = re.sub(r"\s*=\s*24\s*$", "", expr)
+                    return expr
 
         # Try "= value" at end of line
         equals_match = re.search(r"=\s*([0-9,.]+)(?:\s|$)", text)
@@ -336,7 +421,51 @@ class StrategyTreeOfThoughts(StrategyBase):
         return samples
 
     def _build_propose_prompt(self, problem: str, state: str) -> str:
-        """Build prompt for next-step proposal."""
+        """
+        Build prompt for next-step proposal.
+
+        For Game of 24, uses the original ToT prompt format that generates
+        multiple possible next steps in the format: "X op Y = Z (left: remaining)"
+        """
+        # Check if this is a Game of 24 problem (has pattern like "1 2 3 4")
+        problem_numbers = re.findall(r"\d+", problem.strip())
+        is_game24 = len(problem_numbers) in [2, 3, 4]  # Game 24 has 2-4 numbers
+
+        if is_game24:
+            # Get current numbers (either from state or original problem)
+            current_numbers = self.get_current_numbers(state, problem)
+
+            # Use original ToT propose prompt for Game of 24
+            # This prompt generates multiple possible next steps
+            import os
+
+            prompt_path = os.path.join(
+                os.path.dirname(__file__),
+                "../../..",
+                "config/prompts/game24_tot_propose_step.txt",
+            )
+
+            try:
+                with open(prompt_path, "r") as f:
+                    template = f.read()
+                return template.format(input=current_numbers)
+            except FileNotFoundError:
+                # Fallback to inline prompt
+                return f"""Input: 2 8 8 14
+Possible next steps:
+2 + 8 = 10 (left: 8 10 14)
+8 / 2 = 4 (left: 4 8 14)
+14 + 2 = 16 (left: 8 8 16)
+2 * 8 = 16 (left: 8 14 16)
+8 - 2 = 6 (left: 6 8 14)
+14 - 8 = 6 (left: 2 6 8)
+14 / 2 = 7 (left: 7 8 8)
+14 - 2 = 12 (left: 8 8 12)
+Input: {current_numbers}
+Possible next steps:
+"""
+
+        # Non-Game24 problems use original verbose prompt
         if not state:
             return f"""Solve the following math problem step-by-step. Provide 3-5 CONCRETE first steps with specific calculations or actions:
 
@@ -390,26 +519,47 @@ Continue with concrete steps and numbers (show your work):
         return prompt_prefix
 
     def _parse_proposals(self, text: str, current_state: str) -> List[str]:
-        """Parse proposals from model output."""
+        """
+        Parse proposals from model output.
+
+        For Game of 24, expects format: "X op Y = Z (left: remaining)"
+        For other problems, extracts bullet points or numbered items.
+        """
         proposals = []
 
-        # Try to extract bullet points or numbered items
+        # Check if this is Game of 24 format (contains "(left: " pattern)
         lines = text.split("\n")
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
+        has_game24_format = any("(left: " in line for line in lines)
 
-            # Remove bullet markers
-            line = re.sub(r"^[-*•]\s*", "", line)
-            line = re.sub(
-                r"^(?:Step|Next step)\s*\d+:\s*", "", line, flags=re.IGNORECASE
-            )
+        if has_game24_format:
+            # Parse Game of 24 proposals
+            for line in lines:
+                line = line.strip()
+                if not line or "(left: " not in line:
+                    continue
 
-            if line and len(line) > 10:  # Minimum length check
+                # This line is a complete next step
                 # Append to current state
                 full_step = current_state + ("\n" if current_state else "") + line
                 proposals.append(full_step)
+
+        else:
+            # Parse regular proposals (bullet points, numbered items)
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+
+                # Remove bullet markers
+                line = re.sub(r"^[-*•]\s*", "", line)
+                line = re.sub(
+                    r"^(?:Step|Next step)\s*\d+:\s*", "", line, flags=re.IGNORECASE
+                )
+
+                if line and len(line) > 10:  # Minimum length check
+                    # Append to current state
+                    full_step = current_state + ("\n" if current_state else "") + line
+                    proposals.append(full_step)
 
         # Fallback: treat whole output as single proposal
         if not proposals and text.strip():
@@ -420,13 +570,24 @@ Continue with concrete steps and numbers (show your work):
         return proposals
 
     def _is_final_answer(self, state: str) -> bool:
-        """Check if state contains a final answer."""
+        """
+        Check if state contains a final answer.
+
+        For Game of 24, checks for (left: 24) pattern.
+        For other problems, checks for various answer indicators.
+        """
         state_lower = state.lower()
+
+        # Game of 24: solution reached when (left: 24)
+        if "(left: 24)" in state_lower:
+            return True
+
+        # Other answer formats
         return any(
             [
                 "answer:" in state_lower,
                 "\\boxed{" in state,
-                " = " in state,  # Detect equations like "x = 27"
+                state.strip().endswith(" = 24"),  # Game 24 final expression
             ]
         )
 
