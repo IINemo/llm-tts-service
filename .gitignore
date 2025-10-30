@@ -208,3 +208,7 @@ investigate_*.py
 view_*.py
 openrouter_*.py
 tmp.py
+
+# Visualization outputs (generated HTML files)
+tot_visualization_*.html
+tot_demo_visualization.html
