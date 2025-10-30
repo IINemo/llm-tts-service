@@ -181,3 +181,30 @@ outputs/
 
 workdir/
 NLP_project/
+
+# Claude Code specific files (do not commit to shared repo)
+.claude/
+agents/
+
+# Reference implementations and external repos
+deepconf/
+tree-of-thought-llm/
+lm-polygraph/
+
+# Temporary analysis and exploration documents
+*_ANALYSIS.md
+*_SUMMARY.md
+*_GUIDE.md
+*_INDEX.md
+*_REFERENCE.md
+CODEBASE_*.md
+TOT_*.md
+docs/tree_of_thoughts/
+
+# Debug and test scripts
+calculate_*.py
+debug_*.py
+investigate_*.py
+view_*.py
+openrouter_*.py
+tmp.py
