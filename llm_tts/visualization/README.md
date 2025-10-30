@@ -55,6 +55,7 @@ This runs a minimal ToT search (2 steps, beam width 2) and generates an HTML vis
    - Root node at the top (initial empty state)
    - Each level represents a reasoning step
    - Branches show alternative reasoning paths explored
+   - Compact node labels (N0, N1, etc.) to reduce clutter
 
 2. **Color Coding**:
    - Green: High-scoring states (promising paths)
@@ -70,10 +71,16 @@ This runs a minimal ToT search (2 steps, beam width 2) and generates an HTML vis
    - Full state text with reasoning steps
 
 4. **Interactive Controls**:
-   - Click and drag to pan
-   - Scroll to zoom in/out
-   - Double-click to reset view
-   - Hover over nodes for detailed information
+   - **Pan**: Click and drag on background
+   - **Zoom**: Scroll wheel
+   - **Move nodes**: Shift + Click & drag on a node (rearrange layout manually)
+   - **Reset view**: Double-click on background
+   - **Hover**: Move mouse over nodes for detailed information
+
+5. **Manual Layout Adjustment**:
+   - Hold Shift and click-drag any node to reposition it
+   - Useful for making the tree more compact or readable
+   - Changes are temporary (not saved between sessions)
 
 ### Output Format
 

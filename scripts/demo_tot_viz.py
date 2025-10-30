@@ -114,7 +114,7 @@ def main():
         width=1400,
         height=900,
         show_state_preview=True,
-        max_state_chars=60,
+        max_state_chars=10,  # Short labels for compact display
     )
 
     output_file = "tot_demo_visualization.html"
