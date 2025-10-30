@@ -1,0 +1,19 @@
+You are solving this problem:
+{problem}
+
+Current reasoning progress:
+{state}
+
+Generate 3-5 possible next reasoning steps. Each step should:
+- Build logically on the current progress
+- Move closer to a solution
+- Be specific and actionable
+- Consider different approaches
+
+Think carefully about:
+- What information do we have?
+- What's missing or unclear?
+- What are alternative paths forward?
+- Which approach seems most promising?
+
+Possible next steps:

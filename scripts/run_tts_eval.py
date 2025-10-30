@@ -366,6 +366,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
         strategy = StrategyTreeOfThoughts(
             model=model,
             scorer=tot_scorer,
+            mode=config.strategy.get("mode", "generic"),
             method_generate=config.strategy.get("method_generate", "propose"),
             beam_width=config.strategy.get("beam_width", 5),
             n_generate_sample=config.strategy.get("n_generate_sample", 5),

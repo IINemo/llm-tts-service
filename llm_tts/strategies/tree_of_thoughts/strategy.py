@@ -42,6 +42,7 @@ class StrategyTreeOfThoughts(StrategyBase):
         self,
         model,
         scorer=None,
+        mode: str = "generic",
         method_generate: str = "propose",
         beam_width: int = 5,
         n_generate_sample: int = 5,
@@ -62,6 +63,7 @@ class StrategyTreeOfThoughts(StrategyBase):
             model: Language model for generation
             scorer: ToT state scorer (TotValueScorer or TotVoteScorer).
                    If None, defaults to TotValueScorer.
+            mode: Strategy mode - "generic" (default, any prompt) or "game24" (validation benchmark)
             method_generate: Generation method ("propose" or "sample")
                 - propose: Sequential next-step proposal given current state
                 - sample: Independent step generation with CoT
@@ -78,6 +80,7 @@ class StrategyTreeOfThoughts(StrategyBase):
             value_last_step_prompt_path: Path to final answer validation prompt
         """
         self.model = model
+        self.mode = mode
         self.method_generate = method_generate
         self.beam_width = beam_width
         self.n_generate_sample = n_generate_sample
@@ -109,6 +112,31 @@ class StrategyTreeOfThoughts(StrategyBase):
 
         # Statistics tracking
         self.total_api_calls = 0
+
+        # Configure mode-specific settings
+        if mode == "game24":
+            self._setup_game24_mode()
+        elif mode == "generic":
+            self._setup_generic_mode()
+        else:
+            raise ValueError(f"Unknown mode: {mode}. Use 'generic' or 'game24'.")
+
+    def _setup_generic_mode(self):
+        """Configure for generic reasoning (any user prompt)."""
+        self.validation_enabled = False
+        self.terminal_patterns = [
+            r"final answer:\s*",
+            r"therefore,?\s+",
+            r"in conclusion",
+            r"(?:the )?(?:answer|solution|result) is:?",
+        ]
+        log.info("[ToT] Mode: GENERIC - works for any user prompt")
+
+    def _setup_game24_mode(self):
+        """Configure for Game24 (paper-exact validation benchmark)."""
+        self.validation_enabled = True
+        self.target_value = 24
+        log.info("[ToT] Mode: GAME24 - paper-exact implementation for validation")
 
     def get_current_numbers(self, state: str, problem: str) -> str:
         """
@@ -375,8 +403,9 @@ class StrategyTreeOfThoughts(StrategyBase):
             proposals_text = outputs[0]
             proposals = self._parse_proposals(proposals_text, current_state)
 
-            # Validate Game of 24 final answers
-            proposals = self._filter_valid_game24_answers(proposals, problem)
+            # Validate Game of 24 final answers (only in game24 mode)
+            if self.validation_enabled:
+                proposals = self._filter_valid_game24_answers(proposals, problem)
 
             return proposals[: self.n_generate_sample]
 
@@ -427,8 +456,9 @@ class StrategyTreeOfThoughts(StrategyBase):
             # Append to current state
             samples = [current_state + output for output in outputs]
 
-            # Validate Game of 24 final answers
-            samples = self._filter_valid_game24_answers(samples, problem)
+            # Validate Game of 24 final answers (only in game24 mode)
+            if self.validation_enabled:
+                samples = self._filter_valid_game24_answers(samples, problem)
 
         except openai.APITimeoutError as e:
             log.error(
@@ -445,53 +475,52 @@ class StrategyTreeOfThoughts(StrategyBase):
         """
         Build prompt for next-step proposal.
 
-        For Game of 24, uses the original ToT prompt format that generates
-        multiple possible next steps in the format: "X op Y = Z (left: remaining)"
+        Dispatches to mode-specific implementations.
         """
-        # Check if this is a Game of 24 problem
-        # Look for "obtain 24" phrase (specific to Game24) or check first line format
-        is_game24 = "obtain 24" in problem.lower()
-        if not is_game24:
-            # Alternative check: first line has format "Input: X Y Z W" with 2-4 numbers
-            first_line = problem.strip().split("\n")[0]
-            if first_line.startswith("Input:"):
-                input_numbers = re.findall(r"\d+", first_line.replace("Input:", ""))
-                is_game24 = len(input_numbers) in [2, 3, 4]
+        if self.mode == "game24":
+            return self._build_game24_prompt(problem, state)
+        else:
+            return self._build_generic_prompt(problem, state)
 
-        if is_game24:
-            # Get current numbers (either from state or original problem)
-            current_numbers = self.get_current_numbers(state, problem)
+    def _build_game24_prompt(self, problem: str, state: str) -> str:
+        """
+        Build Game24-specific prompt (paper-exact format).
 
-            # CRITICAL: When we reach (left: 24), switch to CoT prompt
-            # to generate the final "Answer: expression = 24" line
-            if current_numbers == "24":
-                # Load CoT prompt with full examples (if configured)
-                if self.cot_prompt_path:
-                    try:
-                        with open(self.cot_prompt_path, "r") as f:
-                            template = f.read()
-                        # Append "Steps:" + current state to prompt model for final answer
-                        return template.format(input=problem) + "Steps:\n" + state
-                    except FileNotFoundError:
-                        pass
-                # Fallback
-                return f"""Use numbers and basic arithmetic operations (+ - * /) to obtain 24.
+        Generates prompts in format: "X op Y = Z (left: remaining)"
+        """
+        # Get current numbers (either from state or original problem)
+        current_numbers = self.get_current_numbers(state, problem)
+
+        # CRITICAL: When we reach (left: 24), switch to CoT prompt
+        # to generate the final "Answer: expression = 24" line
+        if current_numbers == "24":
+            # Load CoT prompt with full examples (if configured)
+            if self.cot_prompt_path:
+                try:
+                    with open(self.cot_prompt_path, "r") as f:
+                        template = f.read()
+                    # Append "Steps:" + current state to prompt model for final answer
+                    return template.format(input=problem) + "Steps:\n" + state
+                except FileNotFoundError:
+                    pass
+            # Fallback
+            return f"""Use numbers and basic arithmetic operations (+ - * /) to obtain 24.
 Input: {problem}
 Steps:
 {state}
 """
-            else:
-                # Generate next step proposals
-                if self.propose_prompt_path:
-                    try:
-                        with open(self.propose_prompt_path, "r") as f:
-                            template = f.read()
-                        return template.format(input=current_numbers)
-                    except FileNotFoundError:
-                        pass
+        else:
+            # Generate next step proposals
+            if self.propose_prompt_path:
+                try:
+                    with open(self.propose_prompt_path, "r") as f:
+                        template = f.read()
+                    return template.format(input=current_numbers)
+                except FileNotFoundError:
+                    pass
 
-                # Fallback to inline prompt
-                return f"""Input: 2 8 8 14
+            # Fallback to inline prompt
+            return f"""Input: 2 8 8 14
 Possible next steps:
 2 + 8 = 10 (left: 8 10 14)
 8 / 2 = 4 (left: 4 8 14)
@@ -505,36 +534,48 @@ Input: {current_numbers}
 Possible next steps:
 """
 
-        # Non-Game24 problems use original verbose prompt
+    def _build_generic_prompt(self, problem: str, state: str) -> str:
+        """
+        Build generic prompt that works for any user question.
+
+        No assumptions about format or domain.
+        """
+        # Load custom template if provided
+        if self.propose_prompt_path:
+            try:
+                with open(self.propose_prompt_path, "r") as f:
+                    template = f.read()
+                return template.format(problem=problem, state=state)
+            except FileNotFoundError:
+                pass
+            except KeyError:
+                # Template missing required variables, fall through
+                pass
+
+        # Default generic prompts
         if not state:
-            return f"""Solve the following math problem step-by-step. Provide 3-5 CONCRETE first steps with specific calculations or actions:
+            # Initial step - propose approaches
+            return f"""Problem: {problem}
 
-Problem: {problem}
+Think step by step. What are 3-5 possible approaches or next steps to solve this?
 
-Provide specific next steps (not just plans, but actual reasoning with numbers):
-- Step 1: [concrete action with calculations]
-- Step 2: [concrete action with calculations]
-- Step 3: [concrete action with calculations]
+Generate diverse possibilities. Each should be concrete and actionable.
 
-Example format:
-- Step 1: Identify that we start with 16 eggs total
-- Step 2: Calculate eggs remaining after breakfast: 16 - 3 = 13 eggs
+Possible approaches:
 """
         else:
-            # Extract intermediate state
-            return f"""Continue solving this math problem with CONCRETE steps. Show specific calculations, not just plans.
+            # Continuation - propose next steps
+            return f"""Problem: {problem}
 
-Problem: {problem}
-
-Current progress:
+Current reasoning:
 {state}
 
-Provide 3-5 specific next steps with calculations:
-- Next step 1: [perform specific calculation]
-- Next step 2: [perform specific calculation]
-- Next step 3: [perform specific calculation]
+What are 3-5 possible next steps? Each step should:
+- Build logically on the current progress
+- Move closer to a solution
+- Be specific and actionable
 
-Show your work with actual numbers. DO NOT just describe what you would do - actually do it.
+Possible next steps:
 """
 
     def _filter_valid_game24_answers(
@@ -656,52 +697,83 @@ Continue with concrete steps and numbers (show your work):
 
     def _parse_proposals(self, text: str, current_state: str) -> List[str]:
         """
-        Parse proposals from model output.
+        Parse proposals from model output (mode dispatcher).
 
-        For Game of 24, expects format: "X op Y = Z (left: remaining)"
-        For other problems, extracts bullet points or numbered items.
+        Delegates to mode-specific parsing methods:
+        - game24: Parses "X op Y = Z (left: ...)" format
+        - generic: Parses bullets, numbers, or paragraphs
 
-        For Game of 24 final answers, validates expressions using sympy.
+        Args:
+            text: Model output text
+            current_state: Current reasoning state
+
+        Returns:
+            List of proposal states (each = current_state + new_line)
+        """
+        if self.mode == "game24":
+            return self._parse_game24_format(text, current_state)
+        else:
+            return self._parse_generic_format(text, current_state)
+
+    def _parse_game24_format(self, text: str, current_state: str) -> List[str]:
+        """
+        Parse Game24 format: 'X op Y = Z (left: ...)' or 'Answer: expression'.
+
+        Args:
+            text: Model output text
+            current_state: Current reasoning state
+
+        Returns:
+            List of proposals in Game24 format
         """
         proposals = []
-
-        # Check if this is Game of 24 format (contains "(left: " or "Answer:" pattern)
         lines = text.split("\n")
-        has_game24_format = any(
-            "(left: " in line or "answer:" in line.lower() for line in lines
-        )
 
-        if has_game24_format:
-            # Parse Game of 24 proposals
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
 
-                # Accept lines with "(left: " OR "Answer:" (for final step)
-                if "(left: " in line or "answer:" in line.lower():
-                    # This line is a complete next step
-                    # Append to current state
-                    full_step = current_state + ("\n" if current_state else "") + line
-                    proposals.append(full_step)
+            # Accept lines with "(left: " OR "Answer:" (for final step)
+            if "(left: " in line or "answer:" in line.lower():
+                # This line is a complete next step
+                full_step = current_state + ("\n" if current_state else "") + line
+                proposals.append(full_step)
 
-        else:
-            # Parse regular proposals (bullet points, numbered items)
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
+        return proposals
 
-                # Remove bullet markers
-                line = re.sub(r"^[-*•]\s*", "", line)
-                line = re.sub(
-                    r"^(?:Step|Next step)\s*\d+:\s*", "", line, flags=re.IGNORECASE
-                )
+    def _parse_generic_format(self, text: str, current_state: str) -> List[str]:
+        """
+        Parse generic format: bullets, numbered lists, or paragraphs.
 
-                if line and len(line) > 10:  # Minimum length check
-                    # Append to current state
-                    full_step = current_state + ("\n" if current_state else "") + line
-                    proposals.append(full_step)
+        Removes common formatting markers and extracts reasoning steps.
+
+        Args:
+            text: Model output text
+            current_state: Current reasoning state
+
+        Returns:
+            List of proposals parsed from generic format
+        """
+        proposals = []
+        lines = text.split("\n")
+
+        for line in lines:
+            line = line.strip()
+            if not line or len(line) < 20:  # Minimum substance check
+                continue
+
+            # Remove common formatting markers
+            line = re.sub(r"^[-*•]\s*", "", line)  # Bullets
+            line = re.sub(r"^\d+[\.)]\s*", "", line)  # Numbers: "1." or "1)"
+            line = re.sub(
+                r"^(?:Step|Next step)\s*\d+:\s*", "", line, flags=re.IGNORECASE
+            )
+
+            if line:
+                # Append to current state
+                full_step = current_state + ("\n" if current_state else "") + line
+                proposals.append(full_step)
 
         # Fallback: treat whole output as single proposal
         if not proposals and text.strip():
@@ -713,25 +785,60 @@ Continue with concrete steps and numbers (show your work):
 
     def _is_final_answer(self, state: str) -> bool:
         """
-        Check if state contains a final answer.
+        Check if state contains a final answer (mode dispatcher).
 
-        For Game of 24, checks for (left: 24) pattern.
-        For other problems, checks for various answer indicators.
+        Delegates to mode-specific terminal detection:
+        - game24: Checks for "(left: 24)" or "Answer:"
+        - generic: Checks for common conclusion patterns
+
+        Args:
+            state: Current reasoning state
+
+        Returns:
+            True if state represents a final answer
+        """
+        if self.mode == "game24":
+            return self._is_game24_terminal(state)
+        else:
+            return self._is_generic_terminal(state)
+
+    def _is_game24_terminal(self, state: str) -> bool:
+        """
+        Check if Game24 state is terminal (paper-exact).
+
+        Terminal conditions:
+        - "(left: 24)" - reached target value
+        - "Answer:" - final expression provided
+
+        Args:
+            state: Current reasoning state
+
+        Returns:
+            True if Game24 solution found
+        """
+        state_lower = state.lower()
+        return "(left: 24)" in state_lower or "answer:" in state_lower
+
+    def _is_generic_terminal(self, state: str) -> bool:
+        """
+        Check if generic reasoning reached a conclusion.
+
+        Uses pattern matching for common terminal indicators.
+
+        Args:
+            state: Current reasoning state
+
+        Returns:
+            True if reasoning appears complete
         """
         state_lower = state.lower()
 
-        # Game of 24: solution reached when (left: 24)
-        if "(left: 24)" in state_lower:
-            return True
+        # Check configured terminal patterns
+        for pattern in self.terminal_patterns:
+            if re.search(pattern, state_lower):
+                return True
 
-        # Other answer formats
-        return any(
-            [
-                "answer:" in state_lower,
-                "\\boxed{" in state,
-                state.strip().endswith(" = 24"),  # Game 24 final expression
-            ]
-        )
+        return False
 
     def _generate_candidates(
         self,
