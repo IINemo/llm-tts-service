@@ -554,26 +554,37 @@ Possible next steps:
 
         # Default generic prompts
         if not state:
-            # Initial step - propose approaches
+            # Initial step - propose first concrete action
             return f"""Problem: {problem}
 
-Think step by step. What are 3-5 possible approaches or next steps to solve this?
+Think step by step. What are 3-5 possible FIRST STEPS to begin solving this?
 
-Generate diverse possibilities. Each should be concrete and actionable.
+IMPORTANT:
+- Suggest ONE concrete action per step (not the complete solution)
+- Make each step different (explore alternatives)
+- Be specific and actionable
 
-Possible approaches:
+Examples of good first steps:
+- "Identify the main constraint or requirement"
+- "Break down the problem into smaller sub-problems"
+- "List the available resources or information"
+
+Possible first steps:
 """
         else:
-            # Continuation - propose next steps
+            # Continuation - propose next incremental step
             return f"""Problem: {problem}
 
 Current reasoning:
 {state}
 
-What are 3-5 possible next steps? Each step should:
-- Build logically on the current progress
-- Move closer to a solution
-- Be specific and actionable
+What are 3-5 possible NEXT STEPS to continue?
+
+IMPORTANT:
+- Each step should be ONE small action or thought
+- Do NOT jump to the final solution
+- Build incrementally on current progress
+- Explore different alternatives
 
 Possible next steps:
 """
