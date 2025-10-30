@@ -347,6 +347,11 @@ def create_tts_strategy(config, model, step_generator, scorer):
                 n_evaluate_sample=n_evaluate_sample,
                 temperature=0.0,
                 max_tokens=50,
+                timeout=config.strategy.get("scorer_timeout", 120),
+                value_prompt_path=config.strategy.get("value_prompt_path"),
+                value_last_step_prompt_path=config.strategy.get(
+                    "value_last_step_prompt_path"
+                ),
             )
         elif method_evaluate == "vote":
             tot_scorer = TotVoteScorer(
@@ -368,6 +373,13 @@ def create_tts_strategy(config, model, step_generator, scorer):
             temperature=config.strategy.get("temperature", 0.7),
             max_tokens_per_step=config.strategy.get("max_tokens_per_step", 100),
             n_threads=config.strategy.get("n_threads", 8),
+            scorer_timeout=config.strategy.get("scorer_timeout", 120),
+            propose_prompt_path=config.strategy.get("propose_prompt_path"),
+            cot_prompt_path=config.strategy.get("cot_prompt_path"),
+            value_prompt_path=config.strategy.get("value_prompt_path"),
+            value_last_step_prompt_path=config.strategy.get(
+                "value_last_step_prompt_path"
+            ),
         )
 
     else:
