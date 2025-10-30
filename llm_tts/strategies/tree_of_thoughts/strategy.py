@@ -820,7 +820,30 @@ Continue with concrete steps and numbers (show your work):
                 log.info(f"  Final state {i+1} (score={score:.2f}):")
                 log.info(f"    {state}")
 
-            best_idx = np.argmax(final_scores)
+            # IMPROVED SELECTION LOGIC:
+            # 1. First, identify states that have reached a valid final answer
+            final_answer_indices = [
+                i for i, state in enumerate(states) if self._is_final_answer(state)
+            ]
+
+            if final_answer_indices:
+                # If we have states with final answers, select the highest scoring one among them
+                final_answer_scores = [final_scores[i] for i in final_answer_indices]
+                best_among_finals = np.argmax(final_answer_scores)
+                best_idx = final_answer_indices[best_among_finals]
+                log.info(
+                    f"\n[SELECT] Found {len(final_answer_indices)} states with final answers"
+                )
+                log.info(
+                    f"[SELECT] Selecting best among them (index {best_idx+1}, score {final_scores[best_idx]:.2f})"
+                )
+            else:
+                # No final answers found, select by highest score (fallback)
+                best_idx = np.argmax(final_scores)
+                log.info(
+                    "\n[SELECT] No final answers found, selecting highest scoring state"
+                )
+
             best_state = states[best_idx]
             best_score = final_scores[best_idx]
             best_answer = self._extract_answer(best_state)
