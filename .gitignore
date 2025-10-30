@@ -212,3 +212,4 @@ tmp.py
 # Visualization outputs (generated HTML files)
 tot_visualization_*.html
 tot_demo_visualization.html
+tot_mock_visualization.html
