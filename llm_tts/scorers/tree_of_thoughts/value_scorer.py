@@ -69,24 +69,79 @@ class TotValueScorer(TotStateScorerBase):
             "impossible": 0.001,  # Paper value: cannot reach solution
         }
 
+    def get_current_numbers(self, state: str, problem: str) -> str:
+        """
+        Extract remaining numbers from state.
+
+        For Game of 24, looks for (left: X Y Z) pattern in state.
+        If not found, returns the original problem numbers.
+
+        Args:
+            state: Current partial solution
+            problem: Original problem
+
+        Returns:
+            String of remaining numbers (e.g., "3 8 10")
+        """
+        if not state.strip():
+            return problem.strip()
+
+        # Get last line of state
+        last_line = state.strip().split("\n")[-1]
+
+        # Check for (left: ...) pattern
+        if "(left: " in last_line:
+            # Extract numbers after "left: " and before ")"
+            remaining = last_line.split("left: ")[-1].split(")")[0]
+            return remaining.strip()
+
+        # No pattern found, return original problem
+        return problem.strip()
+
     def build_evaluation_prompt(self, problem: str, state: str) -> str:
         """Build prompt for state value evaluation."""
-        # Check if this is a final answer
-        if self.is_final_state(state):
-            return f"""Evaluate if this solution correctly solves the problem:
+        # Check if this is a final answer (contains "Answer:" line)
+        if "answer:" in state.lower() or "(left: 24)" in state.lower():
+            # Extract the answer expression
+            answer_line = ""
+            for line in state.split("\n"):
+                if "answer:" in line.lower():
+                    answer_line = line.split(":", 1)[-1].strip()
+                    break
 
-Problem: {problem}
+            if answer_line:
+                # Use last step prompt from original ToT
+                # Load prompt template
+                import os
 
-Solution:
-{state}
+                prompt_path = os.path.join(
+                    os.path.dirname(__file__),
+                    "../../..",
+                    "config/prompts/game24_tot_value_last_step.txt",
+                )
+                try:
+                    with open(prompt_path, "r") as f:
+                        template = f.read()
+                    return template.format(input=problem.strip(), answer=answer_line)
+                except FileNotFoundError:
+                    # Fallback to inline prompt
+                    pass
 
-Is this solution correct? Rate as one of:
-- correct: The solution is mathematically correct and answers the problem
-- incorrect: The solution has errors or doesn't answer the problem
-- incomplete: The solution is on track but not finished
+        # For intermediate states, use value prompt with remaining numbers
+        remaining_numbers = self.get_current_numbers(state, problem)
 
-Rating:"""
-        else:
+        # Load prompt template
+        import os
+
+        prompt_path = os.path.join(
+            os.path.dirname(__file__), "../../..", "config/prompts/game24_tot_value.txt"
+        )
+        try:
+            with open(prompt_path, "r") as f:
+                template = f.read()
+            return template.format(input=remaining_numbers)
+        except FileNotFoundError:
+            # Fallback to original prompt
             return f"""Evaluate this partial solution for a math problem:
 
 Problem: {problem}
