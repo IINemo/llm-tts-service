@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import openai
+import sympy
 
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers.tree_of_thoughts import TotValueScorer
@@ -153,8 +154,6 @@ class StrategyTreeOfThoughts(StrategyBase):
             True if answer is correct, False otherwise
         """
         try:
-            import sympy
-
             # Extract numbers from expression
             used_numbers = re.findall(r"\d+", expression)
             problem_numbers = re.findall(r"\d+", input_numbers)
@@ -376,6 +375,9 @@ class StrategyTreeOfThoughts(StrategyBase):
             proposals_text = outputs[0]
             proposals = self._parse_proposals(proposals_text, current_state)
 
+            # Validate Game of 24 final answers
+            proposals = self._filter_valid_game24_answers(proposals, problem)
+
             return proposals[: self.n_generate_sample]
 
         except openai.APITimeoutError as e:
@@ -424,6 +426,9 @@ class StrategyTreeOfThoughts(StrategyBase):
 
             # Append to current state
             samples = [current_state + output for output in outputs]
+
+            # Validate Game of 24 final answers
+            samples = self._filter_valid_game24_answers(samples, problem)
 
         except openai.APITimeoutError as e:
             log.error(
@@ -532,6 +537,102 @@ Provide 3-5 specific next steps with calculations:
 Show your work with actual numbers. DO NOT just describe what you would do - actually do it.
 """
 
+    def _filter_valid_game24_answers(
+        self, proposals: List[str], problem: str
+    ) -> List[str]:
+        """
+        Filter Game of 24 proposals to keep only valid final answers.
+
+        For states with Answer lines, validates that the expression:
+        1. Uses exactly the same numbers as the input
+        2. Evaluates to 24 using sympy
+
+        Non-answer proposals (with "(left: )" pattern) are kept as-is.
+
+        Args:
+            proposals: List of candidate states
+            problem: Original problem statement
+
+        Returns:
+            Filtered list with only valid answers
+        """
+        if not proposals:
+            return proposals
+
+        # Extract input numbers from problem
+        input_numbers = None
+
+        # Check if this is a Game of 24 problem
+        is_game24 = "obtain 24" in problem.lower()
+        if is_game24:
+            # Extract numbers from "Input: X Y Z W" format or direct "X Y Z W" format
+            for line in problem.split("\n"):
+                if line.strip().startswith("Input:"):
+                    input_numbers = line.replace("Input:", "").strip()
+                    break
+                elif re.match(r"^\s*\d+\s+\d+", line):
+                    # Line starts with numbers
+                    input_numbers = re.search(r"(\d+(?:\s+\d+)*)", line).group(1)
+                    break
+
+        # If not Game24 or can't find input, skip validation
+        if not input_numbers:
+            return proposals
+
+        filtered = []
+        invalid_count = 0
+
+        for proposal in proposals:
+            # Check if this is a final answer (contains "Answer:" line)
+            if "answer:" in proposal.lower():
+
+                # Extract the answer expression
+                answer_line = None
+                for line in proposal.split("\n"):
+                    if "answer:" in line.lower():
+                        answer_line = line
+                        break
+
+                if answer_line and input_numbers:
+                    # Extract expression from "Answer: expr = 24" format
+                    expr_match = re.search(
+                        r"Answer:\s*(.+?)(?:\s*=\s*24)?\s*$", answer_line, re.IGNORECASE
+                    )
+                    if expr_match:
+                        expression = expr_match.group(1).strip()
+
+                        # Validate using sympy
+                        is_valid = self.validate_game24_answer(
+                            expression, input_numbers
+                        )
+
+                        if is_valid:
+                            filtered.append(proposal)
+                            log.debug(f"[VALIDATE] Valid answer: {expression}")
+                        else:
+                            invalid_count += 1
+                            log.debug(
+                                f"[VALIDATE] Invalid answer: {expression} "
+                                f"(input: {input_numbers})"
+                            )
+                    else:
+                        # Can't extract expression, keep it (may be valid format issue)
+                        filtered.append(proposal)
+                else:
+                    # Can't extract info, keep it to avoid filtering too aggressively
+                    filtered.append(proposal)
+            else:
+                # Not a final answer (intermediate step), keep it
+                filtered.append(proposal)
+
+        if invalid_count > 0:
+            log.info(
+                f"[VALIDATE] Filtered out {invalid_count} invalid answer(s), "
+                f"kept {len(filtered)} valid proposal(s)"
+            )
+
+        return filtered
+
     def _build_cot_prompt(self, problem: str, state: str) -> str:
         """Build prompt for CoT sampling."""
         if not state:
@@ -559,6 +660,8 @@ Continue with concrete steps and numbers (show your work):
 
         For Game of 24, expects format: "X op Y = Z (left: remaining)"
         For other problems, extracts bullet points or numbered items.
+
+        For Game of 24 final answers, validates expressions using sympy.
         """
         proposals = []
 

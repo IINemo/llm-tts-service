@@ -187,8 +187,8 @@ NLP_project/
 agents/
 
 # Reference implementations and external repos
-deepconf/
-tree-of-thought-llm/
+# deepconf/
+# tree-of-thought-llm/
 lm-polygraph/
 
 # Temporary analysis and exploration documents
