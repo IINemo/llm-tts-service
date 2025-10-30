@@ -39,6 +39,8 @@ class TotValueScorer(TotStateScorerBase):
         max_tokens: int = 50,
         timeout: int = 120,
         name: str = "tot_value_scorer",
+        value_prompt_path: str = None,
+        value_last_step_prompt_path: str = None,
     ):
         """
         Initialize value scorer.
@@ -50,12 +52,18 @@ class TotValueScorer(TotStateScorerBase):
             max_tokens: Maximum tokens per evaluation
             timeout: Timeout in seconds for each evaluation call (default: 120s)
             name: Scorer name
+            value_prompt_path: Path to value scorer prompt template
+            value_last_step_prompt_path: Path to final answer validation prompt
         """
         super().__init__(model, name)
         self.n_evaluate_sample = n_evaluate_sample
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+
+        # Store prompt paths
+        self.value_prompt_path = value_prompt_path
+        self.value_last_step_prompt_path = value_last_step_prompt_path
 
         # Value mapping from text ratings to scores
         # Based on original ToT paper (Yao et al., 2023)
@@ -100,47 +108,34 @@ class TotValueScorer(TotStateScorerBase):
 
     def build_evaluation_prompt(self, problem: str, state: str) -> str:
         """Build prompt for state value evaluation."""
-        # Check if this is a final answer (contains "Answer:" line)
-        if "answer:" in state.lower() or "(left: 24)" in state.lower():
-            # Extract the answer expression
-            answer_line = ""
-            for line in state.split("\n"):
-                if "answer:" in line.lower():
-                    answer_line = line.split(":", 1)[-1].strip()
-                    break
+        # Check if this is a final answer - ORIGINAL LOGIC:
+        # If last line doesn't have 'left: ', it's a final answer
+        last_line = state.strip().split("\n")[-1] if state.strip() else ""
 
-            if answer_line:
-                # Use last step prompt from original ToT
-                # Load prompt template
-                import os
+        if "left: " not in last_line and state.strip():
+            # This is a final answer - extract the answer line
+            answer_line = last_line.lower().replace("answer: ", "").strip()
 
-                prompt_path = os.path.join(
-                    os.path.dirname(__file__),
-                    "../../..",
-                    "config/prompts/game24_tot_value_last_step.txt",
-                )
+            # Use configured last step prompt
+            if self.value_last_step_prompt_path:
                 try:
-                    with open(prompt_path, "r") as f:
+                    with open(self.value_last_step_prompt_path, "r") as f:
                         template = f.read()
                     return template.format(input=problem.strip(), answer=answer_line)
                 except FileNotFoundError:
-                    # Fallback to inline prompt
                     pass
 
         # For intermediate states, use value prompt with remaining numbers
         remaining_numbers = self.get_current_numbers(state, problem)
 
-        # Load prompt template
-        import os
-
-        prompt_path = os.path.join(
-            os.path.dirname(__file__), "../../..", "config/prompts/game24_tot_value.txt"
-        )
-        try:
-            with open(prompt_path, "r") as f:
-                template = f.read()
-            return template.format(input=remaining_numbers)
-        except FileNotFoundError:
+        # Use configured value prompt
+        if self.value_prompt_path:
+            try:
+                with open(self.value_prompt_path, "r") as f:
+                    template = f.read()
+                return template.format(input=remaining_numbers)
+            except FileNotFoundError:
+                pass
             # Fallback to original prompt
             return f"""Evaluate this partial solution for a math problem:
 
