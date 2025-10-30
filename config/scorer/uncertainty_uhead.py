@@ -59,7 +59,7 @@ def create_uncertainty_model(config):
         uncertainty_head,
         tokenize=True,
         # args_generate=args_generate, TODO:
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        device=config.scorer.device,
         generations_cache_dir="",
         predict_token_uncertainties=False,
     )

@@ -58,6 +58,7 @@ class StrategyDeepConf(StrategyBase):
         total_budget: Optional[int] = None,
         confidence_percentile: Optional[int] = None,
         confidence_threshold: Optional[float] = None,
+        n_threads: int = 8,
     ):
         """
         Initialize DeepConf strategy.
@@ -76,6 +77,7 @@ class StrategyDeepConf(StrategyBase):
             top_logprobs: Number of top logprobs to request
             filter_method: Filtering method ("topK", "threshold", or specific like "top10")
             confidence_threshold: Manual confidence threshold (optional)
+            n_threads: Number of threads for parallel API requests (default: 8)
         """
         self.model = model
         self.mode = mode.lower()
@@ -90,15 +92,16 @@ class StrategyDeepConf(StrategyBase):
         self.top_logprobs = top_logprobs
         self.filter_method = filter_method
         self.confidence_threshold = confidence_threshold
+        self.n_threads = n_threads
 
         # Validate model supports logprobs
         if not hasattr(model, "supports_logprobs") or not model.supports_logprobs:
             raise ValueError("Model must support logprobs for DeepConf")
 
         log.info(
-            f"✅ DeepConf initialized: mode={mode}, "
+            f"DeepConf initialized: mode={mode}, "
             f"budget={budget if mode == 'offline' else total_budget}, "
-            f"window={window_size}, filter={filter_method}"
+            f"window={window_size}, filter={filter_method}, threads={n_threads}"
         )
 
     def generate_trajectory(self, prompt) -> Dict[str, Any]:
@@ -144,6 +147,41 @@ class StrategyDeepConf(StrategyBase):
         # Filter and vote
         result = self._filter_and_vote(traces)
 
+        # Build enhanced metadata
+        filtered_set = set(id(t) for t in result["filtered_traces"])
+
+        # Summary stats for all traces
+        trace_summaries = []
+        for i, trace in enumerate(traces):
+            trace_summaries.append(
+                {
+                    "trace_id": i,
+                    "min_conf": trace["min_conf"],
+                    "mean_conf": (
+                        sum(trace["token_confs"]) / len(trace["token_confs"])
+                        if trace["token_confs"]
+                        else 0.0
+                    ),
+                    "answer": trace["extracted_answer"],
+                    "num_tokens": len(trace.get("token_data", [])),
+                    "selected": id(trace) in filtered_set,
+                }
+            )
+
+        # Full details for filtered traces only
+        filtered_trace_details = []
+        for trace in result["filtered_traces"]:
+            trace_idx = traces.index(trace)
+            filtered_trace_details.append(
+                {
+                    "trace_id": trace_idx,
+                    "text": trace["text"],
+                    "min_conf": trace["min_conf"],
+                    "answer": trace["extracted_answer"],
+                    "num_tokens": len(trace.get("token_data", [])),
+                }
+            )
+
         return {
             "trajectory": result["selected_text"],
             "steps": [result["selected_text"]],
@@ -156,6 +194,9 @@ class StrategyDeepConf(StrategyBase):
                 "confidence_score": result["confidence_score"],
                 "selected_answer": result["selected_answer"],
                 "vote_distribution": result["vote_distribution"],
+                # Enhanced metadata with trace summaries
+                "trace_summaries": trace_summaries,
+                "filtered_trace_details": filtered_trace_details,
             },
         }
 
@@ -254,6 +295,45 @@ class StrategyDeepConf(StrategyBase):
         # Filter and vote
         result = self._filter_and_vote(all_traces, conf_threshold)
 
+        # Build enhanced metadata (consistent with offline mode)
+        filtered_set = set(id(t) for t in result["filtered_traces"])
+
+        # Summary stats for all traces
+        trace_summaries = []
+        for i, trace in enumerate(all_traces):
+            trace_summaries.append(
+                {
+                    "trace_id": i,
+                    "min_conf": trace["min_conf"],
+                    "mean_conf": (
+                        sum(trace["token_confs"]) / len(trace["token_confs"])
+                        if trace["token_confs"]
+                        else 0.0
+                    ),
+                    "answer": trace["extracted_answer"],
+                    "num_tokens": len(trace.get("token_data", [])),
+                    "selected": id(trace) in filtered_set,
+                    "phase": "warmup" if i < len(warmup_traces) else "adaptive",
+                    "stopped_early": trace.get("stopped_early", False),
+                }
+            )
+
+        # Full details for filtered traces only
+        filtered_trace_details = []
+        for trace in result["filtered_traces"]:
+            trace_idx = all_traces.index(trace)
+            filtered_trace_details.append(
+                {
+                    "trace_id": trace_idx,
+                    "text": trace["text"],
+                    "min_conf": trace["min_conf"],
+                    "answer": trace["extracted_answer"],
+                    "num_tokens": len(trace.get("token_data", [])),
+                    "phase": "warmup" if trace_idx < len(warmup_traces) else "adaptive",
+                    "stopped_early": trace.get("stopped_early", False),
+                }
+            )
+
         return {
             "trajectory": result["selected_text"],
             "steps": [result["selected_text"]],
@@ -269,96 +349,116 @@ class StrategyDeepConf(StrategyBase):
                 "confidence_score": result["confidence_score"],
                 "selected_answer": result["selected_answer"],
                 "vote_distribution": result["vote_distribution"],
+                # Enhanced metadata with trace summaries (consistent with offline mode)
+                "trace_summaries": trace_summaries,
+                "filtered_trace_details": filtered_trace_details,
             },
         }
 
+    def _generate_single_trace(self, args: tuple) -> Optional[Dict[str, Any]]:
+        """
+        Generate a single trace with logprobs (for multithreading).
+
+        Args:
+            args: Tuple of (prompt, trace_index, total_traces)
+
+        Returns:
+            Trace dictionary with text, confidence, and answer, or None if error
+        """
+        prompt, i, n = args
+        try:
+            # Prepare chat messages
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a math problem solver. Always put your "
+                        "final numerical answer in \\boxed{answer} format."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ]
+
+            # Generate with logprobs
+            # Disable early stopping for batch generation
+            self.model.early_stopping = None
+
+            results = self.model.generate_texts(
+                chats=[messages],
+                max_new_tokens=self.max_tokens,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                output_scores=True,
+                top_logprobs=self.top_logprobs,
+            )
+
+            # Extract text and logprobs from result
+            text = results[0]["text"]
+            logprobs_data = results[0].get("logprobs", [])
+
+            # Extract confidences from logprobs
+            token_confs = []
+            for token_info in logprobs_data:
+                # Use mean of top-k logprobs (same as online mode)
+                top_logprobs_list = token_info["top_logprobs"][: self.top_logprobs]
+                mean_logprob = sum(t["logprob"] for t in top_logprobs_list) / len(
+                    top_logprobs_list
+                )
+                token_confs.append(-mean_logprob)
+
+            token_data = logprobs_data
+
+            # Compute sliding window confidences
+            window_confs = compute_sliding_window_confidence(
+                token_confs, self.window_size
+            )
+            min_conf = min(window_confs) if window_confs else 0.0
+
+            # Extract answer
+            extracted_answer = extract_answer(text)
+
+            trace = {
+                "text": text,
+                "min_conf": min_conf,
+                "extracted_answer": extracted_answer,
+                "token_confs": token_confs,
+                "window_confs": window_confs,
+                "token_data": token_data,
+            }
+
+            log.info(
+                f"  Trace {i+1}/{n}: tokens={len(token_data)}, "
+                f"min_conf={min_conf:.3f}, answer={extracted_answer}"
+            )
+
+            # Debug: log text if no answer extracted
+            if not extracted_answer:
+                log.warning(f"    No answer extracted. Text length: {len(text)}")
+                log.warning(f"    Text ends with: ...{text[-150:]}")
+
+            return trace
+
+        except Exception as e:
+            log.error(f"  Error generating trace {i+1}: {e}")
+            return None
+
     def _generate_traces_batch(self, prompt: str, n: int) -> List[Dict[str, Any]]:
         """
-        Generate n traces using standard BlackboxModel generation.
+        Generate n traces using parallel API requests.
 
         Returns:
             List of trace dictionaries with text, confidence, and answer
         """
-        traces = []
+        # Prepare arguments for each trace: (prompt, index, total)
+        trace_args = [(prompt, i, n) for i in range(n)]
 
-        for i in range(n):
-            try:
-                # Prepare chat messages
-                messages = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a math problem solver. Always put your "
-                            "final numerical answer in \\boxed{answer} format."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ]
-
-                # Generate with logprobs using parent's generate_texts() method
-                # Disable early stopping for batch generation
-                self.model.early_stopping = None
-
-                results = self.model.generate_texts(
-                    chats=[messages],
-                    max_new_tokens=self.max_tokens,
-                    temperature=self.temperature,
-                    top_p=self.top_p,
-                    output_scores=True,
-                    top_logprobs=self.top_logprobs,
-                )
-
-                # Extract text and logprobs from result
-                text = results[0]["text"]
-                logprobs_data = results[0].get("logprobs", [])
-
-                # Extract confidences from logprobs
-                token_confs = []
-                for token_info in logprobs_data:
-                    # Use mean of top-k logprobs (same as online mode)
-                    top_logprobs = token_info["top_logprobs"][: self.top_logprobs]
-                    mean_logprob = sum(t["logprob"] for t in top_logprobs) / len(
-                        top_logprobs
-                    )
-                    token_confs.append(-mean_logprob)
-
-                token_data = logprobs_data
-
-                # Compute sliding window confidences
-                window_confs = compute_sliding_window_confidence(
-                    token_confs, self.window_size
-                )
-                min_conf = min(window_confs) if window_confs else 0.0
-
-                # Extract answer
-                extracted_answer = extract_answer(text)
-
-                trace = {
-                    "text": text,
-                    "min_conf": min_conf,
-                    "extracted_answer": extracted_answer,
-                    "token_confs": token_confs,
-                    "window_confs": window_confs,
-                    "token_data": token_data,
-                }
-
-                traces.append(trace)
-
-                log.info(
-                    f"  Trace {i+1}/{n}: tokens={len(token_data)}, "
-                    f"min_conf={min_conf:.3f}, answer={extracted_answer}"
-                )
-
-                # Debug: log text if no answer extracted
-                if not extracted_answer:
-                    log.warning(f"    No answer extracted. Text length: {len(text)}")
-                    log.warning(f"    Text ends with: ...{text[-150:]}")
-
-            except Exception as e:
-                log.error(f"  ❌ Error generating trace {i+1}: {e}")
-                continue
-
-        return traces
+        # Use base class parallel generation with our trace-specific worker
+        return self._parallel_generate(
+            worker_func=self._generate_single_trace,
+            task_args=trace_args,
+            n_threads=self.n_threads,
+            desc=f"Generating {n} traces",
+        )
 
     def _generate_traces_adaptive(
         self, prompt: str, n: int, conf_threshold: float
