@@ -55,10 +55,10 @@ strategy:
   # which now matches the paper: n_evaluate_sample=3, temperature=0.7, beam_width=5
 
   # Game of 24 specific prompts (from original ToT paper)
-  propose_prompt_path: ./config/prompts/game24_tot_propose_step.txt
-  cot_prompt_path: ./config/prompts/game24_tot_propose.txt
-  value_prompt_path: ./config/prompts/game24_tot_value.txt
-  value_last_step_prompt_path: ./config/prompts/game24_tot_value_last_step.txt
+  propose_prompt_path: ./config/prompts/tot/game24_tot_propose_step.txt
+  cot_prompt_path: ./config/prompts/tot/game24_tot_propose.txt
+  value_prompt_path: ./config/prompts/tot/game24_tot_value.txt
+  value_last_step_prompt_path: ./config/prompts/tot/game24_tot_value_last_step.txt
 
 # Evaluation configuration
 # Game of 24 has deterministic correctness (expression evaluates to 24)
