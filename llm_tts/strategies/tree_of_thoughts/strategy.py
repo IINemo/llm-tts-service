@@ -49,6 +49,10 @@ class StrategyTreeOfThoughts(StrategyBase):
         max_tokens_per_step: int = 100,
         n_threads: int = 8,
         scorer_timeout: int = 120,
+        propose_prompt_path: str = None,
+        cot_prompt_path: str = None,
+        value_prompt_path: str = None,
+        value_last_step_prompt_path: str = None,
     ):
         """
         Initialize Tree-of-Thoughts strategy.
@@ -67,6 +71,10 @@ class StrategyTreeOfThoughts(StrategyBase):
             max_tokens_per_step: Maximum tokens per reasoning step
             n_threads: Number of parallel threads for API calls
             scorer_timeout: Timeout in seconds for scorer evaluation calls (default: 120s)
+            propose_prompt_path: Path to propose prompt template
+            cot_prompt_path: Path to CoT prompt template (for final answers)
+            value_prompt_path: Path to value scorer prompt template
+            value_last_step_prompt_path: Path to final answer validation prompt
         """
         self.model = model
         self.method_generate = method_generate
@@ -77,6 +85,12 @@ class StrategyTreeOfThoughts(StrategyBase):
         self.max_tokens_per_step = max_tokens_per_step
         self.n_threads = n_threads
 
+        # Store prompt paths
+        self.propose_prompt_path = propose_prompt_path
+        self.cot_prompt_path = cot_prompt_path
+        self.value_prompt_path = value_prompt_path
+        self.value_last_step_prompt_path = value_last_step_prompt_path
+
         # Initialize scorer
         if scorer is None:
             # Default to value scorer matching original ToT paper parameters
@@ -86,6 +100,8 @@ class StrategyTreeOfThoughts(StrategyBase):
                 n_evaluate_sample=3,  # Paper: 3 samples, aggregate scores
                 temperature=0.7,  # Paper: 0.7 temperature
                 timeout=scorer_timeout,
+                value_prompt_path=value_prompt_path,
+                value_last_step_prompt_path=value_last_step_prompt_path,
             )
         else:
             self.scorer = scorer
@@ -435,21 +451,34 @@ class StrategyTreeOfThoughts(StrategyBase):
             # Get current numbers (either from state or original problem)
             current_numbers = self.get_current_numbers(state, problem)
 
-            # Use original ToT propose prompt for Game of 24
-            # This prompt generates multiple possible next steps
-            import os
+            # CRITICAL: When we reach (left: 24), switch to CoT prompt
+            # to generate the final "Answer: expression = 24" line
+            if current_numbers == "24":
+                # Load CoT prompt with full examples (if configured)
+                if self.cot_prompt_path:
+                    try:
+                        with open(self.cot_prompt_path, "r") as f:
+                            template = f.read()
+                        # Append "Steps:" + current state to prompt model for final answer
+                        return template.format(input=problem) + "Steps:\n" + state
+                    except FileNotFoundError:
+                        pass
+                # Fallback
+                return f"""Use numbers and basic arithmetic operations (+ - * /) to obtain 24.
+Input: {problem}
+Steps:
+{state}
+"""
+            else:
+                # Generate next step proposals
+                if self.propose_prompt_path:
+                    try:
+                        with open(self.propose_prompt_path, "r") as f:
+                            template = f.read()
+                        return template.format(input=current_numbers)
+                    except FileNotFoundError:
+                        pass
 
-            prompt_path = os.path.join(
-                os.path.dirname(__file__),
-                "../../..",
-                "config/prompts/game24_tot_propose_step.txt",
-            )
-
-            try:
-                with open(prompt_path, "r") as f:
-                    template = f.read()
-                return template.format(input=current_numbers)
-            except FileNotFoundError:
                 # Fallback to inline prompt
                 return f"""Input: 2 8 8 14
 Possible next steps:
@@ -527,21 +556,25 @@ Continue with concrete steps and numbers (show your work):
         """
         proposals = []
 
-        # Check if this is Game of 24 format (contains "(left: " pattern)
+        # Check if this is Game of 24 format (contains "(left: " or "Answer:" pattern)
         lines = text.split("\n")
-        has_game24_format = any("(left: " in line for line in lines)
+        has_game24_format = any(
+            "(left: " in line or "answer:" in line.lower() for line in lines
+        )
 
         if has_game24_format:
             # Parse Game of 24 proposals
             for line in lines:
                 line = line.strip()
-                if not line or "(left: " not in line:
+                if not line:
                     continue
 
-                # This line is a complete next step
-                # Append to current state
-                full_step = current_state + ("\n" if current_state else "") + line
-                proposals.append(full_step)
+                # Accept lines with "(left: " OR "Answer:" (for final step)
+                if "(left: " in line or "answer:" in line.lower():
+                    # This line is a complete next step
+                    # Append to current state
+                    full_step = current_state + ("\n" if current_state else "") + line
+                    proposals.append(full_step)
 
         else:
             # Parse regular proposals (bullet points, numbered items)
