@@ -1,19 +1,26 @@
-You are solving this problem:
+You are solving this problem step-by-step:
 {problem}
 
 Current reasoning progress:
 {state}
 
-Generate 3-5 possible next reasoning steps. Each step should:
-- Build logically on the current progress
-- Move closer to a solution
+Generate 3-5 possible NEXT STEPS to continue reasoning.
+
+IMPORTANT RULES:
+- Each step should be ONE small, concrete action or thought
+- Do NOT provide the complete solution - just the immediate next step
+- Each step should be different (explore alternative approaches)
+- Build incrementally on the current progress
 - Be specific and actionable
-- Consider different approaches
 
-Think carefully about:
-- What information do we have?
-- What's missing or unclear?
-- What are alternative paths forward?
-- Which approach seems most promising?
+Examples of good next steps:
+- "Identify the key constraint: budget must be under $10k"
+- "Break the problem into 3 phases: research, design, implementation"
+- "Consider alternative approach: use database denormalization for speed"
+- "Calculate the worst-case scenario: maximum load = 1000 req/sec"
 
-Possible next steps:
+Examples of BAD next steps (too complete):
+- "Here's the complete solution with all steps..."
+- "The answer is X because of reasons A, B, C..."
+
+Generate 3-5 alternative next steps (one per line):
