@@ -692,21 +692,23 @@ document.addEventListener('DOMContentLoaded', function() {
                 nodeX[draggedNodeIndex] += dx;
                 nodeY[draggedNodeIndex] += dy;
 
-                // Update connected edges
+                // Rebuild edges based on current node positions
                 if (edgeTraceIndex !== null) {
-                    var newEdgeX = [...originalEdgeX];
-                    var newEdgeY = [...originalEdgeY];
+                    var newEdgeX = [];
+                    var newEdgeY = [];
 
                     for (var i = 0; i < edgeMap.length; i++) {
                         var edge = edgeMap[i];
-                        if (edge.fromIdx === draggedNodeIndex) {
-                            newEdgeX[edge.edgeStartIdx] = nodeX[draggedNodeIndex];
-                            newEdgeY[edge.edgeStartIdx] = nodeY[draggedNodeIndex];
-                        }
-                        if (edge.toIdx === draggedNodeIndex) {
-                            newEdgeX[edge.edgeStartIdx + 1] = nodeX[draggedNodeIndex];
-                            newEdgeY[edge.edgeStartIdx + 1] = nodeY[draggedNodeIndex];
-                        }
+                        var fromIdx = edge.fromIdx;
+                        var toIdx = edge.toIdx;
+
+                        // Use current node positions
+                        newEdgeX.push(nodeX[fromIdx]);
+                        newEdgeY.push(nodeY[fromIdx]);
+                        newEdgeX.push(nodeX[toIdx]);
+                        newEdgeY.push(nodeY[toIdx]);
+                        newEdgeX.push(null);  // Separator
+                        newEdgeY.push(null);
                     }
 
                     // Update both nodes and edges
