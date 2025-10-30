@@ -2,6 +2,8 @@
 
 # LLM Test-Time Scaling Service
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A research framework for implementing and evaluating test-time scaling strategies for large language models. Includes implementations of DeepConf, Best-of-N, Self-Consistency, and Chain-of-Thought strategies.
 
 ---
@@ -321,3 +323,9 @@ python service_app/main.py
 - Add new scorers (semantic similarity, calibration-based)
 - Implement Tree of Thought strategy
 - Add MATH dataset support
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
