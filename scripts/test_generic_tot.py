@@ -9,6 +9,7 @@ Example:
     python scripts/test_generic_tot.py "How can I improve my startup's user retention?"
 """
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -23,6 +24,13 @@ from dotenv import load_dotenv  # noqa: E402
 project_root = Path(__file__).parent.parent
 env_path = project_root / ".env"
 load_dotenv(dotenv_path=env_path)
+
+# Configure logging to show progress
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s][%(name)s][%(levelname)s] - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 from llm_tts.models.blackboxmodel_with_streaming import (  # noqa: E402
     BlackboxModelWithStreaming,
