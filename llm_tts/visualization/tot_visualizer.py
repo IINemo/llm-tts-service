@@ -536,14 +536,6 @@ document.addEventListener('DOMContentLoaded', function() {
         var myDiv = document.querySelector('.plotly-graph-div');
         if (!myDiv) return;
 
-        // Prevent text selection during Shift operations
-        document.addEventListener('selectstart', function(e) {
-            if (e.shiftKey) {
-                e.preventDefault();
-                return false;
-            }
-        });
-
         var isDragging = false;
         var draggedNodeIndex = null;
         var startX, startY;
@@ -619,6 +611,14 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
+        // Prevent text selection only during node dragging
+        document.addEventListener('selectstart', function(e) {
+            if (isDragging) {
+                e.preventDefault();
+                return false;
+            }
+        });
+
         myDiv.addEventListener('mousedown', function(e) {
             if (e.shiftKey && draggedNodeIndex !== null) {
                 isDragging = true;
@@ -626,7 +626,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 startY = e.clientY;
                 myDiv.style.cursor = 'grabbing';
 
-                // Prevent text selection
+                // Prevent text selection only during drag
                 document.body.classList.add('no-select');
                 e.preventDefault();
                 e.stopPropagation();
