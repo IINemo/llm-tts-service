@@ -28,3 +28,9 @@ scorer_timeout: 120              # Timeout in seconds for scorer evaluation call
 
 # Optimization
 cache_values: true               # Cache state evaluations to reduce API calls
+
+# Prompt paths (override in experiment configs for specific tasks)
+propose_prompt_path: null        # Path to propose prompt (for generating next steps)
+cot_prompt_path: null            # Path to CoT prompt (for final answer generation)
+value_prompt_path: null          # Path to value scorer prompt (for intermediate states)
+value_last_step_prompt_path: null  # Path to final answer validation prompt
