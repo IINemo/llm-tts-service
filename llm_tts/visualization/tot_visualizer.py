@@ -528,68 +528,151 @@ document.addEventListener('DOMContentLoaded', function() {
         var myDiv = document.querySelector('.plotly-graph-div');
         if (!myDiv) return;
 
-        var draggedNode = null;
-        var nodePositions = {};
+        var isDragging = false;
+        var draggedNodeIndex = null;
+        var startX, startY;
+        var nodeTraceIndex = null;
+        var edgeTraceIndex = null;
 
-        // Track node positions
+        // Find which trace contains the nodes (has markers+text) and edges (lines only)
+        var data = myDiv.data;
+        for (var i = 0; i < data.length; i++) {
+            if (data[i].mode && data[i].mode.includes('markers')) {
+                nodeTraceIndex = i;
+            } else if (data[i].mode === 'lines') {
+                edgeTraceIndex = i;
+            }
+        }
+
+        if (nodeTraceIndex === null) {
+            console.log('Could not find node trace');
+            return;
+        }
+
+        // Store original node positions
+        var nodeX = [...myDiv.data[nodeTraceIndex].x];
+        var nodeY = [...myDiv.data[nodeTraceIndex].y];
+        var originalEdgeX = edgeTraceIndex !== null ? [...myDiv.data[edgeTraceIndex].x] : [];
+        var originalEdgeY = edgeTraceIndex !== null ? [...myDiv.data[edgeTraceIndex].y] : [];
+
+        // Build edge connectivity map (which nodes are connected)
+        var edgeMap = [];
+        if (edgeTraceIndex !== null) {
+            for (var i = 0; i < originalEdgeX.length; i += 3) {
+                if (originalEdgeX[i] !== null && originalEdgeX[i+1] !== null) {
+                    edgeMap.push({
+                        fromIdx: -1,
+                        toIdx: -1,
+                        edgeStartIdx: i,
+                        x0: originalEdgeX[i],
+                        y0: originalEdgeY[i],
+                        x1: originalEdgeX[i+1],
+                        y1: originalEdgeY[i+1]
+                    });
+
+                    // Find corresponding node indices
+                    for (var j = 0; j < nodeX.length; j++) {
+                        if (Math.abs(nodeX[j] - originalEdgeX[i]) < 0.01 &&
+                            Math.abs(nodeY[j] - originalEdgeY[i]) < 0.01) {
+                            edgeMap[edgeMap.length - 1].fromIdx = j;
+                        }
+                        if (Math.abs(nodeX[j] - originalEdgeX[i+1]) < 0.01 &&
+                            Math.abs(nodeY[j] - originalEdgeY[i+1]) < 0.01) {
+                            edgeMap[edgeMap.length - 1].toIdx = j;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Mouse event handlers
         myDiv.on('plotly_hover', function(data) {
             if (data.points && data.points[0]) {
                 var point = data.points[0];
-                if (point.data.mode && point.data.mode.includes('markers')) {
-                    // Store node info
-                    draggedNode = {
-                        curveNumber: point.curveNumber,
-                        pointNumber: point.pointNumber,
-                        x: point.x,
-                        y: point.y
-                    };
+                if (point.curveNumber === nodeTraceIndex) {
+                    draggedNodeIndex = point.pointNumber;
+                    myDiv.style.cursor = 'grab';
                 }
             }
         });
 
-        // Enable dragging with shift+click+drag
-        var isDragging = false;
-        var startX, startY;
+        myDiv.on('plotly_unhover', function() {
+            if (!isDragging) {
+                draggedNodeIndex = null;
+                myDiv.style.cursor = 'default';
+            }
+        });
 
         myDiv.addEventListener('mousedown', function(e) {
-            if (e.shiftKey && draggedNode) {
+            if (e.shiftKey && draggedNodeIndex !== null) {
                 isDragging = true;
                 startX = e.clientX;
                 startY = e.clientY;
+                myDiv.style.cursor = 'grabbing';
                 e.preventDefault();
+                e.stopPropagation();
             }
         });
 
         document.addEventListener('mousemove', function(e) {
-            if (isDragging && draggedNode) {
-                var dx = (e.clientX - startX) / 5;  // Scale factor
-                var dy = -(e.clientY - startY) / 5;  // Inverted Y axis
+            if (isDragging && draggedNodeIndex !== null) {
+                // Get plot dimensions for scaling
+                var plotArea = myDiv.querySelector('.nsewdrag');
+                if (!plotArea) return;
 
-                var update = {
-                    x: [[draggedNode.x + dx]],
-                    y: [[draggedNode.y + dy]]
-                };
+                var bbox = plotArea.getBoundingClientRect();
+                var xrange = myDiv.layout.xaxis.range;
+                var yrange = myDiv.layout.yaxis.range;
 
-                Plotly.restyle(myDiv, update, [draggedNode.curveNumber]);
+                var xScale = (xrange[1] - xrange[0]) / bbox.width;
+                var yScale = (yrange[1] - yrange[0]) / bbox.height;
+
+                var dx = (e.clientX - startX) * xScale;
+                var dy = -(e.clientY - startY) * yScale;  // Inverted Y
+
+                // Update node position
+                nodeX[draggedNodeIndex] += dx;
+                nodeY[draggedNodeIndex] += dy;
+
+                // Update connected edges
+                if (edgeTraceIndex !== null) {
+                    var newEdgeX = [...originalEdgeX];
+                    var newEdgeY = [...originalEdgeY];
+
+                    for (var i = 0; i < edgeMap.length; i++) {
+                        var edge = edgeMap[i];
+                        if (edge.fromIdx === draggedNodeIndex) {
+                            newEdgeX[edge.edgeStartIdx] = nodeX[draggedNodeIndex];
+                            newEdgeY[edge.edgeStartIdx] = nodeY[draggedNodeIndex];
+                        }
+                        if (edge.toIdx === draggedNodeIndex) {
+                            newEdgeX[edge.edgeStartIdx + 1] = nodeX[draggedNodeIndex];
+                            newEdgeY[edge.edgeStartIdx + 1] = nodeY[draggedNodeIndex];
+                        }
+                    }
+
+                    // Update both nodes and edges
+                    Plotly.restyle(myDiv, {x: [newEdgeX], y: [newEdgeY]}, [edgeTraceIndex]);
+                }
+
+                Plotly.restyle(myDiv, {x: [nodeX], y: [nodeY]}, [nodeTraceIndex]);
 
                 startX = e.clientX;
                 startY = e.clientY;
-                draggedNode.x += dx;
-                draggedNode.y += dy;
             }
         });
 
         document.addEventListener('mouseup', function(e) {
             if (isDragging) {
                 isDragging = false;
-                draggedNode = null;
+                myDiv.style.cursor = draggedNodeIndex !== null ? 'grab' : 'default';
             }
         });
 
         // Add instruction text
         var instruction = document.createElement('div');
         instruction.style.cssText = 'position: fixed; top: 10px; right: 10px; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 5px; font-family: Arial; font-size: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); z-index: 1000;';
-        instruction.innerHTML = '<b>Controls:</b><br>• Pan: Click & drag<br>• Zoom: Scroll wheel<br>• Move node: Shift + Click & drag node<br>• Reset: Double-click';
+        instruction.innerHTML = '<b>Controls:</b><br>• Pan: Click & drag background<br>• Zoom: Scroll wheel<br>• <span style="color: #e74c3c; font-weight: bold;">Move node: Shift + drag node</span><br>• Reset: Double-click';
         document.body.appendChild(instruction);
 
     }, 1000);
