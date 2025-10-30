@@ -72,8 +72,10 @@ This runs a minimal ToT search (2 steps, beam width 2) and generates an HTML vis
 
 4. **Interactive Controls**:
    - **Pan**: Click and drag on background
-   - **Zoom**: Scroll wheel
-   - **Move nodes**: Shift + Click & drag on a node (rearrange layout manually)
+   - **Zoom in**: Scroll wheel up
+   - **Zoom out**: Scroll wheel down
+   - **Box zoom**: Shift + drag on background (area selection)
+   - **Move nodes**: Shift + Click & drag on a **node** (rearrange layout manually)
    - **Reset view**: Double-click on background
    - **Hover**: Move mouse over nodes for detailed information
 
