@@ -541,6 +541,7 @@ document.addEventListener('DOMContentLoaded', function() {
         var startX, startY;
         var nodeTraceIndex = null;
         var edgeTraceIndex = null;
+        var shiftPressed = false;
 
         // Find which trace contains the nodes (has markers+text) and edges (lines only)
         var data = myDiv.data;
@@ -593,6 +594,27 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
+        // Track Shift key state
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Shift') {
+                shiftPressed = true;
+                // If hovering over a node, disable dragmode
+                if (draggedNodeIndex !== null) {
+                    Plotly.relayout(myDiv, {'dragmode': false});
+                }
+            }
+        });
+
+        document.addEventListener('keyup', function(e) {
+            if (e.key === 'Shift') {
+                shiftPressed = false;
+                // Re-enable dragmode if not dragging
+                if (!isDragging) {
+                    Plotly.relayout(myDiv, {'dragmode': 'pan'});
+                }
+            }
+        });
+
         // Mouse event handlers
         myDiv.on('plotly_hover', function(data) {
             if (data.points && data.points[0]) {
@@ -600,6 +622,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (point.curveNumber === nodeTraceIndex) {
                     draggedNodeIndex = point.pointNumber;
                     myDiv.style.cursor = 'grab';
+
+                    // Disable dragmode if Shift is already held
+                    if (shiftPressed) {
+                        Plotly.relayout(myDiv, {'dragmode': false});
+                    }
                 }
             }
         });
@@ -608,6 +635,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!isDragging) {
                 draggedNodeIndex = null;
                 myDiv.style.cursor = 'default';
+                // Re-enable dragmode when leaving node (if Shift not held)
+                if (!shiftPressed) {
+                    Plotly.relayout(myDiv, {'dragmode': 'pan'});
+                }
             }
         });
 
@@ -619,6 +650,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
+        // Use capturing phase to catch event before Plotly
         myDiv.addEventListener('mousedown', function(e) {
             if (e.shiftKey && draggedNodeIndex !== null) {
                 isDragging = true;
@@ -631,11 +663,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 // Prevent text selection only during drag
                 document.body.classList.add('no-select');
+
+                // Stop event from reaching Plotly
                 e.preventDefault();
                 e.stopPropagation();
+                e.stopImmediatePropagation();
                 return false;
             }
-        });
+        }, true);  // Use capture phase
 
         document.addEventListener('mousemove', function(e) {
             if (isDragging && draggedNodeIndex !== null) {
