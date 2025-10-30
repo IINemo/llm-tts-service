@@ -133,7 +133,14 @@ class TotValueScorer(TotStateScorerBase):
             try:
                 with open(self.value_prompt_path, "r") as f:
                     template = f.read()
-                return template.format(input=remaining_numbers)
+                # Provide both formats for compatibility:
+                # - {input}: for Game24 (remaining numbers)
+                # - {problem} and {state}: for generic prompts
+                return template.format(
+                    input=remaining_numbers,
+                    problem=problem.strip(),
+                    state=state.strip() if state else "",
+                )
             except FileNotFoundError:
                 pass
             # Fallback to original prompt
