@@ -521,12 +521,28 @@ class TotVisualizer:
 
         # Add custom JavaScript to make nodes draggable
         custom_script = """
+<style>
+.no-select {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+</style>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     // Wait for Plotly to render
     setTimeout(function() {
         var myDiv = document.querySelector('.plotly-graph-div');
         if (!myDiv) return;
+
+        // Prevent text selection during Shift operations
+        document.addEventListener('selectstart', function(e) {
+            if (e.shiftKey) {
+                e.preventDefault();
+                return false;
+            }
+        });
 
         var isDragging = false;
         var draggedNodeIndex = null;
@@ -609,8 +625,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 startX = e.clientX;
                 startY = e.clientY;
                 myDiv.style.cursor = 'grabbing';
+
+                // Prevent text selection
+                document.body.classList.add('no-select');
                 e.preventDefault();
                 e.stopPropagation();
+                return false;
             }
         });
 
@@ -666,6 +686,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (isDragging) {
                 isDragging = false;
                 myDiv.style.cursor = draggedNodeIndex !== null ? 'grab' : 'default';
+                // Re-enable text selection
+                document.body.classList.remove('no-select');
             }
         });
 
