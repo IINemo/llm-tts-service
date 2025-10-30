@@ -930,6 +930,49 @@ Continue with concrete steps and numbers (show your work):
 
         return top_states, top_scores
 
+    def _extract_new_step(self, candidate: str, parent_states: List[str]) -> str:
+        """
+        Extract the new step added to create this candidate.
+
+        Args:
+            candidate: Full candidate state
+            parent_states: List of parent states from previous step
+
+        Returns:
+            The new step (last line added)
+        """
+        if not candidate:
+            return "(empty)"
+
+        # Find matching parent
+        for parent in parent_states:
+            if candidate.startswith(parent):
+                # Extract what was added
+                new_part = candidate[len(parent) :].strip()
+                if new_part:
+                    # Return first line of new part
+                    return new_part.split("\n")[0]
+
+        # No parent found or first step - return first line
+        lines = candidate.strip().split("\n")
+        return lines[-1] if lines else "(empty)"
+
+    def _find_parent_state(self, candidate: str, parent_states: List[str]) -> int:
+        """
+        Find which parent state this candidate came from.
+
+        Args:
+            candidate: Full candidate state
+            parent_states: List of parent states
+
+        Returns:
+            Index of parent state (0-based)
+        """
+        for i, parent in enumerate(parent_states):
+            if candidate.startswith(parent):
+                return i
+        return 0  # Default to first state
+
     def generate_trajectory(self, prompt: str) -> Dict[str, Any]:
         """
         Main entry point for Tree-of-Thoughts reasoning.
@@ -986,9 +1029,20 @@ Continue with concrete steps and numbers (show your work):
             # GENERATE: Expand beam with candidates
             candidates = self._generate_candidates(problem, states)
             log.info(f"\n[GENERATE] Generated {len(candidates)} candidates:")
+
+            # Show tree structure with parent-child relationships
             for i, candidate in enumerate(candidates):
-                log.info(f"  Candidate {i+1}:")
-                log.info(f"    {candidate}")
+                # Extract the new step (last line added)
+                new_step = self._extract_new_step(candidate, states)
+                parent_idx = self._find_parent_state(candidate, states)
+
+                # Show tree structure
+                indent = "  " * (step_idx + 1)
+                tree_marker = "└─" if i == len(candidates) - 1 else "├─"
+                log.info(
+                    f"{tree_marker} [Level {step_idx + 1}] Candidate {i+1} (from state {parent_idx + 1}):"
+                )
+                log.info(f"{indent}New step: {new_step}")
 
             if not candidates:
                 log.warning(f"  No candidates generated at step {step_idx}")
@@ -1005,10 +1059,11 @@ Continue with concrete steps and numbers (show your work):
 
             # SELECT: Prune to top-k
             states, state_scores = self._select_top_states(candidates, scores)
-            log.info(f"\n[SELECT] Selected top {len(states)} states:")
+            log.info(f"\n[SELECT] Selected top {len(states)} states for next step:")
             for i, (state, score) in enumerate(zip(states, state_scores)):
-                log.info(f"  State {i+1} (score={score:.2f}):")
-                log.info(f"    {state}")
+                # Extract last step for compact display
+                last_step = state.strip().split("\n")[-1] if state else "(empty)"
+                log.info(f"  ✓ State {i+1} (score={score:.2f}): {last_step}")
 
             # Record step
             all_steps.append(
