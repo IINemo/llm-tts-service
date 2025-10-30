@@ -443,9 +443,15 @@ class StrategyTreeOfThoughts(StrategyBase):
         For Game of 24, uses the original ToT prompt format that generates
         multiple possible next steps in the format: "X op Y = Z (left: remaining)"
         """
-        # Check if this is a Game of 24 problem (has pattern like "1 2 3 4")
-        problem_numbers = re.findall(r"\d+", problem.strip())
-        is_game24 = len(problem_numbers) in [2, 3, 4]  # Game 24 has 2-4 numbers
+        # Check if this is a Game of 24 problem
+        # Look for "obtain 24" phrase (specific to Game24) or check first line format
+        is_game24 = "obtain 24" in problem.lower()
+        if not is_game24:
+            # Alternative check: first line has format "Input: X Y Z W" with 2-4 numbers
+            first_line = problem.strip().split("\n")[0]
+            if first_line.startswith("Input:"):
+                input_numbers = re.findall(r"\d+", first_line.replace("Input:", ""))
+                is_game24 = len(input_numbers) in [2, 3, 4]
 
         if is_game24:
             # Get current numbers (either from state or original problem)
