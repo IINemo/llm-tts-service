@@ -32,7 +32,7 @@ class TotVisualizer:
         height: int = 900,
         node_size: int = 20,
         show_state_preview: bool = True,
-        max_state_chars: int = 50,
+        max_state_chars: int = 10,
     ):
         """
         Initialize the visualizer.
@@ -105,7 +105,12 @@ class TotVisualizer:
         if output_path:
             output_file = Path(output_path)
             output_file.parent.mkdir(parents=True, exist_ok=True)
-            fig.write_html(str(output_file))
+
+            # Save with custom HTML that makes nodes draggable
+            html_content = self._generate_draggable_html(
+                fig, title or "ToT Visualization"
+            )
+            output_file.write_text(html_content)
             log.info(f"Saved visualization to {output_file}")
 
         # Show if requested
@@ -378,14 +383,12 @@ class TotVisualizer:
             node_colors.append(color)
             node_sizes.append(size)
 
-            # Label
+            # Label - compact format with node IDs
             if node["is_root"]:
                 label = "ROOT"
-            elif self.show_state_preview:
-                state_preview = self._get_state_preview(node["state"])
-                label = f"S{node['step']}: {state_preview}"
             else:
-                label = f"Step {node['step']}"
+                # Use compact node ID labels (N0, N1, etc.)
+                label = f"N{node['id']}"
             node_text.append(label)
 
             # Hover info
@@ -442,6 +445,7 @@ class TotVisualizer:
             title=dict(text=title, font=dict(size=16)),
             showlegend=False,
             hovermode="closest",
+            dragmode="pan",  # Enable pan mode (can switch to select in UI)
             margin=dict(b=20, l=20, r=20, t=80),
             xaxis=dict(
                 showgrid=False,
@@ -459,6 +463,19 @@ class TotVisualizer:
             height=self.height,
             plot_bgcolor="white",
         )
+
+        # Add modebar buttons for interactivity
+        config = {
+            "modeBarButtonsToAdd": [
+                "drawopenpath",
+                "eraseshape",
+            ],
+            "modeBarButtonsToRemove": [],
+            "displaylogo": False,
+        }
+
+        # Store config for use when saving
+        self._plot_config = config
 
         return fig
 
@@ -478,6 +495,112 @@ class TotVisualizer:
         if len(last_line) > self.max_state_chars:
             return last_line[: self.max_state_chars - 3] + "..."
         return last_line
+
+    def _generate_draggable_html(self, fig: go.Figure, title: str) -> str:
+        """
+        Generate HTML with draggable nodes functionality.
+
+        Args:
+            fig: Plotly figure
+            title: Title for the HTML page
+
+        Returns:
+            HTML string with embedded JavaScript for draggable nodes
+        """
+        # Get the basic HTML from plotly
+        import plotly.io as pio
+
+        base_html = pio.to_html(
+            fig,
+            include_plotlyjs="cdn",
+            config={
+                "displaylogo": False,
+                "modeBarButtonsToRemove": ["lasso2d"],
+            },
+        )
+
+        # Add custom JavaScript to make nodes draggable
+        custom_script = """
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Wait for Plotly to render
+    setTimeout(function() {
+        var myDiv = document.querySelector('.plotly-graph-div');
+        if (!myDiv) return;
+
+        var draggedNode = null;
+        var nodePositions = {};
+
+        // Track node positions
+        myDiv.on('plotly_hover', function(data) {
+            if (data.points && data.points[0]) {
+                var point = data.points[0];
+                if (point.data.mode && point.data.mode.includes('markers')) {
+                    // Store node info
+                    draggedNode = {
+                        curveNumber: point.curveNumber,
+                        pointNumber: point.pointNumber,
+                        x: point.x,
+                        y: point.y
+                    };
+                }
+            }
+        });
+
+        // Enable dragging with shift+click+drag
+        var isDragging = false;
+        var startX, startY;
+
+        myDiv.addEventListener('mousedown', function(e) {
+            if (e.shiftKey && draggedNode) {
+                isDragging = true;
+                startX = e.clientX;
+                startY = e.clientY;
+                e.preventDefault();
+            }
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (isDragging && draggedNode) {
+                var dx = (e.clientX - startX) / 5;  // Scale factor
+                var dy = -(e.clientY - startY) / 5;  // Inverted Y axis
+
+                var update = {
+                    x: [[draggedNode.x + dx]],
+                    y: [[draggedNode.y + dy]]
+                };
+
+                Plotly.restyle(myDiv, update, [draggedNode.curveNumber]);
+
+                startX = e.clientX;
+                startY = e.clientY;
+                draggedNode.x += dx;
+                draggedNode.y += dy;
+            }
+        });
+
+        document.addEventListener('mouseup', function(e) {
+            if (isDragging) {
+                isDragging = false;
+                draggedNode = null;
+            }
+        });
+
+        // Add instruction text
+        var instruction = document.createElement('div');
+        instruction.style.cssText = 'position: fixed; top: 10px; right: 10px; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 5px; font-family: Arial; font-size: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); z-index: 1000;';
+        instruction.innerHTML = '<b>Controls:</b><br>• Pan: Click & drag<br>• Zoom: Scroll wheel<br>• Move node: Shift + Click & drag node<br>• Reset: Double-click';
+        document.body.appendChild(instruction);
+
+    }, 1000);
+});
+</script>
+"""
+
+        # Insert custom script before closing body tag
+        html_with_script = base_html.replace("</body>", custom_script + "</body>")
+
+        return html_with_script
 
     def _format_state_for_hover(self, state: str) -> str:
         """Format state text for hover display."""
