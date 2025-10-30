@@ -39,6 +39,7 @@ from llm_tts.scorers.tree_of_thoughts.value_scorer import TotValueScorer  # noqa
 from llm_tts.strategies.tree_of_thoughts.strategy import (  # noqa: E402
     StrategyTreeOfThoughts,
 )
+from llm_tts.visualization import TotVisualizer  # noqa: E402
 
 
 def test_generic_tot(question: str):
@@ -121,6 +122,39 @@ def test_generic_tot(question: str):
     print("GENERATED ANSWER")
     print("-" * 80)
     print(result.get("generated_answer", "No answer generated"))
+
+    print("\n" + "=" * 80)
+
+    # Create visualization
+    print("\n" + "-" * 80)
+    print("GENERATING VISUALIZATION")
+    print("-" * 80)
+    try:
+        visualizer = TotVisualizer(
+            width=1400,
+            height=900,
+            show_state_preview=True,
+            max_state_chars=60,
+        )
+
+        # Generate filename based on question
+        safe_question = "".join(c if c.isalnum() else "_" for c in question[:30])
+        output_file = f"tot_visualization_{safe_question}.html"
+
+        print("Creating interactive visualization...")
+        visualizer.visualize(
+            result,
+            output_path=output_file,
+            title=f"Tree-of-Thoughts: {question[:60]}...",
+            show=False,  # Don't auto-open browser
+        )
+        print(f"✓ Visualization saved to: {output_file}")
+        print("  Open this file in your browser to explore the reasoning tree.")
+    except Exception as e:
+        print(f"✗ Visualization failed: {e}")
+        import traceback
+
+        traceback.print_exc()
 
     print("\n" + "=" * 80)
 
