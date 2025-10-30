@@ -9,11 +9,11 @@ method_generate: propose
 method_evaluate: value
 
 # Beam search parameters
-beam_width: 3                    # Number of states to keep at each step
+beam_width: 5                    # Number of states to keep at each step (paper: 5)
 steps: 5                         # Maximum number of reasoning steps (increased for completeness)
 
 # Candidate generation parameters
-n_generate_sample: 3             # Number of candidates to generate per state
+n_generate_sample: 5             # Number of candidates to generate per state (paper: 5)
 n_evaluate_sample: 3             # Number of evaluation samples for scoring (paper: 3, aggregate)
 
 # Generation parameters
