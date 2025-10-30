@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 
-import json
 import logging
 import os
 import random
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 import hydra
@@ -17,6 +18,7 @@ from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from utils.results import load_results_json, parse_resume_arguments, save_results_json
 
 from llm_tts.evaluation import (
     EvaluatorAlignScore,
@@ -26,14 +28,17 @@ from llm_tts.evaluation import (
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
-from llm_tts.step_candidate_generator_base import StepCandidate
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
 )
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
-from llm_tts.strategies import StrategyDeepConf, StrategyOnlineBestOfN
+from llm_tts.strategies import (
+    StrategyBeamSearch,
+    StrategyDeepConf,
+    StrategyOnlineBestOfN,
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -96,11 +101,16 @@ def build_evaluators(config):
             llm_cfg.pop("provider", None)
             llm_cfg["prompt"] = prompt_template
 
-            evaluators["llm_judge"] = EvaluatorLLMAsAJudge(**llm_cfg)
+            # Include model name in evaluator key to support multiple LLM judge models
+            model_name = llm_cfg.get("model", "unknown")
+            # Sanitize model name (remove slashes, colons, etc.)
+            sanitized_model = model_name.replace("/", "_").replace(":", "_")
+            eval_key = f"llm_judge_{sanitized_model}"
+            evaluators[eval_key] = EvaluatorLLMAsAJudge(**llm_cfg)
 
         elif evaluator_name == "exact_match":
             evaluators["exact_match"] = EvaluatorExactMatch(
-                dataset_name=config.dataset.get("dataset_path")
+                config.dataset.answer_format
             )
 
         elif evaluator_name == "alignscore":
@@ -113,49 +123,6 @@ def build_evaluators(config):
             log.warning(f"Unknown evaluator type '{evaluator_name}', skipping")
 
     return evaluators
-
-
-def _safe_serialize(obj):
-    """Convert arbitrary Python objects (including tensors, numpy) to JSON-safe types."""
-    if obj is None or isinstance(obj, (bool, int, float, str)):
-        return obj
-    if isinstance(obj, dict):
-        return {str(k): _safe_serialize(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple, set)):
-        return [_safe_serialize(v) for v in obj]
-    if isinstance(obj, StepCandidate):
-        return {
-            "text": obj.text,
-            "token_ids": list(obj.token_ids) if obj.token_ids is not None else None,
-            "is_complete": obj.is_complete,
-            "is_trajectory_complete": obj.is_trajectory_complete,
-            "generation_scores": _safe_serialize(obj.generation_scores),
-            "raw_text": obj.raw_text,
-            "other_data": _safe_serialize(obj.other_data) if obj.other_data else None,
-        }
-    if hasattr(obj, "tolist"):
-        try:
-            return obj.tolist()
-        except Exception:
-            pass
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, (np.ndarray,)):
-        return obj.tolist()
-    if hasattr(obj, "__dict__"):
-        return _safe_serialize(vars(obj))
-
-    # Fallback to string representation
-    return str(obj)
-
-
-def _save_results_json(results, json_path: Path):
-    json_path = Path(json_path)
-    json_data = [_safe_serialize(r) for r in results]
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(json_data, f, ensure_ascii=False, indent=2)
 
 
 def wandb_save_directory(directory_path):
@@ -238,6 +205,7 @@ def create_model(config):
             detector=detector,
             temperature=config.generation.temperature,
             max_new_tokens=config.generation.max_new_tokens,
+            max_length=config.generation.max_length,
             top_p=config.generation.top_p,
             top_k=config.generation.top_k,
             disable_thinking_mode=config.model.disable_thinking_mode,
@@ -315,7 +283,6 @@ def create_tts_strategy(config, model, step_generator, scorer):
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
         )
-
     elif config.strategy.type == "deepconf":
         # DeepConf requires BlackboxModel with logprobs support
         if not isinstance(model, BlackboxModelWithStreaming):
@@ -336,6 +303,16 @@ def create_tts_strategy(config, model, step_generator, scorer):
             top_p=config.strategy.get("top_p", 1.0),
             max_tokens=config.strategy.get("max_tokens", 512),
             top_logprobs=config.strategy.get("top_logprobs", 20),
+            n_threads=config.strategy.get("n_threads", 8),
+        )
+    elif config.strategy.type == "beam_search":
+        strategy = StrategyBeamSearch(
+            step_generator=step_generator,
+            scorer=scorer,
+            beam_size=config.strategy.beam_size,
+            candidates_per_beam=config.strategy.candidates_per_beam,
+            max_steps=config.strategy.max_steps,
+            aggregation=getattr(config.strategy, "aggregation", "mean"),
         )
 
     else:
@@ -432,26 +409,29 @@ def generate_trajectories(
         log.info("-" * 60)
 
         # Store result WITHOUT correctness check
-        results.append(
-            {
-                "index": i,
-                "question": instance["question"],
-                "gold_answer": instance["answer"],
-                "generated_trajectory": result["trajectory"],
-                "generated_answer": generated_text,
-                "steps": result["steps"],
-                "validity_scores": result["validity_scores"],
-                "completed": result["completed"],
-            }
-        )
+        result_dict = {
+            "index": i,
+            "question": instance["question"],
+            "gold_answer": instance["answer"],
+            "generated_trajectory": result["trajectory"],
+            "generated_answer": generated_text,
+            "steps": result["steps"],
+            "validity_scores": result["validity_scores"],
+            "completed": result["completed"],
+        }
 
-        # Save periodically
-        if len(results) % 10 == 0:
-            _save_results_json(results, save_path_file)
-            log.info(f"Saved {len(results)} results to {save_path_file}")
+        # Include metadata if present (contains trace summaries and details)
+        if "metadata" in result:
+            result_dict["metadata"] = result["metadata"]
+
+        results.append(result_dict)
+
+        # Save after each sample (enables resuming with minimal data loss)
+        save_results_json(results, save_path_file)
+        log.info(f"Saved result for sample {i} to {save_path_file}")
 
     # Final save after generation
-    _save_results_json(results, save_path_file)
+    save_results_json(results, save_path_file)
     log.info(f"Final save after generation: {len(results)} results to {save_path_file}")
 
     return results
@@ -471,59 +451,93 @@ def evaluate_results(
     evaluators = build_evaluators(config)
     log.info(f"Using evaluators: {list(evaluators.keys())}")
 
-    # Prepare data for batch processing
-    problems = []
-    solutions = []
-    gold_answers = []
-    result_indices = []
+    save_path_file = Path(save_path) / "results.json"
 
-    for i, result in enumerate(results):
-        if "error" not in result:
-            problems.append(result["question"])
-            solutions.append(result["generated_answer"])
-            gold_answers.append(result["gold_answer"])
-            result_indices.append(i)
+    # Process each evaluator separately (allows resuming per-evaluator)
+    for eval_name, evaluator_fn in evaluators.items():
+        log.info(f"\n--- Evaluator: {eval_name} ---")
 
-    if problems:
-        log.info(
-            f"Verifying {len(problems)} solutions with {list(evaluators.keys())}..."
-        )
+        # Evaluate samples one at a time and save after each
+        samples_evaluated = 0
+        for i, result in enumerate(results):
+            if "error" in result:
+                continue
 
-        for eval_name, evaluator_fn in evaluators.items():
+            # Check if this evaluator has already processed this sample
+            if "eval" in result and eval_name in result["eval"]:
+                log.info(
+                    f"Skipping sample {result['index']} (already evaluated by {eval_name})"
+                )
+                continue
+
+            log.info(f"Evaluating sample {result['index']} with {eval_name}...")
+
             try:
-                annotations = evaluator_fn(problems, solutions, gold_answers)
-                for idx, annotation in zip(result_indices, annotations):
-                    if np.isnan(annotation):
-                        log.warning(
-                            f"{eval_name} returned unclear result for sample "
-                            f"{results[idx]['index']}, marking as incorrect"
-                        )
-                        is_correct = False
-                    else:
-                        is_correct = annotation == 1  # 1 = correct, 0 = incorrect
+                # Evaluate single sample
+                eval_result = evaluator_fn(
+                    [result["question"]],
+                    [result["generated_answer"]],
+                    [result["gold_answer"]],
+                )
 
-                    results[idx].setdefault("eval", {})[eval_name] = {
-                        "label": None if np.isnan(annotation) else int(annotation),
-                        "is_correct": bool(is_correct),
-                    }
+                # Handle both old format (list) and new format (tuple of lists)
+                if isinstance(eval_result, tuple):
+                    annotations, responses = eval_result
+                else:
+                    # Backward compatibility: old evaluators return just annotations
+                    annotations = eval_result
+                    responses = [None]
 
-                    if (idx - result_indices[0]) % 10 == 0:
-                        log.info(f"Sample {results[idx]['index']} [{eval_name}]:")
-                        log.info(f"Annotation: {annotation}")
-                        log.info(f"Correct: {is_correct}")
+                annotation = annotations[0]
+                response = responses[0] if responses else None
+
+                if np.isnan(annotation):
+                    log.warning(
+                        f"{eval_name} returned unclear result for sample "
+                        f"{result['index']}, marking as incorrect"
+                    )
+                    is_correct = False
+                else:
+                    is_correct = annotation == 1  # 1 = correct, 0 = incorrect
+
+                eval_data = {
+                    "label": None if np.isnan(annotation) else int(annotation),
+                    "is_correct": bool(is_correct),
+                }
+
+                # Add raw response if available
+                if response is not None:
+                    eval_data["response"] = response
+
+                results[i].setdefault("eval", {})[eval_name] = eval_data
+
+                log.info(
+                    f"Sample {result['index']} [{eval_name}]: "
+                    f"{annotation} ({'Correct' if is_correct else 'Incorrect'})"
+                )
+
+                # Save after each sample evaluation
+                save_results_json(results, save_path_file)
+                samples_evaluated += 1
 
             except Exception as e:
-                log.error(f"Error during {eval_name} verification: {e}")
-                for idx in result_indices:
-                    results[idx].setdefault("eval", {})[eval_name] = {
-                        "label": None,
-                        "is_correct": False,
-                    }
+                traceback.print_exc()
+                log.error(
+                    f"Error during {eval_name} verification for sample {result['index']}: {e}"
+                )
+                results[i].setdefault("eval", {})[eval_name] = {
+                    "label": None,
+                    "is_correct": False,
+                }
+                # Save even after errors
+                save_results_json(results, save_path_file)
 
-    # Final save with correctness results
-    save_path_file = Path(save_path) / "results.json"
-    _save_results_json(results, save_path_file)
-    log.info(f"Final save with correctness: {len(results)} results to {save_path_file}")
+        if samples_evaluated == 0:
+            log.info(f"All samples already evaluated by {eval_name}, skipping")
+        else:
+            log.info(
+                f"Completed evaluation with {eval_name} ({samples_evaluated} samples evaluated)"
+            )
 
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
@@ -534,10 +548,12 @@ def evaluate_results(
 
     for r in results:
         for name in evaluators.keys():
-            if r.get("eval").get(name).get("is_correct"):
-                summary_correct[name] += 1
-            elif not r.get("eval").get(name).get("is_correct"):
-                summary_incorrect[name] += 1
+            # Check if this result has been evaluated by this evaluator
+            if "eval" in r and name in r["eval"]:
+                if r["eval"][name].get("is_correct"):
+                    summary_correct[name] += 1
+                else:
+                    summary_incorrect[name] += 1
 
     log.info("Summary:")
     log.info(f"Total samples: {len(results)}")
@@ -624,8 +640,22 @@ def main(config):
             Path(config_path_hydra) / HydraConfig.get().job.config_name
         )
         os.environ["WANDB_DIR"] = str(Path(output_dir))
-        project = os.environ.get("WANDB_PROJECT", "llm-tts-eval")
-        wandb.init(project=project, dir=output_dir, config=wandb_cfg)
+        # Project name: config > env var > default
+        project = getattr(config, "wandb_project", None) or os.environ.get(
+            "WANDB_PROJECT", "llm-tts-eval"
+        )
+        run_name = config.get("run_name", None)
+
+        # Prepend date to wandb run name to match directory structure
+        if run_name:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            wandb_run_name = f"{date_str}_{run_name}"
+        else:
+            wandb_run_name = None
+
+        wandb.init(
+            project=project, name=wandb_run_name, dir=output_dir, config=wandb_cfg
+        )
         wandb_save_directory(Path(output_dir) / ".hydra")
 
     # Set random seeds
@@ -663,8 +693,10 @@ def main(config):
         config=config, model=model, step_generator=step_generator, scorer=scorer
     )
 
-    processed_indices = set()
-    results = []  # TODO: add logic for resuming from existing results
+    # Load existing results if available (for resuming interrupted runs)
+    results_path = Path(output_dir) / "results.json"
+    results, processed_indices = load_results_json(results_path)
+
     # Generate trajectories
     results = generate_trajectories(
         results=results,
@@ -684,4 +716,6 @@ def main(config):
 
 
 if __name__ == "__main__":
+    # Parse custom resume arguments before Hydra processes sys.argv
+    parse_resume_arguments()
     main()

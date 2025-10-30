@@ -33,6 +33,7 @@ dependencies = [
     "omegaconf>=2.2.0",
     "python-dotenv>=0.19.0",
     # "lm-polygraph>=0.0.1",  # Installed separately via setup.sh (dev branch)
+    "pylatexenc>=2.10",
 ]
 
 [project.optional-dependencies]

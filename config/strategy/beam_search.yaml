@@ -1,0 +1,5 @@
+type: "beam_search"
+beam_size: 3
+candidates_per_beam: 3
+max_steps: 3
+aggregation: "min"

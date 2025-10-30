@@ -2,6 +2,7 @@
 Candidate step generation system for online best-of-n
 """
 
+import inspect
 import logging
 import time
 from typing import Dict, List
@@ -68,6 +69,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         top_p: float,
         top_k: int,
         max_new_tokens: int,
+        max_length: int,
         disable_thinking_mode: bool,
         generation_batch_size: int,
         return_generation_scores: bool = False,
@@ -80,6 +82,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         self.top_p = top_p
         self.top_k = top_k
         self.max_new_tokens = max_new_tokens
+        self.max_length = max_length
         self.device = model.device()
         self.disable_thinking_mode = disable_thinking_mode
         self.return_generation_scores = return_generation_scores
@@ -95,17 +98,30 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         log.info(f"Generating {candidates_per_step} candidates from trajectory")
 
         # Tokenize current trajectory
-        inputs = self.model.tokenizer.apply_chat_template(
-            [request], tokenize=False, add_generation_prompt=True
+        tokenizer_signature = inspect.signature(
+            self.model.tokenizer.apply_chat_template
         )
+        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
+
+        # Call tokenizer depending on whether it supports `enable_thinking`
+        if has_enable_thinking:
+            inputs = self.model.tokenizer.apply_chat_template(
+                [request],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=(not self.disable_thinking_mode),
+            )
+        else:
+            inputs = self.model.tokenizer.apply_chat_template(
+                [request], tokenize=False, add_generation_prompt=True
+            )
+
         # Ensure inputs is a list (some tokenizers return str, some return list)
         if isinstance(inputs, str):
             inputs = [inputs]
 
-        if self.disable_thinking_mode:  # TODO: it is wrong
-            inputs[
-                0
-            ] += "\n<think>\n\n</think>\n\n"  # TODO: incorrect usage of assistant role
+        if self.disable_thinking_mode and not has_enable_thinking:
+            inputs[0] += "\n<think>\n\n</think>\n\n"
 
         inputs[0] = inputs[0] + covert_trajectory_to_string(trajectory)
 
@@ -115,7 +131,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             padding=True,
             truncation=True,
             add_special_tokens=False,
-            max_length=self.max_new_tokens,
+            max_length=self.max_length,
         )
         input_length = inputs["input_ids"].shape[1]
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
@@ -228,7 +244,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 raw_text=raw_generated_text,
                 other_data=(
                     {
-                        "uncertainty_score": outputs.uncertainty_score[0]
+                        "uncertainty_score": outputs.uncertainty_score[i]
                     }  # TODO: check if it is correct
                     if hasattr(outputs, "uncertainty_score")
                     else None
