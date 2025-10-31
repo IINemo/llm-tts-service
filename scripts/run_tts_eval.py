@@ -38,6 +38,7 @@ from llm_tts.strategies import (
     StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
+    StrategySelfConsistency,
 )
 
 # Load environment variables from .env file
@@ -217,19 +218,19 @@ def create_model(config):
         model_path = config.model.get("model_name") or config.model.get("model_path")
         log.info(f"Using OpenAI API model: {model_path}")
 
+        # Check provider for API key and base URL (applies to all strategies)
+        import os
+
+        if config.model.get("provider") == "openrouter":
+            api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+            base_url = "https://openrouter.ai/api/v1"
+        else:
+            api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
+            base_url = None
+
         # Check if DeepConf strategy
         if config.strategy.type == "deepconf":
             # DeepConf uses streaming with logprobs but no boundary detector
-            import os
-
-            # Check provider for API key and base URL
-            if config.model.get("provider") == "openrouter":
-                api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
-                base_url = "https://openrouter.ai/api/v1"
-            else:
-                api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
-                base_url = None
-
             model = BlackboxModelWithStreaming(
                 openai_api_key=api_key,
                 model_path=model_path,
@@ -257,11 +258,12 @@ def create_model(config):
             early_stopping = BoundaryEarlyStopping(detector=detector)
 
             model = BlackboxModelWithStreaming(
-                openai_api_key=config.model.api_key,
+                openai_api_key=api_key,
                 model_path=model_path,
                 supports_logprobs=config.model.supports_logprobs,
                 early_stopping=early_stopping,
                 generation_parameters=generation_parameters,
+                base_url=base_url,
             )
 
             step_generator = StepCandidateGeneratorThroughAPI(
@@ -314,6 +316,16 @@ def create_tts_strategy(config, model, step_generator, scorer):
             max_steps=config.strategy.max_steps,
             aggregation=getattr(config.strategy, "aggregation", "mean"),
         )
+    elif config.strategy.type == "self_consistency":
+        strategy = StrategySelfConsistency(
+            model=model,
+            num_paths=config.strategy.get("num_paths", 10),
+            max_new_tokens=config.strategy.get("max_new_tokens", 512),
+            temperature=config.strategy.get("temperature", 0.7),
+            generation_batch_size=config.strategy.get("generation_batch_size", None),
+            scorer=scorer,
+            n_threads=config.strategy.get("n_threads", None),
+        )
 
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
@@ -350,9 +362,13 @@ def generate_trajectories(
         log.info(f"Question: {instance['question'][:200]}...")
 
         # Extract and log gold answer
-        from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
+        # For GSM8K, extract from "#### X" format; for other datasets, use directly
+        if "####" in instance["answer"]:
+            from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
 
-        gold_answer_num = extract_answer_from_gsm8k(instance["answer"])
+            gold_answer_num = extract_answer_from_gsm8k(instance["answer"])
+        else:
+            gold_answer_num = instance["answer"]
         log.info(f"Gold answer: {gold_answer_num}")
 
         # Generate trajectory
@@ -384,8 +400,9 @@ def generate_trajectories(
         if result["steps"] and isinstance(result["steps"], list):
             for step_idx, step in enumerate(result["steps"]):
                 validity = (
-                    result["validity_scores"][step_idx]
-                    if step_idx < len(result["validity_scores"])
+                    result.get("validity_scores", [])[step_idx]
+                    if "validity_scores" in result
+                    and step_idx < len(result["validity_scores"])
                     else "N/A"
                 )
                 # Format confidence score (handle both numeric and "N/A")
@@ -405,7 +422,8 @@ def generate_trajectories(
         log.info("-" * 60)
         log.info(f"Generated: {generated_text}")
         log.info(f"Num traces: {len(result['steps'])}")
-        log.info(f"Avg confidence: {np.mean(result['validity_scores']):.3f}")
+        if "validity_scores" in result and result["validity_scores"]:
+            log.info(f"Avg confidence: {np.mean(result['validity_scores']):.3f}")
         log.info("-" * 60)
 
         # Store result WITHOUT correctness check
@@ -416,7 +434,7 @@ def generate_trajectories(
             "generated_trajectory": result["trajectory"],
             "generated_answer": generated_text,
             "steps": result["steps"],
-            "validity_scores": result["validity_scores"],
+            "validity_scores": result.get("validity_scores", []),
             "completed": result["completed"],
         }
 
