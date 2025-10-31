@@ -1,0 +1,42 @@
+.tot-tree-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* ReactFlow container styling */
+.react-flow {
+  background: #f5f7fa;
+}
+
+/* Node styling */
+.react-flow__node {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.react-flow__node:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Edge styling */
+.react-flow__edge-path {
+  stroke-width: 2;
+}
+
+/* Controls styling */
+.react-flow__controls {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+}
+
+.react-flow__controls-button {
+  border-bottom: none;
+}
+
+/* MiniMap styling */
+.react-flow__minimap {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+}
