@@ -200,16 +200,3 @@ lm-polygraph/
 CODEBASE_*.md
 TOT_*.md
 docs/tree_of_thoughts/
-
-# Debug and test scripts
-calculate_*.py
-debug_*.py
-investigate_*.py
-view_*.py
-openrouter_*.py
-tmp.py
-
-# Visualization outputs (generated HTML files)
-tot_visualization_*.html
-tot_demo_visualization.html
-tot_mock_visualization.html
