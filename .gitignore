@@ -180,7 +180,6 @@ outputs/
 *.sty
 
 workdir/
-NLP_project/
 
 # Reference implementations and external repos
 # deepconf/
