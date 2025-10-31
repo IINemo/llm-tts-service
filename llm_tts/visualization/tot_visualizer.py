@@ -9,7 +9,6 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import plotly.graph_objects as go
 
 log = logging.getLogger(__name__)
@@ -234,9 +233,10 @@ class TotVisualizer:
         """
         Compute tree layout positions for nodes.
 
-        Uses a hierarchical layout where:
-        - Y position = step number (top to bottom)
-        - X position = horizontal spread within each level
+        Uses a bottom-up approach to create symmetric layout:
+        - Positions leaf nodes first
+        - Parents are centered over their children
+        - Creates balanced, uniform tree structure
 
         Args:
             nodes: List of node dictionaries
@@ -246,41 +246,82 @@ class TotVisualizer:
         Returns:
             Dictionary mapping node_id -> (x, y) position
         """
-        positions = {}
+        # Build parent->children mapping
+        children_map = {}
+        for parent_id, child_id in edges:
+            if parent_id not in children_map:
+                children_map[parent_id] = []
+            children_map[parent_id].append(child_id)
+
+        # Build child->parent mapping
+        parent_map = {}
+        for parent_id, child_id in edges:
+            parent_map[child_id] = parent_id
 
         # Group nodes by step
         nodes_by_step = {}
+        node_map = {}
         for node in nodes:
             step = node["step"]
             if step not in nodes_by_step:
                 nodes_by_step[step] = []
             nodes_by_step[step].append(node)
+            node_map[node["id"]] = node
 
-        # Assign positions level by level
-        max_nodes_per_level = max(len(nodes) for nodes in nodes_by_step.values())
+        # Process bottom-up to compute subtree sizes
+        max_step = max(nodes_by_step.keys())
+        subtree_width = {}
 
-        for step, step_nodes in sorted(nodes_by_step.items()):
-            n_nodes = len(step_nodes)
+        for step in range(max_step, -1, -1):
+            for node in nodes_by_step[step]:
+                node_id = node["id"]
+                if node_id in children_map:
+                    # Width = sum of children's widths
+                    child_widths = sum(
+                        subtree_width.get(c, 1) for c in children_map[node_id]
+                    )
+                    subtree_width[node_id] = child_widths
+                else:
+                    # Leaf node
+                    subtree_width[node_id] = 1
 
-            # Y position (inverted so root is at top)
+        # Now position nodes top-down, allocating space based on subtree width
+        positions = {}
+
+        def position_subtree(node_id, x_start, x_end, step):
+            """Recursively position a subtree within [x_start, x_end]."""
             y = -step
 
-            # X positions (spread evenly)
-            if n_nodes == 1:
-                x_positions = [0.0]
-            else:
-                # Spread based on number of nodes at this level
-                spread = min(n_nodes * 2, max_nodes_per_level * 1.5)
-                x_positions = np.linspace(-spread / 2, spread / 2, n_nodes)
+            # Position this node at the center of its allocated space
+            x_center = (x_start + x_end) / 2
+            positions[node_id] = (x_center, y)
 
-            # Sort nodes by parent for better visual grouping
-            step_nodes_sorted = sorted(
-                step_nodes,
-                key=lambda n: self._get_parent_id(n["id"], edges),
-            )
+            # Position children
+            if node_id in children_map:
+                children = children_map[node_id]
 
-            for node, x in zip(step_nodes_sorted, x_positions):
-                positions[node["id"]] = (x, y)
+                # Allocate space to children proportional to their subtree widths
+                total_width = sum(subtree_width.get(c, 1) for c in children)
+                current_x = x_start
+
+                for child_id in children:
+                    child_width = subtree_width.get(child_id, 1)
+                    child_proportion = child_width / total_width
+                    child_space = (x_end - x_start) * child_proportion
+
+                    child_node = node_map[child_id]
+                    position_subtree(
+                        child_id, current_x, current_x + child_space, child_node["step"]
+                    )
+
+                    current_x += child_space
+
+        # Start from root with total width based on subtree size
+        root_node = nodes_by_step[0][0]
+        root_id = root_node["id"]
+        total_width = subtree_width[root_id] * 2.0  # Scale factor for spacing
+
+        position_subtree(root_id, -total_width / 2, total_width / 2, 0)
 
         return positions
 
@@ -312,21 +353,43 @@ class TotVisualizer:
         Returns:
             Plotly Figure
         """
-        # Extract edge positions
-        edge_x = []
-        edge_y = []
+        # Create node lookup for checking selection status
+        node_map = {n["id"]: n for n in nodes}
+
+        # Separate edges into selected (solid, thick) and non-selected (dashed, thin)
+        selected_edge_x = []
+        selected_edge_y = []
+        nonselected_edge_x = []
+        nonselected_edge_y = []
 
         for parent_id, child_id in edges:
             x0, y0 = positions[parent_id]
             x1, y1 = positions[child_id]
-            edge_x.extend([x0, x1, None])
-            edge_y.extend([y0, y1, None])
 
-        # Create edge trace
-        edge_trace = go.Scatter(
-            x=edge_x,
-            y=edge_y,
-            line=dict(width=1, color="#888"),
+            # Edge is part of selected path if child is selected
+            child_node = node_map.get(child_id)
+            if child_node and child_node["is_selected"]:
+                selected_edge_x.extend([x0, x1, None])
+                selected_edge_y.extend([y0, y1, None])
+            else:
+                nonselected_edge_x.extend([x0, x1, None])
+                nonselected_edge_y.extend([y0, y1, None])
+
+        # Create non-selected edge trace (dashed, thin, light gray)
+        nonselected_edge_trace = go.Scatter(
+            x=nonselected_edge_x,
+            y=nonselected_edge_y,
+            line=dict(width=0.8, color="#ccc", dash="dash"),
+            hoverinfo="none",
+            mode="lines",
+            showlegend=False,
+        )
+
+        # Create selected edge trace (solid, thick, darker)
+        selected_edge_trace = go.Scatter(
+            x=selected_edge_x,
+            y=selected_edge_y,
+            line=dict(width=2.5, color="#555"),
             hoverinfo="none",
             mode="lines",
             showlegend=False,
@@ -337,6 +400,8 @@ class TotVisualizer:
         node_y = []
         node_colors = []
         node_sizes = []
+        node_border_widths = []
+        node_border_colors = []
         node_text = []
         node_hover = []
 
@@ -351,13 +416,17 @@ class TotVisualizer:
             node_x.append(x)
             node_y.append(y)
 
-            # Color based on score (normalized)
+            # Color and size based on score (normalized)
             if node["is_root"]:
                 color = "lightblue"
                 size = self.node_size * 1.5
+                border_width = 2
+                border_color = "white"
             elif node["is_final"]:
                 color = "gold"
-                size = self.node_size * 1.3
+                size = self.node_size * 1.4
+                border_width = 3
+                border_color = "#ff6b00"  # Orange border for final nodes
             else:
                 # Score-based coloring: green (high) to red (low)
                 norm_score = (
@@ -374,14 +443,22 @@ class TotVisualizer:
                     g = 255
                 b = 0
                 color = f"rgb({r},{g},{b})"
-                size = (
-                    self.node_size * 1.2
-                    if node["is_selected"]
-                    else self.node_size * 0.8
-                )
+
+                # Size based on score (higher score = larger node)
+                size = self.node_size * (0.7 + 0.6 * norm_score)
+
+                # Selected nodes get thicker, colored border
+                if node["is_selected"]:
+                    border_width = 4
+                    border_color = "#0066cc"  # Blue border for selected
+                else:
+                    border_width = 1
+                    border_color = "#999"
 
             node_colors.append(color)
             node_sizes.append(size)
+            node_border_widths.append(border_width)
+            node_border_colors.append(border_color)
 
             # Label - compact format with node IDs
             if node["is_root"]:
@@ -421,13 +498,13 @@ class TotVisualizer:
             marker=dict(
                 color=node_colors,
                 size=node_sizes,
-                line=dict(width=2, color="white"),
+                line=dict(width=node_border_widths, color=node_border_colors),
             ),
             showlegend=False,
         )
 
-        # Create figure
-        fig = go.Figure(data=[edge_trace, node_trace])
+        # Create figure with both edge traces (non-selected first, then selected on top)
+        fig = go.Figure(data=[nonselected_edge_trace, selected_edge_trace, node_trace])
 
         # Update layout
         metadata = result.get("metadata", {})
@@ -540,7 +617,7 @@ document.addEventListener('DOMContentLoaded', function() {
         var draggedNodeIndex = null;
         var startX, startY;
         var nodeTraceIndex = null;
-        var edgeTraceIndex = null;
+        var edgeTraceIndices = [];  // Multiple edge traces now
         var shiftPressed = false;
 
         // Find which trace contains the nodes (has markers+text) and edges (lines only)
@@ -549,7 +626,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data[i].mode && data[i].mode.includes('markers')) {
                 nodeTraceIndex = i;
             } else if (data[i].mode === 'lines') {
-                edgeTraceIndex = i;
+                edgeTraceIndices.push(i);
             }
         }
 
@@ -561,34 +638,35 @@ document.addEventListener('DOMContentLoaded', function() {
         // Store original node positions
         var nodeX = [...myDiv.data[nodeTraceIndex].x];
         var nodeY = [...myDiv.data[nodeTraceIndex].y];
-        var originalEdgeX = edgeTraceIndex !== null ? [...myDiv.data[edgeTraceIndex].x] : [];
-        var originalEdgeY = edgeTraceIndex !== null ? [...myDiv.data[edgeTraceIndex].y] : [];
 
-        // Build edge connectivity map (which nodes are connected)
+        // Build edge connectivity map from all edge traces
         var edgeMap = [];
-        if (edgeTraceIndex !== null) {
-            for (var i = 0; i < originalEdgeX.length; i += 3) {
-                if (originalEdgeX[i] !== null && originalEdgeX[i+1] !== null) {
-                    edgeMap.push({
+        for (var traceIdx of edgeTraceIndices) {
+            var edgeX = myDiv.data[traceIdx].x;
+            var edgeY = myDiv.data[traceIdx].y;
+
+            for (var i = 0; i < edgeX.length; i += 3) {
+                if (edgeX[i] !== null && edgeX[i+1] !== null) {
+                    var edge = {
+                        traceIdx: traceIdx,
                         fromIdx: -1,
-                        toIdx: -1,
-                        edgeStartIdx: i,
-                        x0: originalEdgeX[i],
-                        y0: originalEdgeY[i],
-                        x1: originalEdgeX[i+1],
-                        y1: originalEdgeY[i+1]
-                    });
+                        toIdx: -1
+                    };
 
                     // Find corresponding node indices
                     for (var j = 0; j < nodeX.length; j++) {
-                        if (Math.abs(nodeX[j] - originalEdgeX[i]) < 0.01 &&
-                            Math.abs(nodeY[j] - originalEdgeY[i]) < 0.01) {
-                            edgeMap[edgeMap.length - 1].fromIdx = j;
+                        if (Math.abs(nodeX[j] - edgeX[i]) < 0.01 &&
+                            Math.abs(nodeY[j] - edgeY[i]) < 0.01) {
+                            edge.fromIdx = j;
                         }
-                        if (Math.abs(nodeX[j] - originalEdgeX[i+1]) < 0.01 &&
-                            Math.abs(nodeY[j] - originalEdgeY[i+1]) < 0.01) {
-                            edgeMap[edgeMap.length - 1].toIdx = j;
+                        if (Math.abs(nodeX[j] - edgeX[i+1]) < 0.01 &&
+                            Math.abs(nodeY[j] - edgeY[i+1]) < 0.01) {
+                            edge.toIdx = j;
                         }
+                    }
+
+                    if (edge.fromIdx !== -1 && edge.toIdx !== -1) {
+                        edgeMap.push(edge);
                     }
                 }
             }
@@ -692,29 +770,32 @@ document.addEventListener('DOMContentLoaded', function() {
                 nodeX[draggedNodeIndex] += dx;
                 nodeY[draggedNodeIndex] += dy;
 
-                // Rebuild edges based on current node positions
-                if (edgeTraceIndex !== null) {
-                    var newEdgeX = [];
-                    var newEdgeY = [];
+                // Rebuild edges for each trace based on current node positions
+                var edgeUpdatesByTrace = {};
+                for (var i = 0; i < edgeMap.length; i++) {
+                    var edge = edgeMap[i];
+                    var traceIdx = edge.traceIdx;
 
-                    for (var i = 0; i < edgeMap.length; i++) {
-                        var edge = edgeMap[i];
-                        var fromIdx = edge.fromIdx;
-                        var toIdx = edge.toIdx;
-
-                        // Use current node positions
-                        newEdgeX.push(nodeX[fromIdx]);
-                        newEdgeY.push(nodeY[fromIdx]);
-                        newEdgeX.push(nodeX[toIdx]);
-                        newEdgeY.push(nodeY[toIdx]);
-                        newEdgeX.push(null);  // Separator
-                        newEdgeY.push(null);
+                    if (!edgeUpdatesByTrace[traceIdx]) {
+                        edgeUpdatesByTrace[traceIdx] = {x: [], y: []};
                     }
 
-                    // Update both nodes and edges
-                    Plotly.restyle(myDiv, {x: [newEdgeX], y: [newEdgeY]}, [edgeTraceIndex]);
+                    // Use current node positions
+                    edgeUpdatesByTrace[traceIdx].x.push(nodeX[edge.fromIdx]);
+                    edgeUpdatesByTrace[traceIdx].y.push(nodeY[edge.fromIdx]);
+                    edgeUpdatesByTrace[traceIdx].x.push(nodeX[edge.toIdx]);
+                    edgeUpdatesByTrace[traceIdx].y.push(nodeY[edge.toIdx]);
+                    edgeUpdatesByTrace[traceIdx].x.push(null);  // Separator
+                    edgeUpdatesByTrace[traceIdx].y.push(null);
                 }
 
+                // Update all edge traces
+                for (var traceIdx in edgeUpdatesByTrace) {
+                    var updates = edgeUpdatesByTrace[traceIdx];
+                    Plotly.restyle(myDiv, {x: [updates.x], y: [updates.y]}, [parseInt(traceIdx)]);
+                }
+
+                // Update node trace
                 Plotly.restyle(myDiv, {x: [nodeX], y: [nodeY]}, [nodeTraceIndex]);
 
                 startX = e.clientX;
@@ -756,12 +837,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if not state:
             return "<i>(empty)</i>"
 
-        # Limit to reasonable length
-        max_chars = 500
-        if len(state) > max_chars:
-            state = state[:max_chars] + "..."
-
-        # HTML escape and preserve line breaks
+        # HTML escape and preserve line breaks (no truncation)
         state = state.replace("&", "&amp;")
         state = state.replace("<", "&lt;")
         state = state.replace(">", "&gt;")
