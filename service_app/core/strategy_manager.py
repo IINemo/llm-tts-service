@@ -164,7 +164,7 @@ class StrategyManager:
             max_tokens=scorer_config.get("max_tokens", 50),
             timeout=scorer_config.get("timeout", 120),
             value_prompt_path=scorer_config.get(
-                "value_prompt_path", "config/prompts/tot/generic_tot_value.txt"
+                "value_prompt_path", "config/prompts/tree-of-thought/generic_value.txt"
             ),
         )
 
@@ -181,7 +181,8 @@ class StrategyManager:
             n_threads=config.get("n_threads", 4),
             scorer_timeout=scorer_config.get("timeout", 120),
             propose_prompt_path=config.get(
-                "propose_prompt_path", "config/prompts/tot/generic_tot_propose.txt"
+                "propose_prompt_path",
+                "config/prompts/tree-of-thought/generic_propose.txt",
             ),
         )
 
