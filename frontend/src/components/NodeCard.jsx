@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import './NodeCard.css';
 
 const NodeCard = ({ node, onClose }) => {
-  const [renderMode, setRenderMode] = useState('plain');
+  const [renderMode, setRenderMode] = useState('rendered'); // Default to rendered mode
 
   const toggleRenderMode = () => {
     setRenderMode(renderMode === 'plain' ? 'rendered' : 'plain');
@@ -15,6 +15,40 @@ const NodeCard = ({ node, onClose }) => {
     if (node.is_final) statuses.push('FINAL');
     if (node.is_selected) statuses.push('SELECTED');
     return statuses.length > 0 ? statuses.join(', ') : 'Generated';
+  };
+
+  // Parse state into thoughts with metadata
+  const parseStateAsThoughts = (state) => {
+    if (!state) return [{ type: 'text', content: '(empty)' }];
+
+    const lines = state.split('\n');
+    let thoughtCounter = 1;
+    const thoughts = [];
+
+    lines.forEach((line) => {
+      if (line.trim().startsWith('**')) {
+        // Extract content: **Some text**: Description
+        const withoutStart = line.trim().substring(2);
+        const endBoldIndex = withoutStart.indexOf('**');
+
+        if (endBoldIndex !== -1) {
+          const boldText = withoutStart.substring(0, endBoldIndex);
+          const restOfLine = withoutStart.substring(endBoldIndex + 2);
+
+          thoughts.push({
+            type: 'thought',
+            number: thoughtCounter,
+            title: boldText,
+            content: restOfLine,
+          });
+          thoughtCounter++;
+        }
+      } else if (line.trim()) {
+        thoughts.push({ type: 'text', content: line });
+      }
+    });
+
+    return thoughts;
   };
 
   return (
@@ -58,7 +92,20 @@ const NodeCard = ({ node, onClose }) => {
               </div>
             ) : (
               <div className="state-content rendered">
-                <ReactMarkdown>{node.state || '**(empty)**'}</ReactMarkdown>
+                {parseStateAsThoughts(node.state).map((item, idx) => {
+                  if (item.type === 'thought') {
+                    return (
+                      <p key={idx}>
+                        <span className="thought-label">Thought {item.number}:</span>{' '}
+                        <ReactMarkdown components={{ p: 'span' }}>
+                          {`**${item.title}**${item.content}`}
+                        </ReactMarkdown>
+                      </p>
+                    );
+                  } else {
+                    return <p key={idx}>{item.content}</p>;
+                  }
+                })}
               </div>
             )}
           </div>

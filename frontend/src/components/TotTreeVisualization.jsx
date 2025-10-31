@@ -112,8 +112,8 @@ const TotTreeVisualization = ({ data }) => {
 
 // Simple tree layout - position nodes in levels
 function calculateTreeLayout(nodes, edges, originalNodes) {
-  const HORIZONTAL_SPACING = 150;
-  const VERTICAL_SPACING = 100;
+  const HORIZONTAL_SPACING = 280;
+  const VERTICAL_SPACING = 150;
 
   // Group nodes by step (level)
   const nodesByStep = {};
