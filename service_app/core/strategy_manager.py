@@ -6,10 +6,25 @@ import logging
 from typing import Any, Dict, Optional
 
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.strategies.strategy_deepconf import StrategyDeepConf
-from llm_tts.strategies.strategy_online_best_of_n import StrategyOnlineBestOfN
+from llm_tts.scorers.tree_of_thoughts.value_scorer import TotValueScorer
+from llm_tts.strategies.tree_of_thoughts.strategy import StrategyTreeOfThoughts
 
 from .config import settings
+
+# Optional imports for other strategies (may not be available on all branches)
+try:
+    from llm_tts.strategies.strategy_deepconf import StrategyDeepConf
+
+    HAS_DEEPCONF = True
+except ImportError:
+    HAS_DEEPCONF = False
+
+try:
+    from llm_tts.strategies.strategy_online_best_of_n import StrategyOnlineBestOfN
+
+    HAS_ONLINE_BEST_OF_N = True
+except ImportError:
+    HAS_ONLINE_BEST_OF_N = False
 
 log = logging.getLogger(__name__)
 
@@ -78,15 +93,32 @@ class StrategyManager:
         strategy_config = strategy_config or {}
 
         if strategy_type == "deepconf":
+            if not HAS_DEEPCONF:
+                raise ValueError(
+                    "DeepConf strategy is not available on this branch. Use 'tree_of_thoughts' or 'tot' instead."
+                )
             return self._create_deepconf_strategy(model_name, strategy_config)
         elif strategy_type == "online_best_of_n":
+            if not HAS_ONLINE_BEST_OF_N:
+                raise ValueError(
+                    "Online Best-of-N strategy is not available on this branch."
+                )
             return self._create_online_best_of_n_strategy(model_name, strategy_config)
+        elif strategy_type == "tree_of_thoughts" or strategy_type == "tot":
+            return self._create_tree_of_thoughts_strategy(model_name, strategy_config)
         else:
-            raise ValueError(f"Unknown strategy type: {strategy_type}")
+            available = ["tree_of_thoughts", "tot"]
+            if HAS_DEEPCONF:
+                available.append("deepconf")
+            if HAS_ONLINE_BEST_OF_N:
+                available.append("online_best_of_n")
+            raise ValueError(
+                f"Unknown strategy type: {strategy_type}. Available strategies: {', '.join(available)}"
+            )
 
     def _create_deepconf_strategy(
         self, model_name: str, config: Dict[str, Any]
-    ) -> StrategyDeepConf:
+    ) -> "StrategyDeepConf":
         """Create DeepConf strategy instance."""
         model = self._get_or_create_model(
             model_name=model_name,
@@ -108,10 +140,50 @@ class StrategyManager:
 
     def _create_online_best_of_n_strategy(
         self, model_name: str, config: Dict[str, Any]
-    ) -> StrategyOnlineBestOfN:
+    ) -> "StrategyOnlineBestOfN":
         """Create Online Best-of-N strategy instance."""
         # TODO: Implement when needed
         raise NotImplementedError("Online Best-of-N strategy not yet implemented")
+
+    def _create_tree_of_thoughts_strategy(
+        self, model_name: str, config: Dict[str, Any]
+    ) -> StrategyTreeOfThoughts:
+        """Create Tree-of-Thoughts strategy instance."""
+        model = self._get_or_create_model(
+            model_name=model_name,
+            provider=config.get("provider", "openrouter"),
+            supports_logprobs=False,  # ToT doesn't require logprobs
+        )
+
+        # Create scorer if not provided
+        scorer_config = config.get("scorer", {})
+        scorer = TotValueScorer(
+            model=model,
+            n_evaluate_sample=scorer_config.get("n_evaluate_sample", 3),
+            temperature=scorer_config.get("temperature", 0.0),
+            max_tokens=scorer_config.get("max_tokens", 50),
+            timeout=scorer_config.get("timeout", 120),
+            value_prompt_path=scorer_config.get(
+                "value_prompt_path", "config/prompts/tot/generic_tot_value.txt"
+            ),
+        )
+
+        return StrategyTreeOfThoughts(
+            model=model,
+            scorer=scorer,
+            mode=config.get("mode", "generic"),
+            method_generate=config.get("method_generate", "propose"),
+            beam_width=config.get("beam_width", 3),
+            n_generate_sample=config.get("n_generate_sample", 5),
+            steps=config.get("steps", 4),
+            temperature=config.get("temperature", 0.7),
+            max_tokens_per_step=config.get("max_tokens_per_step", 150),
+            n_threads=config.get("n_threads", 4),
+            scorer_timeout=scorer_config.get("timeout", 120),
+            propose_prompt_path=config.get(
+                "propose_prompt_path", "config/prompts/tot/generic_tot_propose.txt"
+            ),
+        )
 
     def clear_cache(self):
         """Clear model cache."""
