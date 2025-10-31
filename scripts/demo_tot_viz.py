@@ -45,7 +45,7 @@ def main():
         print("ERROR: OPENROUTER_API_KEY not found in .env file")
         sys.exit(1)
 
-    question = "What are 3 benefits of test-time scaling in LLMs?"
+    question = "How to solve the equation x^2 + 2x - 3 = 0?"
 
     print("=" * 80)
     print("ToT Visualization Demo")
@@ -84,7 +84,7 @@ def main():
         method_generate="propose",
         beam_width=2,  # Minimal for speed
         n_generate_sample=2,  # Minimal for speed
-        steps=2,  # Minimal for speed
+        steps=8,  # Minimal for speed
         temperature=0.7,
         max_tokens_per_step=100,
         n_threads=2,
@@ -125,7 +125,7 @@ def main():
             result,
             output_path=output_file,
             title=f"ToT Demo: {question}",
-            show=False,
+            show=True,  # Auto-open in browser
         )
         print(f"\n✓ SUCCESS! Visualization saved to: {output_file}")
         print("\nOpen this file in your browser to explore the reasoning tree:")

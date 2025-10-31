@@ -350,11 +350,16 @@ Rating:"""
 
             except (openai.APITimeoutError, openai.APIConnectionError) as e:
                 if attempt < max_retries - 1:
-                    # Client already recreated when timeout detected, just delay before retry
+                    # Recreate client to clear stuck connections
+                    if isinstance(self.model, BlackboxModelWithStreaming):
+                        log.warning(
+                            f"[EVAL] Timeout/connection error on attempt {attempt + 1}/{max_retries}. Recreating client..."
+                        )
+                        self.model.recreate_client()
+
                     delay = 10 + (base_delay * (2**attempt))  # 12s, 14s, 18s
                     log.warning(
-                        f"[EVAL] API timeout/connection error on attempt {attempt + 1}/{max_retries}. "
-                        f"Waiting {delay:.1f}s before retry... Error: {e}"
+                        f"[EVAL] Waiting {delay:.1f}s before retry... Error: {e}"
                     )
                     time.sleep(delay)
                 else:
