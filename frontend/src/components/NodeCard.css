@@ -164,3 +164,8 @@
 .state-content.rendered em {
   color: #999;
 }
+
+.state-content.rendered .thought-label {
+  color: #000;
+  font-weight: normal;
+}
