@@ -180,3 +180,8 @@ outputs/
 *.sty
 
 workdir/
+
+# Reference implementations and external repos
+# deepconf/
+# tree-of-thought-llm/
+lm-polygraph/
