@@ -25,13 +25,14 @@ app = FastAPI(
     description="""
     LLM Test-Time Scaling Service with OpenAI-compatible API.
 
-    This service exposes TTS strategies (DeepConf, Best-of-N, etc.) through
+    This service exposes TTS strategies (DeepConf, Tree-of-Thoughts, Best-of-N, etc.) through
     an OpenAI-compatible interface. You can use the OpenAI Python SDK or
     any OpenAI-compatible client to interact with this service.
 
     ## Features
     - Drop-in replacement for OpenAI's Chat Completions API
     - Supports DeepConf strategy (offline and online modes)
+    - Supports Tree-of-Thoughts (ToT) strategy with beam search
     - Compatible with OpenAI Python SDK
     - Additional TTS-specific parameters for advanced control
 

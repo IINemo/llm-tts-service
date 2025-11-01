@@ -103,16 +103,25 @@ def test_tot_answer_extraction(test_model):
 
 def test_tot_final_answer_detection(test_model):
     """Test detection of final answers."""
+    # Test generic mode (default)
     strategy = StrategyTreeOfThoughts(model=test_model, beam_width=2, steps=1)
 
-    # Should detect these as final answers
-    assert strategy._is_final_answer("Answer: 42")
-    assert strategy._is_final_answer("The result is \\boxed{15}")
-    assert strategy._is_final_answer("x = 27")
+    # Should detect these as final answers in generic mode
+    assert strategy._is_final_answer("final answer: 42")
+    assert strategy._is_final_answer("Therefore, the result is 15")
+    assert strategy._is_final_answer("In conclusion, x = 27")
+    assert strategy._is_final_answer("The answer is: 42")
 
     # Should not detect these as final answers
     assert not strategy._is_final_answer("Step 1: Add the numbers")
     assert not strategy._is_final_answer("Let's think about this")
+
+    # Test game24 mode
+    strategy_game24 = StrategyTreeOfThoughts(
+        model=test_model, beam_width=2, steps=1, mode="game24"
+    )
+    assert strategy_game24._is_final_answer("Answer: (4 + 8) * (6 - 4) = 24")
+    assert strategy_game24._is_final_answer("Steps:\n4 + 8 = 12\n(left: 24)")
 
 
 @pytest.mark.skipif(
@@ -160,10 +169,10 @@ def test_tot_simple_math_problem(test_model):
 
     # Verify metadata
     metadata = result["metadata"]
-    assert "strategy_name" in metadata
+    assert "strategy" in metadata
     assert "config" in metadata
     assert "results" in metadata
-    assert metadata["strategy_name"] == "tree_of_thoughts"
+    assert metadata["strategy"] == "tree_of_thoughts"
 
     # Check API call tracking
     assert strategy.total_api_calls > 0

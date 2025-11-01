@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     together_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
+    wandb_api_key: Optional[str] = None
 
     # Model Settings
     default_model: str = "openai/gpt-4o-mini"
@@ -53,6 +54,8 @@ class Settings(BaseSettings):
         case_sensitive = False
         # Also read from environment variables
         env_nested_delimiter = "__"
+        # Allow extra fields from environment that aren't defined in the model
+        extra = "ignore"
 
 
 # Global settings instance
