@@ -6,7 +6,7 @@ class TestEvaluatorExactMatch:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.evaluator = EvaluatorExactMatch()
+        self.evaluator = EvaluatorExactMatch(dataset_answer_format="numeric")
 
     def test_exact_numeric_match(self):
         problems = ["What is 2+2?"]
@@ -201,3 +201,107 @@ class TestEvaluatorExactMatch:
 
         scores = self.evaluator(problems, solutions, gold_answers)
         assert scores[0] == 0.0
+
+    def test_boolean_answers(self):
+        problem = "Did the Hopi Indians use a symbol that was similar to the swastika?"
+        solution = "true"
+        gold_answer = ["True", "true"]
+
+        score1 = self.evaluator._score_single((problem, solution, gold_answer[0]))
+        score2 = self.evaluator._score_single((problem, solution, gold_answer[1]))
+        assert score1 == 1.0
+        assert score2 == 1.0
+
+    def test_boolean_answers_advanced(self):
+        problem = "Did the Hopi Indians use a symbol that was similar to the swastika?"
+        solution_true = ["<Answer>: True", "<Answer>: true"]
+        solution_false = ["<Answer>: False", "<Answer>: false"]
+
+        for st in solution_true:
+            score = self.evaluator._score_single((problem, st, "true"))
+            assert score == 1.0
+        for sf in solution_false:
+            score = self.evaluator._score_single((problem, sf, "false"))
+            assert score == 1.0
+        for st in solution_true:
+            score = self.evaluator._score_single((problem, st, "false"))
+            assert score == 0.0
+        for sf in solution_false:
+            score = self.evaluator._score_single((problem, sf, "true"))
+            assert score == 0.0
+
+    def test_boolean_answers_parsed(self):
+        problem = [
+            "Did the Hopi Indians use a symbol that was similar to the swastika?"
+        ]
+        solution_true = ["The final answer is True", "The final answer is true"]
+        solution_false = ["The final answer is False", "The final answer is false"]
+
+        boolean_evaluator = EvaluatorExactMatch(dataset_answer_format="boolean")
+
+        for st in solution_true:
+            score = boolean_evaluator._score_single((problem, st, "true"))
+            assert score == 1.0
+        for sf in solution_false:
+            score = boolean_evaluator._score_single((problem, sf, "false"))
+            assert score == 1.0
+        for st in solution_true:
+            score = boolean_evaluator._score_single((problem, st, "false"))
+            assert score == 0.0
+        for sf in solution_false:
+            score = boolean_evaluator._score_single((problem, sf, "true"))
+            assert score == 0.0
+
+    def test_char_answers(self):
+        problem = "The sanctions against the school were a punishing blow, and they seemed to what the efforts the school had made to change? Options: \nA: ignore\nB: enforce\nC: authoritarian\nD: yell at\nE: avoid"
+        solution = "A"
+        gold_answer = "A"
+
+        char_evaluator = EvaluatorExactMatch(dataset_answer_format="char")
+
+        score = char_evaluator._score_single((problem, solution, gold_answer))
+        assert score == 1.0
+
+    def test_char_answers_advanced(self):
+        problem = [
+            "Did the Hopi Indians use a symbol that was similar to the swastika?"
+        ]
+        solution_true = ["<Answer>: A", "<Answer>: A"]
+        solution_false = ["<Answer>: C", "<Answer>: C"]
+
+        char_evaluator = EvaluatorExactMatch(dataset_answer_format="char")
+
+        for st in solution_true:
+            score = char_evaluator._score_single((problem, st, "A"))
+            assert score == 1.0
+        for sf in solution_false:
+            score = char_evaluator._score_single((problem, sf, "C"))
+            assert score == 1.0
+        for st in solution_true:
+            score = char_evaluator._score_single((problem, st, "C"))
+            assert score == 0.0
+        for sf in solution_false:
+            score = char_evaluator._score_single((problem, sf, "A"))
+            assert score == 0.0
+
+    def test_string_answers(self):
+        """Test direct string comparison format."""
+        problem = "What is the capital of France?"
+        solution = "<Answer>: Paris"
+        gold_answer = "Paris"
+
+        # Create evaluator with string format
+        string_evaluator = EvaluatorExactMatch(dataset_answer_format="string")
+
+        score = string_evaluator._score_single((problem, solution, gold_answer))
+        assert score == 1.0
+
+        # Test case sensitivity
+        solution_upper = "PARIS"
+        score = string_evaluator._score_single((problem, solution_upper, gold_answer))
+        assert score == 1.0  # Should match due to normalization
+
+        # Test mismatch
+        solution_wrong = "London"
+        score = string_evaluator._score_single((problem, solution_wrong, gold_answer))
+        assert score == 0.0

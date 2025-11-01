@@ -34,7 +34,7 @@ cache_values: true               # Cache state evaluations to reduce API calls
 
 # Prompt paths (override in experiment configs for specific tasks)
 # Generic mode defaults:
-propose_prompt_path: config/prompts/tot/generic_tot_propose.txt  # Generic propose prompt
+propose_prompt_path: config/prompts/tree-of-thought/generic_propose.txt  # Generic propose prompt
 cot_prompt_path: null            # Path to CoT prompt (for final answer generation)
-value_prompt_path: config/prompts/tot/generic_tot_value.txt     # Generic value scorer prompt
+value_prompt_path: config/prompts/tree-of-thought/generic_value.txt     # Generic value scorer prompt
 value_last_step_prompt_path: null  # Path to final answer validation prompt
