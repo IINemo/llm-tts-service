@@ -1,0 +1,21 @@
+Evaluate the quality and promise of this reasoning path:
+
+Problem: {problem}
+
+Current reasoning:
+{state}
+
+Is this reasoning path likely to lead to a good solution?
+
+Consider:
+- Is the logic sound and coherent?
+- Are we making meaningful progress?
+- Is this approach viable and practical?
+- Are there any obvious errors or dead ends?
+
+Respond with ONE word:
+- "sure" if this path is very promising and likely leads to a good solution
+- "likely" if this path is somewhat promising and worth exploring
+- "impossible" if this path is stuck, wrong, or a dead end
+
+Evaluation:

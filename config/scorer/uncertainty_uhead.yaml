@@ -1,6 +1,6 @@
 type: uncertainty
 uncertainty_model_creator: config.scorer.uncertainty_uhead
-uncertainty: 
+uncertainty:
   cfg:
       predict_token_uncertainties: false
       uq_head_path: JingweiNi/uhead_claim_Qwen3-8B_fixed_prm_layer1_dim512_head16_e5_lr5e-4_pos3 #llm-uncertainty-head/uhead_claim_att_exp3_Mistral-7B-Instruct-v0.2

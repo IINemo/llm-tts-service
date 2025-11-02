@@ -53,15 +53,17 @@ def test_deepconf_online_mode_basic():
     # Verify result structure
     assert "trajectory" in result
     assert "metadata" in result
-    assert result["metadata"]["mode"] == "online"
-    assert result["metadata"]["warmup_traces"] == 2
-    assert result["metadata"]["total_traces"] > 0
+    assert result["metadata"]["config"]["mode"] == "online"
+    assert result["metadata"]["strategy_specific"]["warmup_traces"] == 2
+    assert result["metadata"]["results"]["total_traces"] > 0
 
     print("\n✅ DeepConf Online Mode Test Passed!")
-    print(f"Selected answer: {result['metadata']['selected_answer']}")
-    print(f"Confidence: {result['metadata']['confidence_score']:.3f}")
-    print(f"Total traces: {result['metadata']['total_traces']}")
-    print(f"Adaptive traces: {result['metadata']['adaptive_traces']}")
+    print(f"Selected answer: {result['metadata']['results']['selected_answer']}")
+    print(f"Confidence: {result['metadata']['results']['confidence_score']:.3f}")
+    print(f"Total traces: {result['metadata']['results']['total_traces']}")
+    print(
+        f"Adaptive traces: {result['metadata']['strategy_specific']['adaptive_traces']}"
+    )
 
 
 @pytest.mark.skipif(
@@ -97,10 +99,12 @@ def test_deepconf_online_early_stopping():
     result = strategy.generate_trajectory(prompt)
 
     # Check that we got adaptive traces
-    assert result["metadata"]["adaptive_traces"] >= 0
+    assert result["metadata"]["strategy_specific"]["adaptive_traces"] >= 0
 
     print("\n✅ Early Stopping Test Passed!")
-    print(f"Adaptive traces generated: {result['metadata']['adaptive_traces']}")
+    print(
+        f"Adaptive traces generated: {result['metadata']['strategy_specific']['adaptive_traces']}"
+    )
 
 
 if __name__ == "__main__":

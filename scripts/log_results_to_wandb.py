@@ -167,8 +167,8 @@ def main():
     project = args.project or getattr(config, "wandb_project", "llm-tts-eval")
     log.info(f"Initializing wandb (project: {project})...")
 
-    # Convert config to dict for wandb
-    wandb_config = OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
+    # Convert config to dict for wandb (resolve=False to avoid Hydra interpolation issues)
+    wandb_config = OmegaConf.to_container(config, resolve=False, throw_on_missing=False)
 
     # Add metadata
     wandb_config["HYDRA_CONFIG"] = str(config_path)
