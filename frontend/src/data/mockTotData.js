@@ -9,7 +9,8 @@ const mockTotData = {
       state: "",
       is_root: true,
       is_selected: true,
-      is_final: false
+      is_final: false,
+      timestamp: 0
     },
     {
       id: 1,
@@ -18,7 +19,8 @@ const mockTotData = {
       state: "**Break down the question**: Identify that we need 3 distinct benefits",
       is_root: false,
       is_selected: true,
-      is_final: false
+      is_final: false,
+      timestamp: 1
     },
     {
       id: 2,
@@ -27,7 +29,8 @@ const mockTotData = {
       state: "**Research existing knowledge**: Recall common microservices advantages",
       is_root: false,
       is_selected: true,
-      is_final: false
+      is_final: false,
+      timestamp: 1
     },
     {
       id: 3,
@@ -36,7 +39,8 @@ const mockTotData = {
       state: "**Analyze from architecture perspective**: Microservices promote modularity",
       is_root: false,
       is_selected: true,
-      is_final: false
+      is_final: false,
+      timestamp: 1
     },
     {
       id: 4,
@@ -45,7 +49,8 @@ const mockTotData = {
       state: "**Break down the question**: Identify that we need 3 distinct benefits\n**Consider scalability aspect**: Microservices can scale independently",
       is_root: false,
       is_selected: true,
-      is_final: false
+      is_final: false,
+      timestamp: 2
     },
     {
       id: 5,
@@ -54,7 +59,8 @@ const mockTotData = {
       state: "**Break down the question**: Identify that we need 3 distinct benefits\n**Consider development speed**: Teams can work independently on different services",
       is_root: false,
       is_selected: true,
-      is_final: false
+      is_final: false,
+      timestamp: 2
     },
     {
       id: 6,
@@ -63,7 +69,8 @@ const mockTotData = {
       state: "**Analyze from architecture perspective**: Microservices promote modularity\n**Consider maintenance**: Easier to update individual services",
       is_root: false,
       is_selected: true,
-      is_final: false
+      is_final: false,
+      timestamp: 2
     },
     {
       id: 7,
@@ -72,7 +79,8 @@ const mockTotData = {
       state: "**Break down the question**: Identify that we need 3 distinct benefits\n**Consider scalability aspect**: Microservices can scale independently\n**Final answer**: The 3 key benefits are: 1) Independent scaling, 2) Technology flexibility, 3) Fault isolation",
       is_root: false,
       is_selected: true,
-      is_final: true
+      is_final: true,
+      timestamp: 3
     },
     {
       id: 8,
@@ -81,7 +89,8 @@ const mockTotData = {
       state: "**Break down the question**: Identify that we need 3 distinct benefits\n**Consider development speed**: Teams can work independently on different services\n**Final answer**: The 3 key benefits are: 1) Faster development, 2) Independent deployment, 3) Team autonomy",
       is_root: false,
       is_selected: true,
-      is_final: true
+      is_final: true,
+      timestamp: 3
     },
     {
       id: 9,
@@ -90,7 +99,8 @@ const mockTotData = {
       state: "**Analyze from architecture perspective**: Microservices promote modularity\n**Consider maintenance**: Easier to update individual services\n**Final answer**: The 3 key benefits are: 1) Modularity, 2) Easier updates, 3) Better code organization",
       is_root: false,
       is_selected: true,
-      is_final: true
+      is_final: true,
+      timestamp: 3
     }
   ],
   edges: [
