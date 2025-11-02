@@ -9,20 +9,29 @@ Paper: https://arxiv.org/abs/2305.10601
 Reference: https://github.com/princeton-nlp/tree-of-thought-llm
 """
 
+import json
 import logging
-import re
+import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import openai
-import sympy
 
+from llm_tts.components import ReasoningGraph, ReasoningNode
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers.tree_of_thoughts import TotValueScorer
 
 from ..metadata_builder import StrategyMetadataBuilder
 from ..strategy_base import StrategyBase
+from .parsers import extract_answer, extract_new_step, parse_proposals
+from .prompts import build_cot_prompt, build_propose_prompt
+from .validators import (
+    filter_valid_game24_answers,
+    get_current_numbers,
+    validate_game24_answer,
+)
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +57,7 @@ class StrategyTreeOfThoughts(StrategyBase):
         n_generate_sample: int = 5,
         steps: int = 4,
         temperature: float = 0.7,
-        max_tokens_per_step: int = 100,
+        max_tokens_per_step: int = 1000,
         n_threads: int = 8,
         scorer_timeout: int = 120,
         propose_prompt_path: str = None,
@@ -113,6 +122,9 @@ class StrategyTreeOfThoughts(StrategyBase):
         # Statistics tracking
         self.total_api_calls = 0
 
+        # Progress callback for real-time updates
+        self.progress_callback = None
+
         # Configure mode-specific settings
         if mode == "game24":
             self._setup_game24_mode()
@@ -121,15 +133,27 @@ class StrategyTreeOfThoughts(StrategyBase):
         else:
             raise ValueError(f"Unknown mode: {mode}. Use 'generic' or 'game24'.")
 
+    def set_progress_callback(self, callback):
+        """
+        Set progress callback for real-time updates.
+
+        Args:
+            callback: Function to call with progress updates.
+                     Receives dict with keys: step, nodes_explored, api_calls, node, edge
+        """
+        self.progress_callback = callback
+
+    def _report_progress(self, update: Dict[str, Any]):
+        """Report progress if callback is set."""
+        if self.progress_callback:
+            try:
+                self.progress_callback(update)
+            except Exception as e:
+                log.warning(f"Progress callback error: {e}")
+
     def _setup_generic_mode(self):
         """Configure for generic reasoning (any user prompt)."""
         self.validation_enabled = False
-        self.terminal_patterns = [
-            r"final answer:\s*",
-            r"therefore,?\s+",
-            r"in conclusion",
-            r"(?:the )?(?:answer|solution|result) is:?",
-        ]
         log.info("[ToT] Mode: GENERIC - works for any user prompt")
 
     def _setup_game24_mode(self):
@@ -151,20 +175,7 @@ class StrategyTreeOfThoughts(StrategyBase):
         Returns:
             String of remaining numbers (e.g., "3 8 10")
         """
-        if not state.strip():
-            return problem.strip()
-
-        # Get last line of state
-        last_line = state.strip().split("\n")[-1]
-
-        # Check for (left: ...) pattern
-        if "(left: " in last_line:
-            # Extract numbers after "left: " and before ")"
-            remaining = last_line.split("left: ")[-1].split(")")[0]
-            return remaining.strip()
-
-        # No pattern found, return original problem
-        return problem.strip()
+        return get_current_numbers(state, problem)
 
     def validate_game24_answer(self, expression: str, input_numbers: str) -> bool:
         """
@@ -181,28 +192,7 @@ class StrategyTreeOfThoughts(StrategyBase):
         Returns:
             True if answer is correct, False otherwise
         """
-        try:
-            # Extract numbers from expression
-            used_numbers = re.findall(r"\d+", expression)
-            problem_numbers = re.findall(r"\d+", input_numbers)
-
-            # Check if numbers match (same count and values)
-            if sorted(used_numbers) != sorted(problem_numbers):
-                log.debug(
-                    f"Number mismatch: used {used_numbers}, expected {problem_numbers}"
-                )
-                return False
-
-            # Evaluate expression using sympy
-            result = sympy.simplify(expression)
-            is_correct = result == 24
-
-            log.debug(f"Expression '{expression}' = {result}, correct={is_correct}")
-            return is_correct
-
-        except Exception as e:
-            log.debug(f"Validation error for '{expression}': {e}")
-            return False
+        return validate_game24_answer(expression, input_numbers)
 
     def _extract_answer(self, text: str) -> str:
         """
@@ -224,42 +214,7 @@ class StrategyTreeOfThoughts(StrategyBase):
         Returns:
             Extracted answer string
         """
-        text = text.strip()
-
-        # Try "Answer:" format first (for Game of 24)
-        answer_match = re.search(r"Answer:\s*(.+?)(?:\n|$)", text, re.IGNORECASE)
-        if answer_match:
-            answer_expr = answer_match.group(1).strip()
-            # Remove trailing text like "= 24"
-            answer_expr = re.sub(r"\s*=\s*24\s*$", "", answer_expr)
-            return answer_expr
-
-        # Try \\boxed{} format
-        boxed_match = re.search(r"\\boxed\{([^}]+)\}", text)
-        if boxed_match:
-            return boxed_match.group(1).strip()
-
-        # Try final line with (left: 24) pattern
-        if "(left: 24)" in text:
-            # Found solution! Extract the final expression
-            lines = text.strip().split("\n")
-            for line in reversed(lines):
-                if "answer:" in line.lower():
-                    expr = line.split(":", 1)[-1].strip()
-                    expr = re.sub(r"\s*=\s*24\s*$", "", expr)
-                    return expr
-
-        # Try "= value" at end of line
-        equals_match = re.search(r"=\s*([0-9,.]+)(?:\s|$)", text)
-        if equals_match:
-            return equals_match.group(1).strip()
-
-        # Fallback: last number
-        numbers = re.findall(r"-?\d+\.?\d*", text)
-        if numbers:
-            return numbers[-1]
-
-        return "no_answer"
+        return extract_answer(text)
 
     def _call_model(
         self,
@@ -323,8 +278,10 @@ class StrategyTreeOfThoughts(StrategyBase):
                         # Longer delay to let previous background thread finish
                         delay = 10 + (base_delay * (2**attempt))  # 12s, 14s, 18s
                         log.warning(
-                            f"API timeout/connection error on attempt {attempt + 1}/{max_retries}. "
-                            f"Waiting {delay:.1f}s for background request to finish before retry... Error: {e}"
+                            f"API timeout/connection error on attempt "
+                            f"{attempt + 1}/{max_retries}. "
+                            f"Waiting {delay:.1f}s for background request "
+                            f"to finish before retry... Error: {e}"
                         )
                         time.sleep(delay)
                     else:
@@ -387,10 +344,9 @@ class StrategyTreeOfThoughts(StrategyBase):
         try:
             outputs = self._call_model(
                 prompt,
-                n=1,  # Single call, extract multiple proposals from output
+                n=self.n_generate_sample,  # Generate multiple proposals
                 temperature=self.temperature,
-                max_tokens=self.max_tokens_per_step
-                * 3,  # More tokens for multiple proposals
+                max_tokens=self.max_tokens_per_step,
             )
 
             if not outputs:
@@ -399,15 +355,21 @@ class StrategyTreeOfThoughts(StrategyBase):
                 )
                 return []
 
-            # Parse proposals from output
-            proposals_text = outputs[0]
-            proposals = self._parse_proposals(proposals_text, current_state)
+            # Each output is a proposal - append to current state
+            proposals = [
+                (
+                    current_state + "\n" + output.strip()
+                    if current_state
+                    else output.strip()
+                )
+                for output in outputs
+            ]
 
             # Validate Game of 24 final answers (only in game24 mode)
             if self.validation_enabled:
                 proposals = self._filter_valid_game24_answers(proposals, problem)
 
-            return proposals[: self.n_generate_sample]
+            return proposals
 
         except openai.APITimeoutError as e:
             log.error(
@@ -477,117 +439,12 @@ class StrategyTreeOfThoughts(StrategyBase):
 
         Dispatches to mode-specific implementations.
         """
-        if self.mode == "game24":
-            return self._build_game24_prompt(problem, state)
-        else:
-            return self._build_generic_prompt(problem, state)
-
-    def _build_game24_prompt(self, problem: str, state: str) -> str:
-        """
-        Build Game24-specific prompt (paper-exact format).
-
-        Generates prompts in format: "X op Y = Z (left: remaining)"
-        """
-        # Get current numbers (either from state or original problem)
-        current_numbers = self.get_current_numbers(state, problem)
-
-        # CRITICAL: When we reach (left: 24), switch to CoT prompt
-        # to generate the final "Answer: expression = 24" line
-        if current_numbers == "24":
-            # Load CoT prompt with full examples (if configured)
-            if self.cot_prompt_path:
-                try:
-                    with open(self.cot_prompt_path, "r") as f:
-                        template = f.read()
-                    # Append "Steps:" + current state to prompt model for final answer
-                    return template.format(input=problem) + "Steps:\n" + state
-                except FileNotFoundError:
-                    pass
-            # Fallback
-            return f"""Use numbers and basic arithmetic operations (+ - * /) to obtain 24.
-Input: {problem}
-Steps:
-{state}
-"""
-        else:
-            # Generate next step proposals
-            if self.propose_prompt_path:
-                try:
-                    with open(self.propose_prompt_path, "r") as f:
-                        template = f.read()
-                    return template.format(input=current_numbers)
-                except FileNotFoundError:
-                    pass
-
-            # Fallback to inline prompt
-            return f"""Input: 2 8 8 14
-Possible next steps:
-2 + 8 = 10 (left: 8 10 14)
-8 / 2 = 4 (left: 4 8 14)
-14 + 2 = 16 (left: 8 8 16)
-2 * 8 = 16 (left: 8 14 16)
-8 - 2 = 6 (left: 6 8 14)
-14 - 8 = 6 (left: 2 6 8)
-14 / 2 = 7 (left: 7 8 8)
-14 - 2 = 12 (left: 8 8 12)
-Input: {current_numbers}
-Possible next steps:
-"""
-
-    def _build_generic_prompt(self, problem: str, state: str) -> str:
-        """
-        Build generic prompt that works for any user question.
-
-        No assumptions about format or domain.
-        """
-        # Load custom template if provided
-        if self.propose_prompt_path:
-            try:
-                with open(self.propose_prompt_path, "r") as f:
-                    template = f.read()
-                return template.format(problem=problem, state=state)
-            except FileNotFoundError:
-                pass
-            except KeyError:
-                # Template missing required variables, fall through
-                pass
-
-        # Default generic prompts
-        if not state:
-            # Initial step - propose first concrete action
-            return f"""Problem: {problem}
-
-Think step by step. What are 3-5 possible FIRST STEPS to begin solving this?
-
-IMPORTANT:
-- Suggest ONE concrete action per step (not the complete solution)
-- Make each step different (explore alternatives)
-- Be specific and actionable
-
-Examples of good first steps:
-- "Identify the main constraint or requirement"
-- "Break down the problem into smaller sub-problems"
-- "List the available resources or information"
-
-Possible first steps:
-"""
-        else:
-            # Continuation - propose next incremental step
-            return f"""Problem: {problem}
-
-Current reasoning:
-{state}
-
-What are 3-5 possible NEXT STEPS to continue?
-
-IMPORTANT:
-- Each step should be ONE small action or thought
-- Do NOT jump to the final solution
-- Build incrementally on current progress
-- Explore different alternatives
-
-Possible next steps:
-"""
+        return build_propose_prompt(
+            problem,
+            state,
+            self.mode,
+            propose_prompt_path=self.propose_prompt_path,
+        )
 
     def _filter_valid_game24_answers(
         self, proposals: List[str], problem: str
@@ -608,103 +465,11 @@ Possible next steps:
         Returns:
             Filtered list with only valid answers
         """
-        if not proposals:
-            return proposals
-
-        # Extract input numbers from problem
-        input_numbers = None
-
-        # Check if this is a Game of 24 problem
-        is_game24 = "obtain 24" in problem.lower()
-        if is_game24:
-            # Extract numbers from "Input: X Y Z W" format or direct "X Y Z W" format
-            for line in problem.split("\n"):
-                if line.strip().startswith("Input:"):
-                    input_numbers = line.replace("Input:", "").strip()
-                    break
-                elif re.match(r"^\s*\d+\s+\d+", line):
-                    # Line starts with numbers
-                    input_numbers = re.search(r"(\d+(?:\s+\d+)*)", line).group(1)
-                    break
-
-        # If not Game24 or can't find input, skip validation
-        if not input_numbers:
-            return proposals
-
-        filtered = []
-        invalid_count = 0
-
-        for proposal in proposals:
-            # Check if this is a final answer (contains "Answer:" line)
-            if "answer:" in proposal.lower():
-
-                # Extract the answer expression
-                answer_line = None
-                for line in proposal.split("\n"):
-                    if "answer:" in line.lower():
-                        answer_line = line
-                        break
-
-                if answer_line and input_numbers:
-                    # Extract expression from "Answer: expr = 24" format
-                    expr_match = re.search(
-                        r"Answer:\s*(.+?)(?:\s*=\s*24)?\s*$", answer_line, re.IGNORECASE
-                    )
-                    if expr_match:
-                        expression = expr_match.group(1).strip()
-
-                        # Validate using sympy
-                        is_valid = self.validate_game24_answer(
-                            expression, input_numbers
-                        )
-
-                        if is_valid:
-                            filtered.append(proposal)
-                            log.debug(f"[VALIDATE] Valid answer: {expression}")
-                        else:
-                            invalid_count += 1
-                            log.debug(
-                                f"[VALIDATE] Invalid answer: {expression} "
-                                f"(input: {input_numbers})"
-                            )
-                    else:
-                        # Can't extract expression, keep it (may be valid format issue)
-                        filtered.append(proposal)
-                else:
-                    # Can't extract info, keep it to avoid filtering too aggressively
-                    filtered.append(proposal)
-            else:
-                # Not a final answer (intermediate step), keep it
-                filtered.append(proposal)
-
-        if invalid_count > 0:
-            log.info(
-                f"[VALIDATE] Filtered out {invalid_count} invalid answer(s), "
-                f"kept {len(filtered)} valid proposal(s)"
-            )
-
-        return filtered
+        return filter_valid_game24_answers(proposals, problem)
 
     def _build_cot_prompt(self, problem: str, state: str) -> str:
         """Build prompt for CoT sampling."""
-        if not state:
-            prompt_prefix = f"""Solve this math problem step-by-step with concrete calculations:
-
-Problem: {problem}
-
-Solution (show all work with numbers and calculations):
-"""
-        else:
-            prompt_prefix = f"""Continue solving this math problem with specific calculations:
-
-Problem: {problem}
-
-Current progress:
-{state}
-
-Continue with concrete steps and numbers (show your work):
-"""
-        return prompt_prefix
+        return build_cot_prompt(problem, state, cot_prompt_path=self.cot_prompt_path)
 
     def _parse_proposals(self, text: str, current_state: str) -> List[str]:
         """
@@ -721,214 +486,111 @@ Continue with concrete steps and numbers (show your work):
         Returns:
             List of proposal states (each = current_state + new_line)
         """
-        if self.mode == "game24":
-            return self._parse_game24_format(text, current_state)
-        else:
-            return self._parse_generic_format(text, current_state)
-
-    def _parse_game24_format(self, text: str, current_state: str) -> List[str]:
-        """
-        Parse Game24 format: 'X op Y = Z (left: ...)' or 'Answer: expression'.
-
-        Args:
-            text: Model output text
-            current_state: Current reasoning state
-
-        Returns:
-            List of proposals in Game24 format
-        """
-        proposals = []
-        lines = text.split("\n")
-
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            # Accept lines with "(left: " OR "Answer:" (for final step)
-            if "(left: " in line or "answer:" in line.lower():
-                # This line is a complete next step
-                full_step = current_state + ("\n" if current_state else "") + line
-                proposals.append(full_step)
-
-        return proposals
-
-    def _parse_generic_format(self, text: str, current_state: str) -> List[str]:
-        """
-        Parse generic format: bullets, numbered lists, or paragraphs.
-
-        Removes common formatting markers and extracts reasoning steps.
-
-        Args:
-            text: Model output text
-            current_state: Current reasoning state
-
-        Returns:
-            List of proposals parsed from generic format
-        """
-        proposals = []
-        lines = text.split("\n")
-
-        for line in lines:
-            line = line.strip()
-            if not line or len(line) < 20:  # Minimum substance check
-                continue
-
-            # Remove common formatting markers
-            line = re.sub(r"^[-*•]\s*", "", line)  # Bullets
-            line = re.sub(r"^\d+[\.)]\s*", "", line)  # Numbers: "1." or "1)"
-            line = re.sub(
-                r"^(?:Step|Next step)\s*\d+:\s*", "", line, flags=re.IGNORECASE
-            )
-
-            if line:
-                # Append to current state
-                full_step = current_state + ("\n" if current_state else "") + line
-                proposals.append(full_step)
-
-        # Fallback: treat whole output as single proposal
-        if not proposals and text.strip():
-            proposals.append(
-                current_state + ("\n" if current_state else "") + text.strip()
-            )
-
-        return proposals
-
-    def _is_final_answer(self, state: str) -> bool:
-        """
-        Check if state contains a final answer (mode dispatcher).
-
-        Delegates to mode-specific terminal detection:
-        - game24: Checks for "(left: 24)" or "Answer:"
-        - generic: Checks for common conclusion patterns
-
-        Args:
-            state: Current reasoning state
-
-        Returns:
-            True if state represents a final answer
-        """
-        if self.mode == "game24":
-            return self._is_game24_terminal(state)
-        else:
-            return self._is_generic_terminal(state)
-
-    def _is_game24_terminal(self, state: str) -> bool:
-        """
-        Check if Game24 state is terminal (paper-exact).
-
-        Terminal conditions:
-        - "(left: 24)" - reached target value
-        - "Answer:" - final expression provided
-
-        Args:
-            state: Current reasoning state
-
-        Returns:
-            True if Game24 solution found
-        """
-        state_lower = state.lower()
-        return "(left: 24)" in state_lower or "answer:" in state_lower
-
-    def _is_generic_terminal(self, state: str) -> bool:
-        """
-        Check if generic reasoning reached a conclusion.
-
-        Uses pattern matching for common terminal indicators.
-
-        Args:
-            state: Current reasoning state
-
-        Returns:
-            True if reasoning appears complete
-        """
-        state_lower = state.lower()
-
-        # Check configured terminal patterns
-        for pattern in self.terminal_patterns:
-            if re.search(pattern, state_lower):
-                return True
-
-        return False
+        return parse_proposals(text, current_state, self.mode)
 
     def _generate_candidates(
         self,
         problem: str,
-        states: List[str],
-    ) -> List[str]:
+        parent_nodes: List[ReasoningNode],
+        step_idx: int,
+        timestamp: int,
+    ) -> List[ReasoningNode]:
         """
         Generate candidate next states from current states.
 
         Args:
             problem: Original problem
-            states: Current states in beam
+            parent_nodes: Current nodes in beam
+            step_idx: Current step index
+            timestamp: Timestamp for new nodes
 
         Returns:
-            List of candidate states
+            List of candidate nodes
         """
-        all_candidates = []
+        all_candidate_nodes = []
 
-        # Generate from each state
-        for state in states:
+        # Generate from each parent node
+        for parent_node in parent_nodes:
+            # Generate candidate state strings
             if self.method_generate == "propose":
-                candidates = self._generate_proposals(problem, state)
+                candidate_states = self._generate_proposals(problem, parent_node.state)
             else:  # sample
-                candidates = self._generate_samples(problem, state)
+                candidate_states = self._generate_samples(problem, parent_node.state)
 
-            all_candidates.extend(candidates)
+            # Create child nodes for each candidate
+            for candidate_state in candidate_states:
+                child_node = self.graph.create_child(
+                    parent=parent_node,
+                    state=candidate_state,
+                    score=0.0,  # Will be set by evaluation
+                    timestamp=timestamp,
+                    is_selected=False,  # Will be updated after selection
+                    is_final=False,  # Will be updated if needed
+                )
+                all_candidate_nodes.append(child_node)
 
-        return all_candidates
+        return all_candidate_nodes
 
     def _evaluate_candidates(
         self,
         problem: str,
-        candidates: List[str],
+        candidate_nodes: List[ReasoningNode],
     ) -> List[float]:
         """
         Evaluate candidate states using the scorer.
 
         Args:
             problem: Original problem
-            candidates: Candidate states to evaluate
+            candidate_nodes: Candidate nodes to evaluate
 
         Returns:
             List of scores (one per candidate)
         """
+        # Extract state strings from nodes
+        states = [node.state for node in candidate_nodes]
+
         # Use the scorer to evaluate states
-        scores = self.scorer.score_states(problem, candidates)
+        scores = self.scorer.score_states(problem, states)
+
+        # Update node scores
+        for node, score in zip(candidate_nodes, scores):
+            node.score = score
+
         return scores
 
     def _select_top_states(
         self,
-        candidates: List[str],
-        scores: List[float],
-    ) -> Tuple[List[str], List[float]]:
+        candidate_nodes: List[ReasoningNode],
+    ) -> List[ReasoningNode]:
         """
-        Select top-k candidates by score.
+        Select top-k candidates by score using stable sort.
+
+        Uses stable sorting (matches original ToT) to preserve order for ties.
 
         Args:
-            candidates: Candidate states
-            scores: Scores for each candidate
+            candidate_nodes: Candidate nodes with scores
 
         Returns:
-            Tuple of (selected_states, selected_scores)
+            List of selected nodes
         """
-        # Deduplicate candidates
-        unique_map = {}
-        for cand, score in zip(candidates, scores):
-            if cand not in unique_map or score > unique_map[cand]:
-                unique_map[cand] = score
+        # Extract scores from nodes
+        scores = [node.score for node in candidate_nodes]
 
-        # Sort by score
-        sorted_items = sorted(unique_map.items(), key=lambda x: x[1], reverse=True)
+        # Get top-k indices using stable sort (matches original ToT)
+        if len(scores) <= self.beam_width:
+            top_indices = list(range(len(scores)))
+        else:
+            # Stable sort: for ties, preserves original order
+            top_indices = sorted(
+                range(len(scores)), key=lambda i: scores[i], reverse=True
+            )[: self.beam_width]
 
-        # Take top-k
-        top_items = sorted_items[: self.beam_width]
+        # Select top nodes and mark them as selected
+        selected_nodes = [candidate_nodes[i] for i in top_indices]
+        for node in selected_nodes:
+            node.is_selected = True
 
-        top_states = [item[0] for item in top_items]
-        top_scores = [item[1] for item in top_items]
-
-        return top_states, top_scores
+        return selected_nodes
 
     def _extract_new_step(self, candidate: str, parent_states: List[str]) -> str:
         """
@@ -941,37 +603,7 @@ Continue with concrete steps and numbers (show your work):
         Returns:
             The new step (last line added)
         """
-        if not candidate:
-            return "(empty)"
-
-        # Find matching parent
-        for parent in parent_states:
-            if candidate.startswith(parent):
-                # Extract what was added
-                new_part = candidate[len(parent) :].strip()
-                if new_part:
-                    # Return first line of new part
-                    return new_part.split("\n")[0]
-
-        # No parent found or first step - return first line
-        lines = candidate.strip().split("\n")
-        return lines[-1] if lines else "(empty)"
-
-    def _find_parent_state(self, candidate: str, parent_states: List[str]) -> int:
-        """
-        Find which parent state this candidate came from.
-
-        Args:
-            candidate: Full candidate state
-            parent_states: List of parent states
-
-        Returns:
-            Index of parent state (0-based)
-        """
-        for i, parent in enumerate(parent_states):
-            if candidate.startswith(parent):
-                return i
-        return 0  # Default to first state
+        return extract_new_step(candidate, parent_states)
 
     def generate_trajectory(self, prompt: str) -> Dict[str, Any]:
         """
@@ -1013,127 +645,234 @@ Continue with concrete steps and numbers (show your work):
         log.info(f"  - Scorer: {self.scorer.name}")
         log.info(f"  - Temperature: {self.temperature}")
 
-        # Initialize beam
-        states = [""]  # Start with empty state
+        # Initialize reasoning graph
+        self.graph = ReasoningGraph(question=problem)
+
+        # Create root node
+        root = self.graph.create_root(state="", timestamp=0)
+
+        # Initialize beam with root node
+        current_beam = [root]
+
+        # Track all steps for metadata (backward compatibility)
         all_steps = []
 
         # Reset statistics
         self.total_api_calls = 0
 
+        # Report initial progress
+        self._report_progress(
+            {
+                "step": 0,
+                "nodes_explored": 0,
+                "api_calls": 0,
+            }
+        )
+
+        # Report root node
+        self._report_progress({"node": root.to_dict()})
+
         # Beam search
         for step_idx in range(self.steps):
             log.info(f"\n{'='*80}")
-            log.info(f"Step {step_idx + 1}/{self.steps}: {len(states)} states in beam")
+            log.info(
+                f"Step {step_idx + 1}/{self.steps}: {len(current_beam)} nodes in beam"
+            )
             log.info(f"{'='*80}")
 
-            # GENERATE: Expand beam with candidates
-            candidates = self._generate_candidates(problem, states)
-            log.info(f"\n[GENERATE] Generated {len(candidates)} candidates:")
+            # Report progress: starting new step
+            self._report_progress(
+                {
+                    "step": step_idx + 1,
+                    "nodes_explored": (
+                        len(all_steps) * self.n_generate_sample if all_steps else 0
+                    ),
+                    "api_calls": self.total_api_calls,
+                }
+            )
 
-            # Show tree structure with parent-child relationships
-            for i, candidate in enumerate(candidates):
+            # GENERATE: Expand beam with candidate nodes
+            candidate_nodes = self._generate_candidates(
+                problem, current_beam, step_idx + 1, step_idx + 1
+            )
+            log.info(f"\n[GENERATE] Generated {len(candidate_nodes)} candidates:")
+
+            # Show tree structure with parent relationships
+            for i, candidate_node in enumerate(candidate_nodes):
+                # Get parent node for display
+                parent_idx = (
+                    current_beam.index(candidate_node.parent)
+                    if candidate_node.parent in current_beam
+                    else -1
+                )
+
                 # Extract the new step (last line added)
-                new_step = self._extract_new_step(candidate, states)
-                parent_idx = self._find_parent_state(candidate, states)
+                parent_states = [node.state for node in current_beam]
+                new_step = self._extract_new_step(candidate_node.state, parent_states)
 
                 # Show tree structure
                 indent = "  " * (step_idx + 1)
-                tree_marker = "└─" if i == len(candidates) - 1 else "├─"
+                tree_marker = "└─" if i == len(candidate_nodes) - 1 else "├─"
                 log.info(
-                    f"{tree_marker} [Level {step_idx + 1}] Candidate {i+1} (from state {parent_idx + 1}):"
+                    f"{tree_marker} [Level {step_idx + 1}] "
+                    f"Candidate {i+1} (from node {parent_idx + 1}):"
                 )
                 log.info(f"{indent}New step: {new_step}")
 
-            if not candidates:
+            if not candidate_nodes:
                 log.warning(f"  No candidates generated at step {step_idx}")
                 break
 
             # EVALUATE: Score all candidates using scorer
-            scores = self._evaluate_candidates(problem, candidates)
+            scores = self._evaluate_candidates(problem, candidate_nodes)
             log.info(
-                f"\n[EVALUATE] Scored {len(candidates)} candidates (mean: {np.mean(scores):.2f}, std: {np.std(scores):.2f}):"
+                f"\n[EVALUATE] Scored {len(candidate_nodes)} candidates "
+                f"(mean: {np.mean(scores):.2f}, std: {np.std(scores):.2f}):"
             )
-            for i, (candidate, score) in enumerate(zip(candidates, scores)):
+            for i, (candidate_node, score) in enumerate(zip(candidate_nodes, scores)):
                 log.info(f"  Candidate {i+1} (score={score:.2f}):")
-                log.info(f"    {candidate}")
+                log.info(f"    {candidate_node.state}")
 
-            # SELECT: Prune to top-k
-            states, state_scores = self._select_top_states(candidates, scores)
-            log.info(f"\n[SELECT] Selected top {len(states)} states for next step:")
-            for i, (state, score) in enumerate(zip(states, state_scores)):
-                # Extract last step for compact display
-                last_step = state.strip().split("\n")[-1] if state else "(empty)"
-                log.info(f"  ✓ State {i+1} (score={score:.2f}): {last_step}")
-
-            # Record step
-            all_steps.append(
+            # Report progress: candidates scored
+            self._report_progress(
                 {
-                    "step_idx": step_idx,
-                    "candidates": candidates,
-                    "scores": scores,
-                    "selected_states": states,
-                    "selected_scores": state_scores,
+                    "step": step_idx + 1,
+                    "nodes_explored": (step_idx + 1) * self.n_generate_sample,
+                    "api_calls": self.total_api_calls,
                 }
             )
 
-            # Check if any state has reached final answer
-            final_states = [s for s in states if self._is_final_answer(s)]
-            if final_states:
-                log.info(f"\n[FINAL] Found {len(final_states)} final answer(s):")
-                for i, final_state in enumerate(final_states):
-                    log.info(f"  Final {i+1}: {final_state}")
-                # Could early stop here, but continue to explore
+            # Report intermediate tree updates: new nodes and edges
+            for candidate_node in candidate_nodes:
+                self._report_progress({"node": candidate_node.to_dict()})
+                if candidate_node.parent:
+                    self._report_progress(
+                        {
+                            "edge": {
+                                "from": candidate_node.parent.id,
+                                "to": candidate_node.id,
+                            }
+                        }
+                    )
+
+            # SELECT: Prune to top-k
+            current_beam = self._select_top_states(candidate_nodes)
+            log.info(
+                f"\n[SELECT] Selected top {len(current_beam)} nodes for next step:"
+            )
+            for i, node in enumerate(current_beam):
+                # Extract last step for compact display
+                last_step = (
+                    node.state.strip().split("\n")[-1] if node.state else "(empty)"
+                )
+                log.info(f"  ✓ Node {i+1} (score={node.score:.2f}): {last_step}")
+
+            # Record step (for backward compatibility with metadata)
+            all_steps.append(
+                {
+                    "step_idx": step_idx,
+                    "candidates": [node.state for node in candidate_nodes],
+                    "scores": scores,
+                    "selected_states": [node.state for node in current_beam],
+                    "selected_scores": [node.score for node in current_beam],
+                }
+            )
 
         # Select best final state
         log.info("\n" + "=" * 80)
         log.info("FINAL SELECTION")
         log.info("=" * 80)
 
-        if states:
-            final_scores = self._evaluate_candidates(problem, states)
-            log.info(f"\nEvaluating {len(states)} final states:")
-            for i, (state, score) in enumerate(zip(states, final_scores)):
-                log.info(f"  Final state {i+1} (score={score:.2f}):")
-                log.info(f"    {state}")
+        if current_beam:
+            # Re-evaluate final nodes
+            final_scores = self._evaluate_candidates(problem, current_beam)
+            log.info(f"\nEvaluating {len(current_beam)} final nodes:")
+            for i, (node, score) in enumerate(zip(current_beam, final_scores)):
+                log.info(f"  Final node {i+1} (score={score:.2f}):")
+                log.info(f"    {node.state}")
 
-            # IMPROVED SELECTION LOGIC:
-            # 1. First, identify states that have reached a valid final answer
-            final_answer_indices = [
-                i for i, state in enumerate(states) if self._is_final_answer(state)
-            ]
+            # Select highest scoring node using stable sort (matches original ToT)
+            # Stable sort preserves original order for ties
+            best_idx = sorted(
+                range(len(final_scores)), key=lambda i: final_scores[i], reverse=True
+            )[0]
+            log.info(
+                f"\n[SELECT] Selecting highest scoring node "
+                f"(index {best_idx+1}, score {final_scores[best_idx]:.2f})"
+            )
 
-            if final_answer_indices:
-                # If we have states with final answers, select the highest scoring one among them
-                final_answer_scores = [final_scores[i] for i in final_answer_indices]
-                best_among_finals = np.argmax(final_answer_scores)
-                best_idx = final_answer_indices[best_among_finals]
-                log.info(
-                    f"\n[SELECT] Found {len(final_answer_indices)} states with final answers"
-                )
-                log.info(
-                    f"[SELECT] Selecting best among them (index {best_idx+1}, score {final_scores[best_idx]:.2f})"
-                )
-            else:
-                # No final answers found, select by highest score (fallback)
-                best_idx = np.argmax(final_scores)
-                log.info(
-                    "\n[SELECT] No final answers found, selecting highest scoring state"
+            best_node = current_beam[best_idx]
+            best_node.is_final = True
+            best_score = best_node.score
+            best_answer = self._extract_answer(best_node.state)
+
+            # Mark the selected path
+            self.graph.mark_selected_path(best_node)
+
+            # SYNTHESIS: Generate final answer from best reasoning path
+            log.info("\n" + "=" * 80)
+            log.info("FINAL ANSWER SYNTHESIS")
+            log.info("=" * 80)
+
+            synthesis_prompt = (
+                "Based on the following reasoning steps, provide a complete, "
+                "detailed answer to the original question.\n\n"
+                f"Original Question:\n{problem}\n\n"
+                f"Reasoning Steps Taken:\n{best_node.state}\n\n"
+                "Now provide the actual answer with full details, not just "
+                "the steps. Write a comprehensive response that addresses "
+                "the question."
+            )
+
+            log.info("[SYNTHESIS] Generating final answer from reasoning path...")
+
+            try:
+                final_answer_list = self._call_model(
+                    synthesis_prompt,
+                    n=1,  # Generate just 1 answer
+                    temperature=0.3,  # Lower temperature for final answer
+                    max_tokens=2000,  # Allow longer answer
                 )
 
-            best_state = states[best_idx]
-            best_score = final_scores[best_idx]
-            best_answer = self._extract_answer(best_state)
+                # Extract first (and only) answer from list
+                if final_answer_list and len(final_answer_list) > 0:
+                    final_answer_text = final_answer_list[0]
+                    log.info(
+                        f"[SYNTHESIS] Generated final answer "
+                        f"({len(final_answer_text)} chars)"
+                    )
+                    # Use the synthesized answer as the trajectory
+                    trajectory = final_answer_text
+                else:
+                    log.warning(
+                        "[SYNTHESIS] No answer generated, using reasoning steps"
+                    )
+                    # Keep best_node.state as is (reasoning steps)
+                    trajectory = best_node.state
+
+                # Report final progress
+                self._report_progress(
+                    {
+                        "step": self.steps,
+                        "nodes_explored": sum(len(s["candidates"]) for s in all_steps),
+                        "api_calls": self.total_api_calls,
+                    }
+                )
+            except Exception as e:
+                log.warning(f"[SYNTHESIS] Failed to generate final answer: {e}")
+                log.info("[SYNTHESIS] Falling back to reasoning steps as answer")
+                trajectory = best_node.state
 
             log.info(
-                f"\n[BEST] Selected state {best_idx+1} with score {best_score:.2f}:"
+                f"\n[BEST] Selected node {best_idx+1} with score {best_score:.2f}:"
             )
-            log.info(f"  Full state:\n{best_state}")
+            log.info(f"  Full state:\n{best_node.state[:200]}...")
             log.info(f"  Extracted answer: {best_answer}")
         else:
-            best_state = ""
+            trajectory = ""
             best_score = 0.0
             best_answer = "no_answer"
-            log.warning("No final states available!")
+            log.warning("No final nodes available!")
 
         log.info("\n" + "=" * 80)
         log.info("SEARCH SUMMARY")
@@ -1142,6 +881,10 @@ Continue with concrete steps and numbers (show your work):
         log.info(f"Extracted answer: {best_answer}")
         log.info(f"API calls: {self.total_api_calls}")
         log.info(f"Scorer evaluations: {self.scorer.total_evaluations}")
+
+        # Get graph stats
+        graph_stats = self.graph.get_stats()
+        log.info(f"Graph stats: {graph_stats}")
 
         # Build metadata
         builder = StrategyMetadataBuilder("tree_of_thoughts")
@@ -1160,8 +903,8 @@ Continue with concrete steps and numbers (show your work):
         builder.add_results(
             selected_answer=best_answer,
             best_score=best_score,
-            final_states=states,
-            final_scores=final_scores if states else [],
+            final_states=[node.state for node in current_beam] if current_beam else [],
+            final_scores=[node.score for node in current_beam] if current_beam else [],
         )
 
         # Add search details
@@ -1172,24 +915,68 @@ Continue with concrete steps and numbers (show your work):
             total_candidates_evaluated=sum(
                 len(step["candidates"]) for step in all_steps
             ),
+            graph_stats=graph_stats,
         )
 
         # Log summary
         builder.log_summary(log)
 
         # Format output to match expected interface
+        # Log graph structure to file for debugging
+        graph_dict = self.graph.to_dict()
+        self._save_graph_to_file(graph_dict, problem)
+
         return {
-            "trajectory": best_state,
+            "trajectory": trajectory,
             "steps": [step["selected_states"] for step in all_steps],
             "validity_scores": (
                 [np.mean(step["selected_scores"]) for step in all_steps]
                 if all_steps
                 else [0.0]
             ),
-            "completed": bool(states and best_answer != "no_answer"),
+            "completed": bool(current_beam and best_answer != "no_answer"),
             "strategy": "tree_of_thoughts",
             "metadata": builder.build(),
+            "reasoning_tree": graph_dict,
         }
+
+    def _save_graph_to_file(self, graph_dict: Dict[str, Any], problem: str) -> None:
+        """
+        Save reasoning graph to JSON file for debugging.
+
+        Args:
+            graph_dict: The graph dictionary from self.graph.to_dict()
+            problem: The original problem/question
+        """
+        try:
+            # Create logs directory if it doesn't exist
+            logs_dir = os.path.join(os.getcwd(), "logs", "reasoning_graphs")
+            os.makedirs(logs_dir, exist_ok=True)
+
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Sanitize problem text for filename (first 50 chars)
+            problem_slug = "".join(
+                c if c.isalnum() or c in ("-", "_") else "_" for c in problem[:50]
+            )
+            filename = f"tot_graph_{timestamp}_{problem_slug}.json"
+            filepath = os.path.join(logs_dir, filename)
+
+            # Prepare data to save
+            data = {
+                "timestamp": timestamp,
+                "problem": problem,
+                "graph": graph_dict,
+                "stats": self.graph.get_stats(),
+            }
+
+            # Save to file
+            with open(filepath, "w") as f:
+                json.dump(data, f, indent=2)
+
+            log.info(f"[GRAPH] Saved reasoning graph to: {filepath}")
+        except Exception as e:
+            log.warning(f"[GRAPH] Failed to save reasoning graph: {e}")
 
     def cleanup(self):
         """Clean up resources"""
