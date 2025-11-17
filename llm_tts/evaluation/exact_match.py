@@ -176,14 +176,14 @@ def _extract_answer_by_format(text: str, dataset_format: str) -> str | None:
 
 
 class EvaluatorExactMatch:
-    def __init__(self, dataset_answer_format: str = "numeric"):
+    def __init__(self, dataset_answer_format: str):
         """
         Initialize the exact match evaluator.
 
         Args:
             dataset_answer_format: Type of answers to look for in answer. Set in `config.dataset.answer_format`.
             Options:
-                - "numeric": Math/numeric answers (default, original behavior)
+                - "numeric": Math/numeric answers (for math datasets)
                 - "boolean": True/False answers (for StrategyQA)
                 - "char": Single letter answers (for CSQA)
                 - "string": Direct string comparison (any text)
@@ -212,20 +212,6 @@ class EvaluatorExactMatch:
             # Direct match
             if candidate_norm == gold_norm:
                 return 1.0
-
-            # Special handling for boolean answers
-            if self.dataset_answer_format == "boolean":
-                if self._is_boolean_answer(candidate) and self._is_boolean_answer(
-                    gold_candidate
-                ):
-                    return 1.0 if candidate_norm == gold_norm else 0.0
-
-            # Special handling for single letter answers
-            if self.dataset_answer_format == "char":
-                if self._is_single_letter_answer(
-                    candidate
-                ) and self._is_single_letter_answer(gold_candidate):
-                    return 1.0 if candidate_norm == gold_norm else 0.0
 
         # Step 3: Try mathematical comparison (for numeric datasets)
         if self.dataset_answer_format == "numeric":

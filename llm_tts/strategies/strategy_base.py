@@ -1,7 +1,8 @@
 import logging
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List
+
+from llm_tts.utils.parallel import parallel_execute
 
 log = logging.getLogger(__name__)
 
@@ -19,18 +20,20 @@ class StrategyBase(ABC):
         task_args: List[Any],
         n_threads: int = 8,
         desc: str = "Generating",
+        model: Any = None,
     ) -> List[Any]:
         """
-        Execute tasks in parallel using ThreadPoolExecutor with futures.
+        Execute tasks in parallel using shared parallel execution utility.
 
-        This is a template method that handles the threading infrastructure,
-        while allowing subclasses to define their own worker functions.
+        This is a convenience wrapper around llm_tts.utils.parallel.parallel_execute
+        that maintains backward compatibility with existing strategy code.
 
         Args:
             worker_func: Function to execute for each task (must accept one argument)
             task_args: List of arguments to pass to worker_func
             n_threads: Number of parallel threads (default: 8)
             desc: Description for logging (default: "Generating")
+            model: Optional model instance for automatic client recreation on failures
 
         Returns:
             List of results (None results are filtered out)
@@ -41,29 +44,12 @@ class StrategyBase(ABC):
             >>>     # Do work...
             >>>     return result
             >>> args_list = [(prompt, i, n) for i in range(n)]
-            >>> results = self._parallel_generate(worker, args_list, n_threads=8)
+            >>> results = self._parallel_generate(worker, args_list, n_threads=8, model=self.model)
         """
-        log.info(f"{desc} with {n_threads} parallel threads")
-
-        results = []
-        with ThreadPoolExecutor(max_workers=n_threads) as executor:
-            # Submit all tasks and create future-to-arg mapping
-            future_to_arg = {
-                executor.submit(worker_func, arg): arg for arg in task_args
-            }
-
-            # Collect results as they complete
-            for future in as_completed(future_to_arg):
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    log.error(f"Task failed with exception: {e}")
-                    results.append(None)
-
-        # Filter out None results (failed tasks)
-        valid_results = [r for r in results if r is not None]
-
-        log.info(f"Completed {len(valid_results)}/{len(task_args)} tasks successfully")
-
-        return valid_results
+        return parallel_execute(
+            worker_func=worker_func,
+            task_args=task_args,
+            n_workers=n_threads,
+            desc=desc,
+            model=model,
+        )

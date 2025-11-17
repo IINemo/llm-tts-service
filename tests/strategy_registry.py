@@ -64,6 +64,14 @@ REGISTERED_STRATEGIES = [
             "test_uncert_cot.py",
         ],
         description="Uncertainty-guided chain-of-thought with PD",
+        name="tree_of_thoughts",
+        class_name="StrategyTreeOfThoughts",
+        module_path="llm_tts/strategies/tree_of_thoughts/strategy.py",
+        test_dir="tests/tree_of_thoughts",
+        required_tests=[
+            "test_tree_of_thoughts.py",  # Strategy logic and integration tests
+        ],
+        description="Beam search with LLM-based state evaluation",
     ),
     # TODO: Add tests for self_consistency strategy
     # StrategyInfo(

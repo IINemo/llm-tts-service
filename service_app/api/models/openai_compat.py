@@ -39,7 +39,8 @@ class ChatCompletionRequest(BaseModel):
 
     # TTS-specific parameters (optional, for advanced usage)
     tts_strategy: Optional[str] = Field(
-        default="deepconf", description="TTS strategy: deepconf, online_best_of_n, etc."
+        default="deepconf",
+        description="TTS strategy: deepconf, tree_of_thoughts, tot, online_best_of_n, etc.",
     )
     tts_mode: Optional[str] = Field(
         default="offline", description="DeepConf mode: offline or online"
@@ -49,6 +50,33 @@ class ChatCompletionRequest(BaseModel):
     )
     tts_filter_method: Optional[str] = Field(
         default="top5", description="Trace filtering method: top5, top10, etc."
+    )
+
+    # Tree-of-Thoughts specific parameters
+    tot_mode: Optional[str] = Field(
+        default="generic",
+        description="ToT mode: generic (any prompt) or game24 (benchmark)",
+    )
+    tot_method_generate: Optional[str] = Field(
+        default="propose", description="Generation method: propose or sample"
+    )
+    tot_beam_width: Optional[int] = Field(
+        default=3, description="Number of states to keep at each step", ge=1
+    )
+    tot_n_generate_sample: Optional[int] = Field(
+        default=5, description="Number of candidates per state", ge=1
+    )
+    tot_steps: Optional[int] = Field(
+        default=4, description="Maximum number of reasoning steps", ge=1
+    )
+    tot_max_tokens_per_step: Optional[int] = Field(
+        default=150, description="Maximum tokens per reasoning step", ge=1
+    )
+
+    # Visualization options
+    include_reasoning_tree: Optional[bool] = Field(
+        default=False,
+        description="Include full reasoning tree data for visualization (nodes, edges, timestamps)",
     )
 
     class Config:

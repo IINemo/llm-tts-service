@@ -1,0 +1,40 @@
+# @package strategy
+
+type: tree_of_thoughts
+
+# Mode: "generic" (any user prompt) or "game24" (validation benchmark)
+mode: generic
+
+# Generation method: "propose" (sequential next-step) or "sample" (independent CoT)
+method_generate: propose
+
+# Evaluation method: "value" (individual scoring) or "vote" (consensus)
+method_evaluate: value
+
+# Beam search parameters
+beam_width: 5                    # Number of states to keep at each step (paper: 5)
+steps: 5                         # Maximum number of reasoning steps (increased for completeness)
+
+# Candidate generation parameters
+n_generate_sample: 5             # Number of candidates to generate per state (paper: 5)
+n_evaluate_sample: 3             # Number of evaluation samples for scoring (paper: 3, aggregate)
+
+# Generation parameters
+temperature: 0.7                 # Sampling temperature (paper: 0.7 for both generation and scoring)
+max_tokens_per_step: 150         # Maximum tokens per reasoning step (increased for completeness)
+
+# Parallelization
+n_threads: 8                     # Number of parallel threads for API calls
+
+# Timeout configuration
+scorer_timeout: 120              # Timeout in seconds for scorer evaluation calls
+
+# Optimization
+cache_values: true               # Cache state evaluations to reduce API calls
+
+# Prompt paths (override in experiment configs for specific tasks)
+# Generic mode defaults:
+propose_prompt_path: config/prompts/tree-of-thought/generic_propose.txt  # Generic propose prompt
+cot_prompt_path: null            # Path to CoT prompt (for final answer generation)
+value_prompt_path: config/prompts/tree-of-thought/generic_value.txt     # Generic value scorer prompt
+value_last_step_prompt_path: null  # Path to final answer validation prompt

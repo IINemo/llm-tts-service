@@ -26,7 +26,12 @@ from llm_tts.evaluation import (
     EvaluatorLLMAsAJudge,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import StepScorerPRM, StepScorerUncertainty
+from llm_tts.scorers import (
+    StepScorerPRM,
+    StepScorerUncertainty,
+    TotValueScorer,
+    TotVoteScorer,
+)
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
@@ -38,6 +43,8 @@ from llm_tts.strategies import (
     StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
+    StrategySelfConsistency,
+    StrategyTreeOfThoughts,
     StrategyUncertaintyCoT,
 )
 
@@ -226,19 +233,19 @@ def create_model(config):
         model_path = config.model.get("model_name") or config.model.get("model_path")
         log.info(f"Using OpenAI API model: {model_path}")
 
+        # Check provider for API key and base URL (applies to all strategies)
+        import os
+
+        if config.model.get("provider") == "openrouter":
+            api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+            base_url = "https://openrouter.ai/api/v1"
+        else:
+            api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
+            base_url = None
+
         # Check if DeepConf strategy
         if config.strategy.type == "deepconf":
             # DeepConf uses streaming with logprobs but no boundary detector
-            import os
-
-            # Check provider for API key and base URL
-            if config.model.get("provider") == "openrouter":
-                api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
-                base_url = "https://openrouter.ai/api/v1"
-            else:
-                api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
-                base_url = None
-
             model = BlackboxModelWithStreaming(
                 openai_api_key=api_key,
                 model_path=model_path,
@@ -266,11 +273,12 @@ def create_model(config):
             early_stopping = BoundaryEarlyStopping(detector=detector)
 
             model = BlackboxModelWithStreaming(
-                openai_api_key=config.model.api_key,
+                openai_api_key=api_key,
                 model_path=model_path,
                 supports_logprobs=config.model.supports_logprobs,
                 early_stopping=early_stopping,
                 generation_parameters=generation_parameters,
+                base_url=base_url,
             )
 
             step_generator = StepCandidateGeneratorThroughAPI(
@@ -324,6 +332,68 @@ def create_tts_strategy(config, model, step_generator, scorer):
             max_steps=config.strategy.max_steps,
             aggregation=getattr(config.strategy, "aggregation", "mean"),
         )
+    elif config.strategy.type == "self_consistency":
+        strategy = StrategySelfConsistency(
+            model=model,
+            num_paths=config.strategy.get("num_paths", 10),
+            max_new_tokens=config.strategy.get("max_new_tokens", 512),
+            temperature=config.strategy.get("temperature", 0.7),
+            generation_batch_size=config.strategy.get("generation_batch_size", None),
+            scorer=scorer,
+            n_threads=config.strategy.get("n_threads", None),
+        )
+    elif config.strategy.type == "tree_of_thoughts":
+        # Tree-of-Thoughts requires API-based model for state evaluation
+        if not isinstance(model, BlackboxModelWithStreaming):
+            raise ValueError(
+                f"Tree-of-Thoughts requires BlackboxModelWithStreaming, got {type(model).__name__}"
+            )
+
+        # Create ToT scorer based on method_evaluate config
+        method_evaluate = config.strategy.get("method_evaluate", "value")
+        n_evaluate_sample = config.strategy.get("n_evaluate_sample", 3)
+
+        if method_evaluate == "value":
+            tot_scorer = TotValueScorer(
+                model=model,
+                n_evaluate_sample=n_evaluate_sample,
+                temperature=0.0,
+                max_tokens=50,
+                timeout=config.strategy.get("scorer_timeout", 120),
+                value_prompt_path=config.strategy.get("value_prompt_path"),
+                value_last_step_prompt_path=config.strategy.get(
+                    "value_last_step_prompt_path"
+                ),
+            )
+        elif method_evaluate == "vote":
+            tot_scorer = TotVoteScorer(
+                model=model,
+                n_evaluate_sample=n_evaluate_sample,
+                temperature=0.5,
+                max_tokens=100,
+            )
+        else:
+            raise ValueError(f"Unknown method_evaluate: {method_evaluate}")
+
+        strategy = StrategyTreeOfThoughts(
+            model=model,
+            scorer=tot_scorer,
+            mode=config.strategy.get("mode", "generic"),
+            method_generate=config.strategy.get("method_generate", "propose"),
+            beam_width=config.strategy.get("beam_width", 5),
+            n_generate_sample=config.strategy.get("n_generate_sample", 5),
+            steps=config.strategy.get("steps", 4),
+            temperature=config.strategy.get("temperature", 0.7),
+            max_tokens_per_step=config.strategy.get("max_tokens_per_step", 100),
+            n_threads=config.strategy.get("n_threads", 8),
+            scorer_timeout=config.strategy.get("scorer_timeout", 120),
+            propose_prompt_path=config.strategy.get("propose_prompt_path"),
+            cot_prompt_path=config.strategy.get("cot_prompt_path"),
+            value_prompt_path=config.strategy.get("value_prompt_path"),
+            value_last_step_prompt_path=config.strategy.get(
+                "value_last_step_prompt_path"
+            ),
+        )
 
     elif config.strategy.type == "uncertainty_cot":
         strategy = StrategyUncertaintyCoT(
@@ -347,6 +417,8 @@ def generate_trajectories(
     dataset: Dataset,
     processed_indices: set,
     prompt_template: str,
+    question_field: str = "question",
+    answer_field: str = "answer",
 ):
     # Phase 1: Generate trajectories (without checking correctness)
     log.info("\n" + "=" * 60)
@@ -366,13 +438,23 @@ def generate_trajectories(
 
         log.info("\n" + "=" * 60)
         log.info(f"Sample {i + 1}/{subset_size}")
-        log.info(f"Question: {instance['question'][:200]}...")
 
-        # Extract and log gold answer
-        from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
+        # Get question using configurable field name
+        question = instance[question_field]
+        log.info(f"Question: {question[:200]}...")
 
-        gold_answer_num = extract_answer_from_gsm8k(instance["answer"])
-        log.info(f"Gold answer: {gold_answer_num}")
+        # Handle answer with fallback for Game of 24
+        if answer_field and answer_field in instance and instance[answer_field]:
+            if "####" in instance[answer_field]:
+                from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
+
+                gold_answer_num = extract_answer_from_gsm8k(instance[answer_field])
+            else:
+                gold_answer_num = instance[answer_field]
+            log.info(f"Gold answer: {gold_answer_num}")
+        else:
+            gold_answer_num = "24"  # For Game of 24, answer is always 24
+            log.info("Gold answer: 24 (Game of 24)")
 
         # Generate trajectory
         request = [
@@ -380,9 +462,9 @@ def generate_trajectories(
             {
                 "role": "user",
                 "content": (
-                    prompt_template.format(question=instance["question"])
+                    prompt_template.format(question=question)
                     if prompt_template
-                    else instance["question"]
+                    else question
                 ),
             },
         ]
@@ -391,8 +473,8 @@ def generate_trajectories(
 
         # Extract generated answer (but don't check correctness yet)
         generated_text = result["trajectory"]
-        if instance["question"] in generated_text:
-            generated_text = generated_text.replace(instance["question"], "").strip()
+        if question in generated_text:
+            generated_text = generated_text.replace(question, "").strip()
 
         # Log detailed traces
         log.info("\n" + "-" * 60)
@@ -403,8 +485,9 @@ def generate_trajectories(
         if result["steps"] and isinstance(result["steps"], list):
             for step_idx, step in enumerate(result["steps"]):
                 validity = (
-                    result["validity_scores"][step_idx]
-                    if step_idx < len(result["validity_scores"])
+                    result.get("validity_scores", [])[step_idx]
+                    if "validity_scores" in result
+                    and step_idx < len(result["validity_scores"])
                     else "N/A"
                 )
                 # Format confidence score (handle both numeric and "N/A")
@@ -424,18 +507,19 @@ def generate_trajectories(
         log.info("-" * 60)
         log.info(f"Generated: {generated_text}")
         log.info(f"Num traces: {len(result['steps'])}")
-        log.info(f"Avg confidence: {np.mean(result['validity_scores']):.3f}")
+        if "validity_scores" in result and result["validity_scores"]:
+            log.info(f"Avg confidence: {np.mean(result['validity_scores']):.3f}")
         log.info("-" * 60)
 
         # Store result WITHOUT correctness check
         result_dict = {
             "index": i,
-            "question": instance["question"],
-            "gold_answer": instance["answer"],
+            "question": question,
+            "gold_answer": gold_answer_num,
             "generated_trajectory": result["trajectory"],
             "generated_answer": generated_text,
             "steps": result["steps"],
-            "validity_scores": result["validity_scores"],
+            "validity_scores": result.get("validity_scores", []),
             "completed": result["completed"],
         }
 
@@ -724,6 +808,8 @@ def main(config):
         dataset=dataset,
         processed_indices=processed_indices,
         prompt_template=prompt_template,
+        question_field=config.dataset.get("question_field", "question"),
+        answer_field=config.dataset.get("answer_field", "answer"),
     )
 
     # Evaluate results
@@ -732,6 +818,23 @@ def main(config):
         results=results,
         save_path=output_dir,
     )
+
+    # Shutdown model resources (executor, client)
+    try:
+        if hasattr(model, "shutdown"):
+            model.shutdown()
+    except Exception as e:
+        log.warning(f"Failed to shutdown model: {e}")
+
+    # Finish wandb session if it was initialized
+    if getattr(config, "report_to", None) == "wandb":
+        try:
+            import wandb
+
+            wandb.finish()
+            log.info("Finished wandb session")
+        except Exception as e:
+            log.warning(f"Failed to finish wandb session: {e}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,15 @@
+# Game of 24 dataset configuration
+# From Tree of Thoughts paper (Yao et al., 2023)
+
+dataset_path: "test-time-compute/game-of-24"
+dataset_config: "default"
+dataset_split: "train"
+subset: null  # Set to number to use subset (e.g., 100 for paper evaluation)
+# Paper uses indices 900-1000 (100 hard puzzles)
+start_index: 900  # Start at index 900 (hard puzzles)
+end_index: 1000   # End at index 1000 (100 examples)
+prompt_file: "./config/prompts/game24_tot.txt"
+
+# Field mappings (Game of 24 has different field names)
+question_field: "Puzzles"  # The 4 numbers to use
+answer_field: null  # No single answer - need to verify expression equals 24

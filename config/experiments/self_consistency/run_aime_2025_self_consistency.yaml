@@ -1,6 +1,6 @@
 # @package _global_
 
-# DeepConf Offline Mode Configuration for AIME 2025
+# Self-Consistency Configuration for AIME 2025
 # Competition-level mathematics problems from American Invitational Mathematics Examination
 
 defaults:
@@ -12,45 +12,37 @@ defaults:
   - _self_
 
 # Run naming for descriptive outputs
-run_name: "aime2025_deepconf_gpt4omini_b${strategy.budget}_${now:%H-%M-%S}"
+run_name: "aime2025_selfconsistency_gpt4omini_n${strategy.num_paths}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: false
 report_to: wandb  # Enable wandb logging (optional)
-wandb_project: llm-tts-eval-deepconf  # Wandb project name for DeepConf experiments
+wandb_project: llm-tts-eval-self-consistency  # Wandb project name
 
 # Model configuration (API-based)
 model:
   provider: openrouter
   model_name: "openai/gpt-4o-mini"
   api_key: null  # Set via OPENROUTER_API_KEY env var
-  top_logprobs: 20  # Required for DeepConf
 
 # Generation settings
 generation:
   max_new_tokens: 32000  # Large limit for complex AIME problems
-  temperature: 0.7
+  temperature: 0.7  # Diversity for self-consistency
   top_p: 1.0
   batch_size: 1
 
-# DeepConf strategy (no scorer needed)
+# No scorer needed (strategy has built-in majority voting)
 scorer: null
 
-# DeepConf offline mode strategy
+# Self-consistency strategy
 strategy:
-  type: deepconf
-  mode: "offline"  # Standard weighted voting mode
-  budget: 16  # Number of traces to generate
-
-  # Generation parameters
-  window_size: 2048  # Sliding window (algorithmic parameter - DO NOT CHANGE)
-  temperature: 0.6  # Match original wrapper.py default
-  top_p: 0.95  # Match original wrapper.py default
-  max_tokens: 32000  # Match original wrapper.py default
-  top_logprobs: 20
-
-  # Filtering and voting
-  filter_method: "top10"  # Use top-10 traces by confidence
+  type: self_consistency
+  num_paths: 16  # Number of reasoning paths (matching DeepConf budget)
+  max_new_tokens: 32000
+  temperature: 0.7  # Sampling temperature for diversity
+  generation_batch_size: null  # Generate all at once
+  n_threads: 4  # Parallel generation threads (conservative to avoid API overload)
 
 # Evaluation configuration
 evaluation:
@@ -67,4 +59,4 @@ evaluation:
 # Dataset settings
 dataset:
   subset: null  # Evaluate all AIME 2025 problems (30 total)
-  prompt_file: "./config/prompts/aime_2025_minimal.txt"  # Minimal zero-shot prompt (matching original DeepConf repo)
+  prompt_file: "./config/prompts/aime_2025_self_consistency.txt"  # Few-shot CoT prompt (matching Wang et al. 2022)

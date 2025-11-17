@@ -56,6 +56,10 @@ class CandidateScore:
 class StepScorerBase(ABC):
     """Abstract base class for scoring step candidates in real-time"""
 
+    def __init__(self, name: str = "base_scorer"):
+        """Initialize with scorer name."""
+        self.name = name
+
     @abstractmethod
     def score_candidates_detailed(
         self, chat: List[Dict[str, str]], candidates: List[str], **kwargs
