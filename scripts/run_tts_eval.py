@@ -456,6 +456,8 @@ def generate_trajectories(
         generated_text = result["trajectory"]
         if question in generated_text:
             generated_text = generated_text.replace(question, "").strip()
+        if "<Answer>:" in generated_text:
+            generated_text = generated_text.split("<Answer>:")[-1].strip()
 
         # Log detailed traces
         log.info("\n" + "-" * 60)
