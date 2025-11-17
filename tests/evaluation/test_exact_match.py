@@ -305,3 +305,43 @@ class TestEvaluatorExactMatch:
         solution_wrong = "London"
         score = string_evaluator._score_single((problem, solution_wrong, gold_answer))
         assert score == 0.0
+
+    def test_not_parsed_in_numeric(self):
+        problem = "What is the capital of France?"
+        solution = "<start of response>\nReasoning Steps:\n- Step 1: Recognize that the given double sum can be rewritten by changing variables to simplify the expression.\n- Step 2: Let $ n = j + k $, then for each $ n $, count the number of pairs $ (j, k) $ such that $ j + k = n $, which is $ n - 1 $ for $ n \\geq 2 $.\n- Step 3: Rewrite the double sum as a single sum over $ n $, resulting in $ \\sum_{n=2}^\\infty \\frac{n - 1}{n^3} $.\n- Step 4: Split the fraction to separate the terms, resulting in $ \\sum_{n=2}^\\infty \\left( \\frac{1}{n^2} - \\frac{1}{n^3} \\right) $.\n- Step 5: Express the sum in terms of $ p $ and $ q $ by subtracting the first term of each series, yielding $ p - 1 - (q - 1) $.\n- Step 6: Simplify the expression to get $ p - q $.\n<Answer>:\n<Answer>:\n$ p - q $"
+        gold_answer = "p - q"
+
+        score = self.evaluator._score_single((problem, solution, gold_answer))
+        assert score == 1.0
+
+    def test_parsed_in_numeric(self):
+        problem = "What is the capital of France?"
+        solution = "<Answer>:\n$ p - q $"
+        gold_answer = "p - q"
+
+        score = self.evaluator._score_single((problem, solution, gold_answer))
+        assert score == 1.0
+
+    def test_string_not_parsed_in_numeric(self):
+        problem = "What is the capital of France?"
+        solution = "<start of response>\nReasoning Steps:\n- Step 1: The graph shows distance on the y-axis and time on the x-axis.\n- Step 2: Average speed is calculated as distance divided by time.\n- Step 3: To find the average speed, we need to determine the distance and time for each student.\n- Step 4: For Evelyn, the distance is 4.5 units and the time is 1.25 units.\n- Step 5: For Briana, the distance is 2.2 units and the time is 2.5 units.\n- Step 6: For Carla, the distance is 5.2 units and the time is 4.25 units.\n- Step 7: For Debra, the distance is 2.8 units and the time is 5.6 units.\n- Step 8: For Angela, the distance is 1.4 units and the time is 6.8 units.\n- Step 9: Calculate average speed for each student: Evelyn = 4.5 / 1.25 = 3.6, Briana = 2.2 / 2.5 = 0.88, Carla = 5.2 / 4.25 ≈ 1.22, Debra = 2.8 / 5.6 = 0.5, Angela = 1.4 / 6.8 ≈ 0.21.\n- Step 10: The student with the greatest average speed is Evelyn.\n<Answer>:\n<Answer>:\nEvelyn"
+        gold_answer = "\\text{Evelyn}"
+
+        score = self.evaluator._score_single((problem, solution, gold_answer))
+        assert score == 1.0
+
+    def test_string_parsed_in_numeric(self):
+        problem = "What is the capital of France?"
+        solution = "<Answer>:\nEvelyn"
+        gold_answer = "\\text{Evelyn}"
+
+        score = self.evaluator._score_single((problem, solution, gold_answer))
+        assert score == 1.0
+
+    def test_poly(self):
+        problem = ""
+        solution = "\\boxed{x^3 + 3x - 6}"
+        gold_answer = "x^3+3x-6"
+
+        score = self.evaluator._score_single((problem, solution, gold_answer))
+        assert score == 1.0
