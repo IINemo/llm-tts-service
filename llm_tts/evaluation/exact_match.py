@@ -9,80 +9,11 @@ from .grader import grade_answer
 log = logging.getLogger()
 
 
-def _extract_answer_block(text: str) -> str | None:
-    """Extract text following '<Answer>:' marker up to an end marker or end of text."""
-    if not text:
-        return None
-    marker = "<Answer>:"
-    idx = text.find(marker)
-    if idx == -1:
-        return None
-    start = idx + len(marker)
-    # Known terminators that indicate end of model response
-    terminators = ["<end of response>", "<|im_end|>", "</s>"]
-    end = len(text)
-    for t in terminators:
-        t_idx = text.find(t, start)
-        if t_idx != -1:
-            end = min(end, t_idx)
-    return text[start:end].strip()
-
-
-def _extract_last_boxed(text: str) -> str | None:
-    """Extract the content of the last \boxed{...} block with balanced braces."""
-    marker = "\\boxed{"
-    idx = text.rfind(marker)
-    if idx == -1:
-        return None
-    start = idx + len(marker)
-    depth = 1
-    i = start
-    while i < len(text) and depth > 0:
-        ch = text[i]
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-        i += 1
-    if depth == 0:
-        return text[start : i - 1].strip()
-    return None
-
-
-def _extract_last_inline_math(text: str) -> str | None:
-    """Extract the last $...$ or \\(...\\) or \\[...\\] math block, non-greedy."""
-    # $...$
-    dollar_matches = list(re.finditer(r"\$(.+?)\$", text, flags=re.DOTALL))
-    if dollar_matches:
-        return dollar_matches[-1].group(1).strip()
-
-    # \(...\)
-    paren_matches = list(re.finditer(r"\\\((.+?)\\\)", text, flags=re.DOTALL))
-    if paren_matches:
-        return paren_matches[-1].group(1).strip()
-
-    # \[...\]
-    bracket_matches = list(re.finditer(r"\\\[(.+?)\\\]", text, flags=re.DOTALL))
-    if bracket_matches:
-        return bracket_matches[-1].group(1).strip()
-
-    return None
-
-
 def _extract_numeric(text: str) -> str | None:
     matches = re.findall(r"[-+]?\d[\d,]*\.?\d*", text)
     if not matches:
         return None
     return matches[-1]
-
-
-def _extract_mathish_answer(text: str) -> str | None:
-    """Heuristic: prefer boxed, then inline math, then numeric."""
-    return (
-        _extract_last_boxed(text)
-        or _extract_last_inline_math(text)
-        or _extract_numeric(text)
-    )
 
 
 def _extract_boolean_answer(text: str) -> str | None:
@@ -146,11 +77,6 @@ def _extract_answer_by_format(text: str, dataset_format: str) -> str | None:
     if not text:
         return None
 
-    # Strategy 1: Try structured format first (always check this)
-    structured_answer = _extract_answer_block(text)
-    if structured_answer:
-        return structured_answer
-
     # Strategy 2: Extract based on dataset format
     if dataset_format == "boolean":
         # For boolean datasets (StrategyQA)
@@ -167,23 +93,21 @@ def _extract_answer_by_format(text: str, dataset_format: str) -> str | None:
         return text.strip()
     elif dataset_format == "numeric":
         # For numeric datasets (math problems)
-        math_answer = _extract_mathish_answer(text)
-        if math_answer:
-            return math_answer
+        return text.strip()
 
     # Strategy 3: Fallback to original text
     return text.strip()
 
 
 class EvaluatorExactMatch:
-    def __init__(self, dataset_answer_format: str):
+    def __init__(self, dataset_answer_format: str = "numeric"):
         """
         Initialize the exact match evaluator.
 
         Args:
             dataset_answer_format: Type of answers to look for in answer. Set in `config.dataset.answer_format`.
             Options:
-                - "numeric": Math/numeric answers (for math datasets)
+                - "numeric": Math/numeric answers (default)
                 - "boolean": True/False answers (for StrategyQA)
                 - "char": Single letter answers (for CSQA)
                 - "string": Direct string comparison (any text)
@@ -195,7 +119,13 @@ class EvaluatorExactMatch:
             )
 
     def _score_single(self, inp: tuple[str, str, str]) -> float:
-        _, solution, gold_answer = inp
+        q, solution, gold_answer = inp
+
+        if ("base" in q) and ("_" in gold_answer):
+            gold_answer = gold_answer.split("_")[0]
+
+        if "<Answer>:" in solution:
+            solution = solution.split("<Answer>:")[-1].strip()
 
         # Step 1: Extract the answers using format-specific approach
         candidate = _extract_answer_by_format(solution, self.dataset_answer_format)
@@ -212,6 +142,20 @@ class EvaluatorExactMatch:
             # Direct match
             if candidate_norm == gold_norm:
                 return 1.0
+
+            # Special handling for boolean answers
+            if self.dataset_answer_format == "boolean":
+                if self._is_boolean_answer(candidate) and self._is_boolean_answer(
+                    gold_candidate
+                ):
+                    return 1.0 if candidate_norm == gold_norm else 0.0
+
+            # Special handling for single letter answers
+            if self.dataset_answer_format == "char":
+                if self._is_single_letter_answer(
+                    candidate
+                ) and self._is_single_letter_answer(gold_candidate):
+                    return 1.0 if candidate_norm == gold_norm else 0.0
 
         # Step 3: Try mathematical comparison (for numeric datasets)
         if self.dataset_answer_format == "numeric":
