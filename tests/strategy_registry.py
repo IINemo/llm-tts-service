@@ -64,6 +64,8 @@ REGISTERED_STRATEGIES = [
             "test_uncert_cot.py",
         ],
         description="Uncertainty-guided chain-of-thought with PD",
+    ),
+    StrategyInfo(
         name="tree_of_thoughts",
         class_name="StrategyTreeOfThoughts",
         module_path="llm_tts/strategies/tree_of_thoughts/strategy.py",
