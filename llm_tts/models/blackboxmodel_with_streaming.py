@@ -2,6 +2,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Dict, List, Optional
+import math
+from llm_tts.early_stopping import NoEarlyStopping
 
 import openai
 from lm_polygraph import BlackboxModel
@@ -309,6 +311,73 @@ class BlackboxModelWithStreaming(BlackboxModel):
 
     def tokenize(self, texts: List[str]) -> List[List[str]]:
         return [e.split() for e in texts]
+
+    def generate_with_logprobs(
+        self,
+        request: List[Dict[str, str]],
+        temperature: float = 0.7,
+        top_p: float = 0.95,
+        max_tokens: int = 512,
+        top_logprobs: int = 10,
+        timeout: int = 60,
+    ):
+        """Compatibility wrapper expected by strategies/tests.
+
+        Calls `generate_texts` with appropriate argument mapping and
+        converts the model's logprobs into probabilities (exp(logprob)).
+
+        Returns a simple object with `.text` and `.token_probs` attributes
+        to match the mock used in unit tests and the expectations in
+        strategies like `StrategyCoTUQ`.
+        """
+        # Ask for scores/logprobs in the underlying call
+        args = {
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_new_tokens": max_tokens,
+            "top_logprobs": top_logprobs,
+            "output_scores": True,
+            "timeout": timeout,
+            # When sampling full traces for strategies/tests we do NOT want
+            # the pre-configured boundary early-stopping to cut generations
+            # short (it is used for step-by-step generation elsewhere).
+            "early_stopping": NoEarlyStopping(),
+            "n": 1,
+        }
+
+        results = self.generate_texts([request], **args)
+        if not results:
+            class _R: pass
+            r = _R()
+            r.text = ""
+            r.token_probs = []
+            return r
+
+        res = results[0]
+
+        # Build response-like object expected by strategy/tests
+        class _Resp:
+            pass
+
+        response = _Resp()
+        response.text = res.get("text", "")
+
+        token_probs = []
+        # The streaming implementation fills 'logprobs' with a list of token dicts
+        for tp in res.get("logprobs", []) or []:
+            token = tp.get("token")
+            logprob = tp.get("logprob")
+            prob = None
+            try:
+                if logprob is not None:
+                    prob = float(math.exp(logprob))
+            except Exception:
+                prob = None
+
+            token_probs.append((token, prob))
+
+        response.token_probs = token_probs
+        return response
 
     def cleanup(self):
         """Clean up resources (shutdown thread pool executor)."""

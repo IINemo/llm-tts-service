@@ -6,7 +6,7 @@
 defaults:
   - /config  # Load main Hydra config
   - /dataset/math
-  - /model/openrouter
+  - /model/hf_qwen3
   - /strategy/cot_uq
   - /generation/default
   - /system/default
@@ -21,19 +21,27 @@ report_to: wandb  # Enable wandb logging (optional)
 wandb_project: llm-tts-eval-tot  # Wandb project name for ToT experiments
 
 # Model configuration (API-based)
+# model:
+#   provider: openrouter
+#   model_name: "openai/gpt-4o-mini"
+#   api_key: null  # Set via OPENROUTER_API_KEY env var
+
 model:
-  provider: openrouter
-  model_name: "openai/gpt-4o-mini"
-  api_key: null  # Set via OPENROUTER_API_KEY env var
+  type: "local"
+  model_path: "Qwen/Qwen3-8B"
+  disable_thinking_mode: true
+  device: cuda
 
 # Generation settings
 generation:
-  max_new_tokens: 1024  # Longer for MATH problems
+  max_new_tokens: 5128  # Longer for MATH problems
   temperature: 0.7
   top_p: 1.0
   batch_size: 1
 
 # CoT-UQ strategy (uses model logprobs + COT importance)
+# Backwards compatibility: keep top-level `scorer` key for scripts that
+# expect `config.scorer.*` (some code reads `config.scorer.type`).
 scorer: null
 
 strategy:
@@ -44,24 +52,35 @@ strategy:
   # Generation parameters (will be forwarded to strategy)
   temperature: 0.7
   top_p: 0.95
-  max_tokens: 512
+  max_tokens: 5128
   top_logprobs: 10
 
   # Combination weight between prob_conf and cot_importance (0..1)
   alpha: 0.5
 
+  # Optional scorer configuration for CoT-UQ. When enabled, the strategy
+  # manager will instantiate `CotUqScorer` and pass it into the strategy.
+  scorer:
+    enabled: true
+    # Note: `alpha` and `top_logprobs` are read from the strategy top-level
+    # settings (kept here for explicitness). Manager currently uses
+    # `strategy.alpha` and `strategy.top_logprobs` when constructing the scorer.
+    alpha: 0.5
+    top_logprobs: 10
+
 # Evaluation configuration
 evaluation:
   evaluators:
-    - llm_judge
-  llm_judge:
-    provider: openrouter
-    base_url: https://openrouter.ai/api/v1
-    model: deepseek/deepseek-r1-0528
-    cache_path: ~/.cache
-    n_threads: 1
-    prompt_file: null
+    - exact_match  # Exact match evaluator for MATH
+  #   - llm_judge
+  # llm_judge:
+  #   provider: openrouter
+  #   base_url: https://openrouter.ai/api/v1
+  #   model: deepseek/deepseek-r1-0528
+  #   cache_path: ~/.cache
+  #   n_threads: 1
+  #   prompt_file: null
 
 # Dataset settings
 dataset:
-  subset: 10  # Number of examples to evaluate
+  subset: 0  # Number of examples to evaluate
