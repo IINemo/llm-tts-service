@@ -403,6 +403,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
             max_steps=config.strategy.max_steps,
             max_empty_steps=config.strategy.max_empty_steps,
             uncertainty_threshold=config.strategy.uncertainty_threshold,
+            uncertainty_sampling=config.strategy.uncertainty_sampling,
         )
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
