@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers.tree_of_thoughts.value_scorer import TotValueScorer
+from llm_tts.scorers.cot_uq_scorer import CotUqScorer
 from llm_tts.strategies.tree_of_thoughts.strategy import StrategyTreeOfThoughts
 from llm_tts.strategies.strategy_cot_uq import StrategyCoTUQ
 
@@ -197,6 +198,17 @@ class StrategyManager:
             supports_logprobs=True,
         )
 
+        # Create a CotUqScorer from config if requested, otherwise pass None
+        scorer_config = config.get("scorer", {})
+        use_scorer = scorer_config.get("enabled", True)
+        scorer = None
+        if use_scorer:
+            scorer = CotUqScorer(
+                model=model,
+                alpha=config.get("alpha", 0.5),
+                top_logprobs=config.get("top_logprobs", 10),
+            )
+
         return StrategyCoTUQ(
             model=model,
             budget=config.get("budget", 6),
@@ -205,6 +217,7 @@ class StrategyManager:
             max_tokens=config.get("max_tokens", 512),
             top_logprobs=config.get("top_logprobs", 10),
             alpha=config.get("alpha", 0.5),
+            scorer=scorer,
         )
 
     def clear_cache(self):

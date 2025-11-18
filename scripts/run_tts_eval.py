@@ -180,7 +180,13 @@ def create_scorer(config):
 
 def create_model(config):
     if config.model.type == "local":
-        if config.scorer.type == "uncertainty":
+        # Safely handle missing `config.scorer` (some experiment configs set it to null)
+        # Only try to load an uncertainty model when a scorer is configured and
+        # its type indicates an uncertainty-based scorer.
+        if (
+            getattr(config, "scorer", None) is not None
+            and getattr(config.scorer, "type", None) in ("uncertainty", "uncertainty_pd")
+        ):
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
@@ -204,9 +210,41 @@ def create_model(config):
             base_model.eval()
             model = WhiteboxModel(base_model, tokenizer)
 
+            # If CoT-UQ or an uncertainty scorer is used with a local model,
+            # ensure the model exposes token-level logprobs. Wrap the
+            # WhiteboxModel with a local adapter that implements
+            # `generate_with_logprobs` and `supports_logprobs=True` when needed.
+            need_logprobs = (
+                getattr(config, "strategy", None) is not None
+                and getattr(config.strategy, "type", None) == "cot_uq"
+            ) or (
+                getattr(config, "scorer", None) is not None
+                and getattr(config.scorer, "type", None) in ("uncertainty", "uncertainty_pd")
+            )
+
+            if need_logprobs and not getattr(model, "supports_logprobs", False):
+                try:
+                    from llm_tts.models.local_whitebox_logprob_adapter import (
+                        LocalWhiteboxLogprobAdapter,
+                    )
+
+                    model = LocalWhiteboxLogprobAdapter(
+                        wb_model=model,
+                        base_model=base_model,
+                        tokenizer=tokenizer,
+                        device=config.system.device,
+                    )
+                    log.info("Wrapped local WhiteboxModel with logprob adapter")
+                except Exception as e:
+                    log.warning(f"Failed to create local logprob adapter: {e}")
+
         detector = StepBoundaryDetector(
-            step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
-            answer_patterns=["<Answer>:", "\n<Answer>:"],
+            step_patterns=config.strategy.get(
+                "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+            ),
+            answer_patterns=config.strategy.get(
+                "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+            ),
             max_tokens_per_step=config.generation.max_new_tokens,
         )
         step_generator = StepCandidateGeneratorThroughHuggingface(
@@ -397,10 +435,13 @@ def create_tts_strategy(config, model, step_generator, scorer):
         )
 
     elif config.strategy.type == "cot_uq":
-        # CoT-UQ uses BlackboxModelWithStreaming to obtain logprobs
-        if not isinstance(model, BlackboxModelWithStreaming):
+        # CoT-UQ requires a model that can provide token-level logprobs.
+        # Accept any model that advertises `supports_logprobs` instead of
+        # enforcing a concrete class. This allows local models that expose
+        # `generate_with_logprobs`/logprob support to be used as well.
+        if not getattr(model, "supports_logprobs", False):
             raise ValueError(
-                f"CoT-UQ requires BlackboxModelWithStreaming, got {type(model).__name__}"
+                f"CoT-UQ requires a model with logprobs support, got {type(model).__name__}"
             )
 
         strategy = StrategyCoTUQ(
