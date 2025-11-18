@@ -45,6 +45,8 @@ from llm_tts.strategies import (
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
     StrategyTreeOfThoughts,
+    StrategyOfflineBestOfN,
+    StrategyCoTUQ,
 )
 
 # Load environment variables from .env file
@@ -385,6 +387,32 @@ def create_tts_strategy(config, model, step_generator, scorer):
             ),
         )
 
+    elif config.strategy.type == "offline_best_of_n":
+        strategy = StrategyOfflineBestOfN(
+            model=model,
+            trajectories=config.strategy.get("trajectories", 10),
+            temperature=config.strategy.get("temperature", 0.7),
+            top_p=config.strategy.get("top_p", 1.0),
+            max_tokens=config.strategy.get("max_tokens", 512),
+        )
+
+    elif config.strategy.type == "cot_uq":
+        # CoT-UQ uses BlackboxModelWithStreaming to obtain logprobs
+        if not isinstance(model, BlackboxModelWithStreaming):
+            raise ValueError(
+                f"CoT-UQ requires BlackboxModelWithStreaming, got {type(model).__name__}"
+            )
+
+        strategy = StrategyCoTUQ(
+            model=model,
+            budget=config.strategy.get("budget", 6),
+            temperature=config.strategy.get("temperature", config.generation.temperature),
+            top_p=config.strategy.get("top_p", config.generation.top_p),
+            max_tokens=config.strategy.get("max_tokens", config.generation.max_new_tokens),
+            top_logprobs=config.strategy.get("top_logprobs", 10),
+            alpha=config.strategy.get("alpha", 0.5),
+        )
+    
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
 

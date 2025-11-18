@@ -5,6 +5,8 @@ from .strategy_chain_of_thought import StrategyChainOfThought
 from .strategy_online_best_of_n import StrategyOnlineBestOfN
 from .strategy_self_consistency import StrategySelfConsistency
 from .tree_of_thoughts import StrategyTreeOfThoughts
+from .strategy_cot_uq import StrategyCoTUQ
+from .strategy_offline_best_of_n import StrategyOfflineBestOfN
 
 __all__ = [
     "StrategyOnlineBestOfN",
@@ -13,4 +15,6 @@ __all__ = [
     "StrategySelfConsistency",
     "StrategyDeepConf",
     "StrategyTreeOfThoughts",
+    "StrategyCoTUQ",
+    "StrategyOfflineBestOfN",
 ]

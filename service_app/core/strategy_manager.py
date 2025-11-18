@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers.tree_of_thoughts.value_scorer import TotValueScorer
 from llm_tts.strategies.tree_of_thoughts.strategy import StrategyTreeOfThoughts
+from llm_tts.strategies.strategy_cot_uq import StrategyCoTUQ
 
 from .config import settings
 
@@ -106,6 +107,8 @@ class StrategyManager:
             return self._create_online_best_of_n_strategy(model_name, strategy_config)
         elif strategy_type == "tree_of_thoughts" or strategy_type == "tot":
             return self._create_tree_of_thoughts_strategy(model_name, strategy_config)
+        elif strategy_type == "cot_uq":
+            return self._create_cot_uq_strategy(model_name, strategy_config)
         else:
             available = ["tree_of_thoughts", "tot"]
             if HAS_DEEPCONF:
@@ -184,6 +187,24 @@ class StrategyManager:
                 "propose_prompt_path",
                 "config/prompts/tree-of-thought/generic_propose.txt",
             ),
+        )
+
+    def _create_cot_uq_strategy(self, model_name: str, config: Dict[str, Any]) -> StrategyCoTUQ:
+        """Create CoT-UQ strategy instance."""
+        model = self._get_or_create_model(
+            model_name=model_name,
+            provider=config.get("provider", "openrouter"),
+            supports_logprobs=True,
+        )
+
+        return StrategyCoTUQ(
+            model=model,
+            budget=config.get("budget", 6),
+            temperature=config.get("temperature", 0.7),
+            top_p=config.get("top_p", 0.95),
+            max_tokens=config.get("max_tokens", 512),
+            top_logprobs=config.get("top_logprobs", 10),
+            alpha=config.get("alpha", 0.5),
         )
 
     def clear_cache(self):

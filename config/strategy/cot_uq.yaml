@@ -1,0 +1,18 @@
+# @package strategy
+
+type: cot_uq
+
+# Sampling budget (number of full traces)
+budget: 6
+
+# Generation parameters
+temperature: 0.7
+top_p: 0.95
+max_tokens: 512
+top_logprobs: 10
+
+# CoT-UQ combination weight (0..1)
+# Final score = alpha * prob_conf + (1 - alpha) * cot_importance
+alpha: 0.5
+
+
