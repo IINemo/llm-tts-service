@@ -11,6 +11,7 @@ return_dict_in_generate=True)` and extracts per-token probabilities from the
 returned `scores` logits.
 """
 from types import SimpleNamespace
+import inspect
 import torch
 import torch.nn.functional as F
 import logging
@@ -30,12 +31,13 @@ class LocalWhiteboxLogprobAdapter:
         device: device string or torch.device where tensors should be placed
     """
 
-    def __init__(self, wb_model, base_model, tokenizer, device="cpu"):
+    def __init__(self, wb_model, base_model, tokenizer, device="cpu", disable_thinking_mode: bool = False):
         self._wb = wb_model
         self._base = base_model
         self.tokenizer = tokenizer
         self.device_str = device
         self.supports_logprobs = True
+        self.disable_thinking_mode = disable_thinking_mode
 
     def __getattr__(self, name):
         # Delegate unknown attributes to the wrapped WhiteboxModel
@@ -45,12 +47,27 @@ class LocalWhiteboxLogprobAdapter:
         # Prefer tokenizer's chat template helper if available
         try:
             if hasattr(self._wb.tokenizer, "apply_chat_template"):
+                sig = inspect.signature(self._wb.tokenizer.apply_chat_template)
+                has_enable_thinking = "enable_thinking" in sig.parameters
+
                 inputs = self._wb.tokenizer.apply_chat_template(
-                    [request], tokenize=False, add_generation_prompt=True
+                    [request],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **(
+                        {"enable_thinking": (not self.disable_thinking_mode)}
+                        if has_enable_thinking
+                        else {}
+                    ),
                 )
                 if isinstance(inputs, list):
                     return inputs[0]
-                return inputs
+                prompt = inputs
+                if self.disable_thinking_mode and not has_enable_thinking:
+                    # For tokenizers without `enable_thinking`, explicitly close any
+                    # thinking block to discourage thought emissions.
+                    prompt += "\n<think>\n\n</think>\n\n"
+                return prompt
         except Exception:
             # Fall back to concatenating contents
             log.debug("tokenizer.apply_chat_template failed, falling back")

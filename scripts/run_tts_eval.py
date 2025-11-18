@@ -18,6 +18,7 @@ from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import re
 from utils.results import load_results_json, parse_resume_arguments, save_results_json
 
 from llm_tts.evaluation import (
@@ -71,7 +72,24 @@ def load_model(model_path: str, device_map: str):
 
 def load_prompt_template(prompt_file: str) -> str:
     """Load prompt template from file"""
-    with open(prompt_file, "r") as f:
+    from pathlib import Path
+
+    # Try the provided path first. Hydra often changes the working directory
+    # to the output directory, so relative paths in configs may no longer
+    # point to the repository files. If the path doesn't exist, resolve it
+    # relative to the repository root (two levels up from this script).
+    p = Path(prompt_file)
+    if not p.is_absolute() or not p.exists():
+        repo_root = Path(__file__).resolve().parents[1]
+        alt = repo_root / prompt_file
+        if alt.exists():
+            p = alt
+
+    if not p.exists():
+        log.warning(f"Prompt file not found: {prompt_file} (tried {p}). Using empty prompt.")
+        return ""
+
+    with open(p, "r") as f:
         return f.read().strip()
 
 
@@ -233,6 +251,7 @@ def create_model(config):
                         base_model=base_model,
                         tokenizer=tokenizer,
                         device=config.system.device,
+                        disable_thinking_mode=getattr(config.model, "disable_thinking_mode", False),
                     )
                     log.info("Wrapped local WhiteboxModel with logprob adapter")
                 except Exception as e:
@@ -520,9 +539,36 @@ def generate_trajectories(
         ]
 
         result = strategy.generate_trajectory(request)
+        # Post-process generated traces to remove internal thinking markers
+        # (e.g., <think>...</think>) when thinking mode was disabled but
+        # the model still emitted thought content. Also clean step texts.
+        def _strip_thinking(s: str) -> str:
+            if not s:
+                return s
+            # Remove <think>...</think> blocks
+            s = re.sub(r"<think>.*?</think>", "", s, flags=re.DOTALL)
+            # Remove any leftover standalone tags
+            s = re.sub(r"</?think>", "", s)
+            # Collapse repeated blank lines
+            s = re.sub(r"\n{3,}", "\n\n", s)
+            return s.strip()
+
+        # Clean step objects if present
+        if "steps" in result and result["steps"] and isinstance(result["steps"], list):
+            for step in result["steps"]:
+                try:
+                    if hasattr(step, "text") and step.text:
+                        step.text = _strip_thinking(step.text)
+                    if hasattr(step, "raw_text") and step.raw_text:
+                        step.raw_text = _strip_thinking(step.raw_text)
+                except Exception:
+                    # Non-fatal: continue if step structure differs
+                    pass
 
         # Extract generated answer (but don't check correctness yet)
-        generated_text = result["trajectory"]
+        sanitized_trajectory = _strip_thinking(result["trajectory"])
+        result["trajectory"] = sanitized_trajectory
+        generated_text = sanitized_trajectory
         if question in generated_text:
             generated_text = generated_text.replace(question, "").strip()
         if "<Answer>:" in generated_text:

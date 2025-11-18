@@ -6,7 +6,7 @@
 defaults:
   - /config  # Load main Hydra config
   - /dataset/math
-  # - /model/openrouter
+  - /model/hf_qwen3
   - /strategy/cot_uq
   - /generation/default
   - /system/default
@@ -34,7 +34,7 @@ model:
 
 # Generation settings
 generation:
-  max_new_tokens: 1024  # Longer for MATH problems
+  max_new_tokens: 5128  # Longer for MATH problems
   temperature: 0.7
   top_p: 1.0
   batch_size: 1
@@ -52,7 +52,7 @@ strategy:
   # Generation parameters (will be forwarded to strategy)
   temperature: 0.7
   top_p: 0.95
-  max_tokens: 512
+  max_tokens: 5128
   top_logprobs: 10
 
   # Combination weight between prob_conf and cot_importance (0..1)
@@ -83,4 +83,4 @@ evaluation:
 
 # Dataset settings
 dataset:
-  subset: 10  # Number of examples to evaluate
+  subset: 0  # Number of examples to evaluate

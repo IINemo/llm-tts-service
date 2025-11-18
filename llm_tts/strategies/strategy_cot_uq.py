@@ -1,5 +1,6 @@
 import logging
 from typing import Any, Dict, List, Optional, Tuple
+import re
 
 import numpy as np
 
@@ -219,6 +220,30 @@ class StrategyCoTUQ(StrategyBase):
 
         return s
 
+    @staticmethod
+    def _strip_thinking(text: str) -> str:
+        """Remove <think> tags/blocks and normalise blank lines."""
+        if not text:
+            return text
+        s = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+        s = re.sub(r"</?think>", "", s, flags=re.IGNORECASE)
+        s = re.sub(r"\n{3,}", "\n\n", s)
+        return s.strip()
+
+    def _format_trace(self, raw_text: str, answer_text: str) -> str:
+        """Enforce template-ish structure: Reasoning Steps + <Answer>."""
+        cleaned = self._strip_thinking(raw_text or "")
+
+        # Ensure Reasoning Steps header exists
+        if "Reasoning Steps:" not in cleaned:
+            cleaned = f"Reasoning Steps:\n- Step 1: {cleaned}"
+
+        # Attach <Answer>: block if missing
+        if "<Answer>:" not in cleaned:
+            cleaned = f"{cleaned}\n<Answer>: {answer_text or ''}"
+
+        return cleaned.strip()
+
     def generate_trajectory(self, request: List[Dict[str, str]]) -> Dict[str, Any]:
         traces: List[str] = []
         answers: List[str] = []
@@ -275,16 +300,23 @@ class StrategyCoTUQ(StrategyBase):
 
         best_idx = int(np.argmax(scores))
         best_text = traces[best_idx]
+        best_answer = answers[best_idx]
+
+        formatted_trace = self._format_trace(best_text, best_answer)
 
         # Represent the best trace as a single step candidate containing the whole content
         best_step = StepCandidate(
-            text=best_text,
+            text=formatted_trace,
             token_ids=[],
             is_complete=True,
             is_trajectory_complete=True,
             generation_scores=None,
-            raw_text=best_text,
-            other_data={"answer": answers[best_idx], "cot_uq_score": scores[best_idx]},
+            raw_text=formatted_trace,
+            other_data={
+                "answer": best_answer,
+                "cot_uq_score": scores[best_idx],
+                "raw_original_trace": best_text,
+            },
         )
 
         log.info(
@@ -306,5 +338,4 @@ class StrategyCoTUQ(StrategyBase):
                     self.scorer.cleanup()
                 except Exception:
                     log.exception("Error during scorer cleanup")
-
 

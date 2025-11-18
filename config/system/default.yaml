@@ -1,5 +1,5 @@
 # @package system
 
-device: "cuda:0"  # Device to use for base model
+device: "cuda:1"  # Device to use for base model
 seed: 42  # Random seed
 hf_cache: ".cache/huggingface"  # HuggingFace cache directory (local to repo)
