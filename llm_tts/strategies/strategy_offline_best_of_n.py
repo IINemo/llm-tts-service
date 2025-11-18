@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from lm_polygraph import BlackboxModel
 
@@ -18,12 +18,14 @@ class StrategyOfflineBestOfN(StrategyBase):
         self,
         model: BlackboxModel,
         trajectories: int,
+        scorer: Any = None,
         temperature: float = 0.7,
         top_p: float = 1.0,
         max_tokens: int = 512,
     ):
         self.model = model
         self.num_trajectories = trajectories
+        self.scorer = scorer
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
@@ -77,12 +79,33 @@ class StrategyOfflineBestOfN(StrategyBase):
                 "completed": False,
             }
 
-        # For now, we'll use a simple scoring mechanism
-        # In a real implementation, you might want to use a more sophisticated scorer
-        # For simplicity, we'll just use trajectory length as a proxy for quality
-        trajectory_scores = [len(traj) for traj in all_trajectories]
-        
-        # Select the best trajectory (longest in this simple case)
+        # Score trajectories using provided scorer if available, otherwise fallback
+        # to a simple heuristic (trajectory length).
+        trajectory_scores: List[float]
+        if self.scorer is not None:
+            try:
+                # Prepare full chains by concatenating the chat prompt with generated text
+                try:
+                    prompt = "".join([m.get("content", "") for m in request])
+                except Exception:
+                    prompt = ""
+
+                chains = [prompt + traj for traj in all_trajectories]
+
+                # Prefer scorer API that directly scores complete chains if available
+                if hasattr(self.scorer, "score_complete_chains"):
+                    trajectory_scores = self.scorer.score_complete_chains(chains)
+                else:
+                    # Fall back to generic candidate scorer (passes chat + candidates)
+                    trajectory_scores = self.scorer.score_candidates(request, all_trajectories)
+            except Exception as e:
+                log.error(f"Scoring trajectories failed: {e}. Falling back to length heuristic")
+                trajectory_scores = [len(traj) for traj in all_trajectories]
+        else:
+            # For now, use trajectory length as a proxy for quality
+            trajectory_scores = [len(traj) for traj in all_trajectories]
+
+        # Select the best trajectory based on scores
         best_idx = max(range(len(trajectory_scores)), key=lambda i: trajectory_scores[i])
         best_trajectory = all_trajectories[best_idx]
 
@@ -99,4 +122,9 @@ class StrategyOfflineBestOfN(StrategyBase):
 
     def cleanup(self):
         """Clean up resources"""
-        pass
+        if hasattr(self, "scorer") and self.scorer is not None:
+            if hasattr(self.scorer, "cleanup"):
+                try:
+                    self.scorer.cleanup()
+                except Exception:
+                    log.exception("Error during scorer cleanup")
