@@ -1,0 +1,8 @@
+# AIME 2024 dataset configuration
+
+dataset_path: "test-time-compute/aime_2024"
+dataset_config: "default"
+dataset_split: "test"
+subset: null
+prompt_file: "./config/prompts/aime_2025_deepconf.txt"
+answer_format: "numeric"

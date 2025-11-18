@@ -1,0 +1,57 @@
+# @package _global_
+
+# CoT-UQ Evaluation for AIME 2025
+
+defaults:
+  - /config
+  - /dataset/aime_2025
+  - /model/openrouter
+  - /strategy/cot_uq
+  - /generation/default
+  - /system/default
+  - _self_
+
+run_name: "aime2025_cot_uq_budget${strategy.budget}_${now:%Y-%m-%d_%H-%M-%S}"
+
+verbose: false
+report_to: wandb
+wandb_project: llm-tts-eval-cot-uq
+
+# Model configuration (API-based) - inherited from defaults (/model/openrouter)
+
+# Generation parameters (can be overridden in config.strategy as well)
+generation:
+  max_new_tokens: 512
+  temperature: 0.7
+  top_p: 0.95
+  batch_size: 1
+
+# Use built-in CoT-UQ scorer (relies on model logprobs from streaming)
+scorer: null
+
+# Strategy configuration: CoT-UQ parameters (sensible defaults)
+strategy:
+  type: cot_uq
+  budget: 6
+  temperature: 0.7
+  top_p: 0.95
+  max_tokens: 512
+  top_logprobs: 10
+  alpha: 0.5
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - llm_judge
+  llm_judge:
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: deepseek/deepseek-r1-0528
+    cache_path: ~/.cache
+    n_threads: 1
+    prompt_file: null
+
+# Dataset settings - inherited from /dataset/aime_2025
+# Override subset here if you want to run a smaller quick test
+# subset: 10
+
