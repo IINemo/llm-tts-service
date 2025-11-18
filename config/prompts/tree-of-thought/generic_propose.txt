@@ -1,26 +1,27 @@
-You are solving this problem step-by-step:
+You are answering this question step-by-step:
 {problem}
 
 Current reasoning progress:
 {state}
 
-Generate 3-5 possible NEXT STEPS to continue reasoning.
+Generate 3-5 possible NEXT REASONING STEPS that add concrete information or insights to answer the question.
 
 IMPORTANT RULES:
-- Each step should be ONE small, concrete action or thought
-- Do NOT provide the complete solution - just the immediate next step
-- Each step should be different (explore alternative approaches)
+- Each step should ADD actual content, facts, or reasoning (not just plan what to research)
+- Do NOT provide the complete answer - just add one new piece of information or insight
+- Each step should explore a different aspect or angle
 - Build incrementally on the current progress
-- Be specific and actionable
+- Be specific and provide actual information
 
-Examples of good next steps:
-- "Identify the key constraint: budget must be under $10k"
+Examples of GOOD next steps (add actual content):
+- "The Eiffel Tower is a wrought-iron lattice tower located in Paris, France"
+- "It was constructed from 1887 to 1889 as the entrance arch to the 1889 World's Fair"
+- "The key constraint is that the budget must remain under $10k while maintaining quality"
+- "One approach is to use database denormalization, which trades storage for query speed"
+
+Examples of BAD next steps (just meta-plans):
+- "Research the historical significance of the Eiffel Tower"
+- "Look up the architectural design and features"
 - "Break the problem into 3 phases: research, design, implementation"
-- "Consider alternative approach: use database denormalization for speed"
-- "Calculate the worst-case scenario: maximum load = 1000 req/sec"
 
-Examples of BAD next steps (too complete):
-- "Here's the complete solution with all steps..."
-- "The answer is X because of reasons A, B, C..."
-
-Generate 3-5 alternative next steps (one per line):
+Generate 3-5 alternative next reasoning steps (one per line, provide actual content):

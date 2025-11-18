@@ -1,21 +1,22 @@
-Evaluate the quality and promise of this reasoning path:
+Evaluate the quality and usefulness of this partial answer:
 
-Problem: {problem}
+Question: {problem}
 
-Current reasoning:
+Current answer progress:
 {state}
 
-Is this reasoning path likely to lead to a good solution?
+Is this answer path providing good, accurate information that helps answer the question?
 
 Consider:
-- Is the logic sound and coherent?
-- Are we making meaningful progress?
-- Is this approach viable and practical?
-- Are there any obvious errors or dead ends?
+- Does it provide actual facts and information (not just plans)?
+- Is the information accurate and relevant to the question?
+- Are we making meaningful progress toward a complete answer?
+- Is the reasoning sound and coherent?
+- Are there any obvious errors or irrelevant information?
 
 Respond with ONE word:
-- "sure" if this path is very promising and likely leads to a good solution
-- "likely" if this path is somewhat promising and worth exploring
-- "impossible" if this path is stuck, wrong, or a dead end
+- "sure" if this provides excellent, accurate information that strongly addresses the question
+- "likely" if this provides decent information that partially addresses the question
+- "impossible" if this is off-topic, inaccurate, or just planning without actual content
 
 Evaluation:

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from service_app.api.routes import chat, models
+from service_app.api.routes import chat, jobs, models
 from service_app.core.config import settings
 
 # Configure logging
@@ -80,6 +80,7 @@ app.add_middleware(
 # Include routers
 app.include_router(chat.router, tags=["Chat Completions"])
 app.include_router(models.router, tags=["Models"])
+app.include_router(jobs.router, tags=["Async Jobs"])
 
 
 @app.get("/", tags=["Health"])
