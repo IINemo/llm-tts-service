@@ -16,7 +16,7 @@ class StrategyUncertaintyCoT:
         max_empty_steps: Optional[int] = None,
         uncertainty_threshold: Optional[float] = None,
         step_generator: Optional[object] = None,
-        score_aggregation: Optional[str] = "mean",
+        uncertainty_sampling: Optional[str] = None,
     ):
         """
         Initialize Uncertainty-Guided CoT with Predictive Distribution (PD).
@@ -28,15 +28,19 @@ class StrategyUncertaintyCoT:
             max_empty_steps: Maximum number of empty generations before stopping
             uncertainty_threshold: Threshold for triggering CoT branching
         """
-        # Accept either a step generator (preferred) or legacy api_client
         if step_generator is None:
             raise RuntimeError("Provide either step_generator or api_client (legacy).")
+        if uncertainty_sampling.lower() not in {"sequence", "token"}:
+            raise ValueError(
+                f"uncertainty_sampling must be 'sequence' or 'token', got {uncertainty_sampling}"
+            )
         self.step_generator = step_generator
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
         self.max_empty_steps = max_empty_steps
         self.max_new_tokens = step_generator.max_new_tokens
         self.uncertainty_threshold = uncertainty_threshold
+        self.uncertainty_sampling_mode = uncertainty_sampling.lower()
 
     def generate_trajectory(
         self, prompt_or_chat: Union[str, List[Dict[str, str]]]
@@ -66,19 +70,36 @@ class StrategyUncertaintyCoT:
             for step_num in range(self.max_steps):
                 log.info(f"\n=== PD step {step_num+1} ===")
 
-                # 1) Probe: get one candidate and read its uncertainty score
-                self.step_generator.max_new_tokens = 1
-                probe_token = self.step_generator.generate_candidates(
-                    request_chat, trajectory_steps, candidates_per_step=1
-                )[0]
-                if not probe_token:
-                    raise RuntimeError("Probe generation returned no candidates")
+                # 1) Get initial uncertainty score
+                initial_candidate = None
+                # if we are sampling at the token level, we need to probe 1 token uncertainty
+                # and use it to determine if we should use CoT, but we still need to generate a sequence
+                if self.uncertainty_sampling_mode == "token":
+                    initial_uncertainty = self._probe_token_uncertainty(
+                        request_chat, trajectory_steps
+                    )
 
-                probe_uncertainty = probe_token.other_data["uncertainty_score"]
-                use_cot = bool(probe_uncertainty > self.uncertainty_threshold)
-                log.info(f"probed uncertainty: {probe_uncertainty}")
+                # if we are sampling at the sequence level, we can just generate a sequence
+                # and if uncertainty is low, we keep it
+                elif self.uncertainty_sampling_mode == "sequence":
+                    self.step_generator.max_new_tokens = self.max_new_tokens
+                    initial_candidate = self.step_generator.generate_candidates(
+                        request_chat,
+                        trajectory_steps,
+                        candidates_per_step=1,
+                    )[0]
+                    if not initial_candidate:
+                        raise RuntimeError("Initial generation returned no candidates")
+                    initial_uncertainty = initial_candidate.other_data[
+                        "uncertainty_score"
+                    ]
+
+                log.info(
+                    f"[initial] Uncertainty ({self.uncertainty_sampling_mode}): {initial_uncertainty}"
+                )
 
                 # 2) Branch based on uncertainty
+                use_cot = bool(initial_uncertainty > self.uncertainty_threshold)
                 self.step_generator.max_new_tokens = self.max_new_tokens
                 if use_cot:
                     log.info("Using multi-path completion")
@@ -104,6 +125,8 @@ class StrategyUncertaintyCoT:
                     extra = {
                         "uncert_cot_metadata": {
                             "branch": "multi-path",
+                            "trigger_uncertainty": initial_uncertainty,
+                            "sampling_mode": self.uncertainty_sampling_mode,
                             "num_candidates": len(cand_list),
                             "all_candidates": [cand.text for cand in cand_list],
                             "all_uncertainties": [
@@ -114,23 +137,28 @@ class StrategyUncertaintyCoT:
                     }
 
                 else:
-                    log.info("Using greedy completion")
-                    chosen = self.step_generator.generate_candidates(
-                        request_chat,
-                        trajectory_steps,
-                        candidates_per_step=1,
-                    )[0]
-                    if not chosen:
-                        raise RuntimeError(
-                            "No candidate returned for greedy completion"
-                        )
-
-                    log.info(
-                        f"[{0}] Uncertainty: {chosen.other_data['uncertainty_score']:.3f} | Text: {chosen.text}"
-                    )
-
+                    log.info("Using single-path completion")
+                    # if we used the token level probe and uncertainty is low,
+                    # we need to generate a sequence
+                    if initial_candidate is None:
+                        initial_candidate = self.step_generator.generate_candidates(
+                            request_chat,
+                            trajectory_steps,
+                            candidates_per_step=1,
+                        )[0]
+                        if not initial_candidate:
+                            raise RuntimeError(
+                                "No candidate returned for greedy completion"
+                            )
+                    chosen = initial_candidate
                     num_greedy_steps += 1
-                    extra = {"uncert_cot_metadata": {"branch": "greedy"}}
+                    extra = {
+                        "uncert_cot_metadata": {
+                            "branch": "greedy",
+                            "trigger_uncertainty": initial_uncertainty,
+                            "sampling_mode": self.uncertainty_sampling_mode,
+                        }
+                    }
 
                 # 3) Append and check for answer
                 chosen_text = chosen.text
@@ -140,7 +168,7 @@ class StrategyUncertaintyCoT:
                 trajectory_steps.append(chosen)
                 trajectory_text += ("\n" if trajectory_text != "" else "") + chosen_text
 
-                uncertainties.append(probe_uncertainty)
+                uncertainties.append(initial_uncertainty)
                 validity_scores.append(1 - chosen_uncert)
 
                 if chosen_text == "":
@@ -196,6 +224,7 @@ class StrategyUncertaintyCoT:
                 ),
                 "metadata": {
                     "uncert_cot_threshold": self.uncertainty_threshold,
+                    "uncert_sampling_mode": self.uncertainty_sampling_mode,
                     "num_steps": step_num + 1,
                     "num_greedy_steps": num_greedy_steps,
                     "num_multi_path_steps": num_multi_path_steps,
@@ -212,6 +241,17 @@ class StrategyUncertaintyCoT:
         raise TypeError(
             "generate_trajectory expects a string or chat-style List[Dict[str, str]]"
         )
+
+    def _probe_token_uncertainty(
+        self, request_chat: List[Dict[str, str]], trajectory_steps: List[Any]
+    ) -> Optional[float]:
+        self.step_generator.max_new_tokens = 1
+        probe = self.step_generator.generate_candidates(
+            request_chat, trajectory_steps, candidates_per_step=1
+        )
+        if not probe:
+            raise RuntimeError("Token-level probe generation returned no candidates")
+        return probe[0].other_data.get("uncertainty_score")
 
     def _normalize_to_prompt(
         self, prompt_or_chat: Union[str, List[Dict[str, str]]]
