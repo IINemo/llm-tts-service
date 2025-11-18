@@ -87,6 +87,7 @@ def test_uncertainty_guided_cot_with_whitebox():
         max_steps=max_steps,
         max_empty_steps=1,
         uncertainty_threshold=0.3,
+        uncertainty_sampling="token",
     )
 
     question = "3 + 4 = ?"
