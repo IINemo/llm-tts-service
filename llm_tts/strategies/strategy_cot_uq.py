@@ -13,9 +13,9 @@ from llm_tts.step_candidate_generator_base import (
 )
 
 from .cot_uq_evidence import (
-    CotUqEvidenceExtractor,
     DEFAULT_ANSWER_PATTERNS,
     DEFAULT_STEP_PATTERNS,
+    CotUqEvidenceExtractor,
     clean_answer_text,
     compute_reasoning_importance,
     extract_answer_span,
@@ -177,7 +177,9 @@ class StrategyCoTUQ(StrategyBase):
             prob_conf = float(answer_info.get("mean_probability", 0.5))
             cot_importance = float(evidence.get("keyword_confidence", 0.5))
         except Exception:
-            log.exception("Failed to extract CoT-UQ evidence; falling back to heuristics")
+            log.exception(
+                "Failed to extract CoT-UQ evidence; falling back to heuristics"
+            )
             a_start, a_end = self._extract_answer_span(text)
             answer_text = self._clean_answer_text(text[a_start:a_end])
             prob_conf = self._aggregate_answer_prob(token_probs, answer_text)

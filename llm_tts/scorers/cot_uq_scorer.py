@@ -20,9 +20,9 @@ import numpy as np
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers.step_scorer_base import CandidateScore, StepScorerBase
 from llm_tts.strategies.cot_uq_evidence import (
-    CotUqEvidenceExtractor,
     DEFAULT_ANSWER_PATTERNS,
     DEFAULT_STEP_PATTERNS,
+    CotUqEvidenceExtractor,
     clean_answer_text,
     compute_reasoning_importance,
     extract_answer_span,
@@ -105,7 +105,9 @@ class CotUqScorer(StepScorerBase):
             prob_conf = float(answer_info.get("mean_probability", 0.5))
             cot_importance = float(evidence.get("keyword_confidence", 0.5))
         except Exception:
-            log.exception("CotUqScorer failed to extract evidence; using fallback heuristics")
+            log.exception(
+                "CotUqScorer failed to extract evidence; using fallback heuristics"
+            )
             a_start, a_end = extract_answer_span(text, DEFAULT_ANSWER_PATTERNS)
             answer_text = clean_answer_text(text[a_start:a_end])
             prob_conf = self._aggregate_answer_prob(token_probs, answer_text)

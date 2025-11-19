@@ -51,9 +51,7 @@ def _normalize_lower(s: str) -> str:
     return s.lower() if s else ""
 
 
-def extract_answer_span(
-    text: str, answer_patterns: Sequence[str]
-) -> Tuple[int, int]:
+def extract_answer_span(text: str, answer_patterns: Sequence[str]) -> Tuple[int, int]:
     """Locate the answer span; prefer the last non-empty answer block."""
     if not text:
         return 0, 0
@@ -175,7 +173,9 @@ class CotUqEvidenceExtractor:
             keyword_tokens: Dict[str, List[str]] = {}
 
             for keyword in keywords:
-                span = self._locate_keyword_span(step["text"], keyword, step["text_start"])
+                span = self._locate_keyword_span(
+                    step["text"], keyword, step["text_start"]
+                )
                 if not span:
                     continue
                 tokens = self._collect_tokens_in_span(token_spans, span[0], span[1])
@@ -183,7 +183,9 @@ class CotUqEvidenceExtractor:
                 keyword_probs[keyword] = [t["prob"] for t in tokens]
 
             has_signal = any(
-                probs for probs in keyword_probs.values() if any(p is not None for p in probs)
+                probs
+                for probs in keyword_probs.values()
+                if any(p is not None for p in probs)
             )
             if has_signal:
                 empty_streak = 0
@@ -278,9 +280,7 @@ class CotUqEvidenceExtractor:
             collected.append(token)
         return collected
 
-    def _extract_steps(
-        self, reasoning_text: str, offset: int
-    ) -> List[Dict[str, Any]]:
+    def _extract_steps(self, reasoning_text: str, offset: int) -> List[Dict[str, Any]]:
         if not reasoning_text:
             return []
 
@@ -300,8 +300,10 @@ class CotUqEvidenceExtractor:
         segments: List[Tuple[int, int]] = []
         if boundaries:
             for idx, start in enumerate(boundaries):
-                end = boundaries[idx + 1] if idx + 1 < len(boundaries) else len(
-                    reasoning_text
+                end = (
+                    boundaries[idx + 1]
+                    if idx + 1 < len(boundaries)
+                    else len(reasoning_text)
                 )
                 segments.append((start, end))
         elif reasoning_text.strip():
@@ -309,12 +311,9 @@ class CotUqEvidenceExtractor:
 
         steps: List[Dict[str, Any]] = []
         for seg_start, seg_end in segments:
-            raw_segment = reasoning_text[seg_start:seg_end]
+            # raw_segment = reasoning_text[seg_start:seg_end]
             content_start = seg_start
-            while (
-                content_start < seg_end
-                and reasoning_text[content_start].isspace()
-            ):
+            while content_start < seg_end and reasoning_text[content_start].isspace():
                 content_start += 1
             content_end = seg_end
             while (
@@ -386,9 +385,7 @@ class CotUqEvidenceExtractor:
                     break
         return keywords
 
-    def _compute_keyword_contributions(
-        self, keywords: List[str]
-    ) -> Dict[str, float]:
+    def _compute_keyword_contributions(self, keywords: List[str]) -> Dict[str, float]:
         if not keywords:
             return {}
         weights: Dict[str, float] = {}

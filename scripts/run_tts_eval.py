@@ -470,9 +470,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
 
         strategy_scorer_cfg = getattr(config.strategy, "scorer", None)
         strategy_scorer = None
-        if strategy_scorer_cfg is not None and strategy_scorer_cfg.get(
-            "enabled", True
-        ):
+        if strategy_scorer_cfg is not None and strategy_scorer_cfg.get("enabled", True):
             strategy_scorer = CotUqScorer(
                 model=model,
                 alpha=strategy_scorer_cfg.get(
