@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
@@ -133,7 +133,6 @@ class StrategyCoTUQ(StrategyBase):
         sig_pattern = re.compile(r"\\pi|\\frac|\d+|\(|\)|/")
         answer_sig = bool(sig_pattern.search(answer_text))
 
-        flat_tokens = [t for t, p in token_probs]
         flat_probs = [p for t, p in token_probs]
 
         if answer_sig:
