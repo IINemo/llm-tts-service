@@ -28,6 +28,7 @@ from llm_tts.evaluation import (
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import (
+    CotUqScorer,
     StepScorerPRM,
     StepScorerUncertainty,
     TotValueScorer,
@@ -467,6 +468,26 @@ def create_tts_strategy(config, model, step_generator, scorer):
                 f"CoT-UQ requires a model with logprobs support, got {type(model).__name__}"
             )
 
+        strategy_scorer_cfg = getattr(config.strategy, "scorer", None)
+        strategy_scorer = None
+        if strategy_scorer_cfg is not None and strategy_scorer_cfg.get(
+            "enabled", True
+        ):
+            strategy_scorer = CotUqScorer(
+                model=model,
+                alpha=strategy_scorer_cfg.get(
+                    "alpha", config.strategy.get("alpha", 0.5)
+                ),
+                top_logprobs=strategy_scorer_cfg.get(
+                    "top_logprobs", config.strategy.get("top_logprobs", 10)
+                ),
+                step_patterns=config.strategy.get("detector_step_patterns"),
+                answer_patterns=config.strategy.get("detector_answer_patterns"),
+                max_steps=config.strategy.get("max_steps"),
+                max_empty_steps=config.strategy.get("max_empty_steps"),
+                max_keywords=config.strategy.get("max_keywords", 5),
+            )
+
         strategy = StrategyCoTUQ(
             model=model,
             budget=config.strategy.get("budget", 6),
@@ -479,6 +500,13 @@ def create_tts_strategy(config, model, step_generator, scorer):
             ),
             top_logprobs=config.strategy.get("top_logprobs", 10),
             alpha=config.strategy.get("alpha", 0.5),
+            scorer=strategy_scorer,
+            detector_step_patterns=config.strategy.get("detector_step_patterns"),
+            detector_answer_patterns=config.strategy.get("detector_answer_patterns"),
+            max_steps=config.strategy.get("max_steps"),
+            max_empty_steps=config.strategy.get("max_empty_steps"),
+            max_keywords=config.strategy.get("max_keywords", 5),
+            step_generator=step_generator,
         )
 
     else:

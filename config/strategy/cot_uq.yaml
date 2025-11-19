@@ -15,4 +15,32 @@ top_logprobs: 10
 # Final score = alpha * prob_conf + (1 - alpha) * cot_importance
 alpha: 0.5
 
+# Optional limits for reasoning evidence extraction
+max_steps: 10
+max_empty_steps: 5
+max_keywords: 5
 
+detector_step_patterns:
+  - "\n**Step"
+  - "\n## Step"
+  - "\n- Step"
+  - "- Step"
+  - "\nStep"
+
+detector_answer_patterns:
+  - "<Answer>:"
+  - "<answer>:"
+  - "final answer"
+  - "Final answer"
+  - "Answer:"
+  - "Answer: "
+  - "answer:"
+  - "Answer is"
+  - "answer is"
+  - "<end of response>"
+  - "<|im_end|>"
+
+scorer:
+  enabled: false
+  alpha: 0.5
+  top_logprobs: 10

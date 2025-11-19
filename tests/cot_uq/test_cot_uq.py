@@ -21,6 +21,11 @@ class MockBlackboxModelWithStreaming:
     
     def generate_with_logprobs(self, request, temperature=0.7, top_p=0.95, max_tokens=512, top_logprobs=10):
         """Mock generation with logprobs."""
+        if not self.responses:
+            response = Mock()
+            response.text = ""
+            response.token_probs = []
+            return response
         if self.call_count >= len(self.responses):
             # Cycle through responses if we run out
             self.call_count = 0
@@ -33,6 +38,32 @@ class MockBlackboxModelWithStreaming:
         response.text = text
         response.token_probs = token_probs
         return response
+
+
+class DummyStepGenerator:
+    """Minimal step generator that appends a fixed answer."""
+
+    def __init__(self, answer_text: str):
+        self.answer_text = answer_text
+        self.called = 0
+
+    def generate_answer_candidates(
+        self,
+        request,
+        trajectory,
+        candidates_per_step,
+    ):
+        self.called += 1
+        return [
+            StepCandidate(
+                text=f"\n<Answer>: {self.answer_text}",
+                token_ids=[],
+                is_complete=True,
+                is_trajectory_complete=True,
+                generation_scores=None,
+                raw_text=f"\n<Answer>: {self.answer_text}",
+            )
+        ]
 
 
 def create_request(question: str) -> List[Dict[str, str]]:
@@ -186,12 +217,15 @@ class TestStrategyCoTUQ(unittest.TestCase):
         text = "Reasoning Steps:\n- Step 1: 8 - 3 = 5\n- Step 2: 5 + 5 = 10\n<Answer>: 10"
         token_probs = [("8", 0.8), ("-", 0.7), ("3", 0.8), ("=", 0.6), ("5", 0.9), ("10", 0.95)]
         
-        score, answer = strategy._score_trace(text, token_probs)
-        
+        score, answer, evidence = strategy._score_trace(text, token_probs)
+
         self.assertIsInstance(score, float)
         self.assertGreaterEqual(score, 0.0)
         self.assertLessEqual(score, 1.0)
         self.assertEqual(answer.strip(), "10")
+        self.assertIsInstance(evidence, dict)
+        self.assertIn("answer", evidence)
+        self.assertIn("steps", evidence)
     
     def test_generate_trajectory_success(self):
         """Test successful trajectory generation."""
@@ -218,14 +252,47 @@ class TestStrategyCoTUQ(unittest.TestCase):
         self.assertEqual(len(result["validity_scores"]), 3)
         self.assertEqual(len(result["steps"]), 1)
         self.assertIsInstance(result["steps"][0], StepCandidate)
-        
+        self.assertIn("metadata", result)
+        self.assertIn("cot_uq", result["metadata"])
+        self.assertIn("best_evidence", result["metadata"]["cot_uq"])
+
         # Verify step candidate properties
         step = result["steps"][0]
         self.assertTrue(step.is_complete)
         self.assertTrue(step.is_trajectory_complete)
         self.assertIn("answer", step.other_data)
         self.assertIn("cot_uq_score", step.other_data)
-    
+        self.assertIn("cot_uq_evidence", step.other_data)
+
+    def test_force_answer_with_step_generator(self):
+        """Ensure missing answers trigger fallback generation."""
+        incomplete_trace = [
+            (
+                "Reasoning Steps:\n- Step 1: Compute 2 + 2 = 4\n- Step 2: We need to report the answer.\n<Answer>:",
+                [("Reasoning", 0.8), ("Steps", 0.7)],
+            )
+        ]
+        model = MockBlackboxModelWithStreaming(incomplete_trace)
+        step_generator = DummyStepGenerator("4")
+        strategy = StrategyCoTUQ(
+            model=model,
+            budget=1,
+            temperature=0.7,
+            top_p=0.95,
+            max_tokens=200,
+            step_generator=step_generator,
+        )
+
+        result = strategy.generate_trajectory(self.request)
+
+        self.assertTrue(result["completed"])
+        self.assertGreater(step_generator.called, 0)
+        step = result["steps"][0]
+        self.assertIn("4", step.other_data["answer"])
+        self.assertIn("cot_uq_evidence", step.other_data)
+        answer_text = step.other_data["cot_uq_evidence"]["answer"]["clean_text"]
+        self.assertEqual(answer_text.strip(), "4")
+
     def test_generate_trajectory_empty_traces(self):
         """Test trajectory generation with empty traces."""
         model = MockBlackboxModelWithStreaming([])  # No responses

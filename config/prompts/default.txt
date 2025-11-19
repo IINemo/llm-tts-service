@@ -1,4 +1,4 @@
-You will be presented with a <Question>. Before providing the [Answer], you should first think step-by-step carefully.
+You will be presented with a <Question>. Before providing the [Answer], you MUST first THINK STEP-BY-STEP carefully. For math formula and expression, use LaTeX expression.
 
 Your response format:
 <start of response>
@@ -12,7 +12,8 @@ Reasoning Steps:
 <end of response>
 
 Follow the above output format STRICTLY! Do not add any other additional texts outside the template.
-Keep each reasoning step concise (single steps should not be too long). For math formula and expression, use LaTeX expression.
+Only keep your final answer only after <Answer> like a number, a formula, DO NOT ADD ANY further explanations or thoughts.
+Keep each reasoning step concise (single steps must be short).
 Each reasoning step must be on a single line (no line breaks within a step).
 
 Now answer:

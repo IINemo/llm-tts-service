@@ -205,8 +205,15 @@ class StrategyManager:
         if use_scorer:
             scorer = CotUqScorer(
                 model=model,
-                alpha=config.get("alpha", 0.5),
-                top_logprobs=config.get("top_logprobs", 10),
+                alpha=scorer_config.get("alpha", config.get("alpha", 0.5)),
+                top_logprobs=scorer_config.get(
+                    "top_logprobs", config.get("top_logprobs", 10)
+                ),
+                step_patterns=config.get("detector_step_patterns"),
+                answer_patterns=config.get("detector_answer_patterns"),
+                max_steps=config.get("max_steps"),
+                max_empty_steps=config.get("max_empty_steps"),
+                max_keywords=config.get("max_keywords", 5),
             )
 
         return StrategyCoTUQ(
@@ -218,6 +225,11 @@ class StrategyManager:
             top_logprobs=config.get("top_logprobs", 10),
             alpha=config.get("alpha", 0.5),
             scorer=scorer,
+            detector_step_patterns=config.get("detector_step_patterns"),
+            detector_answer_patterns=config.get("detector_answer_patterns"),
+            max_steps=config.get("max_steps"),
+            max_empty_steps=config.get("max_empty_steps"),
+            max_keywords=config.get("max_keywords", 5),
         )
 
     def clear_cache(self):

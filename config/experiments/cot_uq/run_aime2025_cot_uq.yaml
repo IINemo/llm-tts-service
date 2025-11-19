@@ -34,10 +34,12 @@ model:
 
 # Generation settings
 generation:
-  max_new_tokens: 2048  # Longer for MATH problems
+  max_new_tokens: 5128  # Longer for MATH problems
   temperature: 0.7
   top_p: 1.0
   batch_size: 1
+  max_steps: 10
+  max_empty_steps: 5
 
 # CoT-UQ strategy (uses model logprobs + COT importance)
 # Backwards compatibility: keep top-level `scorer` key for scripts that
@@ -55,6 +57,9 @@ strategy:
   max_tokens: 2048
   top_logprobs: 10
 
+  max_steps: 10
+  max_empty_steps: 5
+
   # Combination weight between prob_conf and cot_importance (0..1)
   alpha: 0.5
 
@@ -67,6 +72,27 @@ strategy:
     # `strategy.alpha` and `strategy.top_logprobs` when constructing the scorer.
     alpha: 0.5
     top_logprobs: 10
+
+  detector_step_patterns: [
+            "\n**Step",
+            "\n## Step",
+            "\n- Step",
+            "- Step",
+            "\nStep",
+        ]
+  detector_answer_patterns: [
+            "<Answer>:",
+            "<answer>:",
+            "final answer",
+            "Final answer",
+            "Answer:",
+            "Answer: ",
+            "answer:",
+            "Answer is",
+            "answer is",
+            "<end of response>",
+            "<|im_end|>",
+        ]
 
 # Evaluation configuration
 evaluation:

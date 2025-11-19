@@ -19,6 +19,14 @@ import numpy as np
 
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers.step_scorer_base import CandidateScore, StepScorerBase
+from llm_tts.strategies.cot_uq_evidence import (
+    CotUqEvidenceExtractor,
+    DEFAULT_ANSWER_PATTERNS,
+    DEFAULT_STEP_PATTERNS,
+    clean_answer_text,
+    compute_reasoning_importance,
+    extract_answer_span,
+)
 
 log = logging.getLogger(__name__)
 
@@ -37,71 +45,26 @@ class CotUqScorer(StepScorerBase):
         model: Any = None,
         alpha: float = 0.5,
         top_logprobs: int = 10,
+        step_patterns: Optional[List[str]] = None,
+        answer_patterns: Optional[List[str]] = None,
+        max_steps: Optional[int] = None,
+        max_empty_steps: Optional[int] = None,
+        max_keywords: int = 5,
         name: str = "cot_uq_scorer",
     ):
         super().__init__(name)
         self.model = model if isinstance(model, BlackboxModelWithStreaming) else None
         self.alpha = alpha
         self.top_logprobs = top_logprobs
+        self.extractor = CotUqEvidenceExtractor(
+            step_patterns=step_patterns or DEFAULT_STEP_PATTERNS,
+            answer_patterns=answer_patterns or DEFAULT_ANSWER_PATTERNS,
+            max_steps=max_steps,
+            max_empty_steps=max_empty_steps,
+            max_keywords=max_keywords,
+        )
 
     # -- Internal helpers (ported/adapted from strategy_cot_uq) --
-    @staticmethod
-    def _extract_answer_span(text: str) -> Tuple[int, int]:
-        marker = "<Answer>:"
-        idx = text.rfind(marker)
-        if idx >= 0:
-            start = idx + len(marker)
-            tail_markers = ["<end of response>", "<end response>", "<end>"]
-            end = len(text)
-            for m in tail_markers:
-                m_idx = text.find(m, start)
-                if m_idx != -1:
-                    end = min(end, m_idx)
-            return start, end
-        last_nl = text.rfind("\n")
-        start = last_nl + 1 if last_nl >= 0 else 0
-        tail_markers = ["<end of response>", "<end response>", "<end>"]
-        end = len(text)
-        for m in tail_markers:
-            m_idx = text.find(m, start)
-            if m_idx != -1:
-                end = min(end, m_idx)
-        return start, end
-
-    @staticmethod
-    def _clean_answer_text(answer: str) -> str:
-        import re
-
-        if not answer:
-            return ""
-
-        s = answer.strip()
-        tail_markers = [r"<end of response>", r"<end response>", r"<end>"]
-        for m in tail_markers:
-            s = re.sub(re.escape(m) + r"\s*$", "", s, flags=re.IGNORECASE)
-
-        s = s.strip()
-
-        m = re.match(r"^\\\\\((.*)\\\\\)$", s, flags=re.DOTALL)
-        if m:
-            s = m.group(1).strip()
-
-        m = re.match(r"^\${1,2}(.*)\${1,2}$", s, flags=re.DOTALL)
-        if m:
-            s = m.group(1).strip()
-
-        s = re.sub(r"\\n$", "", s)
-        s = s.strip()
-        return s
-
-    @staticmethod
-    def _compute_reasoning_importance(text: str) -> float:
-        digits = sum(ch.isdigit() for ch in text)
-        ops = sum(ch in "+-*/" for ch in text)
-        tokens = max(1, len(text.split()))
-        score = (digits + ops) / tokens
-        return float(max(0.0, min(1.0, score)))
-
     @staticmethod
     def _aggregate_answer_prob(
         token_probs: List[Tuple[str, float]], answer_text: str
@@ -134,14 +97,34 @@ class CotUqScorer(StepScorerBase):
 
     def _score_trace(
         self, text: str, token_probs: Optional[List[Tuple[str, float]]] = None
-    ) -> Tuple[float, str]:
-        a_start, a_end = self._extract_answer_span(text)
-        answer_text = text[a_start:a_end]
-        answer_text = self._clean_answer_text(answer_text)
-        prob_conf = self._aggregate_answer_prob(token_probs or [], answer_text)
-        cot_importance = self._compute_reasoning_importance(text[:a_start])
+    ) -> Tuple[float, Dict[str, Any]]:
+        token_probs = token_probs or []
+        try:
+            evidence = self.extractor.extract(text, token_probs)
+            answer_info = evidence.get("answer", {})
+            prob_conf = float(answer_info.get("mean_probability", 0.5))
+            cot_importance = float(evidence.get("keyword_confidence", 0.5))
+        except Exception:
+            log.exception("CotUqScorer failed to extract evidence; using fallback heuristics")
+            a_start, a_end = extract_answer_span(text, DEFAULT_ANSWER_PATTERNS)
+            answer_text = clean_answer_text(text[a_start:a_end])
+            prob_conf = self._aggregate_answer_prob(token_probs, answer_text)
+            cot_importance = compute_reasoning_importance(text[:a_start])
+            evidence = {
+                "answer": {
+                    "text": text[a_start:a_end],
+                    "clean_text": answer_text,
+                    "span": [a_start, a_end],
+                    "token_details": [],
+                    "probabilities": [],
+                    "mean_probability": prob_conf,
+                },
+                "reasoning_text": text[:a_start],
+                "steps": [],
+                "keyword_confidence": cot_importance,
+            }
         score = self.alpha * prob_conf + (1 - self.alpha) * cot_importance
-        return score, answer_text
+        return score, evidence
 
     # -- Public scorer APIs --
     def score_complete_chains(
@@ -175,12 +158,16 @@ class CotUqScorer(StepScorerBase):
         for idx, cand in enumerate(candidates):
             tp = token_probs[idx] if idx < len(token_probs) else None
             try:
-                s, answer = self._score_trace(cand, tp)
+                s, evidence = self._score_trace(cand, tp)
                 # Put the combined score into candidate claim_scores for compatibility
                 cs = CandidateScore(
                     candidate_text=cand, claim_scores=[float(s)], aggregate_scores={}
                 )
-                cs.metadata = {"scorer_type": "cot_uq", "answer": answer}
+                cs.metadata = {
+                    "scorer_type": "cot_uq",
+                    "answer": evidence.get("answer", {}).get("clean_text"),
+                    "cot_uq_evidence": evidence,
+                }
                 scores.append(cs)
             except Exception as e:
                 log.error(f"Error scoring candidate: {e}")
