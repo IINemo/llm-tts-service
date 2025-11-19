@@ -32,7 +32,13 @@ class CotUqScorer(StepScorerBase):
         top_logprobs: top-k to request when calling the model for token probs.
     """
 
-    def __init__(self, model: Any = None, alpha: float = 0.5, top_logprobs: int = 10, name: str = "cot_uq_scorer"):
+    def __init__(
+        self,
+        model: Any = None,
+        alpha: float = 0.5,
+        top_logprobs: int = 10,
+        name: str = "cot_uq_scorer",
+    ):
         super().__init__(name)
         self.model = model if isinstance(model, BlackboxModelWithStreaming) else None
         self.alpha = alpha
@@ -97,7 +103,9 @@ class CotUqScorer(StepScorerBase):
         return float(max(0.0, min(1.0, score)))
 
     @staticmethod
-    def _aggregate_answer_prob(token_probs: List[Tuple[str, float]], answer_text: str) -> float:
+    def _aggregate_answer_prob(
+        token_probs: List[Tuple[str, float]], answer_text: str
+    ) -> float:
         if not token_probs:
             return 0.5
 
@@ -124,7 +132,9 @@ class CotUqScorer(StepScorerBase):
         tail_probs = flat_probs[-k:]
         return float(np.mean(tail_probs))
 
-    def _score_trace(self, text: str, token_probs: Optional[List[Tuple[str, float]]] = None) -> Tuple[float, str]:
+    def _score_trace(
+        self, text: str, token_probs: Optional[List[Tuple[str, float]]] = None
+    ) -> Tuple[float, str]:
         a_start, a_end = self._extract_answer_span(text)
         answer_text = text[a_start:a_end]
         answer_text = self._clean_answer_text(answer_text)
@@ -134,7 +144,11 @@ class CotUqScorer(StepScorerBase):
         return score, answer_text
 
     # -- Public scorer APIs --
-    def score_complete_chains(self, chains: List[str], token_probs: Optional[List[List[Tuple[str, float]]]] = None) -> List[float]:
+    def score_complete_chains(
+        self,
+        chains: List[str],
+        token_probs: Optional[List[List[Tuple[str, float]]]] = None,
+    ) -> List[float]:
         """Score complete chains (full trajectories)."""
         scores: List[float] = []
         token_probs = token_probs or [None] * len(chains)
@@ -147,7 +161,13 @@ class CotUqScorer(StepScorerBase):
                 scores.append(0.5)
         return scores
 
-    def score_candidates_detailed(self, chat: List[Dict[str, str]], candidates: List[str], token_probs: Optional[List[List[Tuple[str, float]]]] = None, **kwargs) -> List[CandidateScore]:
+    def score_candidates_detailed(
+        self,
+        chat: List[Dict[str, str]],
+        candidates: List[str],
+        token_probs: Optional[List[List[Tuple[str, float]]]] = None,
+        **kwargs,
+    ) -> List[CandidateScore]:
         """Implements StepScorerBase API and returns detailed CandidateScore entries."""
         scores: List[CandidateScore] = []
         token_probs = token_probs or [None] * len(candidates)
@@ -157,12 +177,16 @@ class CotUqScorer(StepScorerBase):
             try:
                 s, answer = self._score_trace(cand, tp)
                 # Put the combined score into candidate claim_scores for compatibility
-                cs = CandidateScore(candidate_text=cand, claim_scores=[float(s)], aggregate_scores={})
+                cs = CandidateScore(
+                    candidate_text=cand, claim_scores=[float(s)], aggregate_scores={}
+                )
                 cs.metadata = {"scorer_type": "cot_uq", "answer": answer}
                 scores.append(cs)
             except Exception as e:
                 log.error(f"Error scoring candidate: {e}")
-                cs = CandidateScore(candidate_text=cand, claim_scores=[0.5], aggregate_scores={})
+                cs = CandidateScore(
+                    candidate_text=cand, claim_scores=[0.5], aggregate_scores={}
+                )
                 cs.metadata = {"scorer_type": "cot_uq", "error": str(e)}
                 scores.append(cs)
 

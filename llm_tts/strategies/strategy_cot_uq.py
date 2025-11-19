@@ -70,7 +70,9 @@ class StrategyCoTUQ(StrategyBase):
             max_tokens_per_step=max_tokens,
         )
 
-    def _sample_full_trace(self, request: List[Dict[str, str]]) -> Tuple[str, List[Tuple[str, float]]]:
+    def _sample_full_trace(
+        self, request: List[Dict[str, str]]
+    ) -> Tuple[str, List[Tuple[str, float]]]:
         """Generate a full trace with token-level probs.
 
         Returns:
@@ -118,7 +120,9 @@ class StrategyCoTUQ(StrategyBase):
         return start, end
 
     @staticmethod
-    def _aggregate_answer_prob(token_probs: List[Tuple[str, float]], answer_text: str) -> float:
+    def _aggregate_answer_prob(
+        token_probs: List[Tuple[str, float]], answer_text: str
+    ) -> float:
         """Aggregate probabilities over answer tokens (mean prob)."""
         if not token_probs:
             return 0.5
@@ -167,7 +171,9 @@ class StrategyCoTUQ(StrategyBase):
         # Clamp to [0,1]
         return float(max(0.0, min(1.0, score)))
 
-    def _score_trace(self, text: str, token_probs: List[Tuple[str, float]]) -> Tuple[float, str]:
+    def _score_trace(
+        self, text: str, token_probs: List[Tuple[str, float]]
+    ) -> Tuple[float, str]:
         """Return (score, answer_text) for one trace."""
         a_start, a_end = self._extract_answer_span(text)
         answer_text = text[a_start:a_end]
@@ -272,10 +278,14 @@ class StrategyCoTUQ(StrategyBase):
                 chains = [prompt + t for t in traces]
 
                 if hasattr(self.scorer, "score_complete_chains"):
-                    trajectory_scores = self.scorer.score_complete_chains(chains, token_probs=token_probs_list)
+                    trajectory_scores = self.scorer.score_complete_chains(
+                        chains, token_probs=token_probs_list
+                    )
                 else:
                     # Fall back to candidate-style scoring
-                    trajectory_scores = self.scorer.score_candidates(request, traces, token_probs=token_probs_list)
+                    trajectory_scores = self.scorer.score_candidates(
+                        request, traces, token_probs=token_probs_list
+                    )
 
                 # Ensure we have a list of floats matching traces
                 if not trajectory_scores or len(trajectory_scores) != len(traces):
@@ -283,7 +293,9 @@ class StrategyCoTUQ(StrategyBase):
 
                 scores = [float(s) for s in trajectory_scores]
             except Exception as e:
-                log.error(f"External scorer failed: {e}. Falling back to internal CoT-UQ scoring")
+                log.error(
+                    f"External scorer failed: {e}. Falling back to internal CoT-UQ scoring"
+                )
                 # Fall back to internal scoring
                 scores = []
                 for t, tp in zip(traces, token_probs_list):
@@ -296,7 +308,12 @@ class StrategyCoTUQ(StrategyBase):
                 scores.append(s)
 
         if not traces:
-            return {"trajectory": "", "steps": [], "validity_scores": [], "completed": False}
+            return {
+                "trajectory": "",
+                "steps": [],
+                "validity_scores": [],
+                "completed": False,
+            }
 
         best_idx = int(np.argmax(scores))
         best_text = traces[best_idx]
@@ -338,4 +355,3 @@ class StrategyCoTUQ(StrategyBase):
                     self.scorer.cleanup()
                 except Exception:
                     log.exception("Error during scorer cleanup")
-

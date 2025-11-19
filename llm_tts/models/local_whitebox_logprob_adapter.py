@@ -10,6 +10,7 @@ The implementation uses the underlying transformers `AutoModelForCausalLM`
 return_dict_in_generate=True)` and extracts per-token probabilities from the
 returned `scores` logits.
 """
+
 from types import SimpleNamespace
 import inspect
 import torch
@@ -31,7 +32,14 @@ class LocalWhiteboxLogprobAdapter:
         device: device string or torch.device where tensors should be placed
     """
 
-    def __init__(self, wb_model, base_model, tokenizer, device="cpu", disable_thinking_mode: bool = False):
+    def __init__(
+        self,
+        wb_model,
+        base_model,
+        tokenizer,
+        device="cpu",
+        disable_thinking_mode: bool = False,
+    ):
         self._wb = wb_model
         self._base = base_model
         self.tokenizer = tokenizer

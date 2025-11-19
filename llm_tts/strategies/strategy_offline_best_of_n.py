@@ -42,7 +42,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         """
 
         all_trajectories: List[str] = []
-        
+
         # Generate complete trajectories directly using the model
         for traj_idx in range(self.num_trajectories):
             log.info(f"\n=== Trajectory {traj_idx} ===")
@@ -60,7 +60,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                     trajectory_text = results[0].get("text", "")
                     if trajectory_text.strip():
                         all_trajectories.append(trajectory_text)
-                        log.info(f"Generated trajectory {traj_idx}: {trajectory_text[:100]}...")
+                        log.info(
+                            f"Generated trajectory {traj_idx}: {trajectory_text[:100]}..."
+                        )
                     else:
                         log.warning(f"Empty trajectory generated for {traj_idx}")
                 else:
@@ -97,16 +99,22 @@ class StrategyOfflineBestOfN(StrategyBase):
                     trajectory_scores = self.scorer.score_complete_chains(chains)
                 else:
                     # Fall back to generic candidate scorer (passes chat + candidates)
-                    trajectory_scores = self.scorer.score_candidates(request, all_trajectories)
+                    trajectory_scores = self.scorer.score_candidates(
+                        request, all_trajectories
+                    )
             except Exception as e:
-                log.error(f"Scoring trajectories failed: {e}. Falling back to length heuristic")
+                log.error(
+                    f"Scoring trajectories failed: {e}. Falling back to length heuristic"
+                )
                 trajectory_scores = [len(traj) for traj in all_trajectories]
         else:
             # For now, use trajectory length as a proxy for quality
             trajectory_scores = [len(traj) for traj in all_trajectories]
 
         # Select the best trajectory based on scores
-        best_idx = max(range(len(trajectory_scores)), key=lambda i: trajectory_scores[i])
+        best_idx = max(
+            range(len(trajectory_scores)), key=lambda i: trajectory_scores[i]
+        )
         best_trajectory = all_trajectories[best_idx]
 
         log.info(

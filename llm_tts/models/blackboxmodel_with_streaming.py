@@ -347,7 +347,10 @@ class BlackboxModelWithStreaming(BlackboxModel):
 
         results = self.generate_texts([request], **args)
         if not results:
-            class _R: pass
+
+            class _R:
+                pass
+
             r = _R()
             r.text = ""
             r.token_probs = []

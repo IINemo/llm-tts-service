@@ -86,7 +86,9 @@ def load_prompt_template(prompt_file: str) -> str:
             p = alt
 
     if not p.exists():
-        log.warning(f"Prompt file not found: {prompt_file} (tried {p}). Using empty prompt.")
+        log.warning(
+            f"Prompt file not found: {prompt_file} (tried {p}). Using empty prompt."
+        )
         return ""
 
     with open(p, "r") as f:
@@ -201,10 +203,9 @@ def create_model(config):
         # Safely handle missing `config.scorer` (some experiment configs set it to null)
         # Only try to load an uncertainty model when a scorer is configured and
         # its type indicates an uncertainty-based scorer.
-        if (
-            getattr(config, "scorer", None) is not None
-            and getattr(config.scorer, "type", None) in ("uncertainty", "uncertainty_pd")
-        ):
+        if getattr(config, "scorer", None) is not None and getattr(
+            config.scorer, "type", None
+        ) in ("uncertainty", "uncertainty_pd"):
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
@@ -237,7 +238,8 @@ def create_model(config):
                 and getattr(config.strategy, "type", None) == "cot_uq"
             ) or (
                 getattr(config, "scorer", None) is not None
-                and getattr(config.scorer, "type", None) in ("uncertainty", "uncertainty_pd")
+                and getattr(config.scorer, "type", None)
+                in ("uncertainty", "uncertainty_pd")
             )
 
             if need_logprobs and not getattr(model, "supports_logprobs", False):
@@ -251,7 +253,9 @@ def create_model(config):
                         base_model=base_model,
                         tokenizer=tokenizer,
                         device=config.system.device,
-                        disable_thinking_mode=getattr(config.model, "disable_thinking_mode", False),
+                        disable_thinking_mode=getattr(
+                            config.model, "disable_thinking_mode", False
+                        ),
                     )
                     log.info("Wrapped local WhiteboxModel with logprob adapter")
                 except Exception as e:
@@ -466,13 +470,17 @@ def create_tts_strategy(config, model, step_generator, scorer):
         strategy = StrategyCoTUQ(
             model=model,
             budget=config.strategy.get("budget", 6),
-            temperature=config.strategy.get("temperature", config.generation.temperature),
+            temperature=config.strategy.get(
+                "temperature", config.generation.temperature
+            ),
             top_p=config.strategy.get("top_p", config.generation.top_p),
-            max_tokens=config.strategy.get("max_tokens", config.generation.max_new_tokens),
+            max_tokens=config.strategy.get(
+                "max_tokens", config.generation.max_new_tokens
+            ),
             top_logprobs=config.strategy.get("top_logprobs", 10),
             alpha=config.strategy.get("alpha", 0.5),
         )
-    
+
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
 
@@ -539,6 +547,7 @@ def generate_trajectories(
         ]
 
         result = strategy.generate_trajectory(request)
+
         # Post-process generated traces to remove internal thinking markers
         # (e.g., <think>...</think>) when thinking mode was disabled but
         # the model still emitted thought content. Also clean step texts.
