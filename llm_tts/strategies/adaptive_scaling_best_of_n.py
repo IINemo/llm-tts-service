@@ -94,12 +94,12 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     trajectory=trajectory,
                     candidates_per_step=self.candidates_per_step,
                 )
-                validity_scores = self.scorer.score_candidates(request, candidates)
+                all_candidate_scores = self.scorer.score_candidates(request, candidates)
                 # Select best candidate
                 best_idx, selected_candidate = self._select_best_candidate(
-                    candidates, candidate_validity_scores
+                    candidates, all_candidate_scores
                 )
-                cur_signal = validity_scores[best_idx]
+                cur_signal = all_candidate_scores[best_idx]
 
             self.scale_discriminator.update(cur_signal)
 
