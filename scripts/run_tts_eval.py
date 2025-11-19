@@ -3,6 +3,7 @@
 import logging
 import os
 import random
+import re
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +19,6 @@ from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import re
 from utils.results import load_results_json, parse_resume_arguments, save_results_json
 
 from llm_tts.evaluation import (
@@ -42,12 +42,12 @@ from llm_tts.step_candidate_generator_through_huggingface import (
 )
 from llm_tts.strategies import (
     StrategyBeamSearch,
+    StrategyCoTUQ,
     StrategyDeepConf,
+    StrategyOfflineBestOfN,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
     StrategyTreeOfThoughts,
-    StrategyOfflineBestOfN,
-    StrategyCoTUQ,
 )
 
 # Load environment variables from .env file

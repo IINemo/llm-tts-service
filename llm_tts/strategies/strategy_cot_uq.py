@@ -1,18 +1,17 @@
 import logging
-from typing import Any, Dict, List, Optional, Tuple
 import re
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
+from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.step_candidate_generator_base import (
     StepCandidate,
     covert_trajectory_to_string,
 )
-from llm_tts.step_boundary_detector import StepBoundaryDetector
-from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 
 from .strategy_base import StrategyBase
-
 
 log = logging.getLogger(__name__)
 

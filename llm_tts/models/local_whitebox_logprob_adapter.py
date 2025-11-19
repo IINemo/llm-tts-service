@@ -11,12 +11,13 @@ return_dict_in_generate=True)` and extracts per-token probabilities from the
 returned `scores` logits.
 """
 
-from types import SimpleNamespace
 import inspect
+import logging
+from types import SimpleNamespace
+from typing import Dict, List, Tuple
+
 import torch
 import torch.nn.functional as F
-import logging
-from typing import List, Tuple, Dict
 
 log = logging.getLogger(__name__)
 

@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from llm_tts.scorers.step_scorer_base import CandidateScore, StepScorerBase
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
+from llm_tts.scorers.step_scorer_base import CandidateScore, StepScorerBase
 
 log = logging.getLogger(__name__)
 

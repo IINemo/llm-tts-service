@@ -1,9 +1,8 @@
 import logging
+import math
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Dict, List, Optional
-import math
-from llm_tts.early_stopping import NoEarlyStopping
 
 import openai
 from lm_polygraph import BlackboxModel
@@ -13,6 +12,7 @@ from llm_tts.early_stopping import (
     BoundaryEarlyStopping,
     ConfidenceEarlyStopping,
     EarlyStopping,
+    NoEarlyStopping,
 )
 
 log = logging.getLogger(__name__)
