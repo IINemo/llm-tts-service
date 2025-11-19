@@ -119,6 +119,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
             trajectory.append(final_answer)
             selected_steps.append(final_answer)
             validity_scores.append(final_validity)
+        self.scale_discriminator.reset()
 
         return {
             "trajectory": covert_trajectory_to_string(trajectory),
@@ -163,3 +164,4 @@ class AdaptiveScalingBestOfN(StrategyBase):
         """Clean up resources"""
 
         self.scorer.cleanup()
+        self.scale_discriminator.reset()

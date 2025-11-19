@@ -139,3 +139,6 @@ class ScaleDiscriminator:
     def update(self, cur_signal: float) -> float:
         """Update state of the discriminator"""
         return self.discriminator.update(cur_signal)
+
+    def reset(self):
+        self.discriminator.__init__()
