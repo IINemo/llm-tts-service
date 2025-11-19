@@ -40,7 +40,7 @@ scorer: null
 strategy:
   type: deepconf
   mode: "offline"  # Standard weighted voting mode
-  budget: 16  # Increased budget for harder problems
+  budget: 16  # Number of traces to generate
 
   # Generation parameters
   window_size: 2048  # Sliding window (algorithmic parameter - DO NOT CHANGE)
@@ -50,7 +50,7 @@ strategy:
   top_logprobs: 20
 
   # Filtering and voting
-  filter_method: "top5"  # Use top-5 traces by confidence
+  filter_method: "top10"  # Use top-10 traces by confidence
 
 # Evaluation configuration
 evaluation:
@@ -66,4 +66,5 @@ evaluation:
 
 # Dataset settings
 dataset:
-  subset: 5  # Number of examples to evaluate (AIME has 30 total)
+  subset: null  # Evaluate all AIME 2025 problems (30 total)
+  prompt_file: "./config/prompts/aime_2025_minimal.txt"  # Minimal zero-shot prompt (matching original DeepConf repo)

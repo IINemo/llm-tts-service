@@ -3,6 +3,8 @@
 
 # LLM Test-Time Scaling Service
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A research framework for implementing and evaluating test-time scaling strategies for large language models. Includes implementations of DeepConf, Best-of-N, Self-Consistency, and Chain-of-Thought strategies.
 
 ---
@@ -290,6 +292,21 @@ python scripts/run_tts_eval.py --config-name your_experiment --resume
 python scripts/run_tts_eval.py --resume-from outputs/2025-10-18/23-50-46
 ```
 
+### Evaluation
+To re-evaluate or use another evaluator for already existing run use `scripts/evaluate_results.py` providing path to run's folder.
+
+To re-evaluate using same config:
+```
+python3 scripts/evaluate_results.py --results_dir outputs_path
+```
+To add and override config.evaluation.evaluators pass `--evaluators` flag and list them, e.g.:
+```
+python3 scripts/evaluate_results.py --results_dir outputs_path --evaluators exact_match llm_judge
+```
+You can modify configs for new evaluators by passing `--llm_judge_config` or `--alignscore_config`, default is used if no config is passed, but evaluator is called.
+
+By default, script saves new file back to the same folder instead of original file. If it is not desired you can pass `--save-to` argument to specify another folder.
+
 **📖 For detailed documentation, troubleshooting, and best practices, see [Robustness Guide](docs/ROBUSTNESS.md)**
 
 ---
@@ -347,3 +364,9 @@ python service_app/main.py
 - Add new scorers (semantic similarity, calibration-based)
 - Implement Tree of Thought strategy
 - Add MATH dataset support
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

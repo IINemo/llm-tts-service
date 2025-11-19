@@ -126,6 +126,18 @@ async def create_chat_completion(request: ChatCompletionRequest):
                     "top_logprobs": 20,
                 }
             )
+        elif request.tts_strategy in ["tree_of_thoughts", "tot"]:
+            strategy_config.update(
+                {
+                    "mode": request.tot_mode or "generic",
+                    "method_generate": request.tot_method_generate or "propose",
+                    "beam_width": request.tot_beam_width or 3,
+                    "n_generate_sample": request.tot_n_generate_sample or 5,
+                    "steps": request.tot_steps or 4,
+                    "max_tokens_per_step": request.tot_max_tokens_per_step or 150,
+                    "n_threads": 4,
+                }
+            )
 
         # Create strategy
         log.info(f"Creating strategy: {request.tts_strategy}")
@@ -183,6 +195,110 @@ async def create_chat_completion(request: ChatCompletionRequest):
                         "agreement": metadata.get("agreement"),
                     }
                 )
+            elif request.tts_strategy in ["tree_of_thoughts", "tot"]:
+                # Debug: log the full metadata structure
+                log.info(f"Full metadata structure: {metadata.keys()}")
+
+                # Extract ToT metadata - check both nested and flat structures
+                config = metadata.get("config", {})
+                results = metadata.get("results", {})
+                generation = metadata.get("generation_details", {})
+
+                tts_metadata.update(
+                    {
+                        "mode": config.get("mode") or metadata.get("mode"),
+                        "beam_width": config.get("beam_width")
+                        or metadata.get("beam_width"),
+                        "steps": config.get("steps") or metadata.get("steps"),
+                        "method_generate": config.get("method_generate")
+                        or metadata.get("method_generate"),
+                        "temperature": config.get("temperature")
+                        or metadata.get("temperature"),
+                        "best_score": results.get("best_score")
+                        or metadata.get("best_score"),
+                        "selected_answer": results.get("selected_answer")
+                        or metadata.get("selected_answer"),
+                        "total_api_calls": generation.get("total_api_calls")
+                        or metadata.get("total_api_calls"),
+                        "scorer_evaluations": generation.get("scorer_evaluations")
+                        or metadata.get("scorer_evaluations"),
+                        "total_candidates_evaluated": generation.get(
+                            "total_candidates_evaluated"
+                        )
+                        or metadata.get("total_candidates_evaluated"),
+                    }
+                )
+
+                # Include full reasoning tree if requested
+                if request.include_reasoning_tree:
+                    log.info("Building reasoning tree from metadata")
+
+                    # Get all_steps from generation_details
+                    all_steps = generation.get("all_steps", [])
+                    log.info(f"Found {len(all_steps)} steps in search history")
+                    reasoning_tree = {
+                        "nodes": [],
+                        "edges": [],
+                        "question": prompt,
+                    }
+
+                    node_id = 0
+
+                    # Root node
+                    reasoning_tree["nodes"].append(
+                        {
+                            "id": node_id,
+                            "step": 0,
+                            "state": "",
+                            "score": 0.0,
+                            "is_root": True,
+                            "is_selected": True,
+                            "is_final": False,
+                            "timestamp": 0,
+                        }
+                    )
+                    node_id += 1
+
+                    # Process each step
+                    for step_data in all_steps:
+                        step_idx = step_data["step_idx"]
+                        candidates = step_data["candidates"]
+                        scores = step_data["scores"]
+                        selected_states = step_data["selected_states"]
+
+                        # Add all candidate nodes
+                        for candidate, score in zip(candidates, scores):
+                            is_selected = candidate in selected_states
+                            reasoning_tree["nodes"].append(
+                                {
+                                    "id": node_id,
+                                    "step": step_idx + 1,
+                                    "state": candidate,
+                                    "score": float(score),
+                                    "is_root": False,
+                                    "is_selected": is_selected,
+                                    "is_final": step_idx == len(all_steps) - 1,
+                                    "timestamp": step_idx
+                                    + 1,  # Simple timestamp based on step
+                                }
+                            )
+                            node_id += 1
+
+                    # Build edges (simplified - connect steps sequentially)
+                    # Note: More sophisticated edge tracking would require changes to the strategy
+                    for i in range(len(reasoning_tree["nodes"]) - 1):
+                        if (
+                            reasoning_tree["nodes"][i + 1]["step"]
+                            > reasoning_tree["nodes"][i]["step"]
+                        ):
+                            reasoning_tree["edges"].append(
+                                {
+                                    "from": reasoning_tree["nodes"][i]["id"],
+                                    "to": reasoning_tree["nodes"][i + 1]["id"],
+                                }
+                            )
+
+                    tts_metadata["reasoning_tree"] = reasoning_tree
 
         if answer:
             tts_metadata["extracted_answer"] = answer
