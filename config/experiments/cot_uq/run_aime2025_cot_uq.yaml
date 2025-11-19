@@ -6,14 +6,14 @@
 defaults:
   - /config  # Load main Hydra config
   - /dataset/aime_2025
-  - /model/hf_qwen3
+  - /model/hf_qwen32
   - /strategy/cot_uq
   - /generation/default
   - /system/default
   - _self_
 
 # Run naming for descriptive outputs
-run_name: "math_cot_uq_budget${strategy.budget}_${now:%H-%M-%S}"
+run_name: "aime25_cot_uq_budget${strategy.budget}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: false
@@ -30,11 +30,11 @@ model:
   type: "local"
   model_path: "Qwen/Qwen3-8B"
   disable_thinking_mode: true
-  device: cuda
+  device: cuda:1
 
 # Generation settings
 generation:
-  max_new_tokens: 5128  # Longer for MATH problems
+  max_new_tokens: 2048  # Longer for MATH problems
   temperature: 0.7
   top_p: 1.0
   batch_size: 1
@@ -52,7 +52,7 @@ strategy:
   # Generation parameters (will be forwarded to strategy)
   temperature: 0.7
   top_p: 0.95
-  max_tokens: 5128
+  max_tokens: 2048
   top_logprobs: 10
 
   # Combination weight between prob_conf and cot_importance (0..1)
