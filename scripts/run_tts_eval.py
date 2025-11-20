@@ -40,6 +40,7 @@ from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.strategies import (
+    PhiDecoding,
     StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
@@ -321,6 +322,14 @@ def create_tts_strategy(config, model, step_generator, scorer):
             candidates_per_beam=config.strategy.candidates_per_beam,
             max_steps=config.strategy.max_steps,
             aggregation=getattr(config.strategy, "aggregation", "mean"),
+        )
+    elif config.strategy.type == "phi_decoding":
+        strategy = PhiDecoding(
+            step_generator=step_generator,
+            scorer=scorer,
+            candidates_per_step=config.strategy.candidates_per_step,
+            max_steps=config.strategy.max_steps,
+            cluster_num=config.strategy.cluster_num,
         )
     elif config.strategy.type == "self_consistency":
         strategy = StrategySelfConsistency(
