@@ -13,6 +13,7 @@ class StepBoundaryDetector:
         step_patterns: List[str],
         answer_patterns: List[str],
         max_tokens_per_step: int,
+        eos_patterns: List[str] = None,
     ):
         """
         Args:
@@ -41,6 +42,10 @@ class StepBoundaryDetector:
             "\n\nAnswer:",
             "\nFinal Answer:",
             "\n\nThe answer is",
+        ]
+        self.eos_patterns = eos_patterns or [
+            "<end of response>",
+            "<|im_end|>",
         ]
         self.max_tokens_per_step = max_tokens_per_step
 
@@ -71,25 +76,26 @@ class StepBoundaryDetector:
         self, generated_text: str, reached_eos: bool = False
     ) -> bool:
         """Check if trajectory is complete (second step marker is answer tag)"""
-        # Find all step marker positions
-        marker_positions = []
-        for pattern in self.step_patterns:
-            pos = 0
-            while True:
-                pos = generated_text.find(pattern, pos)
-                if pos == -1:
-                    break
-                marker_positions.append((pos, pattern))
-                pos += len(pattern)
+        first_answer_pos = None
+        active_answer_pattern = None
+        for pattern in self.answer_patterns:
+            pos = generated_text.find(pattern)
+            if pos != -1:
+                if first_answer_pos is None or pos < first_answer_pos:
+                    first_answer_pos = pos
+                    active_answer_pattern = pattern  # noqa: F841
 
-        # Sort by position
-        marker_positions.sort()
+        if first_answer_pos is not None:
+            # If the answer marker occurs at the beginning of the current chunk it means
+            # we have just started the answer step (typically "\n<Answer>:" with leading newline).
+            # We treat this as a completed trajectory.
+            return True
 
-        # If we have 2+ markers, check if the second one is an answer pattern
-        if len(marker_positions) >= 2:
-            second_marker_pattern = marker_positions[1][1]
-            # Check if second marker is an answer pattern
-            if second_marker_pattern in self.answer_patterns:
+        if reached_eos:
+            return True
+
+        for pattern in self.eos_patterns:
+            if pattern in generated_text:
                 return True
 
         return False
