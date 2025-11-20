@@ -65,6 +65,26 @@ REGISTERED_STRATEGIES = [
         ],
         description="Beam search with LLM-based state evaluation",
     ),
+    StrategyInfo(
+        name="offline_best_of_n",
+        class_name="StrategyOfflineBestOfN",
+        module_path="llm_tts/strategies/strategy_offline_best_of_n.py",
+        test_dir="tests/offline_best_of_n",
+        required_tests=[
+            "test_offline_best_of_n.py",  # Strategy logic tests
+        ],
+        description="Generate n complete trajectories directly, then select the best one",
+    ),
+    StrategyInfo(
+        name="cot_uq",
+        class_name="StrategyCoTUQ",
+        module_path="llm_tts/strategies/strategy_cot_uq.py",
+        test_dir="tests/cot_uq",
+        required_tests=[
+            "test_cot_uq.py",  # Strategy logic tests
+        ],
+        description="CoT-UQ strategy",
+    ),
     # TODO: Add tests for self_consistency strategy
     # StrategyInfo(
     #     name="self_consistency",
