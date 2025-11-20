@@ -1,0 +1,66 @@
+# @package _global_
+
+hydra:
+  run:
+    dir: ${save_dir}/eval/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+save_dir: "./workdir"
+
+defaults:
+  - dataset: math
+  - generation: default
+  - system: default
+  - scorer: uncertainty_pd
+  - _self_
+
+model:
+  type: "local"
+  model_path: "Qwen/Qwen3-8B"
+  disable_thinking_mode: true
+  device: cuda
+
+generation:
+  allow_newlines: true
+
+strategy:
+  type: "uncertainty_cot"
+  uncertainty_sampling: "sequence"
+  candidates_per_step: 3
+  max_steps: 20
+  max_empty_steps: 5
+  uncertainty_threshold: 0.1
+
+  detector_step_patterns: [
+            "\n**Step",
+            "\n## Step",
+            "\n- Step",
+            "- Step",
+            "\nStep",
+        ]
+  detector_answer_patterns: [
+            "<Answer>:",
+            "<answer>:",
+            "final answer",
+            "Final answer",
+            "Answer:",
+            "Answer: ",
+            "answer:",
+            "Answer is",
+            "answer is",
+            "<end of response>",
+            "<|im_end|>",
+        ]
+
+dataset:
+  prompt_file: ./config/prompts/default.txt
+
+evaluation:
+  evaluators: [exact_match]
+
+output:
+  resume: false
+
+system:
+  seed: 42
+  hf_cache: ".cache/huggingface"
+  device: cuda
