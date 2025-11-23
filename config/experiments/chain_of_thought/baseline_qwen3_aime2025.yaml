@@ -1,0 +1,54 @@
+# @package _global_
+# Baseline evaluation: Qwen3-8B (local) on AIME 2025 (Chain-of-Thought only)
+
+defaults:
+  - /config
+  - /dataset/aime_2025
+  - /model/hf_qwen3
+  - /generation/default
+  - /system/default
+  - _self_
+
+# Chain-of-thought doesn't need a scorer
+scorer: null
+verbose: true
+
+# Run naming
+run_name: "aime2025_baseline_qwen3_${now:%H-%M-%S}"
+
+# Model configuration (local HuggingFace model)
+model:
+  type: "local"
+  model_path: "Qwen/Qwen3-8B"
+  disable_thinking_mode: true
+  device: cuda:0
+
+# System configuration
+system:
+  device: cuda:0
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 4096  # Longer for complex AIME problems
+  temperature: 0.1  # Low temperature for deterministic reasoning
+  top_p: 0.95
+  top_k: 50
+  batch_size: 1
+  max_length: 8192
+
+# Chain-of-thought strategy (single path baseline)
+strategy:
+  type: chain_of_thought
+  max_new_tokens: 4096
+  temperature: 0.1
+
+# Dataset configuration
+dataset:
+  subset: 30  # Using 30 samples for comparison with midterm results
+  prompt_file: "./config/prompts/baseline.txt"
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match

@@ -65,8 +65,10 @@ class StrategyChainOfThought(StrategyBase):
                 # Use local model
                 # Tokenize prompt
                 inputs = self.model.tokenize([prompt_text])
-                input_ids = inputs["input_ids"].to(self.model.device)
-                attention_mask = inputs["attention_mask"].to(self.model.device)
+                # Get device from model - handle quantized models
+                device = next(self.model.model.parameters()).device
+                input_ids = inputs["input_ids"].to(device)
+                attention_mask = inputs["attention_mask"].to(device)
 
                 # Generate single reasoning path
                 with torch.no_grad():
