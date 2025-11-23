@@ -63,8 +63,12 @@ def load_tokenizer(model_path: str):
 
 def load_model(model_path: str, device_map: str):
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, device_map=device_map, trust_remote_code=True
+        model_path,
+        device_map=device_map,
+        trust_remote_code=True,
+        torch_dtype=torch.float16  # Use float16 for memory efficiency
     )
+    log.info("Loaded model with float16")
     return model
 
 
@@ -179,7 +183,7 @@ def create_scorer(config):
 
 def create_model(config):
     if config.model.type == "local":
-        if config.scorer.type == "uncertainty":
+        if config.scorer and config.scorer.type == "uncertainty":
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
