@@ -41,6 +41,7 @@ from llm_tts.step_candidate_generator_through_huggingface import (
 )
 from llm_tts.strategies import (
     StrategyBeamSearch,
+    StrategyChainOfThought,
     StrategyDeepConf,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
@@ -321,6 +322,12 @@ def create_tts_strategy(config, model, step_generator, scorer):
             candidates_per_beam=config.strategy.candidates_per_beam,
             max_steps=config.strategy.max_steps,
             aggregation=getattr(config.strategy, "aggregation", "mean"),
+        )
+    elif config.strategy.type == "chain_of_thought":
+        strategy = StrategyChainOfThought(
+            model=model,
+            max_new_tokens=config.strategy.get("max_new_tokens", 512),
+            temperature=config.strategy.get("temperature", 0.1),
         )
     elif config.strategy.type == "self_consistency":
         strategy = StrategySelfConsistency(
@@ -758,7 +765,9 @@ def main(config):
         cache_dir=config.system.hf_cache,
     )
     if config.dataset.subset:
-        dataset = dataset.select(range(min(config.dataset.subset, len(dataset))))
+        offset = config.dataset.get("offset", 0)
+        end_idx = offset + config.dataset.subset
+        dataset = dataset.select(range(offset, min(end_idx, len(dataset))))
 
     prompt_template = (
         load_prompt_template(config.dataset.prompt_file)

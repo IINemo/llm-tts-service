@@ -46,7 +46,7 @@ class StrategyDeepConf(StrategyBase):
 
     def __init__(
         self,
-        model: BlackboxModel,
+        model,
         mode: str,
         budget: int,
         window_size: int,
@@ -65,7 +65,7 @@ class StrategyDeepConf(StrategyBase):
         Initialize DeepConf strategy.
 
         Args:
-            model: BlackboxModel with logprobs support
+            model: Model supporting logprobs (BlackboxModel for API, or local HuggingFace model)
             mode: "offline" or "online"
             budget: Number of traces for offline mode
             warmup_traces: Warmup traces for online mode
@@ -95,12 +95,25 @@ class StrategyDeepConf(StrategyBase):
         self.confidence_threshold = confidence_threshold
         self.n_threads = n_threads
 
-        # Validate model supports logprobs
-        if not hasattr(model, "supports_logprobs") or not model.supports_logprobs:
-            raise ValueError("Model must support logprobs for DeepConf")
+        # Validate model supports logprobs (for API models) or has required attributes (for local)
+        if isinstance(model, BlackboxModel):
+            # API model: check supports_logprobs flag
+            if not hasattr(model, "supports_logprobs") or not model.supports_logprobs:
+                raise ValueError(
+                    "API model must have supports_logprobs=True for DeepConf"
+                )
+        else:
+            # Local HuggingFace model: check required attributes
+            required_attrs = ["model", "tokenizer", "tokenize", "device"]
+            missing = [attr for attr in required_attrs if not hasattr(model, attr)]
+            if missing:
+                raise ValueError(
+                    f"Local model missing required attributes for DeepConf: {missing}"
+                )
 
+        model_type = "API" if isinstance(model, BlackboxModel) else "Local"
         log.info(
-            f"DeepConf initialized: mode={mode}, "
+            f"DeepConf initialized ({model_type} model): mode={mode}, "
             f"budget={budget if mode == 'offline' else total_budget}, "
             f"window={window_size}, filter={filter_method}, threads={n_threads}"
         )
@@ -410,7 +423,7 @@ class StrategyDeepConf(StrategyBase):
 
     def _generate_single_trace(self, args: tuple) -> Optional[Dict[str, Any]]:
         """
-        Generate a single trace with logprobs (for multithreading).
+        Generate a single trace with logprobs (supports both API and local models).
 
         Args:
             args: Tuple of (prompt, trace_index, total_traces)
@@ -420,47 +433,127 @@ class StrategyDeepConf(StrategyBase):
         """
         prompt, i, n = args
         try:
-            # Prepare chat messages
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a math problem solver. Always put your "
-                        "final numerical answer in \\boxed{answer} format."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ]
+            # Check if this is an API model (BlackboxModel) or local HuggingFace model
+            if isinstance(self.model, BlackboxModel):
+                # ===== API MODEL PATH (OpenAI, OpenRouter, etc.) =====
+                # Prepare chat messages
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a math problem solver. Always put your "
+                            "final numerical answer in \\boxed{answer} format."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ]
 
-            # Generate with logprobs
-            # Disable early stopping for batch generation
-            self.model.early_stopping = None
+                # Generate with logprobs
+                # Disable early stopping for batch generation
+                self.model.early_stopping = None
 
-            results = self.model.generate_texts(
-                chats=[messages],
-                max_new_tokens=self.max_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                output_scores=True,
-                top_logprobs=self.top_logprobs,
-            )
-
-            # Extract text and logprobs from result
-            text = results[0]["text"]
-            logprobs_data = results[0].get("logprobs", [])
-
-            # Extract confidences from logprobs
-            token_confs = []
-            for token_info in logprobs_data:
-                # Use mean of top-k logprobs (same as online mode)
-                top_logprobs_list = token_info["top_logprobs"][: self.top_logprobs]
-                mean_logprob = sum(t["logprob"] for t in top_logprobs_list) / len(
-                    top_logprobs_list
+                results = self.model.generate_texts(
+                    chats=[messages],
+                    max_new_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    output_scores=True,
+                    top_logprobs=self.top_logprobs,
                 )
-                token_confs.append(-mean_logprob)
 
-            token_data = logprobs_data
+                # Extract text and logprobs from result
+                text = results[0]["text"]
+                logprobs_data = results[0].get("logprobs", [])
 
+                # Extract confidences from logprobs
+                token_confs = []
+                for token_info in logprobs_data:
+                    # Use mean of top-k logprobs (same as online mode)
+                    top_logprobs_list = token_info["top_logprobs"][: self.top_logprobs]
+                    mean_logprob = sum(t["logprob"] for t in top_logprobs_list) / len(
+                        top_logprobs_list
+                    )
+                    token_confs.append(-mean_logprob)
+
+                token_data = logprobs_data
+
+            else:
+                # ===== LOCAL HUGGINGFACE MODEL PATH =====
+                import torch
+                import torch.nn.functional as F
+
+                # Tokenize prompt
+                inputs = self.model.tokenize([prompt])
+                input_ids = inputs["input_ids"].to(self.model.device)
+                attention_mask = inputs["attention_mask"].to(self.model.device)
+
+                # Generate with output_scores to get logits
+                with torch.no_grad():
+                    outputs = self.model.model.generate(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=self.max_tokens,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        do_sample=True,
+                        return_dict_in_generate=True,
+                        output_scores=True,  # Get logits for each generated token
+                        pad_token_id=self.model.tokenizer.eos_token_id,
+                        eos_token_id=self.model.tokenizer.eos_token_id,
+                        repetition_penalty=1.1,
+                    )
+
+                # Extract generated text
+                output_seq = outputs.sequences[0]
+                new_tokens = output_seq[input_ids.shape[1] :]
+                text = self.model.tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+                # Extract logprobs from scores (logits)
+                logprobs_data = []
+                token_confs = []
+
+                for idx, score_tensor in enumerate(outputs.scores):
+                    # score_tensor shape: [batch_size, vocab_size]
+                    # Convert logits to log probabilities
+                    log_probs = F.log_softmax(score_tensor[0], dim=-1)
+
+                    # Get top-k log probs and indices
+                    top_k_logprobs, top_k_indices = torch.topk(
+                        log_probs, min(self.top_logprobs, log_probs.size(-1))
+                    )
+
+                    # Get the token that was actually generated
+                    generated_token_id = new_tokens[idx].item()
+                    generated_logprob = log_probs[generated_token_id].item()
+
+                    # Build logprobs data structure (matching API format)
+                    top_logprobs_list = [
+                        {
+                            "token": self.model.tokenizer.decode([token_id.item()]),
+                            "logprob": logprob.item(),
+                        }
+                        for logprob, token_id in zip(top_k_logprobs, top_k_indices)
+                    ]
+
+                    logprobs_data.append(
+                        {
+                            "token": self.model.tokenizer.decode([generated_token_id]),
+                            "logprob": generated_logprob,
+                            "top_logprobs": top_logprobs_list,
+                        }
+                    )
+
+                    # Compute confidence (negative mean of top-k logprobs)
+                    mean_logprob = top_k_logprobs.mean().item()
+                    token_confs.append(-mean_logprob)
+
+                token_data = logprobs_data
+
+                # Clear GPU cache for local models
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            # ===== COMMON PATH (both API and local models) =====
             # Compute sliding window confidences
             window_confs = compute_sliding_window_confidence(
                 token_confs, self.window_size

@@ -1,7 +1,9 @@
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 import torch
+
+from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 
 from .strategy_base import StrategyBase
 
@@ -24,9 +26,81 @@ class StrategyChainOfThought(StrategyBase):
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
 
+    def _generate_single_reasoning(
+        self, args: Tuple[Any, str]
+    ) -> Optional[Tuple[str, str]]:
+        """
+        Generate a single Chain-of-Thought reasoning path (for parallel_execute support).
+
+        This method wraps the generation logic to enable automatic client recreation
+        on API timeouts via parallel_execute().
+
+        Args:
+            args: Tuple of (messages, prompt_text) where:
+                  - messages: Chat format messages for API models
+                  - prompt_text: Original prompt text for local models
+
+        Returns:
+            Tuple of (generated_text, prompt_text) if successful, None if failed
+        """
+        messages, prompt_text = args
+
+        try:
+            # Check if this is an API model (BlackboxModelWithStreaming)
+            if isinstance(self.model, BlackboxModelWithStreaming):
+                results = self.model.generate_texts(
+                    chats=[messages],
+                    max_new_tokens=self.max_new_tokens,
+                    temperature=self.temperature,
+                )
+
+                if results and results[0] and results[0].get("text"):
+                    generated_text = results[0]["text"]
+                    return (generated_text, prompt_text)
+                else:
+                    log.warning("Empty generation from model")
+                    return None
+
+            else:
+                # Use local model
+                # Tokenize prompt
+                inputs = self.model.tokenize([prompt_text])
+                input_ids = inputs["input_ids"].to(self.model.device)
+                attention_mask = inputs["attention_mask"].to(self.model.device)
+
+                # Generate single reasoning path
+                with torch.no_grad():
+                    outputs = self.model.model.generate(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=self.max_new_tokens,
+                        do_sample=True,
+                        temperature=self.temperature,
+                        num_return_sequences=1,
+                        pad_token_id=self.model.tokenizer.eos_token_id,
+                        eos_token_id=self.model.tokenizer.eos_token_id,
+                        repetition_penalty=1.1,
+                    )
+
+                # Decode generated reasoning
+                output_seq = outputs[0]
+                new_tokens = output_seq[input_ids.shape[1] :]
+                generated_text = self.model.tokenizer.decode(
+                    new_tokens, skip_special_tokens=True
+                )
+
+                return (generated_text, prompt_text)
+
+        except Exception as e:
+            log.error(f"Failed to generate CoT reasoning: {e}")
+            return None
+
     def generate_trajectory(self, prompt: str) -> Dict[str, Any]:
         """
         Generate a single Chain-of-Thought reasoning path.
+
+        Uses parallel_execute() with n_threads=1 to enable automatic client
+        recreation on API timeouts, while maintaining sequential execution.
 
         Args:
             prompt: Input prompt/question
@@ -36,69 +110,37 @@ class StrategyChainOfThought(StrategyBase):
         """
         log.info(f"Starting Chain-of-Thought reasoning for prompt: {prompt[:100]}...")
 
-        # Check if this is an API model
-        if hasattr(self.model, "api_model") or self.model.device == "api":
-            log.info("Using API model for CoT generation")
-            try:
-                if hasattr(self.model, "generate"):
-                    # Direct API model
-                    completions = self.model.generate(
-                        prompt=prompt,
-                        max_new_tokens=self.max_new_tokens,
-                        temperature=self.temperature,
-                        num_return_sequences=1,
-                    )
-                    generated_text = completions[0] if completions else ""
-                else:
-                    # API model wrapped in adapter
-                    completions = self.model.api_model.generate(
-                        prompt=prompt,
-                        max_new_tokens=self.max_new_tokens,
-                        temperature=self.temperature,
-                        num_return_sequences=1,
-                    )
-                    generated_text = completions[0] if completions else ""
-
-                # Combine with prompt
-                full_reasoning = prompt + generated_text
-
-            except Exception as e:
-                log.error(f"Failed to generate CoT reasoning: {e}")
-                full_reasoning = prompt + f" [Generation failed: {str(e)}]"
-
-        else:
-            # Use local model
-            log.info("Using local model for CoT generation")
-            # Tokenize prompt
-            inputs = self.model.tokenize([prompt])
-            input_ids = inputs["input_ids"].to(self.model.device)
-            attention_mask = inputs["attention_mask"].to(self.model.device)
-
-            # Generate single reasoning path
-            with torch.no_grad():
-                outputs = self.model.model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    max_new_tokens=self.max_new_tokens,
-                    do_sample=True,
-                    temperature=self.temperature,
-                    num_return_sequences=1,
-                    pad_token_id=self.model.tokenizer.eos_token_id,
-                    eos_token_id=self.model.tokenizer.eos_token_id,
-                    repetition_penalty=1.1,
-                )
-
-            # Decode generated reasoning
-            output_seq = outputs[0]
-            new_tokens = output_seq[input_ids.shape[1] :]
-            generated_text = self.model.tokenizer.decode(
-                new_tokens, skip_special_tokens=True
+        # Prepare arguments for generation
+        if isinstance(prompt, list):
+            messages = prompt
+            # Extract user content from messages for prompt text
+            prompt_text = next(
+                (msg["content"] for msg in prompt if msg["role"] == "user"),
+                str(prompt),
             )
+        else:
+            messages = [{"role": "user", "content": prompt}]
+            prompt_text = prompt
 
-            # Combine with prompt
-            full_reasoning = prompt + generated_text
+        # Use parallel_execute with n_threads=1 for automatic client recreation
+        # This provides robust timeout handling without changing execution order
+        results = self._parallel_generate(
+            worker_func=self._generate_single_reasoning,
+            task_args=[(messages, prompt_text)],
+            n_threads=1,  # Sequential execution, but with retry logic
+            desc="Generating CoT reasoning",
+            model=self.model,  # Critical: enables recreate_client() on timeout
+        )
 
-        log.info("Chain-of-Thought reasoning completed")
+        # Process results
+        if results and len(results) > 0:
+            generated_text, prompt_text = results[0]
+            full_reasoning = prompt_text + "\n\n" + generated_text
+            log.info("Chain-of-Thought reasoning completed")
+        else:
+            # Generation failed (timeout or other error)
+            log.error("Failed to generate CoT reasoning (no results returned)")
+            full_reasoning = prompt_text + "\n\n[Generation failed: timeout or error]"
 
         return {
             "trajectory": full_reasoning,
