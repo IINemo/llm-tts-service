@@ -172,12 +172,14 @@ tmp/
 temp/
 outputs/
 
-*.zip
-*.bst
-*.pdf
-*.bib
-*.tex
-*.sty
+web_app/node_modules/*
+
+# *.zip
+# *.bst
+# *.pdf
+# *.bib
+# *.tex
+# *.sty
 
 workdir/
 

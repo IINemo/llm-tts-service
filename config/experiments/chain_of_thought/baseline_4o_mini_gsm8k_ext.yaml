@@ -1,0 +1,40 @@
+# @package _global_
+# GSM8K Extension: Samples 30-100 (70 additional samples)
+# Extends October 20 experiments to 100 total samples
+
+defaults:
+- /config
+- /dataset/gsm8k
+- /model/openrouter
+- /generation/default
+- /system/default
+- _self_
+scorer: null
+verbose: true
+run_name: gsm8k_baseline_4omini_ext_${now:%H-%M-%S}
+model:
+  provider: openrouter
+  model_name: openai/gpt-4o-mini
+  api_key: null
+generation:
+  max_new_tokens: 512
+  temperature: 0.1
+  batch_size: 1
+strategy:
+  type: chain_of_thought
+  max_new_tokens: 512
+  temperature: 0.1
+dataset:
+  subset: 70
+  offset: 30
+  prompt_file: ./config/prompts/baseline.txt
+evaluation:
+  evaluators:
+  - llm_judge
+  llm_judge:
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: deepseek/deepseek-r1-0528
+    cache_path: ~/.cache
+    n_threads: 1
+    prompt_file: null

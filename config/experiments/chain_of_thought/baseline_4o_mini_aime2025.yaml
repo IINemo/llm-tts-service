@@ -1,0 +1,52 @@
+# @package _global_
+# Baseline evaluation: GPT-4o-mini on AIME 2025 (Chain-of-Thought only)
+
+defaults:
+  - /config
+  - /dataset/aime_2025
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - _self_
+
+# Chain-of-thought doesn't need a scorer
+scorer: null
+verbose: true
+
+# Run naming
+run_name: "aime2025_baseline_4omini_${now:%H-%M-%S}"
+
+# Model configuration
+model:
+  provider: openrouter
+  model_name: "openai/gpt-4o-mini"
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+
+# Generation configuration
+generation:
+  max_new_tokens: 4096  # Longer for complex AIME problems
+  temperature: 0.1  # Low temperature for deterministic reasoning
+  batch_size: 1
+
+# Chain-of-thought strategy (single path baseline)
+strategy:
+  type: chain_of_thought
+  max_new_tokens: 4096
+  temperature: 0.1
+
+# Dataset configuration
+dataset:
+  subset: 30  # Using 30 samples for comparison with midterm results
+  prompt_file: "./config/prompts/baseline.txt"
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - llm_judge
+  llm_judge:
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: deepseek/deepseek-r1-0528
+    cache_path: ~/.cache
+    n_threads: 1
+    prompt_file: null

@@ -1,0 +1,49 @@
+# @package _global_
+# GSM8K Extension: Samples 30-100 (70 additional samples)
+# Extends October 20 experiments to 100 total samples
+
+defaults:
+- /config
+- /dataset/gsm8k
+- /model/openrouter
+- /generation/default
+- /system/default
+- _self_
+run_name: gsm8k_deepconf_gpt4o_b16_ext_${now:%H-%M-%S}
+verbose: false
+report_to: wandb
+wandb_project: llm-tts-eval-deepconf
+model:
+  provider: openrouter
+  model_name: openai/gpt-4o
+  api_key: null
+  top_logprobs: 20
+generation:
+  max_new_tokens: 512
+  temperature: 0.7
+  top_p: 1.0
+  batch_size: 1
+scorer: null
+strategy:
+  type: deepconf
+  mode: offline
+  budget: 16
+  window_size: 2048
+  temperature: 0.6
+  top_p: 0.95
+  max_tokens: 32000
+  top_logprobs: 20
+  filter_method: top5
+evaluation:
+  evaluators:
+  - llm_judge
+  llm_judge:
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: deepseek/deepseek-r1-0528
+    cache_path: ~/.cache
+    n_threads: 1
+    prompt_file: null
+dataset:
+  subset: 70
+  offset: 30
