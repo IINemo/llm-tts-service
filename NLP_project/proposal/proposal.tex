@@ -1,0 +1,130 @@
+% This must be in the first 5 lines to tell arXiv to use pdfLaTeX, which is strongly recommended.
+\pdfoutput=1
+% In particular, the hyperref package requires pdfLaTeX in order to break URLs across lines.
+
+\documentclass[11pt]{article}
+
+% Remove the "review" option to generate the final version.
+\usepackage[]{acl}
+
+% Standard package includes
+\usepackage{times}
+\usepackage{latexsym}
+
+% For proper rendering and hyphenation of words containing Latin characters (including in bib files)
+\usepackage[T1]{fontenc}
+% For Vietnamese characters
+% \usepackage[T5]{fontenc}
+% See https://www.latex-project.org/help/documentation/encguide.pdf for other character sets
+
+% This assumes your files are encoded as UTF8
+\usepackage[utf8]{inputenc}
+
+% This is not strictly necessary, and may be commented out.
+% However, it will improve the layout of the manuscript,
+% and will typically save some space.
+\usepackage{microtype}
+
+% This is also not strictly necessary, and may be commented out.
+% However, it will improve the aesthetics of text in
+% the typewriter font.
+\usepackage{inconsolata}
+
+
+% If the title and author information does not fit in the area allocated, uncomment the following
+%
+%\setlength\titlebox{<dim>}
+%
+% and set <dim> to something 5cm or larger.
+
+\title{Test-Time Scaling Service with Uncertainty Quantification for Enhanced LLM Reasoning}
+
+\author{Vladislav Smirnov \\
+  \texttt{Vladislav.Smirnov@mbzuai.ac.ae} \\
+}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+This project develops a CLI service that enhances large language model reasoning through test-time scaling techniques, specifically integrating Chain-of-Thought prompting, self-consistency, and Deep Think with Confidence methodologies. The service leverages the lm-polygraph framework for advanced uncertainty quantification to reduce hallucinations, improve output quality, and optimize inference costs through intelligent uncertainty-based filtering of reasoning traces.
+\end{abstract}
+
+\section{Introduction}
+
+Large Language Models (LLMs) have shown remarkable capabilities in reasoning tasks, but they suffer from hallucinations and inconsistent outputs. Recent advances in test-time scaling techniques have demonstrated significant improvements in reasoning quality through methods like Chain-of-Thought (CoT) prompting~\cite{wei2022chain}, self-consistency~\cite{wang2022self}, and Deep Think with Confidence (DeepConf)~\cite{sun2025deep}.
+
+While CoT prompting improves reasoning by eliciting step-by-step thought processes, and self-consistency enhances reliability through multiple reasoning path generation, these approaches have limitations. DeepConf addresses some of these by using confidence-based filtering, but relies primarily on token entropy for uncertainty quantification.
+
+Our main contribution is developing a practical CLI service that allows users to select from different LLMs and reasoning strategies (Chain-of-Thought, self-consistency, or DeepConf). As a secondary contribution, we explore integrating alternative uncertainty quantification methods from lm-polygraph~\cite{shelmanov2024benchmarking} into the DeepConf approach, moving beyond simple token entropy for reasoning path filtering.
+
+\section{Data}
+
+We will use GSM8K (grade school math problems) for evaluation. While DeepConf was evaluated on more challenging datasets (AIME, HMMT, BRUMO, GPQA-Diamond), we choose GSM8K for initial development as it is more accessible, has faster evaluation cycles, and allows us to focus on implementing the core service functionality. GSM8K has been extensively used in Chain-of-Thought and self-consistency literature, providing a solid foundation for comparison.
+
+The dataset is publicly available and well-documented, enabling rapid prototyping and evaluation of our CLI service.
+
+\section{Resources}
+
+\textbf{Computational Resources:} MBZUAI GPU clusters for model inference and evaluation.
+
+\textbf{Models:} We will focus on open-source models like Qwen-2.5-8B/32B and DeepSeek-V3-8B for reproducibility, with potential extension to larger models if resources permit. We will also support API-based models for broader accessibility.
+
+\textbf{Software Framework:} The lm-polygraph library~\cite{shelmanov2024benchmarking} provides the core uncertainty quantification methods. We will build our CLI service using Python with integration to popular LLM serving frameworks.
+
+\textbf{Timeline Considerations:} By midterm, we plan to implement the necessary CLI service and evaluate reasoning methods (self-consistency and DeepConf) on reasoning benchmarks. If time remains, we will explore applying other uncertainty quantification methods to DeepConf.
+
+\section{Methodology}
+
+Our methodology combines three key components:
+
+\textbf{1. Test-Time Scaling Techniques:}
+\begin{itemize}
+\item Chain-of-Thought prompting for eliciting reasoning steps
+\item Self-consistency for generating multiple reasoning paths
+\item Deep Think with Confidence for confidence-based path filtering
+\end{itemize}
+
+\textbf{2. Enhanced Uncertainty Quantification:} We extend beyond token entropy by implementing methods from lm-polygraph including:
+\begin{itemize}
+\item Information-based approaches (e.g., semantic entropy)
+\item Meaning diversity techniques
+\item Density-based methods
+\end{itemize}
+
+\textbf{3. Service Architecture:} A CLI interface allowing users to select models and scaling techniques, corresponding to practical NLP system design principles covered in the course.
+
+
+\section{Experimental setup}
+
+\textbf{Core Implementation:} Develop a working CLI service that allows users to select models and reasoning strategies (CoT, self-consistency, DeepConf). Verify that our implementation produces reasonable results on GSM8K to ensure the solution is adequate.
+
+\textbf{Extended Goals (if time permits):} Compare reasoning strategies against baselines and explore alternative uncertainty quantification methods for DeepConf using lm-polygraph.
+
+
+\section{Evaluation}
+
+\textbf{Primary Metrics:}
+\begin{itemize}
+\item \textbf{Accuracy:} Task-specific accuracy on reasoning benchmarks
+\item \textbf{Efficiency:} Token generation reduction and inference speedup
+\end{itemize}
+
+
+\section{Expected outcomes}
+
+\textbf{Technical Contributions:}
+\begin{itemize}
+\item Implementation and evaluation of alternative uncertainty quantification methods for reasoning path filtering
+\item Comparative analysis of different uncertainty methods against token entropy baseline
+\item Functional CLI service prototype for test-time scaling with uncertainty quantification
+\end{itemize}
+
+\textbf{Expected Performance:} We aim to demonstrate that alternative uncertainty quantification methods can match or improve upon DeepConf's token entropy baseline, with initial focus on establishing the framework and methodology.
+
+\textbf{Broader Impact:} This work contributes to making LLMs more reliable and efficient for reasoning tasks, with potential applications in education, scientific research, and decision support systems where accuracy and confidence estimation are critical.
+
+% Bibliography
+\bibliography{proposal_references}
+
+
+\end{document}

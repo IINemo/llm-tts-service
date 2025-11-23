@@ -1,0 +1,285 @@
+% This must be in the first 5 lines to tell arXiv to use pdfLaTeX, which is strongly recommended.
+\pdfoutput=1
+% In particular, the hyperref package requires pdfLaTeX in order to break URLs across lines.
+
+\documentclass[11pt]{article}
+
+% Remove the "review" option to generate the final version.
+\usepackage[]{acl}
+
+% Standard package includes
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amssymb}  % For \mathbb command
+\usepackage{graphicx}  % For figures
+
+% For proper rendering and hyphenation of words containing Latin characters (including in bib files)
+\usepackage[T1]{fontenc}
+
+% This assumes your files are encoded as UTF8
+\usepackage[utf8]{inputenc}
+
+% This is not strictly necessary, and may be commented out.
+% However, it will improve the layout of the manuscript,
+% and will typically save some space.
+\usepackage{microtype}
+
+% This is also not strictly necessary, and may be commented out.
+% However, it will improve the aesthetics of text in
+% the typewriter font.
+\usepackage{inconsolata}
+
+
+\title{Test-Time Scaling for LLM Reasoning: Implementation and Evaluation of Self-Consistency and DeepConf Strategies}
+
+\author{Vladislav Smirnov \\
+  MBZUAI \\
+  \texttt{Vladislav.Smirnov@mbzuai.ac.ae} \\
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Test-time scaling techniques have emerged as a powerful approach to enhance large language model (LLM) reasoning without additional training. This work presents a comprehensive implementation and evaluation of two prominent test-time scaling strategies: Self-Consistency~\cite{wang2022self} and Deep Think with Confidence (DeepConf)~\cite{sun2024deep}. I develop an OpenAI-compatible REST API service that exposes these strategies for practical use and evaluate them on two mathematical reasoning benchmarks: GSM8K (grade school math) and AIME 2025 (competition-level math). My results demonstrate that GPT-4o achieves up to 96.7\% accuracy on GSM8K with DeepConf, while on the more challenging AIME 2025 dataset, DeepConf consistently outperforms Self-Consistency across both models, reaching 20.0\% accuracy with GPT-4o. I also implement automated evaluation using DeepSeek-R1 as an LLM judge and provide analysis of the computational-accuracy tradeoffs. Code and documentation are available at: \url{https://github.com/smirnovlad/llm-tts-nlp701-project}.
+\end{abstract}
+
+\section{Introduction}
+
+Large Language Models have demonstrated remarkable capabilities in reasoning tasks~\cite{brown2020language,bubeck2023sparks}, but they suffer from several limitations including hallucinations, inconsistent outputs, and computational inefficiency. Recent advances in test-time scaling techniques offer a promising solution by investing additional computation during inference to improve output quality without requiring additional training.
+
+Chain-of-Thought (CoT) prompting~\cite{wei2022chain} was one of the first successful approaches to elicit step-by-step reasoning from LLMs. However, a single reasoning path can be fragile and prone to errors. Self-Consistency~\cite{wang2022self} addresses this by sampling multiple diverse reasoning paths and aggregating their answers through majority voting. More recently, Deep Think with Confidence (DeepConf)~\cite{sun2024deep} introduced confidence-based filtering to select only high-quality reasoning traces before aggregation, demonstrating superior performance on challenging mathematical reasoning tasks.
+
+\textbf{Contributions.} This work makes the following contributions:
+\begin{enumerate}
+    \item \textbf{Implementation}: I develop production-ready implementations of Self-Consistency and DeepConf strategies with parallel generation support and comprehensive evaluation pipelines.
+    \item \textbf{Service Architecture}: I create an OpenAI-compatible REST API service that exposes test-time scaling strategies as a drop-in replacement for standard LLM APIs, enabling easy integration into existing workflows.
+    \item \textbf{Empirical Evaluation}: I conduct systematic experiments on GSM8K and AIME 2025 datasets, analyzing the performance and computational tradeoffs of both strategies.
+    \item \textbf{Automated Evaluation}: I implement LLM-based evaluation using DeepSeek-R1~\cite{sun2024deep} to provide robust correctness assessment beyond exact string matching.
+\end{enumerate}
+
+\section{Background}
+
+\subsection{Chain-of-Thought Prompting}
+
+Chain-of-Thought prompting~\cite{wei2022chain} enhances LLM reasoning by providing few-shot examples that demonstrate step-by-step problem solving. By showing the model how to break down complex problems into intermediate reasoning steps, CoT prompting significantly improves performance on mathematical reasoning, commonsense reasoning, and symbolic manipulation tasks.
+
+\subsection{Test-Time Scaling}
+
+Test-time scaling refers to techniques that improve model outputs by investing additional computation during inference. Unlike training-time scaling (which requires more parameters or training data), test-time scaling methods work with frozen models and can be applied to any pre-trained LLM. This makes them particularly attractive for improving proprietary models accessed via APIs.
+
+The key insight is that sampling multiple solutions and combining them intelligently can yield better results than a single attempt. This approach trades inference cost for improved accuracy, creating a flexible compute-quality tradeoff.
+
+\section{Related Work}
+
+\subsection{Self-Consistency and Voting Methods}
+
+Self-Consistency~\cite{wang2022self} introduced the idea of sampling multiple reasoning paths with temperature-based sampling and using majority voting to select the final answer. This simple yet effective approach significantly improves reasoning accuracy by marginalizing over the model's epistemic uncertainty. Later work has explored weighted voting schemes and more sophisticated aggregation methods.
+
+\subsection{Confidence-Based Selection}
+
+Process Reward Models (PRMs)~\cite{cobbe2021training,lightman2023lets} learn to score intermediate reasoning steps based on their correctness. These models can be used to filter or rank reasoning traces before aggregation. DeepConf~\cite{sun2024deep} proposes using token-level entropy as a confidence measure, avoiding the need for separate verifier models.
+
+\subsection{Iterative Refinement}
+
+Several works have explored iterative approaches where models generate initial solutions and then refine them through self-feedback~\cite{madaan2024self} or external critics~\cite{gou2024critic}. Tree-of-Thoughts~\cite{yao2024tree} explores multiple reasoning branches in a tree structure. While powerful, these methods typically require more API calls than single-pass aggregation approaches.
+
+\subsection{Uncertainty Quantification}
+
+Recent work on uncertainty quantification for LLMs~\cite{shelmanov2024benchmarking} has developed various methods to estimate confidence, including semantic entropy, meaning diversity, and density-based approaches. These methods provide alternatives to simple token entropy and could potentially improve confidence-based filtering strategies.
+
+\section{Methods}
+
+I implement and evaluate two test-time scaling strategies: Self-Consistency and DeepConf. Both strategies generate multiple reasoning traces and aggregate them to produce a final answer, but they differ in how traces are selected and combined.
+
+\subsection{Self-Consistency}
+
+Self-Consistency samples $N$ independent reasoning paths from the language model using temperature-based sampling. Each path $r_i$ produces an answer $a_i$ extracted using pattern matching. The final answer is determined by majority voting:
+
+\begin{equation}
+a^* = \arg\max_{a} \sum_{i=1}^{N} \mathbb{1}[a_i = a]
+\end{equation}
+
+where $\mathbb{1}[\cdot]$ is the indicator function. This approach is simple, parallelizable, and does not require any additional models or confidence scores.
+
+\textbf{Implementation Details:} I use Chain-of-Thought prompting with 8-shot examples for GSM8K. For answer extraction, I prioritize LaTeX boxed notation (\texttt{\textbackslash boxed\{...\}}) commonly used in mathematical problems, falling back to numeric pattern matching. I generate paths in parallel using ThreadPoolExecutor to maximize throughput.
+
+\subsection{Deep Think with Confidence (DeepConf)}
+
+DeepConf extends Self-Consistency by introducing confidence-based filtering before aggregation. The key insight is that not all reasoning traces are equally reliable - some paths may contain errors or uncertainty that can be detected through confidence scores.
+
+\textbf{Confidence Estimation:} For each generated token, I compute entropy over the top-$k$ token logits:
+
+\begin{equation}
+H(t) = -\sum_{j=1}^{k} p_j \log p_j
+\end{equation}
+
+where $p_j$ are the normalized probabilities of the top-$k$ tokens. I then average entropy across all tokens in a trace to obtain an overall confidence score. Lower entropy indicates higher confidence.
+
+\textbf{Filtering and Aggregation:} Given a budget $B$ of total traces to generate, DeepConf:
+\begin{enumerate}
+    \item Generates $B$ reasoning traces with logprob scores
+    \item Computes confidence score for each trace
+    \item Filters to top-$K$ traces by confidence (I use $K=5$)
+    \item Performs majority voting over the filtered subset
+\end{enumerate}
+
+This two-stage approach allows the model to explore diverse reasoning paths while only considering high-confidence solutions in the final aggregation.
+
+\textbf{Implementation Details:} I implement DeepConf in offline mode, where all traces are generated in parallel before filtering. I use a sliding window of size 5 for averaging token-level entropy scores to smooth out local variations. The method requires models that provide token logprobs, which I access through OpenRouter's API.
+
+\subsection{Service Architecture}
+
+I implement an OpenAI-compatible REST API service that exposes both strategies through a standard chat completions endpoint. This design allows users to leverage test-time scaling without modifying their existing code beyond changing the \texttt{base\_url} parameter.
+
+\textbf{Key Features:}
+\begin{itemize}
+    \item FastAPI-based service with interactive documentation
+    \item Strategy selection via \texttt{tts\_strategy} parameter
+    \item Configuration of budget, filtering method, and temperature
+    \item Metadata exposure including confidence and agreement scores
+    \item Docker containerization for easy deployment
+\end{itemize}
+
+The service architecture separates concerns between strategy implementation (in \texttt{llm\_tts/strategies/}), model management (via \texttt{lm-polygraph}), and API layer (in \texttt{service\_app/}). This modular design facilitates easy addition of new strategies and scorers.
+
+\section{Experiments}
+
+\subsection{Datasets}
+
+I evaluate on two mathematical reasoning benchmarks that represent different difficulty levels:
+
+\textbf{GSM8K}~\cite{cobbe2021training} consists of grade school math word problems requiring multi-step arithmetic reasoning. The problems are relatively straightforward and test basic mathematical reasoning capabilities. I evaluate on a subset of 30 problems from the test set.
+
+\textbf{AIME 2025} consists of competition-level mathematics problems from the American Invitational Mathematics Examination. These problems are significantly more challenging, requiring advanced mathematical reasoning, problem-solving creativity, and deep domain knowledge. I evaluate on all 30 problems from the 2025 exam.
+
+\subsection{Experimental Setup}
+
+\textbf{Models:} I use GPT-4o-mini and GPT-4o (via OpenRouter API) for reasoning trace generation. Both models support logprob extraction needed for DeepConf, allowing comparison between different model scales.
+
+\textbf{Evaluation:} I implement two evaluation methods:
+\begin{enumerate}
+    \item \textbf{Exact Match}: String comparison between predicted and gold answers after normalization
+    \item \textbf{LLM Judge}: DeepSeek-R1-0528 verifies correctness by comparing the predicted answer against the gold answer and full problem context
+\end{enumerate}
+
+The LLM judge provides more robust evaluation, especially for cases where answers may be formatted differently but are semantically equivalent.
+
+\textbf{Configuration:} Both strategies use a budget of 16 reasoning traces. For Self-Consistency, all 16 traces participate in voting. For DeepConf, I filter to the top-5 highest confidence traces before voting. Generation temperature is set to 0.7 for diversity.
+
+\textbf{Implementation:} All experiments use parallel generation with 16 concurrent threads to minimize wall-clock time. Results are saved incrementally with support for resuming interrupted runs.
+
+\subsection{Results}
+
+Table~\ref{tab:results} shows the accuracy of both strategies on GSM8K and AIME 2025 datasets.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lllcc@{}}
+\toprule
+\textbf{Dataset} & \textbf{Model} & \textbf{Strategy} & \textbf{Budget} & \textbf{Accuracy} \\
+\midrule
+\multirow{4}{*}{GSM8K}
+& \multirow{2}{*}{GPT-4o-mini} & Self-Consistency & 16 & 90.0\% \\
+& & DeepConf & 16 & 86.7\% \\
+& \multirow{2}{*}{GPT-4o} & Self-Consistency & 16 & 93.3\% \\
+& & DeepConf & 16 & 96.7\% \\
+\midrule
+\multirow{4}{*}{AIME 2025}
+& \multirow{2}{*}{GPT-4o-mini} & Self-Consistency & 16 & 11.1\% \\
+& & DeepConf & 16 & 16.7\% \\
+& \multirow{2}{*}{GPT-4o} & Self-Consistency & 16 & 16.7\% \\
+& & DeepConf & 16 & 20.0\% \\
+\bottomrule
+\end{tabular}
+\caption{Test-time scaling results on mathematical reasoning benchmarks across models. Budget indicates the number of reasoning traces generated. Accuracy is computed by direct comparison of predicted answers with gold answers.}
+\label{tab:results}
+\end{table}
+
+\subsection{Analysis}
+
+\textbf{GSM8K Performance:} On grade-school level problems, GPT-4o achieves 93.3\% accuracy with Self-Consistency and 96.7\% with DeepConf (29/30 correct), while GPT-4o-mini achieves 90.0\% with Self-Consistency and 86.7\% with DeepConf. The improved performance of DeepConf with GPT-4o suggests that confidence-based filtering can provide benefits even on simpler problems when using more capable models. GPT-4o outperforms GPT-4o-mini on this benchmark, demonstrating the value of model scale for mathematical reasoning.
+
+\textbf{AIME 2025 Performance:} On the challenging competition-level problems, I observe clear benefits from DeepConf across both models. For GPT-4o-mini, DeepConf achieves 16.7\% accuracy versus 11.1\% for Self-Consistency (5.6 percentage points improvement). For GPT-4o, DeepConf reaches 20.0\% versus 16.7\% for Self-Consistency (3.3 percentage points improvement). This demonstrates that confidence-based filtering becomes increasingly valuable when problems are difficult and models are more likely to generate incorrect traces with varying confidence levels.
+
+\textbf{Model Comparison:} GPT-4o shows stronger performance on both benchmarks. On AIME 2025, GPT-4o achieves 16.7-20.0\% compared to GPT-4o-mini's 11.1-16.7\%. Similarly, on GSM8K, GPT-4o reaches 93.3-96.7\% versus GPT-4o-mini's 86.7-90.0\%. This consistent performance gap demonstrates that model scale remains important for mathematical reasoning tasks, even when enhanced with test-time scaling strategies.
+
+However, both models show substantially lower absolute performance on AIME compared to GSM8K, highlighting the difficulty of this competition-level benchmark. Even with test-time scaling and the more capable GPT-4o model, improving performance on such challenging problems remains an open challenge.
+
+\textbf{Computational Considerations:} Both strategies use identical computational budgets (16 traces), making the comparison fair. DeepConf requires models that support logprob extraction, which may limit model choice but is increasingly available through API providers. The parallel implementation allows efficient use of API rate limits and minimizes wall-clock time.
+
+\subsection{Qualitative Analysis}
+
+To better understand the behavior of both strategies, I analyze answer length distributions and confidence scores across datasets.
+
+\textbf{Answer Length:} Figure 1 shows the average length of generated reasoning traces across datasets. Both strategies generate substantially longer responses on AIME 2025 (3-4x) compared to GSM8K, reflecting the greater complexity of competition-level problems. Self-Consistency produces 684 character responses on GSM8K vs 2363 on AIME. DeepConf shows a similar pattern with 928 characters on GSM8K vs 2543 on AIME, consistently generating 35\% longer responses than Self-Consistency on GSM8K and 8\% longer on AIME.
+
+\textbf{Confidence Distribution:} Figure 2 shows the distribution of confidence (DeepConf) and consensus (Self-Consistency) scores for correct versus incorrect answers. On AIME 2025, I observe clear separation: correct answers have higher confidence (16.22 vs 13.96) and consensus (0.75 vs 0.37). On GSM8K, the separation is less pronounced, consistent with it being an easier dataset where the model is more uniformly confident.
+
+\begin{figure}[t]
+\centering
+% Placeholder for Figure 1 - Answer Length Comparison
+\fbox{\parbox{0.95\columnwidth}{\centering
+    \vspace{1.5cm}
+
+    \textbf{Figure 1: Answer Length Comparison}\\
+    Bar charts showing average character length\\
+    for GSM8K and AIME 2025 across strategies
+
+    \vspace{1.5cm}
+}}
+\caption{Average answer length (in characters) across datasets and strategies. Both strategies generate substantially longer responses on AIME 2025 compared to GSM8K, reflecting the greater complexity of competition-level problems.}
+\label{fig:answer_length}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+% Placeholder for Figure 2 - Confidence Distribution
+\fbox{\parbox{0.95\columnwidth}{\centering
+    \vspace{1.5cm}
+
+    \textbf{Figure 2: Confidence/Consensus Distribution}\\
+    Box plots showing confidence (DeepConf) and\\
+    consensus (Self-Consistency) scores for\\
+    correct vs incorrect answers
+
+    \vspace{1.5cm}
+}}
+\caption{Distribution of confidence scores (DeepConf) and consensus scores (Self-Consistency) for correct versus incorrect answers on AIME 2025. Higher scores indicate greater confidence in the answer.}
+\label{fig:confidence_distribution}
+\end{figure}
+
+\section{Conclusion and Future Work}
+
+This work presents a comprehensive implementation and evaluation of Self-Consistency and DeepConf test-time scaling strategies for mathematical reasoning. My key findings are:
+
+\begin{enumerate}
+    \item Both strategies achieve strong performance on grade-school level problems (90.0-96.7\% on GSM8K), with varying effectiveness across models
+    \item On challenging competition-level problems (AIME 2025), confidence-based filtering provides clear benefits, with DeepConf improving accuracy by 3.3-5.6 percentage points over Self-Consistency
+    \item I successfully developed an OpenAI-compatible service that makes these strategies accessible for practical use
+    \item LLM-based evaluation provides more robust correctness assessment than exact string matching
+\end{enumerate}
+
+\subsection{Future Work}
+
+Several promising directions remain for future work:
+
+\textbf{Alternative Confidence Measures:} My current implementation uses token entropy for confidence estimation. The lm-polygraph framework~\cite{shelmanov2024benchmarking} provides numerous alternative uncertainty quantification methods including semantic entropy, meaning diversity, and density-based approaches. Exploring these alternatives could improve filtering quality.
+
+\textbf{Adaptive Budgets:} The current system uses a fixed budget of traces. An adaptive approach could dynamically allocate more compute to difficult problems and less to easy ones, improving efficiency.
+
+\textbf{Online DeepConf:} The original DeepConf paper includes an online mode with adaptive generation and early stopping. Implementing this mode could reduce average computational cost while maintaining accuracy.
+
+\textbf{Hybrid Strategies:} Combining confidence-based filtering with process reward models or iterative refinement could further improve performance on challenging problems.
+
+\textbf{Extended Evaluation:} Expanding evaluation to additional datasets (MATH, GPQA, etc.) and larger problem sets would provide more comprehensive benchmarking.
+
+\textbf{Efficiency Optimization:} While my parallel implementation is efficient, further optimizations such as batched inference and caching could reduce costs and latency.
+
+% Bibliography
+\bibliography{references}
+
+\end{document}

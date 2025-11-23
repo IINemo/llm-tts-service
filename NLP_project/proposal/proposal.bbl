@@ -1,0 +1,38 @@
+\begin{thebibliography}{4}
+\providecommand{\natexlab}[1]{#1}
+
+\bibitem[{Sun et~al.(2025)}]{sun2025deep}
+Zhiyuan Sun and 1 others. 2025.
+\newblock Deep think with confidence: A test-time computation framework for
+  reasoning with large language models.
+\newblock \emph{arXiv preprint arXiv:2508.15260}.
+
+\bibitem[{Vashurin et~al.(2025)Vashurin, Fadeeva, Vazhentsev, Rvanova, Vasilev,
+  Tsvigun, Petrakov, Xing, Sadallah, Grishchenkov
+  et~al.}]{shelmanov2024benchmarking}
+Roman Vashurin, Ekaterina Fadeeva, Artem Vazhentsev, Lyudmila Rvanova, Daniil
+  Vasilev, Akim Tsvigun, Sergey Petrakov, Rui Xing, Abdelrahman Sadallah,
+  Kirill Grishchenkov, and 1 others. 2025.
+\newblock Benchmarking uncertainty quantification methods for large language
+  models with lm-polygraph.
+\newblock \emph{Transactions of the Association for Computational Linguistics},
+  13:220--248.
+
+\bibitem[{Wang et~al.(2022)Wang, Wei, Schuurmans, Le, Chi, Narang, Chowdhery,
+  and Zhou}]{wang2022self}
+Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc Le, Ed~Chi, Sharan Narang,
+  Aakanksha Chowdhery, and Denny Zhou. 2022.
+\newblock Self-consistency improves chain of thought reasoning in language
+  models.
+\newblock \emph{arXiv preprint arXiv:2203.11171}.
+
+\bibitem[{Wei et~al.(2022)Wei, Wang, Schuurmans, Bosma, Xia, Chi, Le, Zhou
+  et~al.}]{wei2022chain}
+Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed~Chi, Quoc~V
+  Le, Denny Zhou, and 1 others. 2022.
+\newblock Chain-of-thought prompting elicits reasoning in large language
+  models.
+\newblock \emph{Advances in neural information processing systems},
+  35:24824--24837.
+
+\end{thebibliography}
