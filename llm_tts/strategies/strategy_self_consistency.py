@@ -102,15 +102,29 @@ class StrategySelfConsistency(StrategyBase):
 
             else:
                 # Local model generation
-                # For local models, prompt_or_messages should be a string
-                prompt = (
-                    prompt_or_messages
-                    if isinstance(prompt_or_messages, str)
-                    else prompt_or_messages[0].get("content", "")
-                )
+                # For local models, extract user message from chat format
+                if isinstance(prompt_or_messages, str):
+                    prompt = prompt_or_messages
+                elif isinstance(prompt_or_messages, list):
+                    # Extract user content from messages (skip empty system messages)
+                    prompt = next(
+                        (msg["content"] for msg in prompt_or_messages if msg["role"] == "user"),
+                        str(prompt_or_messages),
+                    )
+                else:
+                    prompt = str(prompt_or_messages)
+
+                log.debug(f"  Path {i+1}/{total}: Prompt type: {type(prompt)}, length: {len(prompt) if isinstance(prompt, str) else 'N/A'}")
+
                 inputs = self.model.tokenize([prompt])
-                input_ids = inputs["input_ids"].to(self.model.device)
-                attention_mask = inputs["attention_mask"].to(self.model.device)
+                log.debug(f"  Path {i+1}/{total}: Input IDs shape: {inputs['input_ids'].shape}")
+
+                # Get device from model - handle quantized models
+                device = next(self.model.model.parameters()).device
+                input_ids = inputs["input_ids"].to(device)
+                attention_mask = inputs["attention_mask"].to(device)
+
+                log.debug(f"  Path {i+1}/{total}: Device: {device}, Input shape: {input_ids.shape}")
 
                 with torch.no_grad():
                     outputs = self.model.model.generate(
@@ -126,8 +140,19 @@ class StrategySelfConsistency(StrategyBase):
                         length_penalty=1.0,
                     )
 
+                log.debug(f"  Path {i+1}/{total}: Outputs shape: {outputs.shape if outputs is not None else 'None'}")
+
+                # Check if outputs is valid
+                if outputs is None or len(outputs) == 0 or outputs.shape[0] == 0:
+                    log.error(f"  Empty outputs from model for path {i+1}/{total}, shape: {outputs.shape if outputs is not None else 'None'}")
+                    return None
+
                 # Decode generated path
                 output_seq = outputs[0]
+                if len(output_seq) <= input_ids.shape[1]:
+                    log.error(f"  No new tokens generated for path {i+1}/{total}")
+                    return None
+
                 new_tokens = output_seq[input_ids.shape[1] :]
                 generated_text = self.model.tokenizer.decode(
                     new_tokens, skip_special_tokens=True
@@ -254,27 +279,92 @@ class StrategySelfConsistency(StrategyBase):
             )
             return valid_paths
         else:
-            # Fallback: Use parallel generation for local models
+            # Local model: Use batched generation for efficiency
+            # Split into smaller batches to avoid OOM
+            batch_size = 8  # Generate 8 paths at a time (balanced between speed and memory)
             log.info(
-                f"Generating {self.num_paths} paths in parallel "
-                f"with {self.n_threads} threads"
+                f"Generating {self.num_paths} paths in batches of {batch_size}"
             )
 
-            path_args = [(prompt, i, self.num_paths) for i in range(self.num_paths)]
-            paths = self._parallel_generate(
-                worker_func=self._generate_single_path,
-                task_args=path_args,
-                n_threads=self.n_threads,
-                desc=f"Generating {self.num_paths} reasoning paths",
-            )
+            # Extract prompt text from chat format if needed
+            if isinstance(prompt, list):
+                prompt_text = next(
+                    (msg["content"] for msg in prompt if msg["role"] == "user"),
+                    str(prompt),
+                )
+            else:
+                prompt_text = prompt
 
-            # Filter out None values (failed generations)
-            valid_paths = [p for p in paths if p]
+            all_valid_paths = []
+
+            # Process in batches
+            num_batches = (self.num_paths + batch_size - 1) // batch_size  # Ceiling division
+            for batch_idx in range(num_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min(start_idx + batch_size, self.num_paths)
+                current_batch_size = end_idx - start_idx
+
+                log.info(f"Batch {batch_idx + 1}/{num_batches}: Generating paths {start_idx + 1}-{end_idx}")
+
+                # Create batch of identical prompts (one per path in this batch)
+                prompts_batch = [prompt_text] * current_batch_size
+
+                try:
+                    # Tokenize all prompts at once
+                    inputs = self.model.tokenize(prompts_batch)
+                    log.info(f"Tokenized {current_batch_size} prompts, input shape: {inputs['input_ids'].shape}")
+
+                    # Get device from model
+                    device = next(self.model.model.parameters()).device
+                    input_ids = inputs["input_ids"].to(device)
+                    attention_mask = inputs["attention_mask"].to(device)
+
+                    log.info(f"Generating {current_batch_size} paths on device {device}...")
+
+                    # Generate all paths in this batch
+                    with torch.no_grad():
+                        outputs = self.model.model.generate(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            max_new_tokens=self.max_new_tokens,
+                            do_sample=True,
+                            temperature=self.temperature,
+                            num_return_sequences=1,  # One sequence per input
+                            pad_token_id=self.model.tokenizer.eos_token_id,
+                            eos_token_id=self.model.tokenizer.eos_token_id,
+                            repetition_penalty=1.1,
+                            length_penalty=1.0,
+                        )
+
+                    log.info(f"Generated outputs shape: {outputs.shape}")
+
+                    # Decode all generated paths in this batch
+                    for i, output_seq in enumerate(outputs):
+                        # Extract only the newly generated tokens (skip the prompt)
+                        new_tokens = output_seq[input_ids.shape[1]:]
+                        generated_text = self.model.tokenizer.decode(
+                            new_tokens, skip_special_tokens=True
+                        )
+
+                        if generated_text.strip():  # Only add non-empty paths
+                            all_valid_paths.append(generated_text)
+                            global_idx = start_idx + i + 1
+                            log.info(f"  Generated path {global_idx}/{self.num_paths} ({len(generated_text)} chars)")
+                        else:
+                            log.warning(f"  Path {start_idx + i + 1}/{self.num_paths} was empty, skipping")
+
+                    # Clear GPU cache after each batch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
+                except Exception as e:
+                    log.error(f"Batch {batch_idx + 1} failed: {e}")
+                    # Continue with next batch even if this one failed
+
             log.info(
-                f"Successfully generated {len(valid_paths)}/{self.num_paths} paths"
+                f"Successfully generated {len(all_valid_paths)}/{self.num_paths} paths via batched generation"
             )
-
-            return valid_paths
+            return all_valid_paths
 
     def select_best_answer(self, reasoning_paths: List[str]) -> Dict[str, Any]:
         """
