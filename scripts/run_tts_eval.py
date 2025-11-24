@@ -297,11 +297,8 @@ def create_tts_strategy(config, model, step_generator, scorer):
             max_steps=config.strategy.max_steps,
         )
     elif config.strategy.type == "deepconf":
-        # DeepConf requires BlackboxModel with logprobs support
-        if not isinstance(model, BlackboxModelWithStreaming):
-            raise ValueError(
-                f"DeepConf requires BlackboxModelWithStreaming, got {type(model).__name__}"
-            )
+        # DeepConf supports both API models (with logprobs) and local HuggingFace models
+        # Validation is done inside StrategyDeepConf.__init__
 
         strategy = StrategyDeepConf(
             model=model,

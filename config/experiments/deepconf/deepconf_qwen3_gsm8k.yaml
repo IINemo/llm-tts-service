@@ -1,0 +1,69 @@
+# @package _global_
+# DeepConf Offline Mode: Qwen3-8B (local) on GSM8K
+# Math word problems with confidence-based test-time scaling
+
+defaults:
+  - /config
+  - /dataset/gsm8k
+  - /model/hf_qwen3
+  - /generation/default
+  - /system/default
+  - _self_
+
+# Run naming
+run_name: "gsm8k_deepconf_qwen3_b${strategy.budget}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: null  # Disable wandb for local runs
+
+# Model configuration (local HuggingFace model)
+model:
+  type: "local"
+  model_path: "Qwen/Qwen3-8B"
+  disable_thinking_mode: true
+  device: cuda:0
+
+# System configuration
+system:
+  device: cuda:0
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 1024  # GSM8K problems are shorter than AIME
+  temperature: 0.7
+  top_p: 0.95
+  batch_size: 1
+  max_length: 8192
+
+# No scorer needed (DeepConf has built-in weighted voting)
+scorer: null
+
+# DeepConf offline mode strategy
+strategy:
+  type: deepconf
+  mode: "offline"  # Generate all traces, filter by confidence, weighted vote
+  budget: 16  # Number of reasoning traces to generate
+
+  # Generation parameters
+  window_size: 2048  # Sliding window for confidence computation
+  temperature: 0.6  # Sampling temperature for diversity
+  top_p: 0.95  # Nucleus sampling
+  max_tokens: 1024  # Match GSM8K complexity
+  top_logprobs: 20  # Required for confidence computation
+
+  # Filtering and voting
+  filter_method: "top10"  # Use top-10 traces by confidence for voting
+  n_threads: 1  # Sequential generation for local model
+
+# Dataset configuration
+dataset:
+  subset: 25  # Number of samples to process (will override with offset for different GPUs)
+  offset: 0  # Start from beginning (will override for second GPU)
+  prompt_file: "./config/prompts/baseline.txt"
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match

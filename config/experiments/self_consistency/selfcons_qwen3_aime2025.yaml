@@ -1,0 +1,62 @@
+# @package _global_
+# Self-Consistency experiment: Qwen3-8B (local) on AIME 2025
+# Competition-level mathematics problems from American Invitational Mathematics Examination
+
+defaults:
+  - /config
+  - /dataset/aime_2025
+  - /model/hf_qwen3
+  - /generation/default
+  - /system/default
+  - _self_
+
+# Run naming
+run_name: "aime2025_selfconsistency_qwen3_n${strategy.num_paths}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: null  # Disable wandb for local runs
+
+# Model configuration (local HuggingFace model)
+model:
+  type: "local"
+  model_path: "Qwen/Qwen3-8B"
+  disable_thinking_mode: true
+  device: cuda:0
+
+# System configuration
+system:
+  device: cuda:0
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 4096  # AIME problems require more tokens than GSM8K
+  temperature: 0.7  # Higher temperature for diversity in self-consistency
+  top_p: 0.95
+  top_k: 50
+  batch_size: 1
+  max_length: 8192
+
+# No scorer needed (strategy has built-in majority voting)
+scorer: null
+
+# Self-consistency strategy
+strategy:
+  type: self_consistency
+  num_paths: 16  # Number of reasoning paths to generate
+  max_new_tokens: 4096  # Match AIME complexity
+  temperature: 0.7  # Sampling temperature for diversity
+  generation_batch_size: 16  # Batch generation for efficiency
+  n_threads: 1  # Sequential generation for local model
+
+# Dataset configuration
+dataset:
+  subset: 30  # All AIME 2025 problems
+  offset: 0  # Start from beginning
+  prompt_file: "./config/prompts/baseline.txt"
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match

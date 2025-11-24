@@ -281,7 +281,7 @@ class StrategySelfConsistency(StrategyBase):
         else:
             # Local model: Use batched generation for efficiency
             # Split into smaller batches to avoid OOM
-            batch_size = 8  # Generate 8 paths at a time (balanced between speed and memory)
+            batch_size = min(self.generation_batch_size, self.num_paths)  # Use configured batch size
             log.info(
                 f"Generating {self.num_paths} paths in batches of {batch_size}"
             )
