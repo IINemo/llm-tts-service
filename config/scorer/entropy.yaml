@@ -1,0 +1,5 @@
+type: entropy
+uncertainty_model_creator: config.scorer.uncertainty_entropy
+uncertainty: 
+  test: 1
+batch_size: 1

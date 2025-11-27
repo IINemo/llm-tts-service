@@ -56,6 +56,16 @@ REGISTERED_STRATEGIES = [
         description="Step-by-step generation with PRM scoring",
     ),
     StrategyInfo(
+        name="adaptive_scaling_best_of_n",
+        class_name="AdaptiveScalingBestOfN",
+        module_path="llm_tts/strategies/adaptive_scaling_best_of_n.py",
+        test_dir="tests/adaptive_scaling_best_of_n",
+        required_tests=[
+            "test_adaptive_scaling.py",
+        ],
+        description="Adaptive scaling best-of-n strategy",
+    ),
+    StrategyInfo(
         name="tree_of_thoughts",
         class_name="StrategyTreeOfThoughts",
         module_path="llm_tts/strategies/tree_of_thoughts/strategy.py",
