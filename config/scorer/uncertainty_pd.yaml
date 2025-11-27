@@ -1,0 +1,5 @@
+type: uncertainty_pd
+uncertainty_model_creator: config.scorer.uncertainty_pd
+uncertainty:
+  test: 1
+batch_size: 1

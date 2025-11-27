@@ -46,6 +46,7 @@ from llm_tts.strategies import (
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
     StrategyTreeOfThoughts,
+    StrategyUncertaintyCoT,
 )
 
 # Load environment variables from .env file
@@ -157,7 +158,8 @@ def create_scorer(config):
 
     if config.strategy.type == "deepconf":
         return None
-
+    if config.scorer.type == "uncertainty_pd":
+        return None
     if config.scorer is None:
         return None
 
@@ -179,7 +181,10 @@ def create_scorer(config):
 
 def create_model(config):
     if config.model.type == "local":
-        if config.scorer.type == "uncertainty":
+        if (
+            config.scorer.type == "uncertainty"
+            or config.scorer.type == "uncertainty_pd"
+        ):
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
@@ -204,8 +209,12 @@ def create_model(config):
             model = WhiteboxModel(base_model, tokenizer)
 
         detector = StepBoundaryDetector(
-            step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
-            answer_patterns=["<Answer>:", "\n<Answer>:"],
+            step_patterns=config.strategy.get(
+                "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+            ),
+            answer_patterns=config.strategy.get(
+                "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+            ),
             max_tokens_per_step=config.generation.max_new_tokens,
         )
         step_generator = StepCandidateGeneratorThroughHuggingface(
@@ -314,6 +323,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
             top_logprobs=config.strategy.get("top_logprobs", 20),
             n_threads=config.strategy.get("n_threads", 8),
         )
+
     elif config.strategy.type == "beam_search":
         strategy = StrategyBeamSearch(
             step_generator=step_generator,
@@ -394,6 +404,16 @@ def create_tts_strategy(config, model, step_generator, scorer):
             ),
         )
 
+    elif config.strategy.type == "uncertainty_cot":
+        strategy = StrategyUncertaintyCoT(
+            config=config,
+            step_generator=step_generator,
+            candidates_per_step=config.strategy.candidates_per_step,
+            max_steps=config.strategy.max_steps,
+            max_empty_steps=config.strategy.max_empty_steps,
+            uncertainty_threshold=config.strategy.uncertainty_threshold,
+            uncertainty_sampling=config.strategy.uncertainty_sampling,
+        )
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
 
