@@ -56,6 +56,16 @@ REGISTERED_STRATEGIES = [
         description="Step-by-step generation with PRM scoring",
     ),
     StrategyInfo(
+        name="phi_decoding",
+        class_name="PhiDecoding",
+        module_path="llm_tts/strategies/phi.py",
+        test_dir="tests/phi_decoding",
+        required_tests=[
+            "test_phi_decoding.py",  # Strategy logic tests
+        ],
+        description="Phi decoding",
+    ),
+    StrategyInfo(
         name="tree_of_thoughts",
         class_name="StrategyTreeOfThoughts",
         module_path="llm_tts/strategies/tree_of_thoughts/strategy.py",
