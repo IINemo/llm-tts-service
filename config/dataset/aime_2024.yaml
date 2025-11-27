@@ -1,0 +1,8 @@
+# AIME 2024 dataset configuration
+
+dataset_path: "test-time-compute/test_aime24"
+dataset_config: "default"
+dataset_split: "test"
+subset: null
+prompt_file: "./config/prompts/default_cotuq.txt"
+answer_format: "numeric"

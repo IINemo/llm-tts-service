@@ -3,6 +3,7 @@
 import logging
 import os
 import random
+import re
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,7 @@ from llm_tts.evaluation import (
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import (
+    CotUqScorer,
     StepScorerPRM,
     StepScorerUncertainty,
     TotValueScorer,
@@ -42,7 +44,9 @@ from llm_tts.step_candidate_generator_through_huggingface import (
 from llm_tts.strategies import (
     PhiDecoding,
     StrategyBeamSearch,
+    StrategyCoTUQ,
     StrategyDeepConf,
+    StrategyOfflineBestOfN,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
     StrategyTreeOfThoughts,
@@ -70,7 +74,26 @@ def load_model(model_path: str, device_map: str):
 
 def load_prompt_template(prompt_file: str) -> str:
     """Load prompt template from file"""
-    with open(prompt_file, "r") as f:
+    from pathlib import Path
+
+    # Try the provided path first. Hydra often changes the working directory
+    # to the output directory, so relative paths in configs may no longer
+    # point to the repository files. If the path doesn't exist, resolve it
+    # relative to the repository root (two levels up from this script).
+    p = Path(prompt_file)
+    if not p.is_absolute() or not p.exists():
+        repo_root = Path(__file__).resolve().parents[1]
+        alt = repo_root / prompt_file
+        if alt.exists():
+            p = alt
+
+    if not p.exists():
+        log.warning(
+            f"Prompt file not found: {prompt_file} (tried {p}). Using empty prompt."
+        )
+        return ""
+
+    with open(p, "r") as f:
         return f.read().strip()
 
 
@@ -179,7 +202,12 @@ def create_scorer(config):
 
 def create_model(config):
     if config.model.type == "local":
-        if config.scorer.type == "uncertainty":
+        # Safely handle missing `config.scorer` (some experiment configs set it to null)
+        # Only try to load an uncertainty model when a scorer is configured and
+        # its type indicates an uncertainty-based scorer.
+        if getattr(config, "scorer", None) is not None and getattr(
+            config.scorer, "type", None
+        ) in ("uncertainty", "uncertainty_pd"):
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
@@ -203,9 +231,45 @@ def create_model(config):
             base_model.eval()
             model = WhiteboxModel(base_model, tokenizer)
 
+            # If CoT-UQ or an uncertainty scorer is used with a local model,
+            # ensure the model exposes token-level logprobs. Wrap the
+            # WhiteboxModel with a local adapter that implements
+            # `generate_with_logprobs` and `supports_logprobs=True` when needed.
+            need_logprobs = (
+                getattr(config, "strategy", None) is not None
+                and getattr(config.strategy, "type", None) == "cot_uq"
+            ) or (
+                getattr(config, "scorer", None) is not None
+                and getattr(config.scorer, "type", None)
+                in ("uncertainty", "uncertainty_pd")
+            )
+
+            if need_logprobs and not getattr(model, "supports_logprobs", False):
+                try:
+                    from llm_tts.models.local_whitebox_logprob_adapter import (
+                        LocalWhiteboxLogprobAdapter,
+                    )
+
+                    model = LocalWhiteboxLogprobAdapter(
+                        wb_model=model,
+                        base_model=base_model,
+                        tokenizer=tokenizer,
+                        device=config.system.device,
+                        disable_thinking_mode=getattr(
+                            config.model, "disable_thinking_mode", False
+                        ),
+                    )
+                    log.info("Wrapped local WhiteboxModel with logprob adapter")
+                except Exception as e:
+                    log.warning(f"Failed to create local logprob adapter: {e}")
+
         detector = StepBoundaryDetector(
-            step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
-            answer_patterns=["<Answer>:", "\n<Answer>:"],
+            step_patterns=config.strategy.get(
+                "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+            ),
+            answer_patterns=config.strategy.get(
+                "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+            ),
             max_tokens_per_step=config.generation.max_new_tokens,
         )
         step_generator = StepCandidateGeneratorThroughHuggingface(
@@ -394,6 +458,64 @@ def create_tts_strategy(config, model, step_generator, scorer):
             ),
         )
 
+    elif config.strategy.type == "offline_best_of_n":
+        strategy = StrategyOfflineBestOfN(
+            model=model,
+            trajectories=config.strategy.get("trajectories", 10),
+            temperature=config.strategy.get("temperature", 0.7),
+            top_p=config.strategy.get("top_p", 1.0),
+            max_tokens=config.strategy.get("max_tokens", 512),
+        )
+
+    elif config.strategy.type == "cot_uq":
+        # CoT-UQ requires a model that can provide token-level logprobs.
+        # Accept any model that advertises `supports_logprobs` instead of
+        # enforcing a concrete class. This allows local models that expose
+        # `generate_with_logprobs`/logprob support to be used as well.
+        if not getattr(model, "supports_logprobs", False):
+            raise ValueError(
+                f"CoT-UQ requires a model with logprobs support, got {type(model).__name__}"
+            )
+
+        strategy_scorer_cfg = getattr(config.strategy, "scorer", None)
+        strategy_scorer = None
+        if strategy_scorer_cfg is not None and strategy_scorer_cfg.get("enabled", True):
+            strategy_scorer = CotUqScorer(
+                model=model,
+                alpha=strategy_scorer_cfg.get(
+                    "alpha", config.strategy.get("alpha", 0.5)
+                ),
+                top_logprobs=strategy_scorer_cfg.get(
+                    "top_logprobs", config.strategy.get("top_logprobs", 10)
+                ),
+                step_patterns=config.strategy.get("detector_step_patterns"),
+                answer_patterns=config.strategy.get("detector_answer_patterns"),
+                max_steps=config.strategy.get("max_steps"),
+                max_empty_steps=config.strategy.get("max_empty_steps"),
+                max_keywords=config.strategy.get("max_keywords", 5),
+            )
+
+        strategy = StrategyCoTUQ(
+            model=model,
+            budget=config.strategy.get("budget", 6),
+            temperature=config.strategy.get(
+                "temperature", config.generation.temperature
+            ),
+            top_p=config.strategy.get("top_p", config.generation.top_p),
+            max_tokens=config.strategy.get(
+                "max_tokens", config.generation.max_new_tokens
+            ),
+            top_logprobs=config.strategy.get("top_logprobs", 10),
+            alpha=config.strategy.get("alpha", 0.5),
+            scorer=strategy_scorer,
+            detector_step_patterns=config.strategy.get("detector_step_patterns"),
+            detector_answer_patterns=config.strategy.get("detector_answer_patterns"),
+            max_steps=config.strategy.get("max_steps"),
+            max_empty_steps=config.strategy.get("max_empty_steps"),
+            max_keywords=config.strategy.get("max_keywords", 5),
+            step_generator=step_generator,
+        )
+
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
 
@@ -461,8 +583,36 @@ def generate_trajectories(
 
         result = strategy.generate_trajectory(request)
 
+        # Post-process generated traces to remove internal thinking markers
+        # (e.g., <think>...</think>) when thinking mode was disabled but
+        # the model still emitted thought content. Also clean step texts.
+        def _strip_thinking(s: str) -> str:
+            if not s:
+                return s
+            # Remove <think>...</think> blocks
+            s = re.sub(r"<think>.*?</think>", "", s, flags=re.DOTALL)
+            # Remove any leftover standalone tags
+            s = re.sub(r"</?think>", "", s)
+            # Collapse repeated blank lines
+            s = re.sub(r"\n{3,}", "\n\n", s)
+            return s.strip()
+
+        # Clean step objects if present
+        if "steps" in result and result["steps"] and isinstance(result["steps"], list):
+            for step in result["steps"]:
+                try:
+                    if hasattr(step, "text") and step.text:
+                        step.text = _strip_thinking(step.text)
+                    if hasattr(step, "raw_text") and step.raw_text:
+                        step.raw_text = _strip_thinking(step.raw_text)
+                except Exception:
+                    # Non-fatal: continue if step structure differs
+                    pass
+
         # Extract generated answer (but don't check correctness yet)
-        generated_text = result["trajectory"]
+        sanitized_trajectory = _strip_thinking(result["trajectory"])
+        result["trajectory"] = sanitized_trajectory
+        generated_text = sanitized_trajectory
         if question in generated_text:
             generated_text = generated_text.replace(question, "").strip()
         if "<Answer>:" in generated_text:
