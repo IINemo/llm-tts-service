@@ -74,7 +74,7 @@ run-tts-eval = "scripts.run_tts_eval:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["llm_tts*"]
+include = ["llm_tts*", "service_app*"]
 
 [tool.setuptools.package-data]
 "llm_tts" = ["config/**/*.yaml", "config/**/*.txt"]
