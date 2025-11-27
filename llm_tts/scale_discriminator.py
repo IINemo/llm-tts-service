@@ -121,11 +121,11 @@ class ScaleDiscriminator:
         if self.criterion == "momentum":
             self.discriminator = MURDiscriminator(**kwargs)
         elif self.criterion == "random":
-            self.discriminator = RandomDiscriminator(**kwargs)
+            self.discriminator = RandomDiscriminator()
         elif self.criterion == "average":
-            self.discriminator = AverageDiscriminator(**kwargs)
+            self.discriminator = AverageDiscriminator()
         elif self.criterion == "always":
-            self.discriminator = AlwaysDiscriminator(**kwargs)
+            self.discriminator = AlwaysDiscriminator()
         elif self.criterion == "threshold":
             self.discriminator = ThresholdDiscriminator(**kwargs)
         else:

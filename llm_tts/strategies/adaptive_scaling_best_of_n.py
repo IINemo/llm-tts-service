@@ -132,7 +132,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         """Select the best candidate based on scores"""
 
         # Higher validity is better
-        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        best_idx = min(range(len(scores)), key=lambda i: scores[i])
         return best_idx, candidates[best_idx]
 
     def _generate_final_answer(
