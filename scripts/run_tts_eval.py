@@ -520,14 +520,16 @@ def generate_trajectories(
             # Fallback: show full trajectory
             log.info(f"\nFull trajectory:\n{result['trajectory']}")
 
-        log.info("\n" + "-" * 60)
-        log.info("FINAL ANSWER:")
+        log.info("\n" + "=" * 60)
+        log.info(f"FINAL ANSWER: {generated_text}")
+        log.info(f"Gold answer:  {gold_answer_num}")
+        log.info(f"Correct:      {'✓ YES' if str(generated_text) == str(gold_answer_num) else '✗ NO'}")
         log.info("-" * 60)
-        log.info(f"Generated: {generated_text}")
         log.info(f"Num traces: {len(result['steps'])}")
         if "validity_scores" in result and result["validity_scores"]:
-            log.info(f"Avg confidence: {np.mean(result['validity_scores']):.3f}")
-        log.info("-" * 60)
+            scores = result["validity_scores"]
+            log.info(f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}")
+        log.info("=" * 60)
 
         # Store result WITHOUT correctness check
         result_dict = {
