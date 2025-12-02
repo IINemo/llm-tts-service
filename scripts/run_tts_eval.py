@@ -64,8 +64,12 @@ def load_tokenizer(model_path: str):
 
 def load_model(model_path: str, device_map: str):
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, device_map=device_map, trust_remote_code=True
+        model_path,
+        device_map=device_map,
+        trust_remote_code=True,
+        torch_dtype=torch.float16,  # Use float16 for memory efficiency
     )
+    log.info("Loaded model with float16")
     return model
 
 
@@ -302,12 +306,8 @@ def create_tts_strategy(config, model, step_generator, scorer):
             max_steps=config.strategy.max_steps,
         )
     elif config.strategy.type == "deepconf":
-        # DeepConf requires BlackboxModel with logprobs support
-        if not isinstance(model, BlackboxModelWithStreaming):
-            raise ValueError(
-                f"DeepConf requires BlackboxModelWithStreaming, got {type(model).__name__}"
-            )
-
+        # DeepConf supports both API models (with logprobs) and local HuggingFace models
+        # Validation is done inside StrategyDeepConf.__init__
         strategy = StrategyDeepConf(
             model=model,
             mode=config.strategy.mode,
