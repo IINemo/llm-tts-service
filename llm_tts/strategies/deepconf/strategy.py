@@ -69,8 +69,8 @@ class AnswerStoppingCriteria(StoppingCriteria):
 
         # Patterns for different formats
         if answer_format == "default":
-            # Default format: <Answer>: followed by <end of response>
-            self.end_pattern = re.compile(r'<end of response>')
+            # Default format: <Answer>: followed by <end of response> or </end of response>
+            self.end_pattern = re.compile(r'</?end of response>')
         else:
             # Boxed format
             self.answer_pattern = re.compile(r'\\boxed\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}')
