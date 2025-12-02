@@ -796,8 +796,16 @@ def main(config):
         split=config.dataset.dataset_split,
         cache_dir=config.system.hf_cache,
     )
-    if config.dataset.subset:
-        dataset = dataset.select(range(min(config.dataset.subset, len(dataset))))
+    # Apply offset and subset
+    offset = config.dataset.get("offset", 0) or 0
+    subset = config.dataset.get("subset", None)
+    if offset > 0 or subset:
+        start_idx = offset
+        end_idx = len(dataset)
+        if subset:
+            end_idx = min(start_idx + subset, len(dataset))
+        dataset = dataset.select(range(start_idx, end_idx))
+        log.info(f"Dataset: using samples {start_idx} to {end_idx-1} ({len(dataset)} samples)")
 
     prompt_template = (
         load_prompt_template(config.dataset.prompt_file)

@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 from lm_polygraph import BlackboxModel
-from transformers import StoppingCriteria
+from transformers import StoppingCriteria, StoppingCriteriaList
 
 from llm_tts.early_stopping import ConfidenceEarlyStopping
 
@@ -31,9 +31,13 @@ from .utils import (
 log = logging.getLogger(__name__)
 
 
-class BoxedAnswerStoppingCriteria(StoppingCriteria):
+class AnswerStoppingCriteria(StoppingCriteria):
     """
-    Stopping criteria that stops generation when a complete \\boxed{...} answer is found.
+    Stopping criteria that stops generation when a complete answer is found.
+
+    Supports two formats:
+    - Default format: <Answer>: ... <end of response>
+    - Boxed format: \\boxed{...}
 
     Works with batched generation (num_return_sequences > 1).
     """
@@ -43,30 +47,38 @@ class BoxedAnswerStoppingCriteria(StoppingCriteria):
         tokenizer,
         start_length: int,
         batch_size: int,
-        min_tokens_after_boxed: int = 5,
+        answer_format: str = "default",
+        min_tokens_after: int = 0,
     ):
         """
         Args:
             tokenizer: HuggingFace tokenizer for decoding
             start_length: Length of input tokens (to extract only generated text)
             batch_size: Number of sequences being generated
-            min_tokens_after_boxed: Minimum tokens to generate after closing brace
-                                    to ensure the answer is complete
+            answer_format: "default" for <Answer>: format, "boxed" for \\boxed{} format
+            min_tokens_after: Minimum tokens to generate after finding answer marker
         """
         self.tokenizer = tokenizer
         self.start_length = start_length
         self.batch_size = batch_size
-        self.min_tokens_after_boxed = min_tokens_after_boxed
+        self.answer_format = answer_format
+        self.min_tokens_after = min_tokens_after
         self.finished = [False] * batch_size
-        # Track when we found boxed answer for each sequence
-        self.boxed_found_at = [None] * batch_size
-        # Pattern to match complete \boxed{...} with balanced braces
-        self.boxed_pattern = re.compile(r'\\boxed\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}')
+        # Track when we found answer for each sequence
+        self.answer_found_at = [None] * batch_size
+
+        # Patterns for different formats
+        if answer_format == "default":
+            # Default format: <Answer>: followed by <end of response>
+            self.end_pattern = re.compile(r'<end of response>')
+        else:
+            # Boxed format
+            self.answer_pattern = re.compile(r'\\boxed\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}')
 
     def __call__(
         self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs
     ) -> bool:
-        """Check if all sequences have found their boxed answer."""
+        """Check if all sequences have found their answer."""
 
         for i in range(min(input_ids.shape[0], self.batch_size)):
             if self.finished[i]:
@@ -78,15 +90,23 @@ class BoxedAnswerStoppingCriteria(StoppingCriteria):
                 generated_ids, skip_special_tokens=True
             )
 
-            # Check for complete \boxed{...} pattern
-            if self.boxed_pattern.search(generated_text):
-                if self.boxed_found_at[i] is None:
-                    self.boxed_found_at[i] = len(generated_ids)
-
-                # Generate a few more tokens after boxed to ensure completion
-                tokens_after = len(generated_ids) - self.boxed_found_at[i]
-                if tokens_after >= self.min_tokens_after_boxed:
-                    self.finished[i] = True
+            # Check for answer pattern
+            if self.answer_format == "default":
+                # For default format, check for <end of response> marker
+                if self.end_pattern.search(generated_text):
+                    if self.answer_found_at[i] is None:
+                        self.answer_found_at[i] = len(generated_ids)
+                    tokens_after = len(generated_ids) - self.answer_found_at[i]
+                    if tokens_after >= self.min_tokens_after:
+                        self.finished[i] = True
+            else:
+                # For boxed format
+                if self.answer_pattern.search(generated_text):
+                    if self.answer_found_at[i] is None:
+                        self.answer_found_at[i] = len(generated_ids)
+                    tokens_after = len(generated_ids) - self.answer_found_at[i]
+                    if tokens_after >= self.min_tokens_after:
+                        self.finished[i] = True
 
         # Stop when all sequences are finished
         return all(self.finished)
@@ -697,10 +717,15 @@ class StrategyDeepConf(StrategyBase):
 
     def _generate_traces_batch_local(self, prompt: str, n: int) -> List[Dict[str, Any]]:
         """
-        Generate n traces using batched generation for local HuggingFace models.
+        Generate n traces using SEQUENTIAL generation with early stopping.
 
-        Generates in mini-batches to avoid OOM while still being much faster
-        than sequential generation.
+        Uses AnswerStoppingCriteria to stop generation as soon as
+        a complete answer is found (<end of response> for default format,
+        or \\boxed{...} for boxed format), saving significant tokens.
+
+        Sequential generation is used because HuggingFace's StoppingCriteria
+        with batched generation (num_return_sequences > 1) only stops when
+        ALL sequences are done, negating any early stopping benefits.
 
         Returns:
             List of trace dictionaries with text, confidence, and answer
@@ -708,18 +733,9 @@ class StrategyDeepConf(StrategyBase):
         import torch
         import torch.nn.functional as F
 
-        # Determine batch size based on max_tokens to avoid OOM
-        # For long sequences (4096 tokens), use smaller batches
-        if self.max_tokens >= 4096:
-            batch_size = 4  # 4 sequences at a time for 4K tokens (4 batches for budget=16)
-        elif self.max_tokens >= 2048:
-            batch_size = 8  # 8 sequences at a time for 2K tokens
-        else:
-            batch_size = 16  # 16 sequences at a time for shorter sequences
-
-        # Calculate number of batches needed
-        num_batches = (n + batch_size - 1) // batch_size
-        log.info(f"🚀 Batched generation: {n} sequences in {num_batches} batches of up to {batch_size}...")
+        # Detect answer format from prompt
+        answer_format = "default" if "<Answer>:" in prompt or "<end of response>" in prompt else "boxed"
+        log.info(f"🚀 Sequential generation with early stopping: {n} sequences...")
 
         all_traces = []
 
@@ -730,146 +746,152 @@ class StrategyDeepConf(StrategyBase):
         inputs = self.model.tokenize([prompt])
         input_ids = inputs["input_ids"].to(device)
         attention_mask = inputs["attention_mask"].to(device)
+        start_length = input_ids.shape[1]
 
-        # Generate in batches
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min(start_idx + batch_size, n)
-            current_batch_size = end_idx - start_idx
+        # Get eos_token_id from model config
+        eos_token_id = self.model.model.generation_config.eos_token_id
+        if eos_token_id is None:
+            eos_token_id = self.model.tokenizer.eos_token_id
 
-            log.info(f"  Batch {batch_idx+1}/{num_batches}: generating {current_batch_size} sequences...")
-
-            # Generate this batch with num_return_sequences
-            # Use model's generation config for eos_token_id (may be list of tokens)
-            eos_token_id = self.model.model.generation_config.eos_token_id
-            if eos_token_id is None:
-                eos_token_id = self.model.tokenizer.eos_token_id
-
-            # NOTE: BoxedAnswerStoppingCriteria doesn't work well with batched generation
-            # because HuggingFace requires ALL sequences to finish before any can stop.
-            # For now, we generate full max_tokens and rely on answer extraction.
-            # TODO: Consider sequential generation for early stopping support.
-
-            with torch.no_grad():
-                outputs = self.model.model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    max_new_tokens=self.max_tokens,
-                    temperature=self.temperature,
-                    top_p=self.top_p,
-                    do_sample=True,
-                    num_return_sequences=current_batch_size,
-                    return_dict_in_generate=True,
-                    output_scores=True,  # Get logits for each generated token
-                    pad_token_id=self.model.tokenizer.pad_token_id,
-                    eos_token_id=eos_token_id,
-                    repetition_penalty=1.1,
+        # Generate each sequence independently (allows per-sequence early stopping)
+        for seq_idx in range(n):
+            try:
+                # Create fresh stopping criteria for each sequence
+                stopping_criteria = AnswerStoppingCriteria(
+                    tokenizer=self.model.tokenizer,
+                    start_length=start_length,
+                    batch_size=1,  # Single sequence
+                    answer_format=answer_format,
+                    min_tokens_after=0,  # Stop immediately when answer found
                 )
 
-            # Process each sequence from this batch
-            for seq_idx in range(current_batch_size):
-                try:
-                    # Calculate global sequence number
-                    global_seq_idx = start_idx + seq_idx
-
-                    # Extract generated text for this sequence
-                    output_seq = outputs.sequences[seq_idx]
-                    new_tokens = output_seq[input_ids.shape[1]:]
-                    text = self.model.tokenizer.decode(new_tokens, skip_special_tokens=True)
-
-                    # Extract logprobs from scores for this sequence
-                    logprobs_data = []
-                    token_confs = []
-
-                    # Check if scores were returned
-                    if outputs.scores is None or len(outputs.scores) == 0:
-                        log.warning(f"    Sequence {global_seq_idx+1}/{n}: No scores returned")
-                        token_data = []
-                    else:
-                        # Process scores for this sequence
-                        num_scores = len(outputs.scores)
-                        num_tokens = len(new_tokens)
-                        process_length = min(num_scores, num_tokens)
-
-                        for token_idx in range(process_length):
-                            score_tensor = outputs.scores[token_idx]
-                            # score_tensor shape: [current_batch_size, vocab_size]
-                            # Extract logprobs for THIS sequence
-                            log_probs = F.log_softmax(score_tensor[seq_idx], dim=-1)
-
-                            # Get top-k log probs and indices
-                            top_k_logprobs, top_k_indices = torch.topk(
-                                log_probs, min(self.top_logprobs, log_probs.size(-1))
-                            )
-
-                            # Get the token that was actually generated for this sequence
-                            generated_token_id = new_tokens[token_idx].item()
-                            generated_logprob = log_probs[generated_token_id].item()
-
-                            # Build logprobs data structure (matching API format)
-                            top_logprobs_list = [
-                                {
-                                    "token": self.model.tokenizer.decode([token_id.item()]),
-                                    "logprob": logprob.item(),
-                                }
-                                for logprob, token_id in zip(top_k_logprobs, top_k_indices)
-                            ]
-
-                            logprobs_data.append(
-                                {
-                                    "token": self.model.tokenizer.decode([generated_token_id]),
-                                    "logprob": generated_logprob,
-                                    "top_logprobs": top_logprobs_list,
-                                }
-                            )
-
-                            # Compute confidence (negative mean of top-k logprobs)
-                            # Filter out -inf values from masked/impossible tokens
-                            valid_logprobs = top_k_logprobs[~torch.isinf(top_k_logprobs)]
-                            if len(valid_logprobs) > 0:
-                                mean_logprob = valid_logprobs.mean().item()
-                                token_confs.append(-mean_logprob)
-                            else:
-                                # All logprobs are -inf (shouldn't happen, but handle it)
-                                token_confs.append(float('inf'))
-
-                        token_data = logprobs_data
-
-                    # Compute sliding window confidences
-                    window_confs = compute_sliding_window_confidence(
-                        token_confs, self.window_size
+                with torch.no_grad():
+                    outputs = self.model.model.generate(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=self.max_tokens,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        do_sample=True,
+                        num_return_sequences=1,  # Single sequence for early stopping
+                        return_dict_in_generate=True,
+                        output_scores=True,  # Get logits for each generated token
+                        pad_token_id=self.model.tokenizer.pad_token_id,
+                        eos_token_id=eos_token_id,
+                        repetition_penalty=1.1,
+                        stopping_criteria=StoppingCriteriaList([stopping_criteria]),
                     )
-                    min_conf = min(window_confs) if window_confs else 0.0
 
-                    # Extract answer
-                    extracted_answer = extract_answer(text)
+                # Extract generated text
+                output_seq = outputs.sequences[0]
+                new_tokens = output_seq[start_length:]
+                text = self.model.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
-                    trace = {
-                        "text": text,
-                        "min_conf": min_conf,
-                        "extracted_answer": extracted_answer,
-                        "token_confs": token_confs,
-                        "window_confs": window_confs,
-                        "token_data": token_data,
-                    }
+                # Check if we stopped early
+                stopped_early = stopping_criteria.finished[0]
 
-                    log.info(
-                        f"    Trace {global_seq_idx+1}/{n}: tokens={len(token_data)}, "
-                        f"min_conf={min_conf:.3f}, answer={extracted_answer}"
-                    )
-                    log.info(f"    --- Trace {global_seq_idx+1} text ---\n{text}\n    --- End trace {global_seq_idx+1} ---")
+                # Extract logprobs from scores
+                logprobs_data = []
+                token_confs = []
 
-                    all_traces.append(trace)
+                if outputs.scores is None or len(outputs.scores) == 0:
+                    log.warning(f"    Sequence {seq_idx+1}/{n}: No scores returned")
+                    token_data = []
+                else:
+                    num_scores = len(outputs.scores)
+                    num_tokens = len(new_tokens)
+                    process_length = min(num_scores, num_tokens)
 
-                except Exception as e:
-                    log.error(f"    Error processing sequence {global_seq_idx+1}/{n}: {e}")
-                    # Continue processing other sequences
+                    for token_idx in range(process_length):
+                        score_tensor = outputs.scores[token_idx]
+                        # score_tensor shape: [1, vocab_size] (single sequence)
+                        log_probs = F.log_softmax(score_tensor[0], dim=-1)
 
-            # Clear GPU cache after each batch
-            if torch.cuda.is_available():
+                        # Get top-k log probs and indices
+                        top_k_logprobs, top_k_indices = torch.topk(
+                            log_probs, min(self.top_logprobs, log_probs.size(-1))
+                        )
+
+                        # Get the token that was actually generated
+                        generated_token_id = new_tokens[token_idx].item()
+                        generated_logprob = log_probs[generated_token_id].item()
+
+                        # Build logprobs data structure (matching API format)
+                        top_logprobs_list = [
+                            {
+                                "token": self.model.tokenizer.decode([token_id.item()]),
+                                "logprob": logprob.item(),
+                            }
+                            for logprob, token_id in zip(top_k_logprobs, top_k_indices)
+                        ]
+
+                        logprobs_data.append(
+                            {
+                                "token": self.model.tokenizer.decode([generated_token_id]),
+                                "logprob": generated_logprob,
+                                "top_logprobs": top_logprobs_list,
+                            }
+                        )
+
+                        # Compute confidence (negative mean of top-k logprobs)
+                        valid_logprobs = top_k_logprobs[~torch.isinf(top_k_logprobs)]
+                        if len(valid_logprobs) > 0:
+                            mean_logprob = valid_logprobs.mean().item()
+                            token_confs.append(-mean_logprob)
+                        else:
+                            token_confs.append(float('inf'))
+
+                    token_data = logprobs_data
+
+                # Compute sliding window confidences
+                window_confs = compute_sliding_window_confidence(
+                    token_confs, self.window_size
+                )
+                min_conf = min(window_confs) if window_confs else 0.0
+
+                # Extract answer
+                extracted_answer = extract_answer(text)
+
+                trace = {
+                    "text": text,
+                    "min_conf": min_conf,
+                    "extracted_answer": extracted_answer,
+                    "token_confs": token_confs,
+                    "window_confs": window_confs,
+                    "token_data": token_data,
+                    "stopped_early": stopped_early,
+                }
+
+                early_str = " [EARLY STOP]" if stopped_early else ""
+                log.info(
+                    f"  Trace {seq_idx+1}/{n}: tokens={len(token_data)}, "
+                    f"min_conf={min_conf:.3f}, answer={extracted_answer}{early_str}"
+                )
+                log.info(f"  --- Trace {seq_idx+1} text ---\n{text}\n  --- End trace {seq_idx+1} ---")
+
+                all_traces.append(trace)
+
+            except Exception as e:
+                log.error(f"  Error generating sequence {seq_idx+1}/{n}: {e}")
+                import traceback
+                log.error(traceback.format_exc())
+
+            # Clear GPU cache periodically
+            if torch.cuda.is_available() and (seq_idx + 1) % 4 == 0:
                 torch.cuda.empty_cache()
 
-        log.info(f"✓ Batched generation complete: {len(all_traces)}/{n} sequences")
+        # Summary statistics
+        num_early_stopped = sum(1 for t in all_traces if t.get("stopped_early", False))
+        total_tokens = sum(len(t.get("token_data", [])) for t in all_traces)
+        avg_tokens = total_tokens / len(all_traces) if all_traces else 0
+
+        log.info(f"✓ Sequential generation complete: {len(all_traces)}/{n} sequences")
+        log.info(f"  Early stopped: {num_early_stopped}/{len(all_traces)}")
+        log.info(f"  Average tokens: {avg_tokens:.0f} (max: {self.max_tokens})")
+        if num_early_stopped > 0:
+            savings = (1 - avg_tokens / self.max_tokens) * 100
+            log.info(f"  Token savings: {savings:.1f}%")
+
         return all_traces
 
     def _generate_traces_adaptive(
