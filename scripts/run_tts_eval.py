@@ -185,9 +185,10 @@ def create_scorer(config):
 
 def create_model(config):
     if config.model.type == "local":
+        scorer_type = config.scorer.type if config.scorer else None
         if (
-            config.scorer.type == "uncertainty"
-            or config.scorer.type == "uncertainty_pd"
+            scorer_type == "uncertainty"
+            or scorer_type == "uncertainty_pd"
         ):
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"

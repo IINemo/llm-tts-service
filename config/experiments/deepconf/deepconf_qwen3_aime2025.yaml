@@ -61,7 +61,7 @@ strategy:
 dataset:
   subset: 30  # All AIME 2025 problems
   offset: 0  # Start from beginning
-  prompt_file: "./config/prompts/baseline.txt"
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/aime_2025_deepconf.txt"
 
 # Evaluation configuration
 evaluation:
