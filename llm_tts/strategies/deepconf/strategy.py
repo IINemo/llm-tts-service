@@ -10,10 +10,13 @@ Supports both offline and online modes:
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import torch
 from lm_polygraph import BlackboxModel
+from transformers import StoppingCriteria
 
 from llm_tts.early_stopping import ConfidenceEarlyStopping
 
@@ -26,6 +29,67 @@ from .utils import (
 )
 
 log = logging.getLogger(__name__)
+
+
+class BoxedAnswerStoppingCriteria(StoppingCriteria):
+    """
+    Stopping criteria that stops generation when a complete \\boxed{...} answer is found.
+
+    Works with batched generation (num_return_sequences > 1).
+    """
+
+    def __init__(
+        self,
+        tokenizer,
+        start_length: int,
+        batch_size: int,
+        min_tokens_after_boxed: int = 5,
+    ):
+        """
+        Args:
+            tokenizer: HuggingFace tokenizer for decoding
+            start_length: Length of input tokens (to extract only generated text)
+            batch_size: Number of sequences being generated
+            min_tokens_after_boxed: Minimum tokens to generate after closing brace
+                                    to ensure the answer is complete
+        """
+        self.tokenizer = tokenizer
+        self.start_length = start_length
+        self.batch_size = batch_size
+        self.min_tokens_after_boxed = min_tokens_after_boxed
+        self.finished = [False] * batch_size
+        # Track when we found boxed answer for each sequence
+        self.boxed_found_at = [None] * batch_size
+        # Pattern to match complete \boxed{...} with balanced braces
+        self.boxed_pattern = re.compile(r'\\boxed\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}')
+
+    def __call__(
+        self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs
+    ) -> bool:
+        """Check if all sequences have found their boxed answer."""
+
+        for i in range(min(input_ids.shape[0], self.batch_size)):
+            if self.finished[i]:
+                continue
+
+            # Decode only generated tokens
+            generated_ids = input_ids[i][self.start_length:]
+            generated_text = self.tokenizer.decode(
+                generated_ids, skip_special_tokens=True
+            )
+
+            # Check for complete \boxed{...} pattern
+            if self.boxed_pattern.search(generated_text):
+                if self.boxed_found_at[i] is None:
+                    self.boxed_found_at[i] = len(generated_ids)
+
+                # Generate a few more tokens after boxed to ensure completion
+                tokens_after = len(generated_ids) - self.boxed_found_at[i]
+                if tokens_after >= self.min_tokens_after_boxed:
+                    self.finished[i] = True
+
+        # Stop when all sequences are finished
+        return all(self.finished)
 
 
 class StrategyDeepConf(StrategyBase):
@@ -479,6 +543,11 @@ class StrategyDeepConf(StrategyBase):
                 attention_mask = inputs["attention_mask"].to(device)
 
                 # Generate with output_scores to get logits
+                # Use model's generation config for eos_token_id (may be list of tokens)
+                eos_token_id = self.model.model.generation_config.eos_token_id
+                if eos_token_id is None:
+                    eos_token_id = self.model.tokenizer.eos_token_id
+
                 with torch.no_grad():
                     outputs = self.model.model.generate(
                         input_ids=input_ids,
@@ -489,8 +558,8 @@ class StrategyDeepConf(StrategyBase):
                         do_sample=True,
                         return_dict_in_generate=True,
                         output_scores=True,  # Get logits for each generated token
-                        pad_token_id=self.model.tokenizer.eos_token_id,
-                        eos_token_id=self.model.tokenizer.eos_token_id,
+                        pad_token_id=self.model.tokenizer.pad_token_id,
+                        eos_token_id=eos_token_id,
                         repetition_penalty=1.1,
                     )
 
@@ -671,6 +740,16 @@ class StrategyDeepConf(StrategyBase):
             log.info(f"  Batch {batch_idx+1}/{num_batches}: generating {current_batch_size} sequences...")
 
             # Generate this batch with num_return_sequences
+            # Use model's generation config for eos_token_id (may be list of tokens)
+            eos_token_id = self.model.model.generation_config.eos_token_id
+            if eos_token_id is None:
+                eos_token_id = self.model.tokenizer.eos_token_id
+
+            # NOTE: BoxedAnswerStoppingCriteria doesn't work well with batched generation
+            # because HuggingFace requires ALL sequences to finish before any can stop.
+            # For now, we generate full max_tokens and rely on answer extraction.
+            # TODO: Consider sequential generation for early stopping support.
+
             with torch.no_grad():
                 outputs = self.model.model.generate(
                     input_ids=input_ids,
@@ -682,8 +761,8 @@ class StrategyDeepConf(StrategyBase):
                     num_return_sequences=current_batch_size,
                     return_dict_in_generate=True,
                     output_scores=True,  # Get logits for each generated token
-                    pad_token_id=self.model.tokenizer.eos_token_id,
-                    eos_token_id=self.model.tokenizer.eos_token_id,
+                    pad_token_id=self.model.tokenizer.pad_token_id,
+                    eos_token_id=eos_token_id,
                     repetition_penalty=1.1,
                 )
 
@@ -778,6 +857,7 @@ class StrategyDeepConf(StrategyBase):
                         f"    Trace {global_seq_idx+1}/{n}: tokens={len(token_data)}, "
                         f"min_conf={min_conf:.3f}, answer={extracted_answer}"
                     )
+                    log.info(f"    --- Trace {global_seq_idx+1} text ---\n{text}\n    --- End trace {global_seq_idx+1} ---")
 
                     all_traces.append(trace)
 
