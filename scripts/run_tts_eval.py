@@ -482,11 +482,16 @@ def generate_trajectories(
         result = strategy.generate_trajectory(request)
 
         # Extract generated answer (but don't check correctness yet)
-        generated_text = result["trajectory"]
-        if question in generated_text:
-            generated_text = generated_text.replace(question, "").strip()
-        if "<Answer>:" in generated_text:
-            generated_text = generated_text.split("<Answer>:")[-1].strip()
+        # Use extracted_answer if available (e.g., from DeepConf's \boxed{} extraction)
+        if "extracted_answer" in result and result["extracted_answer"]:
+            generated_text = result["extracted_answer"]
+        else:
+            # Fallback: extract from trajectory
+            generated_text = result["trajectory"]
+            if question in generated_text:
+                generated_text = generated_text.replace(question, "").strip()
+            if "<Answer>:" in generated_text:
+                generated_text = generated_text.split("<Answer>:")[-1].strip()
 
         # Log detailed traces
         log.info("\n" + "-" * 60)

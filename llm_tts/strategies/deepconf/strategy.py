@@ -232,6 +232,7 @@ class StrategyDeepConf(StrategyBase):
 
         return {
             "trajectory": result["selected_text"],
+            "extracted_answer": result["selected_answer"],  # For ExactMatch evaluation
             "steps": [result["selected_text"]],
             "validity_scores": [result["confidence_score"]],
             "completed": True,
@@ -415,6 +416,7 @@ class StrategyDeepConf(StrategyBase):
 
         return {
             "trajectory": result["selected_text"],
+            "extracted_answer": result["selected_answer"],  # For ExactMatch evaluation
             "steps": [result["selected_text"]],
             "validity_scores": [result["confidence_score"]],
             "completed": True,
