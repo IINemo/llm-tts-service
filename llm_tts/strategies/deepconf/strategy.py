@@ -164,12 +164,13 @@ class StrategyDeepConf(StrategyBase):
         # Build enhanced metadata
         filtered_set = set(id(t) for t in result["filtered_traces"])
 
-        # Summary stats for all traces
-        trace_summaries = []
+        # Full details for ALL traces (for analysis)
+        all_traces_details = []
         for i, trace in enumerate(traces):
-            trace_summaries.append(
+            all_traces_details.append(
                 {
                     "trace_id": i,
+                    "text": trace["text"],  # Full reasoning text
                     "min_conf": trace["min_conf"],
                     "mean_conf": (
                         sum(trace["token_confs"]) / len(trace["token_confs"])
@@ -182,19 +183,10 @@ class StrategyDeepConf(StrategyBase):
                 }
             )
 
-        # Full details for filtered traces only
-        filtered_trace_details = []
-        for trace in result["filtered_traces"]:
-            trace_idx = traces.index(trace)
-            filtered_trace_details.append(
-                {
-                    "trace_id": trace_idx,
-                    "text": trace["text"],
-                    "min_conf": trace["min_conf"],
-                    "answer": trace["extracted_answer"],
-                    "num_tokens": len(trace.get("token_data", [])),
-                }
-            )
+        # Summary of filtered traces (for quick reference)
+        filtered_trace_ids = [
+            traces.index(trace) for trace in result["filtered_traces"]
+        ]
 
         # Build metadata using StrategyMetadataBuilder
         builder = StrategyMetadataBuilder("deepconf")
@@ -223,18 +215,20 @@ class StrategyDeepConf(StrategyBase):
 
         # Add generation details
         builder.add_generation_details(
-            trace_summaries=trace_summaries,
-            filtered_trace_details=filtered_trace_details,
+            all_traces=all_traces_details,
+            filtered_trace_ids=filtered_trace_ids,
         )
 
         # Log summary to console
         builder.log_summary(log)
 
+        # Return all traces for analysis, with selected answer for evaluation
         return {
-            "trajectory": result["selected_text"],
+            "trajectory": result["selected_text"],  # Winning trace text
             "extracted_answer": result["selected_answer"],  # For ExactMatch evaluation
-            "steps": [result["selected_text"]],
-            "validity_scores": [result["confidence_score"]],
+            "all_traces": all_traces_details,  # All generated traces with full text
+            "steps": [t["text"] for t in all_traces_details],  # All trace texts
+            "validity_scores": [t["min_conf"] for t in all_traces_details],  # All confidences
             "completed": True,
             "metadata": builder.build(),
         }
@@ -337,12 +331,13 @@ class StrategyDeepConf(StrategyBase):
         # Build enhanced metadata (consistent with offline mode)
         filtered_set = set(id(t) for t in result["filtered_traces"])
 
-        # Summary stats for all traces
-        trace_summaries = []
+        # Full details for ALL traces (for analysis)
+        all_traces_details = []
         for i, trace in enumerate(all_traces):
-            trace_summaries.append(
+            all_traces_details.append(
                 {
                     "trace_id": i,
+                    "text": trace["text"],  # Full reasoning text
                     "min_conf": trace["min_conf"],
                     "mean_conf": (
                         sum(trace["token_confs"]) / len(trace["token_confs"])
@@ -357,21 +352,10 @@ class StrategyDeepConf(StrategyBase):
                 }
             )
 
-        # Full details for filtered traces only
-        filtered_trace_details = []
-        for trace in result["filtered_traces"]:
-            trace_idx = all_traces.index(trace)
-            filtered_trace_details.append(
-                {
-                    "trace_id": trace_idx,
-                    "text": trace["text"],
-                    "min_conf": trace["min_conf"],
-                    "answer": trace["extracted_answer"],
-                    "num_tokens": len(trace.get("token_data", [])),
-                    "phase": "warmup" if trace_idx < len(warmup_traces) else "adaptive",
-                    "stopped_early": trace.get("stopped_early", False),
-                }
-            )
+        # Summary of filtered traces (for quick reference)
+        filtered_trace_ids = [
+            all_traces.index(trace) for trace in result["filtered_traces"]
+        ]
 
         # Build metadata using StrategyMetadataBuilder
         builder = StrategyMetadataBuilder("deepconf")
@@ -399,8 +383,8 @@ class StrategyDeepConf(StrategyBase):
 
         # Add generation details
         builder.add_generation_details(
-            trace_summaries=trace_summaries,
-            filtered_trace_details=filtered_trace_details,
+            all_traces=all_traces_details,
+            filtered_trace_ids=filtered_trace_ids,
         )
 
         # Add online-specific metadata
@@ -414,11 +398,13 @@ class StrategyDeepConf(StrategyBase):
         # Log summary to console
         builder.log_summary(log)
 
+        # Return all traces for analysis, with selected answer for evaluation
         return {
-            "trajectory": result["selected_text"],
+            "trajectory": result["selected_text"],  # Winning trace text
             "extracted_answer": result["selected_answer"],  # For ExactMatch evaluation
-            "steps": [result["selected_text"]],
-            "validity_scores": [result["confidence_score"]],
+            "all_traces": all_traces_details,  # All generated traces with full text
+            "steps": [t["text"] for t in all_traces_details],  # All trace texts
+            "validity_scores": [t["min_conf"] for t in all_traces_details],  # All confidences
             "completed": True,
             "metadata": builder.build(),
         }

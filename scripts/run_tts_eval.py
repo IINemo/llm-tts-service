@@ -540,6 +540,10 @@ def generate_trajectories(
             "completed": result["completed"],
         }
 
+        # Include all_traces if present (DeepConf generates multiple branches)
+        if "all_traces" in result:
+            result_dict["all_traces"] = result["all_traces"]
+
         # Include metadata if present (contains trace summaries and details)
         if "metadata" in result:
             result_dict["metadata"] = result["metadata"]
