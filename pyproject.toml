@@ -64,6 +64,11 @@ service = [
     "python-json-logger>=2.0.7",
 ]
 
+vllm = [
+    # vLLM backend for fast inference with PagedAttention
+    "vllm>=0.6.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/yourusername/llm-tts-service"
 Repository = "https://github.com/yourusername/llm-tts-service"
