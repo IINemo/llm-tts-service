@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# flake8: noqa: E402
+# E402: Module level import not at top of file
+# This is intentional - we must set multiprocessing method before CUDA imports
 
 # IMPORTANT: Set multiprocessing method BEFORE any CUDA imports
 # This is required for vLLM which uses multiprocessing internally
@@ -239,7 +242,7 @@ def create_model(config):
         model.is_vllm = True
         model.vllm_engine = llm
 
-        log.info(f"vLLM model loaded successfully")
+        log.info("vLLM model loaded successfully")
 
         # vLLM doesn't use step generator for DeepConf
         step_generator = None
