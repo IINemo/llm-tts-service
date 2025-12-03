@@ -3,9 +3,11 @@
 # IMPORTANT: Set multiprocessing method BEFORE any CUDA imports
 # This is required for vLLM which uses multiprocessing internally
 import os
+
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
 import multiprocessing
+
 if multiprocessing.get_start_method(allow_none=True) is None:
     multiprocessing.set_start_method("spawn")
 
@@ -31,6 +33,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 try:
     from vllm import LLM, SamplingParams
     from lm_polygraph.model_adapters import WhiteboxModelvLLM
+
     VLLM_AVAILABLE = True
 except ImportError:
     VLLM_AVAILABLE = False
@@ -244,10 +247,7 @@ def create_model(config):
 
     elif config.model.type == "local":
         scorer_type = config.scorer.type if config.scorer else None
-        if (
-            scorer_type == "uncertainty"
-            or scorer_type == "uncertainty_pd"
-        ):
+        if scorer_type == "uncertainty" or scorer_type == "uncertainty_pd":
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
@@ -581,12 +581,16 @@ def generate_trajectories(
         log.info("\n" + "=" * 60)
         log.info(f"FINAL ANSWER: {generated_text}")
         log.info(f"Gold answer:  {gold_answer_num}")
-        log.info(f"Correct:      {'✓ YES' if str(generated_text) == str(gold_answer_num) else '✗ NO'}")
+        log.info(
+            f"Correct:      {'✓ YES' if str(generated_text) == str(gold_answer_num) else '✗ NO'}"
+        )
         log.info("-" * 60)
         log.info(f"Num traces: {len(result['steps'])}")
         if "validity_scores" in result and result["validity_scores"]:
             scores = result["validity_scores"]
-            log.info(f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}")
+            log.info(
+                f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
+            )
         log.info("=" * 60)
 
         # Store result WITHOUT correctness check
@@ -865,7 +869,9 @@ def main(config):
         if subset:
             end_idx = min(start_idx + subset, len(dataset))
         dataset = dataset.select(range(start_idx, end_idx))
-        log.info(f"Dataset: using samples {start_idx} to {end_idx-1} ({len(dataset)} samples)")
+        log.info(
+            f"Dataset: using samples {start_idx} to {end_idx-1} ({len(dataset)} samples)"
+        )
 
     prompt_template = (
         load_prompt_template(config.dataset.prompt_file)

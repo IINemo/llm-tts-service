@@ -70,10 +70,10 @@ class AnswerStoppingCriteria(StoppingCriteria):
         # Patterns for different formats
         if answer_format == "default":
             # Default format: <Answer>: followed by <end of response> or </end of response>
-            self.end_pattern = re.compile(r'</?end of response>')
+            self.end_pattern = re.compile(r"</?end of response>")
         else:
             # Boxed format
-            self.answer_pattern = re.compile(r'\\boxed\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}')
+            self.answer_pattern = re.compile(r"\\boxed\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}")
 
     def __call__(
         self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs
@@ -85,7 +85,7 @@ class AnswerStoppingCriteria(StoppingCriteria):
                 continue
 
             # Decode only generated tokens
-            generated_ids = input_ids[i][self.start_length:]
+            generated_ids = input_ids[i][self.start_length :]
             generated_text = self.tokenizer.decode(
                 generated_ids, skip_special_tokens=True
             )
@@ -312,7 +312,9 @@ class StrategyDeepConf(StrategyBase):
             "extracted_answer": result["selected_answer"],  # For ExactMatch evaluation
             "all_traces": all_traces_details,  # All generated traces with full text
             "steps": [t["text"] for t in all_traces_details],  # All trace texts
-            "validity_scores": [t["min_conf"] for t in all_traces_details],  # All confidences
+            "validity_scores": [
+                t["min_conf"] for t in all_traces_details
+            ],  # All confidences
             "completed": True,
             "metadata": builder.build(),
         }
@@ -488,7 +490,9 @@ class StrategyDeepConf(StrategyBase):
             "extracted_answer": result["selected_answer"],  # For ExactMatch evaluation
             "all_traces": all_traces_details,  # All generated traces with full text
             "steps": [t["text"] for t in all_traces_details],  # All trace texts
-            "validity_scores": [t["min_conf"] for t in all_traces_details],  # All confidences
+            "validity_scores": [
+                t["min_conf"] for t in all_traces_details
+            ],  # All confidences
             "completed": True,
             "metadata": builder.build(),
         }
@@ -594,16 +598,22 @@ class StrategyDeepConf(StrategyBase):
 
                 # Check if scores were returned
                 if outputs.scores is None or len(outputs.scores) == 0:
-                    log.warning(f"  No scores returned by model (scores: {outputs.scores})")
+                    log.warning(
+                        f"  No scores returned by model (scores: {outputs.scores})"
+                    )
                     token_data = []
                 else:
-                    log.info(f"  Processing {len(outputs.scores)} score tensors for {len(new_tokens)} tokens")
+                    log.info(
+                        f"  Processing {len(outputs.scores)} score tensors for {len(new_tokens)} tokens"
+                    )
 
                     # Handle length mismatch (scores may not include EOS token)
                     num_scores = len(outputs.scores)
                     num_tokens = len(new_tokens)
                     if num_scores != num_tokens:
-                        log.warning(f"  Length mismatch: {num_scores} scores vs {num_tokens} tokens. Using min length.")
+                        log.warning(
+                            f"  Length mismatch: {num_scores} scores vs {num_tokens} tokens. Using min length."
+                        )
                         process_length = min(num_scores, num_tokens)
                     else:
                         process_length = num_scores
@@ -634,7 +644,9 @@ class StrategyDeepConf(StrategyBase):
 
                         logprobs_data.append(
                             {
-                                "token": self.model.tokenizer.decode([generated_token_id]),
+                                "token": self.model.tokenizer.decode(
+                                    [generated_token_id]
+                                ),
                                 "logprob": generated_logprob,
                                 "top_logprobs": top_logprobs_list,
                             }
@@ -648,7 +660,7 @@ class StrategyDeepConf(StrategyBase):
                             token_confs.append(-mean_logprob)
                         else:
                             # All logprobs are -inf (shouldn't happen, but handle it)
-                            token_confs.append(float('inf'))
+                            token_confs.append(float("inf"))
 
                     token_data = logprobs_data
 
@@ -699,7 +711,7 @@ class StrategyDeepConf(StrategyBase):
             List of trace dictionaries with text, confidence, and answer
         """
         # Check if this is a vLLM model (fast path)
-        if hasattr(self.model, 'is_vllm') and self.model.is_vllm:
+        if hasattr(self.model, "is_vllm") and self.model.is_vllm:
             return self._generate_traces_vllm(prompt, n)
 
         # Check if this is a local HuggingFace model
@@ -742,9 +754,7 @@ class StrategyDeepConf(StrategyBase):
         # Prepare the prompt with chat template
         messages = [{"role": "user", "content": prompt}]
         formatted_prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True
         )
 
         # Create sampling params for batch generation
@@ -760,7 +770,9 @@ class StrategyDeepConf(StrategyBase):
         )
 
         # Single call generates all traces in parallel
-        log.info(f"  Generating with params: temp={self.temperature}, top_p={self.top_p}, max_tokens={self.max_tokens}")
+        log.info(
+            f"  Generating with params: temp={self.temperature}, top_p={self.top_p}, max_tokens={self.max_tokens}"
+        )
         outputs = llm.generate([formatted_prompt], sampling_params)
 
         # Process outputs
@@ -780,32 +792,52 @@ class StrategyDeepConf(StrategyBase):
                     # Get top logprobs for this token
                     top_logprobs_list = []
                     for token_id, logprob_obj in token_logprobs.items():
-                        top_logprobs_list.append({
-                            "token": tokenizer.decode([token_id]),
-                            "logprob": logprob_obj.logprob,
-                        })
+                        top_logprobs_list.append(
+                            {
+                                "token": tokenizer.decode([token_id]),
+                                "logprob": logprob_obj.logprob,
+                            }
+                        )
 
                     # Sort by logprob (descending)
                     top_logprobs_list.sort(key=lambda x: x["logprob"], reverse=True)
-                    top_logprobs_list = top_logprobs_list[:self.top_logprobs]
+                    top_logprobs_list = top_logprobs_list[: self.top_logprobs]
 
                     # Compute confidence (negative mean of top-k logprobs)
                     if top_logprobs_list:
-                        valid_logprobs = [lp["logprob"] for lp in top_logprobs_list if lp["logprob"] > float('-inf')]
+                        valid_logprobs = [
+                            lp["logprob"]
+                            for lp in top_logprobs_list
+                            if lp["logprob"] > float("-inf")
+                        ]
                         if valid_logprobs:
                             mean_logprob = sum(valid_logprobs) / len(valid_logprobs)
                             token_confs.append(-mean_logprob)
 
                     # Store token data
-                    generated_token_id = output.token_ids[i] if i < len(output.token_ids) else None
-                    logprobs_data.append({
-                        "token": tokenizer.decode([generated_token_id]) if generated_token_id else "",
-                        "logprob": top_logprobs_list[0]["logprob"] if top_logprobs_list else 0,
-                        "top_logprobs": top_logprobs_list,
-                    })
+                    generated_token_id = (
+                        output.token_ids[i] if i < len(output.token_ids) else None
+                    )
+                    logprobs_data.append(
+                        {
+                            "token": (
+                                tokenizer.decode([generated_token_id])
+                                if generated_token_id
+                                else ""
+                            ),
+                            "logprob": (
+                                top_logprobs_list[0]["logprob"]
+                                if top_logprobs_list
+                                else 0
+                            ),
+                            "top_logprobs": top_logprobs_list,
+                        }
+                    )
 
             # Compute sliding window confidences
-            window_confs = compute_sliding_window_confidence(token_confs, self.window_size)
+            window_confs = compute_sliding_window_confidence(
+                token_confs, self.window_size
+            )
             min_conf = min(window_confs) if window_confs else 0.0
 
             # Extract answer
@@ -832,7 +864,9 @@ class StrategyDeepConf(StrategyBase):
         avg_tokens = total_tokens / len(all_traces) if all_traces else 0
 
         log.info(f"✓ vLLM generation complete: {len(all_traces)}/{n} traces")
-        log.info(f"  Total tokens: {total_tokens}, Average: {avg_tokens:.0f} tokens/trace")
+        log.info(
+            f"  Total tokens: {total_tokens}, Average: {avg_tokens:.0f} tokens/trace"
+        )
 
         return all_traces
 
@@ -855,7 +889,11 @@ class StrategyDeepConf(StrategyBase):
         import torch.nn.functional as F
 
         # Detect answer format from prompt
-        answer_format = "default" if "<Answer>:" in prompt or "<end of response>" in prompt else "boxed"
+        answer_format = (
+            "default"
+            if "<Answer>:" in prompt or "<end of response>" in prompt
+            else "boxed"
+        )
         log.info(f"🚀 Sequential generation with early stopping: {n} sequences...")
 
         all_traces = []
@@ -948,7 +986,9 @@ class StrategyDeepConf(StrategyBase):
 
                         logprobs_data.append(
                             {
-                                "token": self.model.tokenizer.decode([generated_token_id]),
+                                "token": self.model.tokenizer.decode(
+                                    [generated_token_id]
+                                ),
                                 "logprob": generated_logprob,
                                 "top_logprobs": top_logprobs_list,
                             }
@@ -960,7 +1000,7 @@ class StrategyDeepConf(StrategyBase):
                             mean_logprob = valid_logprobs.mean().item()
                             token_confs.append(-mean_logprob)
                         else:
-                            token_confs.append(float('inf'))
+                            token_confs.append(float("inf"))
 
                     token_data = logprobs_data
 
@@ -988,13 +1028,16 @@ class StrategyDeepConf(StrategyBase):
                     f"  Trace {seq_idx+1}/{n}: tokens={len(token_data)}, "
                     f"min_conf={min_conf:.3f}, answer={extracted_answer}{early_str}"
                 )
-                log.info(f"  --- Trace {seq_idx+1} text ---\n{text}\n  --- End trace {seq_idx+1} ---")
+                log.info(
+                    f"  --- Trace {seq_idx+1} text ---\n{text}\n  --- End trace {seq_idx+1} ---"
+                )
 
                 all_traces.append(trace)
 
             except Exception as e:
                 log.error(f"  Error generating sequence {seq_idx+1}/{n}: {e}")
                 import traceback
+
                 log.error(traceback.format_exc())
 
             # Clear GPU cache periodically
