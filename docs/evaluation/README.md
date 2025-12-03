@@ -7,6 +7,7 @@ This document defines the evaluation protocol for comparing test-time compute sc
 - [Datasets](datasets.md) - AIME, MATH-500, SVAMP benchmark details
 - [Models](models.md) - Paper-model matrix for strategy implementations
 - [Metrics](metrics.md) - Accuracy, tokens, FLOPs calculation
+- [WandB](wandb.md) - Logging conventions and upload workflow
 - [Results](results/) - Experiment results by dataset
 - [Inference Backends](#inference-backends) - vLLM vs HuggingFace comparison
 - [Model Configuration](#model-configuration) - Config files for experiments
