@@ -186,13 +186,12 @@ def set_random_seeds(seed):
 
 
 def create_scorer(config):
-    # DeepConf doesn't use a scorer
-
-    if config.strategy.type == "deepconf":
-        return None
-    if config.scorer.type == "uncertainty_pd":
+    # DeepConf and self_consistency don't use a scorer
+    if config.strategy.type in ("deepconf", "self_consistency"):
         return None
     if config.scorer is None:
+        return None
+    if config.scorer.type == "uncertainty_pd":
         return None
 
     if config.scorer.type == "prm":
@@ -250,9 +249,10 @@ def create_model(config):
 
         log.info("vLLM model loaded successfully")
 
-        # Create step generator for non-DeepConf strategies
+        # Create step generator for strategies that need it
+        # DeepConf and self_consistency have their own generation logic
         step_generator = None
-        if config.strategy.type != "deepconf":
+        if config.strategy.type not in ("deepconf", "self_consistency"):
             if not VLLM_GENERATOR_AVAILABLE:
                 raise ImportError(
                     "vLLM step generator not available. "
@@ -624,9 +624,11 @@ def generate_trajectories(
         log.info("\n" + "=" * 60)
         log.info(f"FINAL ANSWER: {generated_text}")
         log.info(f"Gold answer:  {gold_answer_num}")
-        log.info(
-            f"Correct:      {'✓ YES' if str(generated_text) == str(gold_answer_num) else '✗ NO'}"
+        # Compare case-insensitively and stripped (self-consistency returns lowercase)
+        is_correct = (
+            str(generated_text).strip().lower() == str(gold_answer_num).strip().lower()
         )
+        log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
         log.info("-" * 60)
         log.info(f"Num traces: {len(result['steps'])}")
         if "validity_scores" in result and result["validity_scores"]:

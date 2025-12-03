@@ -7,6 +7,8 @@ import re
 from collections import Counter
 from typing import List
 
+from llm_tts.utils import extract_answer as extract_answer_util
+
 from .step_scorer_base import CandidateScore, StepScorerBase
 
 log = logging.getLogger(__name__)
@@ -132,13 +134,28 @@ class ChainMajorityVotingScorer(StepScorerBase):
         pass
 
     def extract_answer(self, text: str) -> str:
-        """Extract final answer using more robust patterns"""
-        text = text.strip()
+        """
+        Extract final answer using robust extraction utility.
 
+        Uses llm_tts.utils.extract_answer which supports:
+        - \\boxed{} format with nested braces
+        - <Answer>: ... <end of response> format
+        - Auto-detection of format
+
+        Note: Returns answer in original case (not lowercased) for consistency
+        with DeepConf. Majority voting comparison is case-insensitive internally.
+        """
+        # Use the utility function for robust extraction
+        answer = extract_answer_util(text, answer_format="auto")
+        if answer:
+            return answer.strip()
+
+        # Fallback to legacy pattern matching
+        text = text.strip()
         for pattern in self.answer_patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             if matches:
-                return matches[-1].strip().lower()
+                return matches[-1].strip()
 
         # Fallback to number extraction
         numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
@@ -160,22 +177,24 @@ class ChainMajorityVotingScorer(StepScorerBase):
         if not chains:
             return []
 
-        # Extract answers from all chains
+        # Extract answers from all chains (original case preserved)
         answers = [self.extract_answer(chain) for chain in chains]
 
-        # Count frequencies
-        answer_counts = Counter(answers)
+        # Count frequencies using lowercased answers for comparison
+        # but keep original answers for display
+        normalized_answers = [a.lower() for a in answers]
+        answer_counts = Counter(normalized_answers)
         total_chains = len(chains)
 
-        # Score each chain
+        # Score each chain based on normalized answer frequency
         scores = []
-        for answer in answers:
-            frequency = answer_counts[answer]
+        for norm_answer in normalized_answers:
+            frequency = answer_counts[norm_answer]
             score = frequency / total_chains
             scores.append(score)
 
         log.info(f"Chain consensus scores: {scores}")
-        log.info(f"Answer distribution: {dict(answer_counts)}")
+        log.info(f"Answer distribution: {dict(Counter(answers))}")
 
         return scores
 
