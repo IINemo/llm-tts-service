@@ -1,0 +1,72 @@
+# @package _global_
+# DeepConf Offline Mode: Qwen3-8B via vLLM on AIME 2025
+# Fast inference with PagedAttention - no OOM on long sequences
+
+defaults:
+  - /config
+  - /dataset/aime_2025
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - _self_
+
+# Run naming
+run_name: "aime2025_deepconf_vllm_b${strategy.budget}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: null  # Disable wandb for local runs
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 32768  # AIME problems require more tokens
+  temperature: 0.6
+  top_p: 0.95
+  batch_size: 1
+  max_length: 8192
+
+# No scorer needed (DeepConf has built-in weighted voting)
+scorer: null
+
+# DeepConf offline mode strategy
+strategy:
+  type: deepconf
+  mode: "offline"  # Generate all traces, filter by confidence, weighted vote
+  budget: 16  # Number of reasoning traces to generate (all in ONE vLLM call!)
+
+  # Generation parameters
+  window_size: 2048  # Sliding window for confidence computation
+  temperature: 0.6  # Sampling temperature for diversity
+  top_p: 0.95  # Nucleus sampling
+  max_tokens: 32768  # vLLM handles long sequences efficiently
+  top_logprobs: 20  # Required for confidence computation
+
+  # Filtering and voting
+  filter_method: "top10"  # Use top-10 traces by confidence for voting
+  n_threads: 1  # Not used for vLLM (single batched call)
+
+# Dataset configuration
+dataset:
+  subset: 30  # All AIME 2025 problems
+  offset: 0  # Start from beginning
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default.txt"
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match

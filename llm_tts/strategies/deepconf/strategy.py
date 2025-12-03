@@ -10,10 +10,13 @@ Supports both offline and online modes:
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import torch
 from lm_polygraph import BlackboxModel
+from transformers import StoppingCriteria, StoppingCriteriaList
 
 from llm_tts.early_stopping import ConfidenceEarlyStopping
 
@@ -26,6 +29,87 @@ from .utils import (
 )
 
 log = logging.getLogger(__name__)
+
+
+class AnswerStoppingCriteria(StoppingCriteria):
+    """
+    Stopping criteria that stops generation when a complete answer is found.
+
+    Supports two formats:
+    - Default format: <Answer>: ... <end of response>
+    - Boxed format: \\boxed{...}
+
+    Works with batched generation (num_return_sequences > 1).
+    """
+
+    def __init__(
+        self,
+        tokenizer,
+        start_length: int,
+        batch_size: int,
+        answer_format: str = "default",
+        min_tokens_after: int = 0,
+    ):
+        """
+        Args:
+            tokenizer: HuggingFace tokenizer for decoding
+            start_length: Length of input tokens (to extract only generated text)
+            batch_size: Number of sequences being generated
+            answer_format: "default" for <Answer>: format, "boxed" for \\boxed{} format
+            min_tokens_after: Minimum tokens to generate after finding answer marker
+        """
+        self.tokenizer = tokenizer
+        self.start_length = start_length
+        self.batch_size = batch_size
+        self.answer_format = answer_format
+        self.min_tokens_after = min_tokens_after
+        self.finished = [False] * batch_size
+        # Track when we found answer for each sequence
+        self.answer_found_at = [None] * batch_size
+
+        # Patterns for different formats
+        if answer_format == "default":
+            # Default format: <Answer>: followed by <end of response> or </end of response>
+            self.end_pattern = re.compile(r"</?end of response>")
+        else:
+            # Boxed format
+            self.answer_pattern = re.compile(r"\\boxed\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}")
+
+    def __call__(
+        self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs
+    ) -> bool:
+        """Check if all sequences have found their answer."""
+
+        for i in range(min(input_ids.shape[0], self.batch_size)):
+            if self.finished[i]:
+                continue
+
+            # Decode only generated tokens
+            generated_ids = input_ids[i][self.start_length :]
+            generated_text = self.tokenizer.decode(
+                generated_ids, skip_special_tokens=True
+            )
+
+            # Check for answer pattern
+            if self.answer_format == "default":
+                # For default format, check for <end of response> marker
+                if self.end_pattern.search(generated_text):
+                    if self.answer_found_at[i] is None:
+                        self.answer_found_at[i] = len(generated_ids)
+                    tokens_after = len(generated_ids) - self.answer_found_at[i]
+                    if tokens_after >= self.min_tokens_after:
+                        self.finished[i] = True
+            else:
+                # For boxed format
+                if self.answer_pattern.search(generated_text):
+                    if self.answer_found_at[i] is None:
+                        self.answer_found_at[i] = len(generated_ids)
+                    tokens_after = len(generated_ids) - self.answer_found_at[i]
+                    if tokens_after >= self.min_tokens_after:
+                        self.finished[i] = True
+
+        # Stop when all sequences are finished
+        return all(self.finished)
 
 
 class StrategyDeepConf(StrategyBase):
@@ -46,7 +130,7 @@ class StrategyDeepConf(StrategyBase):
 
     def __init__(
         self,
-        model: BlackboxModel,
+        model,
         mode: str,
         budget: int,
         window_size: int,
@@ -65,7 +149,7 @@ class StrategyDeepConf(StrategyBase):
         Initialize DeepConf strategy.
 
         Args:
-            model: BlackboxModel with logprobs support
+            model: Model supporting logprobs (BlackboxModel for API, or local HuggingFace model)
             mode: "offline" or "online"
             budget: Number of traces for offline mode
             warmup_traces: Warmup traces for online mode
@@ -95,12 +179,25 @@ class StrategyDeepConf(StrategyBase):
         self.confidence_threshold = confidence_threshold
         self.n_threads = n_threads
 
-        # Validate model supports logprobs
-        if not hasattr(model, "supports_logprobs") or not model.supports_logprobs:
-            raise ValueError("Model must support logprobs for DeepConf")
+        # Validate model supports logprobs (for API models) or has required attributes (for local)
+        if isinstance(model, BlackboxModel):
+            # API model: check supports_logprobs flag
+            if not hasattr(model, "supports_logprobs") or not model.supports_logprobs:
+                raise ValueError(
+                    "API model must have supports_logprobs=True for DeepConf"
+                )
+        else:
+            # Local HuggingFace model: check required attributes
+            required_attrs = ["model", "tokenizer", "tokenize", "device"]
+            missing = [attr for attr in required_attrs if not hasattr(model, attr)]
+            if missing:
+                raise ValueError(
+                    f"Local model missing required attributes for DeepConf: {missing}"
+                )
 
+        model_type = "API" if isinstance(model, BlackboxModel) else "Local"
         log.info(
-            f"DeepConf initialized: mode={mode}, "
+            f"DeepConf initialized ({model_type} model): mode={mode}, "
             f"budget={budget if mode == 'offline' else total_budget}, "
             f"window={window_size}, filter={filter_method}, threads={n_threads}"
         )
@@ -151,12 +248,13 @@ class StrategyDeepConf(StrategyBase):
         # Build enhanced metadata
         filtered_set = set(id(t) for t in result["filtered_traces"])
 
-        # Summary stats for all traces
-        trace_summaries = []
+        # Full details for ALL traces (for analysis)
+        all_traces_details = []
         for i, trace in enumerate(traces):
-            trace_summaries.append(
+            all_traces_details.append(
                 {
                     "trace_id": i,
+                    "text": trace["text"],  # Full reasoning text
                     "min_conf": trace["min_conf"],
                     "mean_conf": (
                         sum(trace["token_confs"]) / len(trace["token_confs"])
@@ -169,19 +267,10 @@ class StrategyDeepConf(StrategyBase):
                 }
             )
 
-        # Full details for filtered traces only
-        filtered_trace_details = []
-        for trace in result["filtered_traces"]:
-            trace_idx = traces.index(trace)
-            filtered_trace_details.append(
-                {
-                    "trace_id": trace_idx,
-                    "text": trace["text"],
-                    "min_conf": trace["min_conf"],
-                    "answer": trace["extracted_answer"],
-                    "num_tokens": len(trace.get("token_data", [])),
-                }
-            )
+        # Summary of filtered traces (for quick reference)
+        filtered_trace_ids = [
+            traces.index(trace) for trace in result["filtered_traces"]
+        ]
 
         # Build metadata using StrategyMetadataBuilder
         builder = StrategyMetadataBuilder("deepconf")
@@ -210,17 +299,22 @@ class StrategyDeepConf(StrategyBase):
 
         # Add generation details
         builder.add_generation_details(
-            trace_summaries=trace_summaries,
-            filtered_trace_details=filtered_trace_details,
+            all_traces=all_traces_details,
+            filtered_trace_ids=filtered_trace_ids,
         )
 
         # Log summary to console
         builder.log_summary(log)
 
+        # Return all traces for analysis, with selected answer for evaluation
         return {
-            "trajectory": result["selected_text"],
-            "steps": [result["selected_text"]],
-            "validity_scores": [result["confidence_score"]],
+            "trajectory": result["selected_text"],  # Winning trace text
+            "extracted_answer": result["selected_answer"],  # For ExactMatch evaluation
+            "all_traces": all_traces_details,  # All generated traces with full text
+            "steps": [t["text"] for t in all_traces_details],  # All trace texts
+            "validity_scores": [
+                t["min_conf"] for t in all_traces_details
+            ],  # All confidences
             "completed": True,
             "metadata": builder.build(),
         }
@@ -323,12 +417,13 @@ class StrategyDeepConf(StrategyBase):
         # Build enhanced metadata (consistent with offline mode)
         filtered_set = set(id(t) for t in result["filtered_traces"])
 
-        # Summary stats for all traces
-        trace_summaries = []
+        # Full details for ALL traces (for analysis)
+        all_traces_details = []
         for i, trace in enumerate(all_traces):
-            trace_summaries.append(
+            all_traces_details.append(
                 {
                     "trace_id": i,
+                    "text": trace["text"],  # Full reasoning text
                     "min_conf": trace["min_conf"],
                     "mean_conf": (
                         sum(trace["token_confs"]) / len(trace["token_confs"])
@@ -343,21 +438,10 @@ class StrategyDeepConf(StrategyBase):
                 }
             )
 
-        # Full details for filtered traces only
-        filtered_trace_details = []
-        for trace in result["filtered_traces"]:
-            trace_idx = all_traces.index(trace)
-            filtered_trace_details.append(
-                {
-                    "trace_id": trace_idx,
-                    "text": trace["text"],
-                    "min_conf": trace["min_conf"],
-                    "answer": trace["extracted_answer"],
-                    "num_tokens": len(trace.get("token_data", [])),
-                    "phase": "warmup" if trace_idx < len(warmup_traces) else "adaptive",
-                    "stopped_early": trace.get("stopped_early", False),
-                }
-            )
+        # Summary of filtered traces (for quick reference)
+        filtered_trace_ids = [
+            all_traces.index(trace) for trace in result["filtered_traces"]
+        ]
 
         # Build metadata using StrategyMetadataBuilder
         builder = StrategyMetadataBuilder("deepconf")
@@ -385,8 +469,8 @@ class StrategyDeepConf(StrategyBase):
 
         # Add generation details
         builder.add_generation_details(
-            trace_summaries=trace_summaries,
-            filtered_trace_details=filtered_trace_details,
+            all_traces=all_traces_details,
+            filtered_trace_ids=filtered_trace_ids,
         )
 
         # Add online-specific metadata
@@ -400,17 +484,22 @@ class StrategyDeepConf(StrategyBase):
         # Log summary to console
         builder.log_summary(log)
 
+        # Return all traces for analysis, with selected answer for evaluation
         return {
-            "trajectory": result["selected_text"],
-            "steps": [result["selected_text"]],
-            "validity_scores": [result["confidence_score"]],
+            "trajectory": result["selected_text"],  # Winning trace text
+            "extracted_answer": result["selected_answer"],  # For ExactMatch evaluation
+            "all_traces": all_traces_details,  # All generated traces with full text
+            "steps": [t["text"] for t in all_traces_details],  # All trace texts
+            "validity_scores": [
+                t["min_conf"] for t in all_traces_details
+            ],  # All confidences
             "completed": True,
             "metadata": builder.build(),
         }
 
     def _generate_single_trace(self, args: tuple) -> Optional[Dict[str, Any]]:
         """
-        Generate a single trace with logprobs (for multithreading).
+        Generate a single trace with logprobs (supports both API and local models).
 
         Args:
             args: Tuple of (prompt, trace_index, total_traces)
@@ -420,47 +509,166 @@ class StrategyDeepConf(StrategyBase):
         """
         prompt, i, n = args
         try:
-            # Prepare chat messages
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a math problem solver. Always put your "
-                        "final numerical answer in \\boxed{answer} format."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ]
+            # Check if this is an API model (BlackboxModel) or local HuggingFace model
+            if isinstance(self.model, BlackboxModel):
+                # ===== API MODEL PATH (OpenAI, OpenRouter, etc.) =====
+                # Prepare chat messages
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a math problem solver. Always put your "
+                            "final numerical answer in \\boxed{answer} format."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ]
 
-            # Generate with logprobs
-            # Disable early stopping for batch generation
-            self.model.early_stopping = None
+                # Generate with logprobs
+                # Disable early stopping for batch generation
+                self.model.early_stopping = None
 
-            results = self.model.generate_texts(
-                chats=[messages],
-                max_new_tokens=self.max_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                output_scores=True,
-                top_logprobs=self.top_logprobs,
-            )
-
-            # Extract text and logprobs from result
-            text = results[0]["text"]
-            logprobs_data = results[0].get("logprobs", [])
-
-            # Extract confidences from logprobs
-            token_confs = []
-            for token_info in logprobs_data:
-                # Use mean of top-k logprobs (same as online mode)
-                top_logprobs_list = token_info["top_logprobs"][: self.top_logprobs]
-                mean_logprob = sum(t["logprob"] for t in top_logprobs_list) / len(
-                    top_logprobs_list
+                results = self.model.generate_texts(
+                    chats=[messages],
+                    max_new_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    output_scores=True,
+                    top_logprobs=self.top_logprobs,
                 )
-                token_confs.append(-mean_logprob)
 
-            token_data = logprobs_data
+                # Extract text and logprobs from result
+                text = results[0]["text"]
+                logprobs_data = results[0].get("logprobs", [])
 
+                # Extract confidences from logprobs
+                token_confs = []
+                for token_info in logprobs_data:
+                    # Use mean of top-k logprobs (same as online mode)
+                    top_logprobs_list = token_info["top_logprobs"][: self.top_logprobs]
+                    mean_logprob = sum(t["logprob"] for t in top_logprobs_list) / len(
+                        top_logprobs_list
+                    )
+                    token_confs.append(-mean_logprob)
+
+                token_data = logprobs_data
+
+            else:
+                # ===== LOCAL HUGGINGFACE MODEL PATH =====
+                import torch
+                import torch.nn.functional as F
+
+                # Get device from model parameters
+                device = next(self.model.model.parameters()).device
+
+                # Tokenize prompt
+                inputs = self.model.tokenize([prompt])
+                input_ids = inputs["input_ids"].to(device)
+                attention_mask = inputs["attention_mask"].to(device)
+
+                # Generate with output_scores to get logits
+                # Use model's generation config for eos_token_id (may be list of tokens)
+                eos_token_id = self.model.model.generation_config.eos_token_id
+                if eos_token_id is None:
+                    eos_token_id = self.model.tokenizer.eos_token_id
+
+                with torch.no_grad():
+                    outputs = self.model.model.generate(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=self.max_tokens,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        do_sample=True,
+                        return_dict_in_generate=True,
+                        output_scores=True,  # Get logits for each generated token
+                        pad_token_id=self.model.tokenizer.pad_token_id,
+                        eos_token_id=eos_token_id,
+                        repetition_penalty=1.1,
+                    )
+
+                # Extract generated text
+                output_seq = outputs.sequences[0]
+                new_tokens = output_seq[input_ids.shape[1] :]
+                text = self.model.tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+                # Extract logprobs from scores (logits)
+                logprobs_data = []
+                token_confs = []
+
+                # Check if scores were returned
+                if outputs.scores is None or len(outputs.scores) == 0:
+                    log.warning(
+                        f"  No scores returned by model (scores: {outputs.scores})"
+                    )
+                    token_data = []
+                else:
+                    log.info(
+                        f"  Processing {len(outputs.scores)} score tensors for {len(new_tokens)} tokens"
+                    )
+
+                    # Handle length mismatch (scores may not include EOS token)
+                    num_scores = len(outputs.scores)
+                    num_tokens = len(new_tokens)
+                    if num_scores != num_tokens:
+                        log.warning(
+                            f"  Length mismatch: {num_scores} scores vs {num_tokens} tokens. Using min length."
+                        )
+                        process_length = min(num_scores, num_tokens)
+                    else:
+                        process_length = num_scores
+
+                    for idx in range(process_length):
+                        score_tensor = outputs.scores[idx]
+                        # score_tensor shape: [batch_size, vocab_size]
+                        # Convert logits to log probabilities
+                        log_probs = F.log_softmax(score_tensor[0], dim=-1)
+
+                        # Get top-k log probs and indices
+                        top_k_logprobs, top_k_indices = torch.topk(
+                            log_probs, min(self.top_logprobs, log_probs.size(-1))
+                        )
+
+                        # Get the token that was actually generated
+                        generated_token_id = new_tokens[idx].item()
+                        generated_logprob = log_probs[generated_token_id].item()
+
+                        # Build logprobs data structure (matching API format)
+                        top_logprobs_list = [
+                            {
+                                "token": self.model.tokenizer.decode([token_id.item()]),
+                                "logprob": logprob.item(),
+                            }
+                            for logprob, token_id in zip(top_k_logprobs, top_k_indices)
+                        ]
+
+                        logprobs_data.append(
+                            {
+                                "token": self.model.tokenizer.decode(
+                                    [generated_token_id]
+                                ),
+                                "logprob": generated_logprob,
+                                "top_logprobs": top_logprobs_list,
+                            }
+                        )
+
+                        # Compute confidence (negative mean of top-k logprobs)
+                        # Filter out -inf values from masked/impossible tokens
+                        valid_logprobs = top_k_logprobs[~torch.isinf(top_k_logprobs)]
+                        if len(valid_logprobs) > 0:
+                            mean_logprob = valid_logprobs.mean().item()
+                            token_confs.append(-mean_logprob)
+                        else:
+                            # All logprobs are -inf (shouldn't happen, but handle it)
+                            token_confs.append(float("inf"))
+
+                    token_data = logprobs_data
+
+                # Clear GPU cache for local models
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            # ===== COMMON PATH (both API and local models) =====
             # Compute sliding window confidences
             window_confs = compute_sliding_window_confidence(
                 token_confs, self.window_size
@@ -497,11 +705,21 @@ class StrategyDeepConf(StrategyBase):
 
     def _generate_traces_batch(self, prompt: str, n: int) -> List[Dict[str, Any]]:
         """
-        Generate n traces using parallel API requests.
+        Generate n traces using parallel API requests or batched local generation.
 
         Returns:
             List of trace dictionaries with text, confidence, and answer
         """
+        # Check if this is a vLLM model (fast path)
+        if hasattr(self.model, "is_vllm") and self.model.is_vllm:
+            return self._generate_traces_vllm(prompt, n)
+
+        # Check if this is a local HuggingFace model
+        if not isinstance(self.model, BlackboxModel):
+            # Use batched generation for local models (much faster!)
+            return self._generate_traces_batch_local(prompt, n)
+
+        # For API models, use parallel generation
         # Prepare arguments for each trace: (prompt, index, total)
         trace_args = [(prompt, i, n) for i in range(n)]
 
@@ -512,6 +730,333 @@ class StrategyDeepConf(StrategyBase):
             n_threads=self.n_threads,
             desc=f"Generating {n} traces",
         )
+
+    def _generate_traces_vllm(self, prompt: str, n: int) -> List[Dict[str, Any]]:
+        """
+        Generate n traces using vLLM (fast, batched, no OOM).
+
+        vLLM generates all traces in a single batched call with:
+        - PagedAttention for memory efficiency
+        - Continuous batching for throughput
+        - Prefix caching for shared prompts
+
+        Returns:
+            List of trace dictionaries with text, confidence, and answer
+        """
+        from vllm import SamplingParams
+
+        log.info(f"🚀 vLLM batch generation: {n} traces...")
+
+        # Get the vLLM engine
+        llm = self.model.vllm_engine
+        tokenizer = llm.get_tokenizer()
+
+        # Prepare the prompt with chat template
+        messages = [{"role": "user", "content": prompt}]
+        formatted_prompt = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
+        # Create sampling params for batch generation
+        # Use stop strings for early stopping (saves tokens)
+        sampling_params = SamplingParams(
+            n=n,  # Generate n traces in ONE call
+            temperature=self.temperature,
+            top_p=self.top_p,
+            max_tokens=self.max_tokens,
+            logprobs=self.top_logprobs,
+            stop=["<end of response>", "</end of response>"],  # Early stopping
+            include_stop_str_in_output=True,  # Keep the stop string in output
+        )
+
+        # Single call generates all traces in parallel
+        log.info(
+            f"  Generating with params: temp={self.temperature}, top_p={self.top_p}, max_tokens={self.max_tokens}"
+        )
+        outputs = llm.generate([formatted_prompt], sampling_params)
+
+        # Process outputs
+        all_traces = []
+        for output in outputs[0].outputs:
+            text = output.text
+
+            # Extract logprobs and compute confidences
+            token_confs = []
+            logprobs_data = []
+
+            if output.logprobs:
+                for i, token_logprobs in enumerate(output.logprobs):
+                    if token_logprobs is None:
+                        continue
+
+                    # Get top logprobs for this token
+                    top_logprobs_list = []
+                    for token_id, logprob_obj in token_logprobs.items():
+                        top_logprobs_list.append(
+                            {
+                                "token": tokenizer.decode([token_id]),
+                                "logprob": logprob_obj.logprob,
+                            }
+                        )
+
+                    # Sort by logprob (descending)
+                    top_logprobs_list.sort(key=lambda x: x["logprob"], reverse=True)
+                    top_logprobs_list = top_logprobs_list[: self.top_logprobs]
+
+                    # Compute confidence (negative mean of top-k logprobs)
+                    if top_logprobs_list:
+                        valid_logprobs = [
+                            lp["logprob"]
+                            for lp in top_logprobs_list
+                            if lp["logprob"] > float("-inf")
+                        ]
+                        if valid_logprobs:
+                            mean_logprob = sum(valid_logprobs) / len(valid_logprobs)
+                            token_confs.append(-mean_logprob)
+
+                    # Store token data
+                    generated_token_id = (
+                        output.token_ids[i] if i < len(output.token_ids) else None
+                    )
+                    logprobs_data.append(
+                        {
+                            "token": (
+                                tokenizer.decode([generated_token_id])
+                                if generated_token_id
+                                else ""
+                            ),
+                            "logprob": (
+                                top_logprobs_list[0]["logprob"]
+                                if top_logprobs_list
+                                else 0
+                            ),
+                            "top_logprobs": top_logprobs_list,
+                        }
+                    )
+
+            # Compute sliding window confidences
+            window_confs = compute_sliding_window_confidence(
+                token_confs, self.window_size
+            )
+            min_conf = min(window_confs) if window_confs else 0.0
+
+            # Extract answer
+            extracted_answer = extract_answer(text)
+
+            trace = {
+                "text": text,
+                "min_conf": min_conf,
+                "extracted_answer": extracted_answer,
+                "token_confs": token_confs,
+                "window_confs": window_confs,
+                "token_data": logprobs_data,
+            }
+
+            all_traces.append(trace)
+
+            log.info(
+                f"  Trace {len(all_traces)}/{n}: tokens={len(logprobs_data)}, "
+                f"min_conf={min_conf:.3f}, answer={extracted_answer}"
+            )
+
+        # Summary statistics
+        total_tokens = sum(len(t.get("token_data", [])) for t in all_traces)
+        avg_tokens = total_tokens / len(all_traces) if all_traces else 0
+
+        log.info(f"✓ vLLM generation complete: {len(all_traces)}/{n} traces")
+        log.info(
+            f"  Total tokens: {total_tokens}, Average: {avg_tokens:.0f} tokens/trace"
+        )
+
+        return all_traces
+
+    def _generate_traces_batch_local(self, prompt: str, n: int) -> List[Dict[str, Any]]:
+        """
+        Generate n traces using SEQUENTIAL generation with early stopping.
+
+        Uses AnswerStoppingCriteria to stop generation as soon as
+        a complete answer is found (<end of response> for default format,
+        or \\boxed{...} for boxed format), saving significant tokens.
+
+        Sequential generation is used because HuggingFace's StoppingCriteria
+        with batched generation (num_return_sequences > 1) only stops when
+        ALL sequences are done, negating any early stopping benefits.
+
+        Returns:
+            List of trace dictionaries with text, confidence, and answer
+        """
+        import torch
+        import torch.nn.functional as F
+
+        # Detect answer format from prompt
+        answer_format = (
+            "default"
+            if "<Answer>:" in prompt or "<end of response>" in prompt
+            else "boxed"
+        )
+        log.info(f"🚀 Sequential generation with early stopping: {n} sequences...")
+
+        all_traces = []
+
+        # Get device from model parameters
+        device = next(self.model.model.parameters()).device
+
+        # Tokenize prompt once for all sequences
+        inputs = self.model.tokenize([prompt])
+        input_ids = inputs["input_ids"].to(device)
+        attention_mask = inputs["attention_mask"].to(device)
+        start_length = input_ids.shape[1]
+
+        # Get eos_token_id from model config
+        eos_token_id = self.model.model.generation_config.eos_token_id
+        if eos_token_id is None:
+            eos_token_id = self.model.tokenizer.eos_token_id
+
+        # Generate each sequence independently (allows per-sequence early stopping)
+        for seq_idx in range(n):
+            try:
+                # Create fresh stopping criteria for each sequence
+                stopping_criteria = AnswerStoppingCriteria(
+                    tokenizer=self.model.tokenizer,
+                    start_length=start_length,
+                    batch_size=1,  # Single sequence
+                    answer_format=answer_format,
+                    min_tokens_after=0,  # Stop immediately when answer found
+                )
+
+                with torch.no_grad():
+                    outputs = self.model.model.generate(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=self.max_tokens,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        do_sample=True,
+                        num_return_sequences=1,  # Single sequence for early stopping
+                        return_dict_in_generate=True,
+                        output_scores=True,  # Get logits for each generated token
+                        pad_token_id=self.model.tokenizer.pad_token_id,
+                        eos_token_id=eos_token_id,
+                        repetition_penalty=1.1,
+                        stopping_criteria=StoppingCriteriaList([stopping_criteria]),
+                    )
+
+                # Extract generated text
+                output_seq = outputs.sequences[0]
+                new_tokens = output_seq[start_length:]
+                text = self.model.tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+                # Check if we stopped early
+                stopped_early = stopping_criteria.finished[0]
+
+                # Extract logprobs from scores
+                logprobs_data = []
+                token_confs = []
+
+                if outputs.scores is None or len(outputs.scores) == 0:
+                    log.warning(f"    Sequence {seq_idx+1}/{n}: No scores returned")
+                    token_data = []
+                else:
+                    num_scores = len(outputs.scores)
+                    num_tokens = len(new_tokens)
+                    process_length = min(num_scores, num_tokens)
+
+                    for token_idx in range(process_length):
+                        score_tensor = outputs.scores[token_idx]
+                        # score_tensor shape: [1, vocab_size] (single sequence)
+                        log_probs = F.log_softmax(score_tensor[0], dim=-1)
+
+                        # Get top-k log probs and indices
+                        top_k_logprobs, top_k_indices = torch.topk(
+                            log_probs, min(self.top_logprobs, log_probs.size(-1))
+                        )
+
+                        # Get the token that was actually generated
+                        generated_token_id = new_tokens[token_idx].item()
+                        generated_logprob = log_probs[generated_token_id].item()
+
+                        # Build logprobs data structure (matching API format)
+                        top_logprobs_list = [
+                            {
+                                "token": self.model.tokenizer.decode([token_id.item()]),
+                                "logprob": logprob.item(),
+                            }
+                            for logprob, token_id in zip(top_k_logprobs, top_k_indices)
+                        ]
+
+                        logprobs_data.append(
+                            {
+                                "token": self.model.tokenizer.decode(
+                                    [generated_token_id]
+                                ),
+                                "logprob": generated_logprob,
+                                "top_logprobs": top_logprobs_list,
+                            }
+                        )
+
+                        # Compute confidence (negative mean of top-k logprobs)
+                        valid_logprobs = top_k_logprobs[~torch.isinf(top_k_logprobs)]
+                        if len(valid_logprobs) > 0:
+                            mean_logprob = valid_logprobs.mean().item()
+                            token_confs.append(-mean_logprob)
+                        else:
+                            token_confs.append(float("inf"))
+
+                    token_data = logprobs_data
+
+                # Compute sliding window confidences
+                window_confs = compute_sliding_window_confidence(
+                    token_confs, self.window_size
+                )
+                min_conf = min(window_confs) if window_confs else 0.0
+
+                # Extract answer
+                extracted_answer = extract_answer(text)
+
+                trace = {
+                    "text": text,
+                    "min_conf": min_conf,
+                    "extracted_answer": extracted_answer,
+                    "token_confs": token_confs,
+                    "window_confs": window_confs,
+                    "token_data": token_data,
+                    "stopped_early": stopped_early,
+                }
+
+                early_str = " [EARLY STOP]" if stopped_early else ""
+                log.info(
+                    f"  Trace {seq_idx+1}/{n}: tokens={len(token_data)}, "
+                    f"min_conf={min_conf:.3f}, answer={extracted_answer}{early_str}"
+                )
+                log.info(
+                    f"  --- Trace {seq_idx+1} text ---\n{text}\n  --- End trace {seq_idx+1} ---"
+                )
+
+                all_traces.append(trace)
+
+            except Exception as e:
+                log.error(f"  Error generating sequence {seq_idx+1}/{n}: {e}")
+                import traceback
+
+                log.error(traceback.format_exc())
+
+            # Clear GPU cache periodically
+            if torch.cuda.is_available() and (seq_idx + 1) % 4 == 0:
+                torch.cuda.empty_cache()
+
+        # Summary statistics
+        num_early_stopped = sum(1 for t in all_traces if t.get("stopped_early", False))
+        total_tokens = sum(len(t.get("token_data", [])) for t in all_traces)
+        avg_tokens = total_tokens / len(all_traces) if all_traces else 0
+
+        log.info(f"✓ Sequential generation complete: {len(all_traces)}/{n} sequences")
+        log.info(f"  Early stopped: {num_early_stopped}/{len(all_traces)}")
+        log.info(f"  Average tokens: {avg_tokens:.0f} (max: {self.max_tokens})")
+        if num_early_stopped > 0:
+            savings = (1 - avg_tokens / self.max_tokens) * 100
+            log.info(f"  Token savings: {savings:.1f}%")
+
+        return all_traces
 
     def _generate_traces_adaptive(
         self, prompt: str, n: int, conf_threshold: float
