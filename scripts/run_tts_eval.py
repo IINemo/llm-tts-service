@@ -31,8 +31,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # vLLM imports (optional, only if vLLM is installed)
 try:
-    from vllm import LLM, SamplingParams
     from lm_polygraph.model_adapters import WhiteboxModelvLLM
+    from vllm import LLM, SamplingParams
 
     VLLM_AVAILABLE = True
 except ImportError:
