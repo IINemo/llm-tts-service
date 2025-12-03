@@ -70,6 +70,25 @@ We selected **Qwen2.5-7B**, **Qwen3-8B**, and **Qwen3-32B** for our benchmark be
 
 ### Configuration
 
+**vLLM (Recommended)**
+
+For local evaluations, use vLLM to avoid OOM errors on long reasoning sequences:
+
+```yaml
+# config/model/vllm_qwen3.yaml
+model:
+  type: "vllm"
+  model_path: Qwen/Qwen3-8B  # or Qwen/Qwen2.5-7B, Qwen/Qwen3-32B
+  device: cuda
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
+```
+
+**HuggingFace (Legacy)**
+
 ```yaml
 # config/model/hf_qwen3.yaml
 model:
@@ -77,6 +96,8 @@ model:
   device_map: auto
   torch_dtype: float16
 ```
+
+> **Note**: HuggingFace inference is prone to OOM errors on long reasoning sequences. Use vLLM for production evaluations.
 
 ---
 

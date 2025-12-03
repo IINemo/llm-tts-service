@@ -8,8 +8,51 @@ This document defines the evaluation protocol for comparing test-time compute sc
 - [Models](models.md) - Paper-model matrix for strategy implementations
 - [Metrics](metrics.md) - Accuracy, tokens, FLOPs calculation
 - [Results](results/) - Experiment results by dataset
+- [Inference Backends](#inference-backends) - vLLM vs HuggingFace comparison
 - [Model Configuration](#model-configuration) - Config files for experiments
 - [Strategies](#strategies) - Test-time compute scaling methods
+
+---
+
+## Inference Backends
+
+### vLLM (Recommended for Local Models)
+
+**For all local model evaluations, use vLLM as the inference backend.** vLLM provides significant advantages over standard HuggingFace inference:
+
+| Feature | vLLM | HuggingFace |
+|---------|------|-------------|
+| Memory Management | PagedAttention (efficient) | Standard (OOM-prone) |
+| Long Sequences | Handles 32K+ tokens | Often OOM on long reasoning |
+| Batched Generation | Native support | Limited |
+| Throughput | High | Moderate |
+
+#### Installation
+
+```bash
+pip install "llm-tts-service[vllm]"
+```
+
+#### vLLM Configuration
+
+```yaml
+# config/model/vllm_qwen3.yaml
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  device: cuda
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
+```
+
+> **Why vLLM?** Test-time scaling strategies like DeepConf generate multiple long reasoning traces. vLLM's PagedAttention prevents out-of-memory errors on extended sequences that would crash standard HuggingFace inference.
+
+### API-Based Models
+
+For API-based models (OpenAI, OpenRouter, DeepSeek), use the standard `openai_api` model type. See [config/model/openrouter.yaml](../../config/model/openrouter.yaml) for examples.
 
 ---
 
@@ -17,11 +60,12 @@ This document defines the evaluation protocol for comparing test-time compute sc
 
 ### Configuration Files
 
-- Model config: [config/model/hf_qwen3.yaml](../../config/model/hf_qwen3.yaml)
+- **vLLM config (recommended)**: [config/model/vllm_qwen3.yaml](../../config/model/vllm_qwen3.yaml)
+- HuggingFace config: [config/model/hf_qwen3.yaml](../../config/model/hf_qwen3.yaml)
 - Generation config: [config/generation/default.yaml](../../config/generation/default.yaml)
 - Prompt template: [config/prompts/default.txt](../../config/prompts/default.txt)
 
-> **IMPORTANT**: Do not modify model or generation configurations between experiments to ensure fair comparison.
+> **IMPORTANT**: Do not modify model or generation configurations between experiments to ensure fair comparison. Always use vLLM for local model evaluations to avoid OOM issues on long reasoning sequences.
 
 ---
 
@@ -41,13 +85,29 @@ This document defines the evaluation protocol for comparing test-time compute sc
 
 ## Running Experiments
 
-```bash
-# DeepConf on AIME 2025
-python scripts/run_tts_eval.py \
-    --config-name=experiments/deepconf/deepconf_qwen3_aime2025
+### Local Models (vLLM)
 
-# Self-Consistency on AIME 2025
+```bash
+# DeepConf on AIME 2025 with vLLM (recommended)
 python scripts/run_tts_eval.py \
-    --config-name=experiments/self_consistency/sc_qwen3_aime2025
+    --config-name=experiments/deepconf/deepconf_vllm_qwen3_aime2025
+
+# Self-Consistency on AIME 2025 with vLLM
+python scripts/run_tts_eval.py \
+    --config-name=experiments/self_consistency/sc_vllm_qwen3_aime2025
 ```
+
+### API-Based Models
+
+```bash
+# DeepConf via OpenRouter API
+python scripts/run_tts_eval.py \
+    --config-name=experiments/deepconf/deepconf_api_test
+
+# Self-Consistency via API
+python scripts/run_tts_eval.py \
+    --config-name=experiments/self_consistency/self_consistency_api_test
+```
+
+> **Note**: For local model evaluations, always prefer vLLM configs (`*_vllm_*`) over HuggingFace configs (`*_hf_*`) to avoid OOM errors on long reasoning sequences.
 
