@@ -3,12 +3,10 @@ from typing import Any, Dict, List
 
 import numpy as np
 
-from llm_tts.step_candidate_generator_base import covert_trajectory_to_string
-from llm_tts.step_candidate_generator_through_api import (
+from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
-)
-from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
+    covert_trajectory_to_string,
 )
 
 from .strategy_base import StrategyBase

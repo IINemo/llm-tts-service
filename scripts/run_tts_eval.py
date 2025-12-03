@@ -47,6 +47,11 @@ from llm_tts.evaluation import (
     EvaluatorExactMatch,
     EvaluatorLLMAsAJudge,
 )
+from llm_tts.generators import (
+    StepBoundaryDetector,
+    StepCandidateGeneratorThroughAPI,
+    StepCandidateGeneratorThroughHuggingface,
+)
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import (
     StepScorerPRM,
@@ -54,20 +59,10 @@ from llm_tts.scorers import (
     TotValueScorer,
     TotVoteScorer,
 )
-from llm_tts.step_boundary_detector import StepBoundaryDetector
-from llm_tts.step_candidate_generator_through_api import (
-    StepCandidateGeneratorThroughAPI,
-)
-from llm_tts.step_candidate_generator_through_huggingface import (
-    StepCandidateGeneratorThroughHuggingface,
-)
 
 # vLLM step generator (optional)
 try:
-    from llm_tts.step_candidate_generator_through_vllm import (
-        StepCandidateGeneratorThroughVLLM,
-        StepCandidateGeneratorThroughVLLMWithLogprobs,
-    )
+    from llm_tts.generators import StepCandidateGeneratorThroughVLLM
 
     VLLM_GENERATOR_AVAILABLE = True
 except ImportError:
@@ -274,33 +269,20 @@ def create_model(config):
                 max_tokens_per_step=config.generation.max_new_tokens,
             )
 
-            # Use logprobs generator if uncertainty scoring is needed
-            scorer_type = config.scorer.type if config.scorer else None
-            if scorer_type == "uncertainty":
-                step_generator = StepCandidateGeneratorThroughVLLMWithLogprobs(
-                    vllm_engine=llm,
-                    detector=detector,
-                    temperature=config.generation.temperature,
-                    top_p=config.generation.top_p,
-                    max_new_tokens=config.generation.max_new_tokens,
-                    disable_thinking_mode=config.model.get(
-                        "disable_thinking_mode", True
-                    ),
-                    generation_batch_size=config.generation.get("batch_size", 8),
-                    top_logprobs=config.strategy.get("top_logprobs", 5),
-                )
-            else:
-                step_generator = StepCandidateGeneratorThroughVLLM(
-                    vllm_engine=llm,
-                    detector=detector,
-                    temperature=config.generation.temperature,
-                    top_p=config.generation.top_p,
-                    max_new_tokens=config.generation.max_new_tokens,
-                    disable_thinking_mode=config.model.get(
-                        "disable_thinking_mode", True
-                    ),
-                    generation_batch_size=config.generation.get("batch_size", 8),
-                )
+            # Create sampling params for step generation
+            step_sampling_params = SamplingParams(
+                max_tokens=config.generation.max_new_tokens,
+                temperature=config.generation.temperature,
+                top_p=config.generation.top_p,
+                logprobs=config.strategy.get("top_logprobs", 20),
+                stop=detector.step_patterns,
+            )
+
+            step_generator = StepCandidateGeneratorThroughVLLM(
+                model=llm,
+                detector=detector,
+                sampling_params=step_sampling_params,
+            )
 
             log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
 

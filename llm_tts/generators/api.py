@@ -9,12 +9,12 @@ from typing import Dict, List
 
 from lm_polygraph import BlackboxModel
 
-from llm_tts.step_boundary_detector import StepBoundaryDetector
-from llm_tts.step_candidate_generator_base import (
+from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
     covert_trajectory_to_string,
 )
+from llm_tts.generators.boundary_detector import StepBoundaryDetector
 
 log = logging.getLogger(__name__)
 

@@ -3,8 +3,8 @@ import sys
 import torch
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 
-from llm_tts.step_boundary_detector import StepBoundaryDetector
-from llm_tts.step_candidate_generator_through_huggingface import (
+from llm_tts.generators import (
+    StepBoundaryDetector,
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.strategies.strategy_uncertainty_cot import StrategyUncertaintyCoT

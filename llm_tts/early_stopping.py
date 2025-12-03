@@ -8,7 +8,7 @@ text generation (confidence-based, boundary-based, etc.).
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.generators import StepBoundaryDetector
 
 
 class EarlyStopping(ABC):
