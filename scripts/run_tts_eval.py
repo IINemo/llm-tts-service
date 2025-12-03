@@ -61,6 +61,17 @@ from llm_tts.step_candidate_generator_through_api import (
 from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
 )
+
+# vLLM step generator (optional)
+try:
+    from llm_tts.step_candidate_generator_through_vllm import (
+        StepCandidateGeneratorThroughVLLM,
+        StepCandidateGeneratorThroughVLLMWithLogprobs,
+    )
+
+    VLLM_GENERATOR_AVAILABLE = True
+except ImportError:
+    VLLM_GENERATOR_AVAILABLE = False
 from llm_tts.strategies import (
     PhiDecoding,
     StrategyBeamSearch,
@@ -244,8 +255,55 @@ def create_model(config):
 
         log.info("vLLM model loaded successfully")
 
-        # vLLM doesn't use step generator for DeepConf
+        # Create step generator for non-DeepConf strategies
         step_generator = None
+        if config.strategy.type != "deepconf":
+            if not VLLM_GENERATOR_AVAILABLE:
+                raise ImportError(
+                    "vLLM step generator not available. "
+                    "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
+                )
+
+            detector = StepBoundaryDetector(
+                step_patterns=config.strategy.get(
+                    "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+                ),
+                answer_patterns=config.strategy.get(
+                    "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+                ),
+                max_tokens_per_step=config.generation.max_new_tokens,
+            )
+
+            # Use logprobs generator if uncertainty scoring is needed
+            scorer_type = config.scorer.type if config.scorer else None
+            if scorer_type == "uncertainty":
+                step_generator = StepCandidateGeneratorThroughVLLMWithLogprobs(
+                    vllm_engine=llm,
+                    detector=detector,
+                    temperature=config.generation.temperature,
+                    top_p=config.generation.top_p,
+                    max_new_tokens=config.generation.max_new_tokens,
+                    disable_thinking_mode=config.model.get(
+                        "disable_thinking_mode", True
+                    ),
+                    generation_batch_size=config.generation.get("batch_size", 8),
+                    top_logprobs=config.strategy.get("top_logprobs", 5),
+                )
+            else:
+                step_generator = StepCandidateGeneratorThroughVLLM(
+                    vllm_engine=llm,
+                    detector=detector,
+                    temperature=config.generation.temperature,
+                    top_p=config.generation.top_p,
+                    max_new_tokens=config.generation.max_new_tokens,
+                    disable_thinking_mode=config.model.get(
+                        "disable_thinking_mode", True
+                    ),
+                    generation_batch_size=config.generation.get("batch_size", 8),
+                )
+
+            log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
+
         return model, step_generator
 
     elif config.model.type == "local":
