@@ -1,5 +1,7 @@
 # Datasets
 
+All datasets are available in our HuggingFace collection: [test-time-compute](https://huggingface.co/test-time-compute)
+
 ## Mathematical Reasoning
 
 | Dataset | Size | Answer Type | Release | Notes |
