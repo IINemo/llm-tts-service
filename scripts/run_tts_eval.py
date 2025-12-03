@@ -48,7 +48,6 @@ from llm_tts.evaluation import (
     EvaluatorLLMAsAJudge,
 )
 from llm_tts.generators import (
-    StepBoundaryDetector,
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
 )
@@ -59,6 +58,7 @@ from llm_tts.scorers import (
     TotValueScorer,
     TotVoteScorer,
 )
+from llm_tts.step_boundary_detector import StepBoundaryDetector
 
 # vLLM step generator (optional)
 try:

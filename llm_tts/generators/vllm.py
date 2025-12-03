@@ -8,7 +8,7 @@ from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
 )
-from llm_tts.generators.boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detector import StepBoundaryDetector
 
 # log = logging.getLogger(__name__)
 

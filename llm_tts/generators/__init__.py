@@ -20,7 +20,6 @@ from llm_tts.generators.base import (
     StepCandidateGeneratorBase,
     covert_trajectory_to_string,
 )
-from llm_tts.generators.boundary_detector import StepBoundaryDetector
 from llm_tts.generators.huggingface import StepCandidateGeneratorThroughHuggingface
 
 # vLLM generators (optional)
@@ -35,6 +34,5 @@ __all__ = [
     "StepCandidateGeneratorThroughAPI",
     "StepCandidateGeneratorThroughHuggingface",
     "StepCandidateGeneratorThroughVLLM",
-    "StepBoundaryDetector",
     "covert_trajectory_to_string",
 ]

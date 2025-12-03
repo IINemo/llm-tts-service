@@ -14,7 +14,7 @@ from llm_tts.generators.base import (
     StepCandidateGeneratorBase,
     covert_trajectory_to_string,
 )
-from llm_tts.generators.boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detector import StepBoundaryDetector
 
 log = logging.getLogger(__name__)
 
