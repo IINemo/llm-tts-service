@@ -226,6 +226,8 @@ class StrategySelfConsistency(StrategyBase):
                     f"  Path {i+1}/{self.num_paths}: "
                     f"tokens={num_tokens}, answer={answer}"
                 )
+                # Log full trace text (like DeepConf)
+                log.info(f"{text}")
             else:
                 log.warning(f"  Empty generation for path {i+1}/{self.num_paths}")
 
