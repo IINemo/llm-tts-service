@@ -218,7 +218,7 @@ def create_model(config):
 
         log.info(f"Loading vLLM model: {config.model.model_path}")
 
-        # Initialize vLLM engine
+        # Initialize vLLM engine with seed for reproducibility
         llm = LLM(
             model=config.model.model_path,
             gpu_memory_utilization=config.model.get("gpu_memory_utilization", 0.9),
@@ -226,6 +226,7 @@ def create_model(config):
             enable_prefix_caching=config.model.get("enable_prefix_caching", True),
             trust_remote_code=config.model.get("trust_remote_code", True),
             max_model_len=config.model.get("max_model_len", 32768),
+            seed=config.system.seed,  # Reproducibility
         )
 
         # Create sampling params (will be updated by strategy)
@@ -234,6 +235,7 @@ def create_model(config):
             temperature=config.generation.temperature,
             top_p=config.generation.top_p,
             logprobs=config.strategy.get("top_logprobs", 20),
+            seed=config.system.seed,  # Reproducibility
         )
 
         # Wrap with lm-polygraph adapter
