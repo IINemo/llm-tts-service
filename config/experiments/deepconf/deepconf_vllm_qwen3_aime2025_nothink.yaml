@@ -33,11 +33,13 @@ system:
   device: cuda
   seed: 42
 
-# Generation configuration
+# Generation configuration (non-thinking mode: temp=0.7, top_p=0.8, top_k=20)
+# See: https://huggingface.co/Qwen/Qwen3-8B
 generation:
   max_new_tokens: 32768  # AIME problems require more tokens
-  temperature: 0.6
-  top_p: 0.95
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
   batch_size: 1
   max_length: 8192
 
@@ -50,10 +52,10 @@ strategy:
   mode: "offline"  # Generate all traces, filter by confidence, weighted vote
   budget: 16  # Number of reasoning traces to generate (all in ONE vLLM call!)
 
-  # Generation parameters
+  # Generation parameters (non-thinking mode)
   window_size: 2048  # Sliding window for confidence computation
-  temperature: 0.6  # Sampling temperature for diversity
-  top_p: 0.95  # Nucleus sampling
+  temperature: 0.7  # Non-thinking mode standard
+  top_p: 0.8  # Non-thinking mode standard
   max_tokens: 32768  # vLLM handles long sequences efficiently
   top_logprobs: 20  # Required for confidence computation
 
