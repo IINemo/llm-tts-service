@@ -144,6 +144,7 @@ class StrategyDeepConf(StrategyBase):
         confidence_percentile: Optional[int] = None,
         confidence_threshold: Optional[float] = None,
         n_threads: int = 8,
+        disable_thinking_mode: bool = True,
     ):
         """
         Initialize DeepConf strategy.
@@ -178,6 +179,7 @@ class StrategyDeepConf(StrategyBase):
         self.filter_method = filter_method
         self.confidence_threshold = confidence_threshold
         self.n_threads = n_threads
+        self.disable_thinking_mode = disable_thinking_mode
 
         # Validate model supports logprobs (for API models) or has required attributes (for local)
         if isinstance(model, BlackboxModel):
@@ -753,8 +755,14 @@ class StrategyDeepConf(StrategyBase):
 
         # Prepare the prompt with chat template
         messages = [{"role": "user", "content": prompt}]
+
+        # Apply chat template with enable_thinking parameter for Qwen3 models
+        # Pass enable_thinking=False if disable_thinking_mode is True
         formatted_prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=not self.disable_thinking_mode,
         )
 
         # Create sampling params for batch generation
