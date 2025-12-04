@@ -41,6 +41,7 @@ class StrategySelfConsistency(StrategyBase):
         generation_batch_size: int = None,
         scorer: Optional[Any] = None,
         n_threads: int = None,
+        disable_thinking_mode: bool = True,
     ):
         """
         Initialize self-consistency strategy.
@@ -53,6 +54,7 @@ class StrategySelfConsistency(StrategyBase):
             generation_batch_size: Batch size for generation (None = all at once)
             scorer: Custom scorer for answer selection (defaults to majority voting)
             n_threads: Number of parallel threads for API calls (None = defaults to 4)
+            disable_thinking_mode: Disable Qwen3 thinking mode (default True)
         """
         self.model = model
         self.num_paths = num_paths
@@ -61,6 +63,7 @@ class StrategySelfConsistency(StrategyBase):
         self.generation_batch_size = generation_batch_size or num_paths
         # Default to 4 threads (conservative to avoid API overload/deadlock)
         self.n_threads = n_threads if n_threads is not None else 4
+        self.disable_thinking_mode = disable_thinking_mode
 
         # Use majority voting scorer by default
         self.scorer = scorer or ChainMajorityVotingScorer()
@@ -181,8 +184,12 @@ class StrategySelfConsistency(StrategyBase):
         else:
             messages = [{"role": "user", "content": prompt}]
 
+        # Apply chat template with enable_thinking parameter for Qwen3 models
         formatted_prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=not self.disable_thinking_mode,
         )
 
         # Create sampling params for batch generation

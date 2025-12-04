@@ -26,17 +26,20 @@ model:
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 32768
+  disable_thinking_mode: true  # Disable Qwen3 thinking mode
 
 # System configuration
 system:
   device: cuda
   seed: 42
 
-# Generation configuration
+# Generation configuration (non-thinking mode: temp=0.7, top_p=0.8, top_k=20)
+# See: https://huggingface.co/Qwen/Qwen3-8B
 generation:
   max_new_tokens: 32768  # AIME problems require more tokens
-  temperature: 0.6  # Matching DeepConf
-  top_p: 0.95
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
   batch_size: 1
   max_length: 8192
 
@@ -48,7 +51,7 @@ strategy:
   type: self_consistency
   num_paths: 16  # Number of reasoning paths (all in ONE vLLM call!)
   max_new_tokens: 32768  # vLLM handles long sequences efficiently
-  temperature: 0.6  # Sampling temperature (matching DeepConf)
+  temperature: 0.7  # Non-thinking mode standard
   generation_batch_size: null  # Not used for vLLM
   n_threads: 1  # Not used for vLLM (single batched call)
 

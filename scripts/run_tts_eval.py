@@ -452,6 +452,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
             generation_batch_size=config.strategy.get("generation_batch_size", None),
             scorer=scorer,
             n_threads=config.strategy.get("n_threads", None),
+            disable_thinking_mode=config.model.get("disable_thinking_mode", False),
         )
     elif config.strategy.type == "tree_of_thoughts":
         # Tree-of-Thoughts requires API-based model for state evaluation
