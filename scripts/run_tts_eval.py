@@ -384,6 +384,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
             max_tokens=config.strategy.get("max_tokens", 512),
             top_logprobs=config.strategy.get("top_logprobs", 20),
             n_threads=config.strategy.get("n_threads", 8),
+            disable_thinking_mode=config.model.get("disable_thinking_mode", False),
         )
 
     elif config.strategy.type == "beam_search":
