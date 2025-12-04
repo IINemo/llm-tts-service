@@ -42,6 +42,7 @@ class StrategySelfConsistency(StrategyBase):
         scorer: Optional[Any] = None,
         n_threads: int = None,
         disable_thinking_mode: bool = True,
+        seed: int = 42,
     ):
         """
         Initialize self-consistency strategy.
@@ -55,6 +56,7 @@ class StrategySelfConsistency(StrategyBase):
             scorer: Custom scorer for answer selection (defaults to majority voting)
             n_threads: Number of parallel threads for API calls (None = defaults to 4)
             disable_thinking_mode: Disable Qwen3 thinking mode (default True)
+            seed: Random seed for reproducibility (default 42)
         """
         self.model = model
         self.num_paths = num_paths
@@ -64,6 +66,7 @@ class StrategySelfConsistency(StrategyBase):
         # Default to 4 threads (conservative to avoid API overload/deadlock)
         self.n_threads = n_threads if n_threads is not None else 4
         self.disable_thinking_mode = disable_thinking_mode
+        self.seed = seed
 
         # Use majority voting scorer by default
         self.scorer = scorer or ChainMajorityVotingScorer()
@@ -200,6 +203,7 @@ class StrategySelfConsistency(StrategyBase):
             max_tokens=self.max_new_tokens,
             stop=["<end of response>", "</end of response>"],  # Early stopping
             include_stop_str_in_output=True,
+            seed=self.seed,  # Reproducibility
         )
 
         log.info(
