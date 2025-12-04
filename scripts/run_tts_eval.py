@@ -1,7 +1,20 @@
 #!/usr/bin/env python3
+# flake8: noqa: E402
+# E402: Module level import not at top of file
+# This is intentional - we must set multiprocessing method before CUDA imports
+
+# IMPORTANT: Set multiprocessing method BEFORE any CUDA imports
+# This is required for vLLM which uses multiprocessing internally
+import os
+
+os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+
+import multiprocessing
+
+if multiprocessing.get_start_method(allow_none=True) is None:
+    multiprocessing.set_start_method("spawn")
 
 import logging
-import os
 import random
 import traceback
 from datetime import datetime
@@ -18,6 +31,15 @@ from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# vLLM imports (optional, only if vLLM is installed)
+try:
+    from lm_polygraph.model_adapters import WhiteboxModelvLLM
+    from vllm import LLM, SamplingParams
+
+    VLLM_AVAILABLE = True
+except ImportError:
+    VLLM_AVAILABLE = False
 from utils.results import load_results_json, parse_resume_arguments, save_results_json
 
 from llm_tts.evaluation import (
@@ -184,12 +206,51 @@ def create_scorer(config):
 
 
 def create_model(config):
-    if config.model.type == "local":
+    if config.model.type == "vllm":
+        # vLLM backend - fast inference with PagedAttention
+        if not VLLM_AVAILABLE:
+            raise ImportError("vLLM not installed. Run: pip install vllm")
+
+        log.info(f"Loading vLLM model: {config.model.model_path}")
+
+        # Initialize vLLM engine
+        llm = LLM(
+            model=config.model.model_path,
+            gpu_memory_utilization=config.model.get("gpu_memory_utilization", 0.9),
+            tensor_parallel_size=config.model.get("tensor_parallel_size", 1),
+            enable_prefix_caching=config.model.get("enable_prefix_caching", True),
+            trust_remote_code=config.model.get("trust_remote_code", True),
+            max_model_len=config.model.get("max_model_len", 32768),
+        )
+
+        # Create sampling params (will be updated by strategy)
+        sampling_params = SamplingParams(
+            max_tokens=config.generation.max_new_tokens,
+            temperature=config.generation.temperature,
+            top_p=config.generation.top_p,
+            logprobs=config.strategy.get("top_logprobs", 20),
+        )
+
+        # Wrap with lm-polygraph adapter
+        model = WhiteboxModelvLLM(
+            model=llm,
+            sampling_params=sampling_params,
+            device=config.model.get("device", "cuda"),
+        )
+
+        # Mark as vLLM model for strategy detection
+        model.is_vllm = True
+        model.vllm_engine = llm
+
+        log.info("vLLM model loaded successfully")
+
+        # vLLM doesn't use step generator for DeepConf
+        step_generator = None
+        return model, step_generator
+
+    elif config.model.type == "local":
         scorer_type = config.scorer.type if config.scorer else None
-        if (
-            scorer_type == "uncertainty"
-            or scorer_type == "uncertainty_pd"
-        ):
+        if scorer_type == "uncertainty" or scorer_type == "uncertainty_pd":
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
@@ -523,12 +584,16 @@ def generate_trajectories(
         log.info("\n" + "=" * 60)
         log.info(f"FINAL ANSWER: {generated_text}")
         log.info(f"Gold answer:  {gold_answer_num}")
-        log.info(f"Correct:      {'✓ YES' if str(generated_text) == str(gold_answer_num) else '✗ NO'}")
+        log.info(
+            f"Correct:      {'✓ YES' if str(generated_text) == str(gold_answer_num) else '✗ NO'}"
+        )
         log.info("-" * 60)
         log.info(f"Num traces: {len(result['steps'])}")
         if "validity_scores" in result and result["validity_scores"]:
             scores = result["validity_scores"]
-            log.info(f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}")
+            log.info(
+                f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
+            )
         log.info("=" * 60)
 
         # Store result WITHOUT correctness check
@@ -807,7 +872,9 @@ def main(config):
         if subset:
             end_idx = min(start_idx + subset, len(dataset))
         dataset = dataset.select(range(start_idx, end_idx))
-        log.info(f"Dataset: using samples {start_idx} to {end_idx-1} ({len(dataset)} samples)")
+        log.info(
+            f"Dataset: using samples {start_idx} to {end_idx-1} ({len(dataset)} samples)"
+        )
 
     prompt_template = (
         load_prompt_template(config.dataset.prompt_file)
