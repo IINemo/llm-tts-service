@@ -9,9 +9,54 @@ This document defines the evaluation protocol for comparing test-time compute sc
 - [Metrics](metrics.md) - Accuracy, tokens, FLOPs calculation
 - [WandB](wandb.md) - Logging conventions and upload workflow
 - [Results](results/) - Experiment results by dataset
+- [Reproducibility](#reproducibility) - Seed and determinism settings
 - [Inference Backends](#inference-backends) - vLLM vs HuggingFace comparison
 - [Model Configuration](#model-configuration) - Config files for experiments
 - [Strategies](#strategies) - Test-time compute scaling methods
+
+---
+
+## Reproducibility
+
+For reproducible experiments, always use `seed=42` in the system configuration. The seed is propagated to all components:
+
+### Seed Propagation
+
+| Component | How Seed is Used |
+|-----------|------------------|
+| Python `random` | `random.seed(seed)` |
+| NumPy | `np.random.seed(seed)` |
+| PyTorch | `torch.manual_seed(seed)` + CUDA seeds |
+| vLLM SamplingParams | `seed=seed` parameter |
+| Strategy (DeepConf) | Passed to `SamplingParams` for trace generation |
+| Strategy (Self-Consistency) | Passed to `SamplingParams` for path generation |
+
+### Configuration
+
+```yaml
+# config/system/default.yaml
+system:
+  seed: 42  # REQUIRED: Always use seed=42 for reproducibility
+  device: cuda
+  hf_cache: ~/.cache/huggingface
+```
+
+### Verification Checklist
+
+Before running experiments, verify that:
+
+1. **System seed is set**: `config.system.seed = 42`
+2. **vLLM uses seed**: Check that `SamplingParams(seed=...)` is passed
+3. **Strategy receives seed**: DeepConf and Self-Consistency strategies should have `seed` parameter
+
+### Why Seed Matters
+
+Without a fixed seed, strategies that use sampling (temperature > 0) will produce different results across runs. This makes it impossible to:
+- Compare strategy performance fairly
+- Debug issues in generation
+- Reproduce reported results
+
+> **IMPORTANT**: All experiments in the results tables were run with `seed=42`. If you need to run multiple trials, use seeds `[42, 43, 44, ...]` and report mean/std.
 
 ---
 
