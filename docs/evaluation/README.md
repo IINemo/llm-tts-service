@@ -50,7 +50,12 @@ model:
 
 ### Step 3: Configure Generation Parameters
 
-Use model-specific recommended parameters. For Qwen3 non-thinking mode:
+Use model-specific recommended parameters. For Qwen3, parameters depend on thinking mode ([source](https://huggingface.co/Qwen/Qwen3-8B)):
+
+| Mode | Temperature | top_p | top_k | Note |
+|------|-------------|-------|-------|------|
+| Non-thinking | 0.7 | 0.8 | 20 | DO NOT use greedy decoding |
+| Thinking | 0.6 | 0.95 | 20 | For thinking mode |
 
 ```yaml
 # config/generation/qwen3_nothink.yaml
