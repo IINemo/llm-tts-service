@@ -70,6 +70,14 @@ We selected **Qwen2.5-7B**, **Qwen3-8B**, and **Qwen3-32B** for our benchmark be
 
 ### Configuration
 
+> **Important**: For Qwen3 models, always use **non-thinking mode** (`disable_thinking_mode: true`). This disables the internal reasoning phase and produces direct answers.
+>
+> According to the [Qwen3-8B model card](https://huggingface.co/Qwen/Qwen3-8B):
+> - **Non-thinking mode**: Temperature=0.7, TopP=0.8, TopK=20, MinP=0
+> - **Thinking mode**: Temperature=0.6, TopP=0.95, TopK=20, MinP=0
+>
+> **DO NOT use greedy decoding** (temperature=0), as it can lead to performance degradation and endless repetitions.
+
 **vLLM (Recommended)**
 
 For local evaluations, use vLLM to avoid OOM errors on long reasoning sequences:
@@ -85,6 +93,10 @@ model:
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 32768
+  disable_thinking_mode: true  # Required for Qwen3 models
+
+generation:
+  temperature: 0.7  # Standard for non-thinking mode
 ```
 
 **HuggingFace (Legacy)**
