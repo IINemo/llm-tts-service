@@ -5,15 +5,11 @@ import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from llm_tts.step_candidate_generator_base import (
+from llm_tts.generators import (
     StepCandidate,
-    covert_trajectory_to_string,
-)
-from llm_tts.step_candidate_generator_through_api import (
     StepCandidateGeneratorThroughAPI,
-)
-from llm_tts.step_candidate_generator_through_huggingface import (
     StepCandidateGeneratorThroughHuggingface,
+    covert_trajectory_to_string,
 )
 
 from .strategy_base import StrategyBase

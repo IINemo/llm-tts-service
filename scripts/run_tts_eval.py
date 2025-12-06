@@ -47,6 +47,10 @@ from llm_tts.evaluation import (
     EvaluatorExactMatch,
     EvaluatorLLMAsAJudge,
 )
+from llm_tts.generators import (
+    StepCandidateGeneratorThroughAPI,
+    StepCandidateGeneratorThroughHuggingface,
+)
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import (
     StepScorerPRM,
@@ -55,12 +59,14 @@ from llm_tts.scorers import (
     TotVoteScorer,
 )
 from llm_tts.step_boundary_detector import StepBoundaryDetector
-from llm_tts.step_candidate_generator_through_api import (
-    StepCandidateGeneratorThroughAPI,
-)
-from llm_tts.step_candidate_generator_through_huggingface import (
-    StepCandidateGeneratorThroughHuggingface,
-)
+
+# vLLM step generator (optional)
+try:
+    from llm_tts.generators import StepCandidateGeneratorThroughVLLM
+
+    VLLM_GENERATOR_AVAILABLE = True
+except ImportError:
+    VLLM_GENERATOR_AVAILABLE = False
 from llm_tts.strategies import (
     PhiDecoding,
     StrategyBeamSearch,
@@ -244,8 +250,42 @@ def create_model(config):
 
         log.info("vLLM model loaded successfully")
 
-        # vLLM doesn't use step generator for DeepConf
+        # Create step generator for non-DeepConf strategies
         step_generator = None
+        if config.strategy.type != "deepconf":
+            if not VLLM_GENERATOR_AVAILABLE:
+                raise ImportError(
+                    "vLLM step generator not available. "
+                    "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
+                )
+
+            detector = StepBoundaryDetector(
+                step_patterns=config.strategy.get(
+                    "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+                ),
+                answer_patterns=config.strategy.get(
+                    "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+                ),
+                max_tokens_per_step=config.generation.max_new_tokens,
+            )
+
+            # Create sampling params for step generation
+            step_sampling_params = SamplingParams(
+                max_tokens=config.generation.max_new_tokens,
+                temperature=config.generation.temperature,
+                top_p=config.generation.top_p,
+                logprobs=config.strategy.get("top_logprobs", 20),
+                stop=detector.step_patterns,
+            )
+
+            step_generator = StepCandidateGeneratorThroughVLLM(
+                model=llm,
+                detector=detector,
+                sampling_params=step_sampling_params,
+            )
+
+            log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
+
         return model, step_generator
 
     elif config.model.type == "local":
