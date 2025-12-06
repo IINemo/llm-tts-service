@@ -4,6 +4,11 @@ Self-consistency strategy for LLM reasoning.
 Based on "Self-Consistency Improves Chain of Thought Reasoning in Language Models"
 by Wang et al. (2022). Generates multiple diverse reasoning paths and selects
 the most consistent answer via majority voting.
+
+Supports multiple backends:
+- API-based models (OpenAI, OpenRouter) via BlackboxModelWithStreaming
+- Local HuggingFace models via WhiteboxModel
+- vLLM for efficient batched generation (recommended for local models)
 """
 
 import logging
@@ -36,6 +41,8 @@ class StrategySelfConsistency(StrategyBase):
         generation_batch_size: int = None,
         scorer: Optional[Any] = None,
         n_threads: int = None,
+        disable_thinking_mode: bool = True,
+        seed: int = 42,
     ):
         """
         Initialize self-consistency strategy.
@@ -48,6 +55,8 @@ class StrategySelfConsistency(StrategyBase):
             generation_batch_size: Batch size for generation (None = all at once)
             scorer: Custom scorer for answer selection (defaults to majority voting)
             n_threads: Number of parallel threads for API calls (None = defaults to 4)
+            disable_thinking_mode: Disable Qwen3 thinking mode (default True)
+            seed: Random seed for reproducibility (default 42)
         """
         self.model = model
         self.num_paths = num_paths
@@ -56,6 +65,8 @@ class StrategySelfConsistency(StrategyBase):
         self.generation_batch_size = generation_batch_size or num_paths
         # Default to 4 threads (conservative to avoid API overload/deadlock)
         self.n_threads = n_threads if n_threads is not None else 4
+        self.disable_thinking_mode = disable_thinking_mode
+        self.seed = seed
 
         # Use majority voting scorer by default
         self.scorer = scorer or ChainMajorityVotingScorer()
@@ -146,6 +157,87 @@ class StrategySelfConsistency(StrategyBase):
             log.error(f"  Error generating path {i+1}/{total}: {e}")
             return None
 
+    def _generate_paths_vllm(self, prompt: str) -> List[str]:
+        """
+        Generate multiple reasoning paths using vLLM batched generation.
+
+        vLLM generates all paths in a single batched call with:
+        - PagedAttention for memory efficiency (no OOM on long sequences)
+        - Continuous batching for high throughput
+        - Prefix caching for shared prompts
+
+        Args:
+            prompt: Input prompt (string or list of messages)
+
+        Returns:
+            List of generated reasoning path texts
+        """
+        from vllm import SamplingParams
+
+        log.info(f"🚀 vLLM batch generation: {self.num_paths} paths...")
+
+        # Get the vLLM engine
+        llm = self.model.vllm_engine
+        tokenizer = llm.get_tokenizer()
+
+        # Prepare the prompt with chat template
+        if isinstance(prompt, list):
+            # Already in message format
+            messages = prompt
+        else:
+            messages = [{"role": "user", "content": prompt}]
+
+        # Apply chat template with enable_thinking parameter for Qwen3 models
+        formatted_prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=not self.disable_thinking_mode,
+        )
+
+        # Create sampling params for batch generation
+        sampling_params = SamplingParams(
+            n=self.num_paths,  # Generate all paths in ONE call
+            temperature=self.temperature,
+            top_p=0.95,
+            max_tokens=self.max_new_tokens,
+            stop=["<end of response>", "</end of response>"],  # Early stopping
+            include_stop_str_in_output=True,
+            seed=self.seed,  # Reproducibility
+        )
+
+        log.info(
+            f"  Generating with params: n={self.num_paths}, "
+            f"temp={self.temperature}, max_tokens={self.max_new_tokens}"
+        )
+
+        # Single call generates all paths in parallel
+        outputs = llm.generate([formatted_prompt], sampling_params)
+
+        # Import answer extraction for logging
+        from llm_tts.utils import extract_answer
+
+        # Extract generated texts
+        paths = []
+        for i, output in enumerate(outputs[0].outputs):
+            text = output.text
+            if text:
+                paths.append(text)
+                # Extract answer for logging (like DeepConf)
+                answer = extract_answer(text, answer_format="auto") or "no_answer"
+                num_tokens = len(output.token_ids)
+                log.info(
+                    f"  Path {i+1}/{self.num_paths}: "
+                    f"tokens={num_tokens}, answer={answer}"
+                )
+                # Log full trace text (like DeepConf)
+                log.info(f"{text}")
+            else:
+                log.warning(f"  Empty generation for path {i+1}/{self.num_paths}")
+
+        log.info(f"✅ vLLM generated {len(paths)}/{self.num_paths} paths successfully")
+        return paths
+
     def generate_reasoning_paths(self, prompt: str) -> List[str]:
         """
         Generate multiple diverse reasoning paths for the given prompt.
@@ -160,6 +252,10 @@ class StrategySelfConsistency(StrategyBase):
             f"Generating {self.num_paths} reasoning paths "
             f"with temperature {self.temperature}"
         )
+
+        # Check if this is a vLLM model (preferred for local inference)
+        if hasattr(self.model, "is_vllm") and self.model.is_vllm:
+            return self._generate_paths_vllm(prompt)
 
         # Check if this is an API-based model
         if isinstance(self.model, BlackboxModelWithStreaming):
@@ -411,6 +507,9 @@ class StrategySelfConsistency(StrategyBase):
             "validity_scores": [result["consensus_score"]],  # Consensus as validity
             "completed": bool(reasoning_paths),
             "strategy": "self_consistency",
+            "extracted_answer": result[
+                "best_answer"
+            ],  # For run_tts_eval.py compatibility
             "metadata": builder.build(),
         }
 

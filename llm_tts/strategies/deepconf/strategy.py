@@ -144,6 +144,8 @@ class StrategyDeepConf(StrategyBase):
         confidence_percentile: Optional[int] = None,
         confidence_threshold: Optional[float] = None,
         n_threads: int = 8,
+        disable_thinking_mode: bool = True,
+        seed: int = 42,
     ):
         """
         Initialize DeepConf strategy.
@@ -163,6 +165,8 @@ class StrategyDeepConf(StrategyBase):
             filter_method: Filtering method ("topK", "threshold", or specific like "top10")
             confidence_threshold: Manual confidence threshold (optional)
             n_threads: Number of threads for parallel API requests (default: 8)
+            disable_thinking_mode: Whether to disable thinking mode for models like Qwen3
+            seed: Random seed for reproducibility (default: 42)
         """
         self.model = model
         self.mode = mode.lower()
@@ -178,6 +182,8 @@ class StrategyDeepConf(StrategyBase):
         self.filter_method = filter_method
         self.confidence_threshold = confidence_threshold
         self.n_threads = n_threads
+        self.disable_thinking_mode = disable_thinking_mode
+        self.seed = seed
 
         # Validate model supports logprobs (for API models) or has required attributes (for local)
         if isinstance(model, BlackboxModel):
@@ -753,8 +759,14 @@ class StrategyDeepConf(StrategyBase):
 
         # Prepare the prompt with chat template
         messages = [{"role": "user", "content": prompt}]
+
+        # Apply chat template with enable_thinking parameter for Qwen3 models
+        # Pass enable_thinking=False if disable_thinking_mode is True
         formatted_prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=not self.disable_thinking_mode,
         )
 
         # Create sampling params for batch generation
@@ -767,6 +779,7 @@ class StrategyDeepConf(StrategyBase):
             logprobs=self.top_logprobs,
             stop=["<end of response>", "</end of response>"],  # Early stopping
             include_stop_str_in_output=True,  # Keep the stop string in output
+            seed=self.seed,  # Reproducibility
         )
 
         # Single call generates all traces in parallel
