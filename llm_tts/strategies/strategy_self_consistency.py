@@ -217,15 +217,17 @@ class StrategySelfConsistency(StrategyBase):
         # Import answer extraction for logging
         from llm_tts.utils import extract_answer
 
-        # Extract generated texts
+        # Extract generated texts with token counts
         paths = []
+        total_tokens = 0
         for i, output in enumerate(outputs[0].outputs):
             text = output.text
             if text:
-                paths.append(text)
+                num_tokens = len(output.token_ids)
+                total_tokens += num_tokens
+                paths.append({"text": text, "num_tokens": num_tokens})
                 # Extract answer for logging (like DeepConf)
                 answer = extract_answer(text, answer_format="auto") or "no_answer"
-                num_tokens = len(output.token_ids)
                 log.info(
                     f"  Path {i+1}/{self.num_paths}: "
                     f"tokens={num_tokens}, answer={answer}"
@@ -236,6 +238,9 @@ class StrategySelfConsistency(StrategyBase):
                 log.warning(f"  Empty generation for path {i+1}/{self.num_paths}")
 
         log.info(f"✅ vLLM generated {len(paths)}/{self.num_paths} paths successfully")
+        log.info(
+            f"  Total tokens: {total_tokens}, Average: {total_tokens/len(paths):.0f} tokens/path"
+        )
         return paths
 
     def generate_reasoning_paths(self, prompt: str) -> List[str]:
@@ -372,12 +377,12 @@ class StrategySelfConsistency(StrategyBase):
 
             return valid_paths
 
-    def select_best_answer(self, reasoning_paths: List[str]) -> Dict[str, Any]:
+    def select_best_answer(self, reasoning_paths: List) -> Dict[str, Any]:
         """
         Select the best answer using majority voting across reasoning paths.
 
         Args:
-            reasoning_paths: List of complete reasoning paths
+            reasoning_paths: List of reasoning paths (strings or dicts with 'text' and 'num_tokens')
 
         Returns:
             Dictionary containing:
@@ -386,6 +391,7 @@ class StrategySelfConsistency(StrategyBase):
                 - consensus_score: Confidence based on answer frequency
                 - all_answers: All extracted answers for debugging
                 - answer_distribution: Answer frequency distribution
+                - all_traces: List of dicts with text, num_tokens, answer for each path
         """
         if not reasoning_paths:
             return {
@@ -394,21 +400,33 @@ class StrategySelfConsistency(StrategyBase):
                 "consensus_score": 0.0,
                 "all_answers": [],
                 "answer_distribution": {},
+                "all_traces": [],
             }
 
+        # Handle both string and dict formats (vLLM returns dicts with token counts)
+        path_texts = []
+        path_tokens = []
+        for p in reasoning_paths:
+            if isinstance(p, dict):
+                path_texts.append(p.get("text", ""))
+                path_tokens.append(p.get("num_tokens", 0))
+            else:
+                path_texts.append(p)
+                path_tokens.append(0)  # No token info for non-vLLM paths
+
         # Use the scorer to get consensus scores
-        scores = self.scorer.score_complete_chains(reasoning_paths)
+        scores = self.scorer.score_complete_chains(path_texts)
 
         # Find the path with highest consensus
         best_idx = np.argmax(scores)
-        best_path = reasoning_paths[best_idx]
+        best_path = path_texts[best_idx]
         best_score = scores[best_idx]
 
         # Extract the best answer
         best_answer = self.scorer.extract_answer(best_path)
 
         # Get all answers for analysis
-        all_answers = [self.scorer.extract_answer(path) for path in reasoning_paths]
+        all_answers = [self.scorer.extract_answer(path) for path in path_texts]
 
         # Calculate answer distribution
         from collections import Counter
@@ -421,14 +439,34 @@ class StrategySelfConsistency(StrategyBase):
         log.info(f"Best answer: {best_answer}")
         log.info(f"Answer distribution: {dict(answer_counts)}")
 
+        # Build all_traces with token info
+        all_traces = []
+        for i, (text, tokens, answer) in enumerate(
+            zip(path_texts, path_tokens, all_answers)
+        ):
+            all_traces.append(
+                {
+                    "text": text,
+                    "num_tokens": tokens,
+                    "answer": answer,
+                    "score": float(scores[i]),
+                    "selected": i == best_idx,
+                }
+            )
+
+        total_tokens = sum(path_tokens)
+        log.info(f"Total tokens across all paths: {total_tokens}")
+
         return {
             "best_path": best_path,
             "best_answer": best_answer,
             "consensus_score": best_score,
             "all_answers": all_answers,
             "answer_distribution": dict(answer_counts),
-            "all_paths": reasoning_paths,
+            "all_paths": path_texts,
             "all_scores": scores,
+            "all_traces": all_traces,
+            "total_tokens": total_tokens,
         }
 
     def generate_trajectory(self, prompt: str) -> Dict[str, Any]:
@@ -511,6 +549,8 @@ class StrategySelfConsistency(StrategyBase):
                 "best_answer"
             ],  # For run_tts_eval.py compatibility
             "metadata": builder.build(),
+            "all_traces": result.get("all_traces", []),  # Token info per path
+            "total_tokens": result.get("total_tokens", 0),  # Total tokens for sample
         }
 
     def cleanup(self):

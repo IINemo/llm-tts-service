@@ -1,17 +1,16 @@
 # @package _global_
-# DeepConf Offline Mode: Qwen3-8B via vLLM on AIME 2025
-# Fast inference with PagedAttention - no OOM on long sequences
+# DeepConf Offline Mode: Qwen3-8B via vLLM on MATH-500
 
 defaults:
   - /config
-  - /dataset/aime_2025
+  - /dataset/math_500
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
   - _self_
 
 # Run naming
-run_name: "aime2025_deepconf_vllm_b${strategy.budget}_${now:%H-%M-%S}"
+run_name: "math500_deepconf_vllm_b${strategy.budget}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -33,11 +32,12 @@ system:
   device: cuda
   seed: 42
 
-# Generation configuration
+# Generation configuration (non-thinking mode: temp=0.7, top_p=0.8, top_k=20)
 generation:
-  max_new_tokens: 32768  # AIME problems require more tokens
-  temperature: 0.6
-  top_p: 0.95
+  max_new_tokens: 32768
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
   batch_size: 1
   max_length: 8192
 
@@ -48,12 +48,12 @@ scorer: null
 strategy:
   type: deepconf
   mode: "offline"  # Generate all traces, filter by confidence, weighted vote
-  budget: 16  # Number of reasoning traces to generate (all in ONE vLLM call!)
+  budget: 16  # Number of reasoning traces to generate
 
   # Generation parameters
   window_size: 2048  # Sliding window for confidence computation
-  temperature: 0.6  # Sampling temperature for diversity
-  top_p: 0.95  # Nucleus sampling
+  temperature: 0.7  # Sampling temperature for diversity
+  top_p: 0.8  # Nucleus sampling
   max_tokens: 32768  # vLLM handles long sequences efficiently
   top_logprobs: 20  # Required for confidence computation
 
@@ -63,9 +63,11 @@ strategy:
 
 # Dataset configuration
 dataset:
-  subset: 30  # All AIME 2025 problems
-  offset: 0  # Start from beginning
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/default.txt"
+  subset: 500  # All MATH-500 problems
+  offset: 0
+  question_field: "problem"
+  answer_field: "answer"
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
 
 # Evaluation configuration
 evaluation:
