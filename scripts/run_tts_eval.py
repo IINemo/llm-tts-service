@@ -426,7 +426,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
             max_tokens=config.strategy.get("max_tokens", 512),
             top_logprobs=config.strategy.get("top_logprobs", 20),
             n_threads=config.strategy.get("n_threads", 8),
-            disable_thinking_mode=config.model.get("disable_thinking_mode", False),
+            disable_thinking_mode=config.model.get("disable_thinking_mode", True),
             seed=config.system.seed,
         )
 
@@ -456,7 +456,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
             generation_batch_size=config.strategy.get("generation_batch_size", None),
             scorer=scorer,
             n_threads=config.strategy.get("n_threads", None),
-            disable_thinking_mode=config.model.get("disable_thinking_mode", False),
+            disable_thinking_mode=config.model.get("disable_thinking_mode", True),
         )
     elif config.strategy.type == "tree_of_thoughts":
         # Tree-of-Thoughts requires API-based model for state evaluation
@@ -668,6 +668,101 @@ def generate_trajectories(
         # Save after each sample (enables resuming with minimal data loss)
         save_results_json(results, save_path_file)
         log.info(f"Saved result for sample {i} to {save_path_file}")
+
+        # Log per-sample metrics to wandb if enabled
+        try:
+            import wandb
+
+            if wandb.run is not None:
+                # Extract token count from metadata if available (DeepConf, self-consistency)
+                # Each trace in all_traces has "num_tokens" field
+                sample_tokens = 0
+                if "all_traces" in result:
+                    # DeepConf: sum tokens from all traces
+                    sample_tokens = sum(
+                        t.get("num_tokens", 0) for t in result["all_traces"]
+                    )
+                elif "metadata" in result:
+                    # Try to get from metadata
+                    metadata = result["metadata"]
+                    if "generation" in metadata and "all_traces" in metadata["generation"]:
+                        sample_tokens = sum(
+                            t.get("num_tokens", 0)
+                            for t in metadata["generation"]["all_traces"]
+                        )
+
+                # Calculate running token statistics from all results
+                all_sample_tokens = []
+                for r in results:
+                    tokens = 0
+                    if "all_traces" in r:
+                        tokens = sum(t.get("num_tokens", 0) for t in r["all_traces"])
+                    elif "metadata" in r:
+                        meta = r["metadata"]
+                        if "generation" in meta and "all_traces" in meta["generation"]:
+                            tokens = sum(
+                                t.get("num_tokens", 0)
+                                for t in meta["generation"]["all_traces"]
+                            )
+                    all_sample_tokens.append(tokens)
+
+                # Count number of traces for this sample
+                num_traces = len(result.get("all_traces", result.get("steps", [])))
+                avg_tokens_per_trace = sample_tokens / num_traces if num_traces > 0 else 0
+
+                sample_metrics = {
+                    "sample_index": i,
+                    "is_correct": is_correct,
+                    "num_steps": len(result["steps"]),
+                    "num_traces": num_traces,
+                    "running_accuracy": sum(
+                        1
+                        for r in results
+                        if str(r.get("generated_answer", "")).strip().lower()
+                        == str(r.get("gold_answer", "")).strip().lower()
+                    )
+                    / len(results),
+                    "samples_completed": len(results),
+                    # Token statistics (actual counts from model output)
+                    "tokens_this_sample": sample_tokens,  # Total tokens for this sample (all traces)
+                    "avg_tokens_per_trace": avg_tokens_per_trace,  # Avg tokens per trace this sample
+                    "running_avg_tokens_per_sample": np.mean(all_sample_tokens) if all_sample_tokens else 0,
+                    "running_total_tokens": sum(all_sample_tokens),
+                }
+                if "validity_scores" in result and result["validity_scores"]:
+                    sample_metrics["confidence"] = np.mean(result["validity_scores"])
+                # Log consensus_score for DeepConf (similar to self-consistency)
+                if "consensus_score" in result:
+                    sample_metrics["consensus_score"] = result["consensus_score"]
+                wandb.log(sample_metrics)
+
+                # Log individual confidence charts for each DeepConf trace
+                if "all_traces" in result:
+                    all_traces = result["all_traces"]
+                    # Check if traces have token_confs (DeepConf)
+                    if all_traces and "token_confs" in all_traces[0] and all_traces[0]["token_confs"]:
+                        for t_idx, trace in enumerate(all_traces):
+                            tc = trace.get("token_confs", [])
+                            if tc:
+                                selected = trace.get("selected", False)
+                                answer = trace.get("answer", "")
+                                min_conf = trace.get("min_conf", 0)
+                                sel_marker = "✓" if selected else ""
+
+                                # Create individual line chart for this trace
+                                data = [[idx, conf] for idx, conf in enumerate(tc)]
+                                table = wandb.Table(data=data, columns=["token_idx", "confidence"])
+                                chart = wandb.plot.line(
+                                    table,
+                                    "token_idx",
+                                    "confidence",
+                                    title=f"Sample {i} Trace {t_idx}{sel_marker} (ans={answer}, min={min_conf:.3f})"
+                                )
+                                wandb.log({f"conf_charts/sample_{i}/trace_{t_idx}": chart})
+        except ImportError:
+            pass
+        except Exception as e:
+            log.warning(f"Failed to log sample metrics to wandb: {e}")
 
     # Final save after generation
     save_results_json(results, save_path_file)
@@ -895,6 +990,7 @@ def main(config):
         wandb.init(
             project=project, name=wandb_run_name, dir=output_dir, config=wandb_cfg
         )
+        log.info(f"WandB run URL: {wandb.run.get_url()}")
         wandb_save_directory(Path(output_dir) / ".hydra")
 
     # Set random seeds

@@ -1,0 +1,15 @@
+You will be presented with a <Question>. Before providing the [Answer], you should first think step-by-step carefully.
+
+Your response format:
+<start of response>
+Reasoning Steps:
+- Step 1: Your reasoning step 1
+- Step 2: Your reasoning step 2
+- Step 3: Your reasoning step 3
+...
+- Step N: Your reasoning step N
+<Answer>: Your final answer
+<end of response>
+
+Now answer:
+<Question>: {question}
