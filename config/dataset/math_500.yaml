@@ -1,0 +1,11 @@
+# MATH-500 dataset configuration
+# 500 problems from MATH dataset, commonly used benchmark
+
+dataset_path: "HuggingFaceH4/MATH-500"
+dataset_config: "default"
+dataset_split: "test"
+subset: null  # Use all 500 problems
+question_field: "problem"
+answer_field: "answer"
+prompt_file: "./config/prompts/default.txt"
+answer_format: "numeric"
