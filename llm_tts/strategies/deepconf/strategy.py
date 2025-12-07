@@ -270,8 +270,12 @@ class StrategyDeepConf(StrategyBase):
                     "answer": trace["extracted_answer"],
                     "num_tokens": len(trace.get("token_data", [])),
                     "selected": id(trace) in filtered_set,
-                    "window_confs": trace.get("window_confs", []),  # For confidence charts
-                    "token_confs": trace.get("token_confs", []),  # Per-token confidences
+                    "window_confs": trace.get(
+                        "window_confs", []
+                    ),  # For confidence charts
+                    "token_confs": trace.get(
+                        "token_confs", []
+                    ),  # Per-token confidences
                 }
             )
 
@@ -323,7 +327,9 @@ class StrategyDeepConf(StrategyBase):
             "validity_scores": [
                 t["min_conf"] for t in all_traces_details
             ],  # All confidences
-            "consensus_score": result["agreement_rate"],  # Proportion of traces with winning answer (0-1)
+            "consensus_score": result[
+                "agreement_rate"
+            ],  # Proportion of traces with winning answer (0-1)
             "vote_distribution": result["vote_distribution"],  # Answer -> percentage
             "completed": True,
             "metadata": builder.build(),
@@ -445,8 +451,12 @@ class StrategyDeepConf(StrategyBase):
                     "selected": id(trace) in filtered_set,
                     "phase": "warmup" if i < len(warmup_traces) else "adaptive",
                     "stopped_early": trace.get("stopped_early", False),
-                    "window_confs": trace.get("window_confs", []),  # For confidence charts
-                    "token_confs": trace.get("token_confs", []),  # Per-token confidences
+                    "window_confs": trace.get(
+                        "window_confs", []
+                    ),  # For confidence charts
+                    "token_confs": trace.get(
+                        "token_confs", []
+                    ),  # Per-token confidences
                 }
             )
 
@@ -505,7 +515,9 @@ class StrategyDeepConf(StrategyBase):
             "validity_scores": [
                 t["min_conf"] for t in all_traces_details
             ],  # All confidences
-            "consensus_score": result["agreement_rate"],  # Proportion of traces with winning answer (0-1)
+            "consensus_score": result[
+                "agreement_rate"
+            ],  # Proportion of traces with winning answer (0-1)
             "vote_distribution": result["vote_distribution"],  # Answer -> percentage
             "completed": True,
             "metadata": builder.build(),

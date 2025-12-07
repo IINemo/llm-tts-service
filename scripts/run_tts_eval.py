@@ -47,6 +47,7 @@ from llm_tts.evaluation import (
     EvaluatorExactMatch,
     EvaluatorLLMAsAJudge,
 )
+from llm_tts.evaluation.grader import grade_answer
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
@@ -76,6 +77,7 @@ from llm_tts.strategies import (
     StrategyTreeOfThoughts,
     StrategyUncertaintyCoT,
 )
+from llm_tts.utils.flops import FLOPCalculator
 
 # Load environment variables from .env file
 load_dotenv()
@@ -536,6 +538,7 @@ def generate_trajectories(
     prompt_template: str,
     question_field: str = "question",
     answer_field: str = "answer",
+    flop_calculator: FLOPCalculator = None,
 ):
     # Phase 1: Generate trajectories (without checking correctness)
     log.info("\n" + "=" * 60)
@@ -629,10 +632,8 @@ def generate_trajectories(
         log.info("\n" + "=" * 60)
         log.info(f"FINAL ANSWER: {generated_text}")
         log.info(f"Gold answer:  {gold_answer_num}")
-        # Compare case-insensitively and stripped (self-consistency returns lowercase)
-        is_correct = (
-            str(generated_text).strip().lower() == str(gold_answer_num).strip().lower()
-        )
+        # Use grade_answer for proper mathematical comparison (handles LaTeX normalization, sympy)
+        is_correct = grade_answer(str(generated_text), str(gold_answer_num))
         log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
         log.info("-" * 60)
         log.info(f"Num traces: {len(result['steps'])}")
@@ -685,7 +686,10 @@ def generate_trajectories(
                 elif "metadata" in result:
                     # Try to get from metadata
                     metadata = result["metadata"]
-                    if "generation" in metadata and "all_traces" in metadata["generation"]:
+                    if (
+                        "generation" in metadata
+                        and "all_traces" in metadata["generation"]
+                    ):
                         sample_tokens = sum(
                             t.get("num_tokens", 0)
                             for t in metadata["generation"]["all_traces"]
@@ -708,39 +712,66 @@ def generate_trajectories(
 
                 # Count number of traces for this sample
                 num_traces = len(result.get("all_traces", result.get("steps", [])))
-                avg_tokens_per_trace = sample_tokens / num_traces if num_traces > 0 else 0
+                avg_tokens_per_trace = (
+                    sample_tokens / num_traces if num_traces > 0 else 0
+                )
 
+                # Calculate FLOPs if calculator is available
+                sample_tflops = 0
+                running_total_tflops = 0
+                if flop_calculator and sample_tokens > 0:
+                    sample_tflops = flop_calculator.compute_tflops(sample_tokens)
+                    running_total_tflops = flop_calculator.compute_tflops(
+                        sum(all_sample_tokens)
+                    )
+
+                # Count correct samples using grade_answer
+                running_correct = sum(
+                    1
+                    for r in results
+                    if grade_answer(
+                        str(r.get("generated_answer", "")),
+                        str(r.get("gold_answer", "")),
+                    )
+                )
                 sample_metrics = {
                     "sample_index": i,
                     "is_correct": is_correct,
                     "num_steps": len(result["steps"]),
                     "num_traces": num_traces,
-                    "running_accuracy": sum(
-                        1
-                        for r in results
-                        if str(r.get("generated_answer", "")).strip().lower()
-                        == str(r.get("gold_answer", "")).strip().lower()
-                    )
-                    / len(results),
+                    "running_correct": running_correct,  # Number of correct samples so far
+                    "running_accuracy": running_correct / len(results),
                     "samples_completed": len(results),
                     # Token statistics (actual counts from model output)
                     "tokens_this_sample": sample_tokens,  # Total tokens for this sample (all traces)
                     "avg_tokens_per_trace": avg_tokens_per_trace,  # Avg tokens per trace this sample
-                    "running_avg_tokens_per_sample": np.mean(all_sample_tokens) if all_sample_tokens else 0,
+                    "running_avg_tokens_per_sample": (
+                        np.mean(all_sample_tokens) if all_sample_tokens else 0
+                    ),
                     "running_total_tokens": sum(all_sample_tokens),
+                    # FLOP statistics (compute cost estimation)
+                    "tflops_this_sample": sample_tflops,  # TFLOPs for this sample
+                    "running_avg_tflops_per_sample": (
+                        running_total_tflops / len(results) if results else 0
+                    ),
+                    "running_total_tflops": running_total_tflops,
                 }
                 if "validity_scores" in result and result["validity_scores"]:
                     sample_metrics["confidence"] = np.mean(result["validity_scores"])
                 # Log consensus_score for DeepConf (similar to self-consistency)
                 if "consensus_score" in result:
                     sample_metrics["consensus_score"] = result["consensus_score"]
-                wandb.log(sample_metrics)
-
                 # Log individual confidence charts for each DeepConf trace
+                # Batch all charts into single log call to avoid incrementing step
+                trace_charts = {}
                 if "all_traces" in result:
                     all_traces = result["all_traces"]
                     # Check if traces have token_confs (DeepConf)
-                    if all_traces and "token_confs" in all_traces[0] and all_traces[0]["token_confs"]:
+                    if (
+                        all_traces
+                        and "token_confs" in all_traces[0]
+                        and all_traces[0]["token_confs"]
+                    ):
                         for t_idx, trace in enumerate(all_traces):
                             tc = trace.get("token_confs", [])
                             if tc:
@@ -751,14 +782,21 @@ def generate_trajectories(
 
                                 # Create individual line chart for this trace
                                 data = [[idx, conf] for idx, conf in enumerate(tc)]
-                                table = wandb.Table(data=data, columns=["token_idx", "confidence"])
+                                table = wandb.Table(
+                                    data=data, columns=["token_idx", "confidence"]
+                                )
                                 chart = wandb.plot.line(
                                     table,
                                     "token_idx",
                                     "confidence",
-                                    title=f"Sample {i} Trace {t_idx}{sel_marker} (ans={answer}, min={min_conf:.3f})"
+                                    title=f"Sample {i} Trace {t_idx}{sel_marker} (ans={answer}, min={min_conf:.3f})",
                                 )
-                                wandb.log({f"conf_charts/sample_{i}/trace_{t_idx}": chart})
+                                trace_charts[
+                                    f"conf_charts/sample_{i}/trace_{t_idx}"
+                                ] = chart
+
+                # Log all metrics and charts in a single call (1 step per sample)
+                wandb.log({**sample_metrics, **trace_charts})
         except ImportError:
             pass
         except Exception as e:
@@ -1030,6 +1068,17 @@ def main(config):
     log.info(f"Loading model: {model_name}")
     model, step_generator = create_model(config)
 
+    # Create FLOP calculator for compute cost estimation
+    flop_calculator = None
+    if model_name:
+        try:
+            flop_calculator = FLOPCalculator(model_name, method="simple")
+            log.info(
+                f"FLOP calculator initialized: {flop_calculator.tflops_per_1k_tokens:.3f} TFLOPs/1k tokens"
+            )
+        except Exception as e:
+            log.warning(f"Failed to initialize FLOP calculator: {e}")
+
     # Create scorer (skip for DeepConf)
     scorer = create_scorer(config)
 
@@ -1052,6 +1101,7 @@ def main(config):
         prompt_template=prompt_template,
         question_field=config.dataset.get("question_field", "question"),
         answer_field=config.dataset.get("answer_field", "answer"),
+        flop_calculator=flop_calculator,
     )
 
     # Evaluate results

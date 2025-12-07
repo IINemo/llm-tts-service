@@ -238,7 +238,9 @@ class StrategySelfConsistency(StrategyBase):
                 log.warning(f"  Empty generation for path {i+1}/{self.num_paths}")
 
         log.info(f"✅ vLLM generated {len(paths)}/{self.num_paths} paths successfully")
-        log.info(f"  Total tokens: {total_tokens}, Average: {total_tokens/len(paths):.0f} tokens/path")
+        log.info(
+            f"  Total tokens: {total_tokens}, Average: {total_tokens/len(paths):.0f} tokens/path"
+        )
         return paths
 
     def generate_reasoning_paths(self, prompt: str) -> List[str]:
@@ -439,14 +441,18 @@ class StrategySelfConsistency(StrategyBase):
 
         # Build all_traces with token info
         all_traces = []
-        for i, (text, tokens, answer) in enumerate(zip(path_texts, path_tokens, all_answers)):
-            all_traces.append({
-                "text": text,
-                "num_tokens": tokens,
-                "answer": answer,
-                "score": float(scores[i]),
-                "selected": i == best_idx,
-            })
+        for i, (text, tokens, answer) in enumerate(
+            zip(path_texts, path_tokens, all_answers)
+        ):
+            all_traces.append(
+                {
+                    "text": text,
+                    "num_tokens": tokens,
+                    "answer": answer,
+                    "score": float(scores[i]),
+                    "selected": i == best_idx,
+                }
+            )
 
         total_tokens = sum(path_tokens)
         log.info(f"Total tokens across all paths: {total_tokens}")
