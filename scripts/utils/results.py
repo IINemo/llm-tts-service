@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from llm_tts.step_candidate_generator_base import StepCandidate
+from llm_tts.generators import StepCandidate
 
 log = logging.getLogger(__name__)
 
