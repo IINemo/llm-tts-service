@@ -186,13 +186,12 @@ def set_random_seeds(seed):
 
 
 def create_scorer(config):
-    # DeepConf doesn't use a scorer
-
-    if config.strategy.type == "deepconf":
-        return None
-    if config.scorer.type == "uncertainty_pd":
+    # DeepConf and self_consistency don't use a scorer
+    if config.strategy.type in ("deepconf", "self_consistency"):
         return None
     if config.scorer is None:
+        return None
+    if config.scorer.type == "uncertainty_pd":
         return None
 
     if config.scorer.type == "prm":
@@ -219,7 +218,7 @@ def create_model(config):
 
         log.info(f"Loading vLLM model: {config.model.model_path}")
 
-        # Initialize vLLM engine
+        # Initialize vLLM engine with seed for reproducibility
         llm = LLM(
             model=config.model.model_path,
             gpu_memory_utilization=config.model.get("gpu_memory_utilization", 0.9),
@@ -227,6 +226,7 @@ def create_model(config):
             enable_prefix_caching=config.model.get("enable_prefix_caching", True),
             trust_remote_code=config.model.get("trust_remote_code", True),
             max_model_len=config.model.get("max_model_len", 32768),
+            seed=config.system.seed,  # Reproducibility
         )
 
         # Create sampling params (will be updated by strategy)
@@ -235,6 +235,7 @@ def create_model(config):
             temperature=config.generation.temperature,
             top_p=config.generation.top_p,
             logprobs=config.strategy.get("top_logprobs", 20),
+            seed=config.system.seed,  # Reproducibility
         )
 
         # Wrap with lm-polygraph adapter
@@ -250,9 +251,10 @@ def create_model(config):
 
         log.info("vLLM model loaded successfully")
 
-        # Create step generator for non-DeepConf strategies
+        # Create step generator for strategies that need it
+        # DeepConf and self_consistency have their own generation logic
         step_generator = None
-        if config.strategy.type != "deepconf":
+        if config.strategy.type not in ("deepconf", "self_consistency"):
             if not VLLM_GENERATOR_AVAILABLE:
                 raise ImportError(
                     "vLLM step generator not available. "
@@ -454,6 +456,7 @@ def create_tts_strategy(config, model, step_generator, scorer):
             generation_batch_size=config.strategy.get("generation_batch_size", None),
             scorer=scorer,
             n_threads=config.strategy.get("n_threads", None),
+            disable_thinking_mode=config.model.get("disable_thinking_mode", False),
         )
     elif config.strategy.type == "tree_of_thoughts":
         # Tree-of-Thoughts requires API-based model for state evaluation
@@ -626,9 +629,11 @@ def generate_trajectories(
         log.info("\n" + "=" * 60)
         log.info(f"FINAL ANSWER: {generated_text}")
         log.info(f"Gold answer:  {gold_answer_num}")
-        log.info(
-            f"Correct:      {'✓ YES' if str(generated_text) == str(gold_answer_num) else '✗ NO'}"
+        # Compare case-insensitively and stripped (self-consistency returns lowercase)
+        is_correct = (
+            str(generated_text).strip().lower() == str(gold_answer_num).strip().lower()
         )
+        log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
         log.info("-" * 60)
         log.info(f"Num traces: {len(result['steps'])}")
         if "validity_scores" in result and result["validity_scores"]:
