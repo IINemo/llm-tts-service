@@ -103,6 +103,29 @@ Where:
 
 During autoregressive inference with a **KV cache**, the second term simplifies from `s²` to `s`, because keys and values for previous tokens are reused. This results in a practical per-token cost dominated by `O(h²)` dense compute.
 
+#### Implementation
+
+FLOP calculation is implemented in [`FLOPCalculator`](../../llm_tts/utils/flops.py):
+
+```python
+from llm_tts.utils import FLOPCalculator
+
+# Initialize with model name (auto-loads architecture from HuggingFace)
+calc = FLOPCalculator("Qwen/Qwen3-8B")
+
+# Compute TFLOPs for token count
+tflops = calc.compute_tflops(num_tokens=45000)
+
+# Get TFLOPs per 1k tokens (useful for comparison)
+print(f"{calc.tflops_per_1k_tokens:.3f} TFLOPs/1k tokens")
+```
+
+In `run_tts_eval.py`, FLOPCalculator is used to track compute cost per sample:
+- Initialized after model loading with the model path
+- `tflops_this_sample` logged per sample based on `tokens_this_sample`
+- `running_total_tflops` accumulated across all samples
+- `running_avg_tflops_per_sample` computed as running average
+
 #### References
 
 - [Kaplan et al. (2020)](https://arxiv.org/abs/2001.08361) - "Scaling Laws for Neural Language Models" (OpenAI)

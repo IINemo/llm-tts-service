@@ -16,6 +16,7 @@ if multiprocessing.get_start_method(allow_none=True) is None:
 
 import logging
 import random
+import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -995,6 +996,15 @@ def evaluate_results(
 def main(config):
     """Main evaluation function"""
 
+    cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
+    log.info(f"Command: CUDA_VISIBLE_DEVICES={cuda_devices} {' '.join(sys.argv)}")
+    config_dir = [
+        path["path"]
+        for path in HydraConfig.get().runtime.config_sources
+        if path["schema"] == "file"
+    ][0]
+    config_file = Path(config_dir) / f"{HydraConfig.get().job.config_name}.yaml"
+    log.info(f"Config: {config_file}")
     output_dir = HydraConfig.get().runtime.output_dir
     log.info(f"Output directory: {output_dir}")
 
