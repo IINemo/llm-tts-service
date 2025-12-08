@@ -2,29 +2,47 @@
 
 This document describes conventions for logging experiment results to Weights & Biases (WandB).
 
-## Recommended Workflow
+## Online Logging (Recommended)
 
-We recommend **offline-first logging**: run experiments locally without real-time WandB tracking, then upload complete results afterwards. This approach:
+Enable live WandB logging by setting `report_to: wandb` in your experiment config:
 
-- Avoids network issues interrupting experiments
-- Allows reviewing results before uploading
-- Reduces overhead during long-running experiments
-- Enables batch uploading of multiple runs
+```yaml
+# In your experiment config (e.g., sc_vllm_qwen3_aime2025.yaml)
+report_to: wandb
+wandb_project: llm-tts-eval-aime2025
+```
+
+Then run:
+
+```bash
+python scripts/run_tts_eval.py \
+    --config-name=experiments/self_consistency/sc_vllm_qwen3_aime2025 \
+    --config-path=../config
+```
+
+This provides:
+- Real-time accuracy tracking per sample
+- Live metrics: `running_accuracy`, `running_correct`, `samples_completed`
+- TFLOP usage tracking: `running_total_tflops`, `tflops_this_sample`
+- Token statistics: `tokens_this_sample`, `avg_tokens_per_trace`
+- Config and log files automatically saved as artifacts
+
+See [metrics.md](metrics.md) for detailed metric definitions and formulas.
+
+Results are also saved locally to `outputs/YYYY-MM-DD/run_name/`.
+
+## Offline Logging (Alternative)
+
+For environments without network access, run experiments locally then upload:
 
 ### Step 1: Run Experiments Locally
-
-Run experiments with default settings (no live WandB tracking):
 
 ```bash
 python scripts/run_tts_eval.py \
     --config-name=experiments/deepconf/deepconf_vllm_qwen3_aime2025
 ```
 
-Results are saved to `outputs/YYYY-MM-DD/run_name/`.
-
 ### Step 2: Upload to WandB
-
-After experiments complete, upload entire output folders using:
 
 ```bash
 python scripts/log_results_to_wandb.py \
