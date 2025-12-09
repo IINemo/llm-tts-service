@@ -1,0 +1,14 @@
+# CUDABench dataset configuration
+# Full dataset: 219 CUDA kernel optimization tasks
+
+# HuggingFace dataset
+dataset_path: "test-time-compute/cudabench"
+dataset_config: null
+dataset_split: "train"  # Not used for local jsonl
+subset: null  # Set to number to use subset
+category: null  # Filter: robust_kbench, kernelbench_level1, kernelbench_level2
+pass_type: "forward"  # forward or backward
+question_field: "pytorch_code"
+answer_field: null  # No ground truth answer - evaluated by execution
+prompt_file: "${hydra:runtime.cwd}/config/prompts/cudabench.txt"
+answer_format: "code"

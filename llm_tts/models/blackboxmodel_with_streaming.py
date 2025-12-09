@@ -212,13 +212,14 @@ class BlackboxModelWithStreaming(BlackboxModel):
         # Otherwise use streaming implementation (n=1)
         results = []
         for chat in chats:
-            # Create streaming request
+            # Create streaming request with usage tracking
             response = self.client.chat.completions.create(
                 model=self.model_path,
                 messages=chat,
                 max_tokens=max_new_tokens,
                 temperature=temperature,
                 stream=True,
+                stream_options={"include_usage": True},  # Get token usage in final chunk
                 logprobs=needs_logprobs,
                 top_logprobs=20 if needs_logprobs else None,  # TODO:
             )
@@ -228,8 +229,17 @@ class BlackboxModelWithStreaming(BlackboxModel):
             token_count = 0
             stopped_early = False
             stop_reason = None
+            usage_info = None  # Will be populated from final chunk
 
             for chunk in response:
+                # Check for usage info (comes in final chunk with empty choices)
+                if hasattr(chunk, "usage") and chunk.usage:
+                    usage_info = {
+                        "prompt_tokens": chunk.usage.prompt_tokens,
+                        "completion_tokens": chunk.usage.completion_tokens,
+                        "total_tokens": chunk.usage.total_tokens,
+                    }
+
                 if not chunk.choices:
                     continue
 
@@ -284,6 +294,10 @@ class BlackboxModelWithStreaming(BlackboxModel):
 
             # Build result
             result = {"text": accumulated_text}
+
+            # Add token usage info if available
+            if usage_info:
+                result["usage"] = usage_info
 
             # Add logprobs if collected
             if needs_logprobs:

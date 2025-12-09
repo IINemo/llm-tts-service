@@ -44,6 +44,7 @@ except ImportError:
 from utils.results import load_results_json, parse_resume_arguments, save_results_json
 
 from llm_tts.evaluation import (
+    CUDAVerifier,
     EvaluatorAlignScore,
     EvaluatorExactMatch,
     EvaluatorLLMAsAJudge,
@@ -55,6 +56,7 @@ from llm_tts.generators import (
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import (
+    CUDASpeedupScorer,
     StepScorerPRM,
     StepScorerUncertainty,
     TotValueScorer,
@@ -86,6 +88,146 @@ load_dotenv()
 log = logging.getLogger(__name__)
 
 
+def log_cuda_summary(results: list) -> None:
+    """Log CUDA-specific metrics summary for best_of_n_cuda strategy.
+
+    Args:
+        results: List of result dictionaries containing cuda_metrics.
+    """
+    cuda_results = [r for r in results if "cuda_metrics" in r]
+    if not cuda_results:
+        return
+
+    total_kernels = 0
+    total_compiled = 0
+    total_correct = 0
+    samples_with_correct = 0
+    best_speedups = []
+
+    for r in cuda_results:
+        m = r["cuda_metrics"]
+        total_kernels += m.get("total_kernels", 8)
+        total_compiled += m.get("num_compiled", 0)
+        total_correct += m.get("num_correct", 0)
+        if m.get("num_correct", 0) > 0:
+            samples_with_correct += 1
+        if m.get("best_speedup", 0) > 0:
+            best_speedups.append(m["best_speedup"])
+
+    log.info("")
+    log.info("=== CUDA Kernel Verification Summary ===")
+    log.info(f"Total kernels generated: {total_kernels}")
+    if total_kernels > 0:
+        log.info(f"Compiled: {total_compiled}/{total_kernels} ({100*total_compiled/total_kernels:.1f}%)")
+        log.info(f"Correct: {total_correct}/{total_kernels} ({100*total_correct/total_kernels:.1f}%)")
+    log.info(f"Samples with correct kernel: {samples_with_correct}/{len(cuda_results)}")
+    if best_speedups:
+        log.info(f"Average best speedup: {np.mean(best_speedups):.2f}x")
+        log.info(f"Max speedup: {max(best_speedups):.2f}x")
+
+
+def get_cudabench_sample_metrics(
+    result: dict,
+    sample_idx: int,
+    all_results: list,
+    flop_calculator: "FLOPCalculator" = None,
+) -> dict:
+    """Extract CUDABench-specific per-sample metrics for wandb logging.
+
+    Args:
+        result: Single sample result dictionary.
+        sample_idx: Index of the current sample.
+        all_results: All results so far (for running statistics).
+        flop_calculator: Optional FLOPCalculator for TFLOPs estimation.
+
+    Returns:
+        Dictionary of CUDABench-specific metrics for wandb.
+    """
+    cuda_metrics = result.get("cuda_metrics", {})
+    if not cuda_metrics:
+        return {}
+
+    # Per-sample metrics
+    total_kernels = cuda_metrics.get("total_kernels", 0)
+    num_compiled = cuda_metrics.get("num_compiled", 0)
+    num_correct = cuda_metrics.get("num_correct", 0)
+    num_compile_failed = cuda_metrics.get("num_compile_failed", 0)
+    best_speedup = cuda_metrics.get("best_speedup", 0.0)
+    all_speedups = cuda_metrics.get("all_speedups", [])
+
+    # Calculate rates for this sample
+    compile_rate = num_compiled / total_kernels if total_kernels > 0 else 0.0
+    correctness_rate = num_correct / total_kernels if total_kernels > 0 else 0.0
+    has_correct = 1 if num_correct > 0 else 0
+
+    # Running statistics across all samples so far
+    cuda_results = [r for r in all_results if "cuda_metrics" in r]
+    num_samples = len(cuda_results)
+    running_total_kernels = sum(r["cuda_metrics"].get("total_kernels", 0) for r in cuda_results)
+    running_compiled = sum(r["cuda_metrics"].get("num_compiled", 0) for r in cuda_results)
+    running_correct = sum(r["cuda_metrics"].get("num_correct", 0) for r in cuda_results)
+    running_samples_with_correct = sum(
+        1 for r in cuda_results if r["cuda_metrics"].get("num_correct", 0) > 0
+    )
+    running_speedups = [
+        r["cuda_metrics"].get("best_speedup", 0)
+        for r in cuda_results
+        if r["cuda_metrics"].get("best_speedup", 0) > 0
+    ]
+
+    # Running accuracy = % of samples that have at least one correct kernel (pass@n)
+    running_accuracy = running_samples_with_correct / num_samples if num_samples > 0 else 0.0
+
+    metrics = {
+        # Per-sample metrics
+        "cuda/sample_idx": sample_idx,
+        "cuda/total_kernels": total_kernels,
+        "cuda/num_compiled": num_compiled,
+        "cuda/num_correct": num_correct,
+        "cuda/num_compile_failed": num_compile_failed,
+        "cuda/compile_rate": compile_rate,
+        "cuda/correctness_rate": correctness_rate,
+        "cuda/has_correct_kernel": has_correct,
+        "cuda/best_speedup": best_speedup,
+        # Running statistics
+        "cuda/running_total_kernels": running_total_kernels,
+        "cuda/running_compiled": running_compiled,
+        "cuda/running_correct": running_correct,
+        "cuda/running_compile_rate": running_compiled / running_total_kernels if running_total_kernels > 0 else 0.0,
+        "cuda/running_correctness_rate": running_correct / running_total_kernels if running_total_kernels > 0 else 0.0,
+        "cuda/running_samples_with_correct": running_samples_with_correct,
+        "cuda/running_accuracy": running_accuracy,  # pass@n: % samples with at least 1 correct
+        "cuda/samples_completed": num_samples,
+    }
+
+    # Speedup statistics (only if we have correct kernels)
+    if running_speedups:
+        metrics["cuda/running_avg_speedup"] = np.mean(running_speedups)
+        metrics["cuda/running_max_speedup"] = max(running_speedups)
+
+    # Token count and TFLOPs from generation
+    gen_details = result.get("metadata", {}).get("generation_details", {})
+    total_tokens = gen_details.get("total_tokens", 0)
+
+    if total_tokens > 0:
+        metrics["cuda/tokens_generated"] = total_tokens
+        # Compute TFLOPs using simple method: 2 * N * tokens
+        if flop_calculator:
+            sample_tflops = flop_calculator.compute_tflops(total_tokens)
+            metrics["cuda/tflops_this_sample"] = sample_tflops
+
+            # Running total tokens and TFLOPs
+            running_tokens = sum(
+                r.get("metadata", {}).get("generation_details", {}).get("total_tokens", 0)
+                for r in cuda_results
+            )
+            if running_tokens > 0:
+                metrics["cuda/running_total_tokens"] = running_tokens
+                metrics["cuda/running_total_tflops"] = flop_calculator.compute_tflops(running_tokens)
+
+    return metrics
+
+
 def load_tokenizer(model_path: str):
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     # tokenizer.chat_template = None
@@ -108,6 +250,34 @@ def load_prompt_template(prompt_file: str) -> str:
     """Load prompt template from file"""
     with open(prompt_file, "r") as f:
         return f.read().strip()
+
+
+def extract_cuda_code(response: str) -> str:
+    """Extract CUDA code from LLM response."""
+    import re
+
+    # Try ```cuda ... ```
+    match = re.search(r"```cuda\s*(.*?)```", response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+
+    # Try ```c++ ... ```
+    match = re.search(r"```c\+\+\s*(.*?)```", response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+
+    # Try ```cpp ... ```
+    match = re.search(r"```cpp\s*(.*?)```", response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+
+    # Try ``` ... ``` (generic code block)
+    match = re.search(r"```\s*(.*?)```", response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+
+    # No code block found
+    return ""
 
 
 def build_evaluators(config):
@@ -163,6 +333,12 @@ def build_evaluators(config):
             )
             evaluators["alignscore"] = EvaluatorAlignScore(**align_cfg)
 
+        elif evaluator_name == "cuda_verifier":
+            cuda_cfg = OmegaConf.to_container(
+                config.evaluation.get("cuda_verifier", {}), resolve=True
+            )
+            evaluators["cuda_verifier"] = CUDAVerifier(**cuda_cfg)
+
         else:
             log.warning(f"Unknown evaluator type '{evaluator_name}', skipping")
 
@@ -206,6 +382,14 @@ def create_scorer(config):
 
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
+
+    elif config.scorer.type == "cuda_speedup":
+        scorer = CUDASpeedupScorer(
+            rtol=config.scorer.get("rtol", 1e-5),
+            atol=config.scorer.get("atol", 1e-5),
+            num_trials=config.scorer.get("num_trials", 5),
+            benchmark_iters=config.scorer.get("benchmark_iters", 100),
+        )
 
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
@@ -461,6 +645,27 @@ def create_tts_strategy(config, model, step_generator, scorer):
             n_threads=config.strategy.get("n_threads", None),
             disable_thinking_mode=config.model.get("disable_thinking_mode", True),
         )
+    elif config.strategy.type == "best_of_n_cuda":
+        from llm_tts.strategies.strategy_best_of_n_cuda import BestOfNCUDAStrategy
+
+        # Get CUDA verifier settings from evaluation config
+        cuda_cfg = config.evaluation.get("cuda_verifier", {})
+
+        strategy = BestOfNCUDAStrategy(
+            model=model,
+            num_paths=config.strategy.get("num_paths", 8),
+            max_new_tokens=config.strategy.get("max_new_tokens", 4096),
+            temperature=config.strategy.get("temperature", 0.7),
+            generation_batch_size=config.strategy.get("generation_batch_size", None),
+            n_threads=config.strategy.get("n_threads", None),
+            rtol=cuda_cfg.get("rtol", 1e-5),
+            atol=cuda_cfg.get("atol", 1e-5),
+            num_trials=cuda_cfg.get("num_trials", 1),
+            warmup_iters=cuda_cfg.get("warmup_iters", 5),
+            benchmark_iters=cuda_cfg.get("benchmark_iters", 10),
+            use_small_inputs=cuda_cfg.get("use_small_inputs", True),
+            parallel_verification=config.strategy.get("parallel_verification", True),
+        )
     elif config.strategy.type == "tree_of_thoughts":
         # Tree-of-Thoughts requires API-based model for state evaluation
         if not isinstance(model, BlackboxModelWithStreaming):
@@ -539,6 +744,7 @@ def generate_trajectories(
     prompt_template: str,
     question_field: str = "question",
     answer_field: str = "answer",
+    answer_format: str = "text",
     flop_calculator: FLOPCalculator = None,
 ):
     # Phase 1: Generate trajectories (without checking correctness)
@@ -562,10 +768,15 @@ def generate_trajectories(
 
         # Get question using configurable field name
         question = instance[question_field]
-        log.info(f"Question: {question[:200]}...")
+        log.info(f"Question: {question}")
 
-        # Handle answer with fallback for Game of 24
-        if answer_field and answer_field in instance and instance[answer_field]:
+        # Handle answer field based on answer format
+        if answer_format == "code":
+            # For code evaluation (e.g., CUDA), no text-based gold answer
+            # Evaluation is done by compilation/execution
+            gold_answer_num = None
+            log.info("Gold answer: N/A (evaluated by execution)")
+        elif answer_field and answer_field in instance and instance[answer_field]:
             if "####" in instance[answer_field]:
                 from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
 
@@ -590,11 +801,24 @@ def generate_trajectories(
             },
         ]
 
+        # For CUDA strategies, set the task context (pytorch_code for verification)
+        if hasattr(strategy, "set_task_context") and answer_format == "code":
+            strategy.set_task_context(question)  # question contains pytorch_code
+
         result = strategy.generate_trajectory(request)
 
         # Extract generated answer (but don't check correctness yet)
-        # Use extracted_answer if available (e.g., from DeepConf's \boxed{} extraction)
-        if "extracted_answer" in result and result["extracted_answer"]:
+        # For code answers, always extract from trajectory (not extracted_answer which is for math)
+        if answer_format == "code":
+            # Extract code block from the full trajectory
+            cuda_code = extract_cuda_code(result["trajectory"])
+            if cuda_code:
+                generated_text = cuda_code
+            else:
+                log.warning("Failed to extract code from trajectory")
+                generated_text = result["trajectory"]
+        elif "extracted_answer" in result and result["extracted_answer"]:
+            # Use extracted_answer if available (e.g., from DeepConf's \boxed{} extraction)
             generated_text = result["extracted_answer"]
         else:
             # Fallback: extract from trajectory
@@ -631,11 +855,18 @@ def generate_trajectories(
             log.info(f"\nFull trajectory:\n{result['trajectory']}")
 
         log.info("\n" + "=" * 60)
-        log.info(f"FINAL ANSWER: {generated_text}")
-        log.info(f"Gold answer:  {gold_answer_num}")
-        # Use grade_answer for proper mathematical comparison (handles LaTeX normalization, sympy)
-        is_correct = grade_answer(str(generated_text), str(gold_answer_num))
-        log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
+        if answer_format == "code":
+            # For code evaluation, show code snippet and defer correctness to Phase 2
+            code_preview = generated_text[:200] + "..." if len(generated_text) > 200 else generated_text
+            log.info(f"GENERATED CODE: {code_preview}")
+            log.info("Correctness: evaluated in Phase 2 (compilation & execution)")
+            is_correct = False  # Will be determined by cuda_verifier in Phase 2
+        else:
+            log.info(f"FINAL ANSWER: {generated_text}")
+            log.info(f"Gold answer:  {gold_answer_num}")
+            # Use grade_answer for proper mathematical comparison (handles LaTeX normalization, sympy)
+            is_correct = grade_answer(str(generated_text), str(gold_answer_num))
+            log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
         log.info("-" * 60)
         log.info(f"Num traces: {len(result['steps'])}")
         if "validity_scores" in result and result["validity_scores"]:
@@ -643,6 +874,11 @@ def generate_trajectories(
             log.info(
                 f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
             )
+        # Show CUDA-specific metrics if available (from best_of_n_cuda strategy)
+        if answer_format == "code" and "best_speedup" in result:
+            log.info(f"Best speedup: {result['best_speedup']:.2f}x")
+            log.info(f"Compiled: {result.get('num_compiled', 0)}/{len(result.get('all_scores', []))}")
+            log.info(f"Correct: {result.get('num_correct', 0)}/{len(result.get('all_scores', []))}")
         log.info("=" * 60)
 
         # Store result WITHOUT correctness check
@@ -664,6 +900,25 @@ def generate_trajectories(
         # Include metadata if present (contains trace summaries and details)
         if "metadata" in result:
             result_dict["metadata"] = result["metadata"]
+
+        # Include CUDA-specific metrics (best_of_n_cuda strategy)
+        # Metrics are in metadata.results.answer_distribution
+        answer_dist = result.get("metadata", {}).get("results", {}).get("answer_distribution", {})
+        if answer_dist:
+            # Get speedup from generation_details.all_scores
+            all_scores = result.get("metadata", {}).get("generation_details", {}).get("all_scores", [])
+            valid_speedups = [s for s in all_scores if s > 0]
+            best_speedup = max(valid_speedups) if valid_speedups else 0.0
+
+            result_dict["cuda_metrics"] = {
+                "num_correct": answer_dist.get("correct", 0),
+                "num_incorrect": answer_dist.get("incorrect", 0),
+                "num_compile_failed": answer_dist.get("compile_failed", 0),
+                "num_compiled": answer_dist.get("correct", 0) + answer_dist.get("incorrect", 0),
+                "total_kernels": sum(answer_dist.values()),
+                "best_speedup": best_speedup,
+                "all_speedups": all_scores,
+            }
 
         results.append(result_dict)
 
@@ -796,8 +1051,12 @@ def generate_trajectories(
                                     f"conf_charts/sample_{i}/trace_{t_idx}"
                                 ] = chart
 
+                # Add CUDABench-specific metrics if available
+                # Use results[-1] which is result_dict (has cuda_metrics), not raw result
+                cuda_sample_metrics = get_cudabench_sample_metrics(results[-1], i, results, flop_calculator)
+
                 # Log all metrics and charts in a single call (1 step per sample)
-                wandb.log({**sample_metrics, **trace_charts})
+                wandb.log({**sample_metrics, **trace_charts, **cuda_sample_metrics})
         except ImportError:
             pass
         except Exception as e:
@@ -884,10 +1143,38 @@ def evaluate_results(
 
                 results[i].setdefault("eval", {})[eval_name] = eval_data
 
-                log.info(
-                    f"Sample {result['index']} [{eval_name}]: "
-                    f"{annotation} ({'Correct' if is_correct else 'Incorrect'})"
-                )
+                # Log evaluation results
+                if eval_name == "cuda_verifier" and response:
+                    # Detailed logging for CUDA verification
+                    compiled = response.get("compiled", False)
+                    correct = response.get("correct", False)
+                    speedup = response.get("speedup", 0.0)
+                    compile_error = response.get("compile_error", "")
+
+                    status_parts = []
+                    if compiled:
+                        status_parts.append("compiled=✓")
+                    else:
+                        status_parts.append("compiled=✗")
+                    if correct:
+                        status_parts.append("correct=✓")
+                    else:
+                        status_parts.append("correct=✗")
+                    if speedup > 0:
+                        status_parts.append(f"speedup={speedup:.2f}x")
+
+                    log.info(
+                        f"Sample {result['index']} [{eval_name}]: {' | '.join(status_parts)}"
+                    )
+                    if compile_error and not compiled:
+                        # Show first line of compile error
+                        error_line = compile_error.split('\n')[0][:100]
+                        log.info(f"  Compile error: {error_line}...")
+                else:
+                    log.info(
+                        f"Sample {result['index']} [{eval_name}]: "
+                        f"{annotation} ({'Correct' if is_correct else 'Incorrect'})"
+                    )
 
                 # Save after each sample evaluation
                 save_results_json(results, save_path_file)
@@ -939,6 +1226,25 @@ def evaluate_results(
         log.info(f"Correct: {correct} ({correct/len(results):.1%})")
         log.info(f"Incorrect: {incorrect} ({incorrect/len(results):.1%})")
 
+        # CUDA-specific summary stats
+        if name == "cuda_verifier":
+            compiled_count = 0
+            correct_count = 0
+            speedups = []
+            for r in results:
+                if "eval" in r and "cuda_verifier" in r["eval"]:
+                    resp = r["eval"]["cuda_verifier"].get("response", {})
+                    if resp.get("compiled"):
+                        compiled_count += 1
+                    if resp.get("correct"):
+                        correct_count += 1
+                    if resp.get("speedup", 0) > 0:
+                        speedups.append(resp["speedup"])
+            log.info(f"  Compiled: {compiled_count}/{len(results)} ({compiled_count/len(results):.1%})")
+            log.info(f"  Correct:  {correct_count}/{len(results)} ({correct_count/len(results):.1%})")
+            if speedups:
+                log.info(f"  Avg speedup: {np.mean(speedups):.2f}x (for correct kernels)")
+
     # Average statistics
     all_validities = []
     all_steps = []
@@ -950,6 +1256,9 @@ def evaluate_results(
     log.info("Step Statistics:")
     log.info(f"Avg steps per trajectory: {np.mean(all_steps):.1f}")
     log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
+
+    # CUDA-specific summary (for best_of_n_cuda strategy)
+    log_cuda_summary(results)
 
     # Log key metrics to wandb if enabled
     try:
@@ -1048,12 +1357,19 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
-    dataset = load_dataset(
-        config.dataset.dataset_path,
-        config.dataset.get("dataset_config", None),
-        split=config.dataset.dataset_split,
-        cache_dir=config.system.hf_cache,
-    )
+    dataset_path = config.dataset.dataset_path
+
+    # Check if it's a local file (jsonl or json)
+    if dataset_path.endswith(".jsonl") or dataset_path.endswith(".json"):
+        log.info(f"Loading local dataset from: {dataset_path}")
+        dataset = load_dataset("json", data_files=dataset_path, split="train")
+    else:
+        dataset = load_dataset(
+            dataset_path,
+            config.dataset.get("dataset_config", None),
+            split=config.dataset.dataset_split,
+            cache_dir=config.system.hf_cache,
+        )
     # Apply offset and subset
     offset = config.dataset.get("offset", 0) or 0
     subset = config.dataset.get("subset", None)
@@ -1111,6 +1427,7 @@ def main(config):
         prompt_template=prompt_template,
         question_field=config.dataset.get("question_field", "question"),
         answer_field=config.dataset.get("answer_field", "answer"),
+        answer_format=config.dataset.get("answer_format", "text"),
         flop_calculator=flop_calculator,
     )
 

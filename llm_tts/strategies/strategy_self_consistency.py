@@ -103,10 +103,16 @@ class StrategySelfConsistency(StrategyBase):
 
                 if results and results[0] and results[0].get("text"):
                     generated_text = results[0]["text"]
-                    # Return just the generated reasoning (not prompt + generation)
-                    # The scorer extracts answers from this text
+                    # Return dict with text and token usage info
                     log.info(f"  Generated path {i+1}/{total}")
-                    return generated_text
+                    result_dict = {"text": generated_text}
+                    # Include token usage if available (from OpenAI API)
+                    if results[0].get("usage"):
+                        usage = results[0]["usage"]
+                        result_dict["num_tokens"] = usage.get("completion_tokens", 0)
+                        result_dict["prompt_tokens"] = usage.get("prompt_tokens", 0)
+                        result_dict["total_tokens"] = usage.get("total_tokens", 0)
+                    return result_dict
                 else:
                     log.warning(f"  Empty generation for path {i+1}/{total}")
                     return None

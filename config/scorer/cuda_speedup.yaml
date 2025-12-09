@@ -1,0 +1,6 @@
+# CUDA Speedup Scorer config
+type: cuda_speedup
+rtol: 1e-5
+atol: 1e-5
+num_trials: 5
+benchmark_iters: 100

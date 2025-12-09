@@ -1,0 +1,80 @@
+# @package _global_
+# Best-of-N CUDA: Qwen3-8B via vLLM on CUDABench
+# Generates N kernels and selects best by verification (not majority voting)
+
+defaults:
+  - /config
+  - /dataset/cudabench_robust
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - _self_
+
+# Run naming
+run_name: "cudabench_bon_vllm_n${strategy.num_paths}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: null  # Disable wandb for local runs
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 8192
+  disable_thinking_mode: true  # Disable Qwen3 thinking mode
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (non-thinking mode)
+generation:
+  max_new_tokens: 4096
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  batch_size: 1
+  max_length: 8192
+
+# No scorer needed - best_of_n_cuda does its own verification
+scorer: null
+
+# Best-of-N CUDA strategy (verification-based selection)
+strategy:
+  type: best_of_n_cuda
+  num_paths: 8  # Generate 8 kernel candidates
+  max_new_tokens: 4096
+  temperature: 0.7
+  generation_batch_size: null
+  n_threads: 1
+  parallel_verification: true  # Use multiprocessing for verification
+
+# Dataset configuration
+dataset:
+  dataset_path: "test-time-compute/cudabench"
+  dataset_split: "robust_kbench"
+  subset: 2  # Start with 2 tasks for testing
+  offset: 0
+  question_field: "pytorch_code"
+  answer_field: null
+  answer_format: "code"
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/cudabench.txt"
+
+# Evaluation configuration - CUDA verifier settings (used by strategy)
+evaluation:
+  evaluators:
+    - cuda_verifier
+  cuda_verifier:
+    rtol: 1e-5
+    atol: 1e-5
+    num_trials: 1
+    warmup_iters: 5
+    benchmark_iters: 10
+    timeout: 30.0
+    use_small_inputs: true  # Use small tensors for fast testing

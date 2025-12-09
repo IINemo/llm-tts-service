@@ -1,0 +1,13 @@
+# CUDABench KernelBench Level 1
+# 100 basic CUDA operations
+
+dataset_path: "test-time-compute/cudabench"
+dataset_config: "default"
+dataset_split: "kernelbench_level1"
+subset: null
+category: "kernelbench_level1"
+pass_type: "forward"
+question_field: "pytorch_code"
+answer_field: null
+prompt_file: "./config/prompts/cudabench.txt"
+answer_format: "code"

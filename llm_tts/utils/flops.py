@@ -188,6 +188,9 @@ class FLOPCalculator:
     """
 
     # Known model configurations (fallback if HF loading fails)
+    # For API models (OpenAI, Anthropic), we use estimated active parameters.
+    # GPT-4/4o are likely MoE with ~200B active params per forward pass.
+    # Claude models estimated similarly.
     KNOWN_MODELS = {
         "Qwen/Qwen3-8B": ModelArchitecture(
             num_parameters=8_000_000_000,
@@ -204,6 +207,64 @@ class FLOPCalculator:
             num_attention_heads=28,
             intermediate_size=18944,
             vocab_size=152064,
+        ),
+        # OpenAI models (estimated active parameters for MoE)
+        "gpt-4o": ModelArchitecture(
+            num_parameters=200_000_000_000,  # ~200B active (estimated)
+            hidden_size=8192,
+            num_hidden_layers=64,
+            num_attention_heads=64,
+            intermediate_size=32768,
+            vocab_size=100000,
+        ),
+        "gpt-4o-mini": ModelArchitecture(
+            num_parameters=8_000_000_000,  # ~8B (estimated)
+            hidden_size=4096,
+            num_hidden_layers=32,
+            num_attention_heads=32,
+            intermediate_size=16384,
+            vocab_size=100000,
+        ),
+        "gpt-4-turbo": ModelArchitecture(
+            num_parameters=200_000_000_000,  # ~200B active (estimated)
+            hidden_size=8192,
+            num_hidden_layers=64,
+            num_attention_heads=64,
+            intermediate_size=32768,
+            vocab_size=100000,
+        ),
+        "gpt-4": ModelArchitecture(
+            num_parameters=200_000_000_000,  # ~200B active (estimated)
+            hidden_size=8192,
+            num_hidden_layers=64,
+            num_attention_heads=64,
+            intermediate_size=32768,
+            vocab_size=100000,
+        ),
+        # Anthropic models (estimated)
+        "claude-3-opus": ModelArchitecture(
+            num_parameters=200_000_000_000,  # ~200B (estimated)
+            hidden_size=8192,
+            num_hidden_layers=64,
+            num_attention_heads=64,
+            intermediate_size=32768,
+            vocab_size=100000,
+        ),
+        "claude-3-sonnet": ModelArchitecture(
+            num_parameters=70_000_000_000,  # ~70B (estimated)
+            hidden_size=6144,
+            num_hidden_layers=48,
+            num_attention_heads=48,
+            intermediate_size=24576,
+            vocab_size=100000,
+        ),
+        "claude-3-haiku": ModelArchitecture(
+            num_parameters=20_000_000_000,  # ~20B (estimated)
+            hidden_size=4096,
+            num_hidden_layers=32,
+            num_attention_heads=32,
+            intermediate_size=16384,
+            vocab_size=100000,
         ),
     }
 

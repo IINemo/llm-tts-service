@@ -1,0 +1,38 @@
+You are an expert CUDA programmer. Your task is to translate PyTorch code into an optimized CUDA kernel as a PyTorch C++ extension.
+
+Requirements:
+1. The kernel must produce numerically correct results matching PyTorch (rtol=1e-5, atol=1e-5)
+2. The kernel should be faster than the PyTorch implementation
+3. Handle all input shapes specified in get_inputs()
+
+PyTorch Reference Implementation:
+```python
+{question}
+```
+
+Write a complete PyTorch CUDA extension with:
+1. Include torch/extension.h
+2. CUDA kernel with __global__ function
+3. C++ wrapper function that launches the kernel
+4. A `forward` function that takes the same arguments as forward_fn
+5. PYBIND11_MODULE to export the forward function
+
+Example structure:
+```cuda
+#include <torch/extension.h>
+#include <cuda_runtime.h>
+
+__global__ void my_kernel(...) {{
+    // CUDA kernel implementation
+}}
+
+torch::Tensor forward(torch::Tensor input, ...) {{
+    // Launch kernel and return result
+}}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {{
+    m.def("forward", &forward, "Forward pass");
+}}
+```
+
+Put your final answer in a code block with ```cuda ... ```

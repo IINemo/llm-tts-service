@@ -1,0 +1,11 @@
+# CUDA Verifier evaluation config
+evaluators:
+  - cuda_verifier
+
+cuda_verifier:
+  rtol: 1e-5
+  atol: 1e-5
+  num_trials: 5
+  warmup_iters: 25
+  benchmark_iters: 100
+  timeout: 60.0
