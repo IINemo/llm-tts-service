@@ -36,6 +36,7 @@ dependencies = [
     "pylatexenc>=2.10",
     "sympy>=1.12",  # For Game of 24 answer validation
     "plotly>=5.0.0",  # For interactive reasoning visualization
+    "vllm>=0.6.0",  # vLLM backend for fast inference
 ]
 
 [project.optional-dependencies]
@@ -62,11 +63,6 @@ service = [
     "httpx>=0.25.0",
     "python-multipart>=0.0.6",
     "python-json-logger>=2.0.7",
-]
-
-vllm = [
-    # vLLM backend for fast inference with PagedAttention
-    "vllm>=0.6.0",
 ]
 
 [project.urls]
