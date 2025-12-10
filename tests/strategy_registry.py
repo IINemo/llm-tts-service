@@ -64,7 +64,7 @@ REGISTERED_STRATEGIES = [
             "test_adaptive_scaling.py",
         ],
         description="Adaptive scaling best-of-n strategy",
-    )
+    ),
     StrategyInfo(
         name="uncert_cot",
         class_name="StrategyUncertaintyCoT",
@@ -94,7 +94,7 @@ REGISTERED_STRATEGIES = [
             "test_tree_of_thoughts.py",  # Strategy logic and integration tests
         ],
         description="Beam search with LLM-based state evaluation",
-    ),
+    )
     # TODO: Add tests for self_consistency strategy
     # StrategyInfo(
     #     name="self_consistency",
