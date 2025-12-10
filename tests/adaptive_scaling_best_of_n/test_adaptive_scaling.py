@@ -28,10 +28,6 @@ Reasoning Steps:
 <Answer>: Your final answer
 <end of response>
 
-Follow the above output format STRICTLY! Do not add any other additional texts outside the template.
-Keep each reasoning step concise (single steps should not be too long).
-Each reasoning step must be on a single line (no line breaks within a step).
-
 Now answer:
 <Question>: {question}
 """
@@ -44,8 +40,7 @@ def create_request(question):
     ]
     return request
 
-
-def test_mur():
+def test_adaptive_scaling_best_of_n():
     max_new_tokens = 100
     step_patterns = ["- Step", "<Answer>:", "\n<Answer>:"]
     answer_patterns = ["<Answer>:", "\n<Answer>:"]
@@ -78,6 +73,8 @@ def test_mur():
         max_length=512,
     )
     scorer = StepScorerUncertainty()
+
+    # Test Momentum 
     strategy = AdaptiveScalingBestOfN(
         step_generator=step_generator,
         scorer=scorer,
@@ -92,3 +89,45 @@ def test_mur():
     request = create_request(question)
     result = strategy.generate_trajectory(request)
     print(result)
+
+
+    # Test Random
+    strategy = AdaptiveScalingBestOfN(
+        step_generator=step_generator,
+        scorer=scorer,
+        candidates_per_step=candidates_per_step,
+        max_steps=max_steps,
+        adaptive_scaling_method="random",
+    )
+
+    question = "Tom had 8 apples. He gave 3 to his friend and bought 5 more. How many apples does Tom have now?"
+    request = create_request(question)
+    result = strategy.generate_trajectory(request)
+    print(result)
+
+    # Test Average
+    strategy = AdaptiveScalingBestOfN(
+        step_generator=step_generator,
+        scorer=scorer,
+        candidates_per_step=candidates_per_step,
+        max_steps=max_steps,
+        adaptive_scaling_method="average",
+    )
+
+    question = "Tom had 8 apples. He gave 3 to his friend and bought 5 more. How many apples does Tom have now?"
+    request = create_request(question)
+    result = strategy.generate_trajectory(request)
+    print(result)
+
+    # Test Always
+    strategy = AdaptiveScalingBestOfN(
+        step_generator=step_generator,  
+        scorer=scorer,
+        candidates_per_step=candidates_per_step,
+        max_steps=max_steps,
+        adaptive_scaling_method="always",
+    )
+
+    question = "Tom had 8 apples. He gave 3 to his friend and bought 5 more. How many apples does Tom have now?"
+    request = create_request(question)
+    result = strategy.generate_trajectory(request)

@@ -14,17 +14,18 @@ defaults:
   - scorer: perplexity
   - evaluation/llm_judge: default
   - evaluation/alignscore: default
+  - strategy: adaptive_bon
   - _self_
 
 evaluation:
-  evaluators: [llm_judge, exact_match]
+  evaluators: [exact_match]
 
-strategy:
-  type: adaptive
-  candidates_per_step: 3
-  max_steps: 10
-  scaling_rate: 0.9
-  momentum_rate: 0.9
-  adaptive_scaling_method: momentum # momentum, random, average, always, threshold
+# strategy:
+#   type: adaptive
+#   candidates_per_step: 3
+#   max_steps: 20
+#   scaling_rate: 0.9
+#   momentum_rate: 0.9
+#   adaptive_scaling_method: always # momentum, random, average, always, threshold
 
 report_to: none

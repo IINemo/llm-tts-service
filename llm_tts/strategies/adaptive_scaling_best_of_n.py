@@ -41,11 +41,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
         self.step_generator = step_generator
         self.scaling_rate = scaling_rate
         self.momentum_rate = momentum_rate
-        self.scale_discriminator = ScaleDiscriminator(
-            criterion=adaptive_scaling_method,
-            momentum_rate=momentum_rate,
-            scaling_rate=scaling_rate,
-        )
+        kwargs = {} 
+        kwargs["momentum_rate"] = momentum_rate
+        kwargs["scaling_rate"] = scaling_rate
+        self.scale_discriminator = ScaleDiscriminator(criterion=adaptive_scaling_method, **kwargs)
 
     def generate_trajectory(self, request: List[Dict[str, str]]) -> Dict[str, any]:
         """

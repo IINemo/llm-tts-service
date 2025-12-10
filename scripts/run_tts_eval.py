@@ -64,7 +64,7 @@ def load_tokenizer(model_path: str):
 
 def load_model(model_path: str, device_map: str):
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, device_map=device_map, trust_remote_code=True
+        model_path, device_map=device_map, trust_remote_code=True, torch_dtype= "auto"
     )
     return model
 
@@ -206,8 +206,13 @@ def create_model(config):
             model = WhiteboxModel(base_model, tokenizer)
 
         detector = StepBoundaryDetector(
-            step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
-            answer_patterns=["<Answer>:", "\n<Answer>:"],
+            step_patterns=["\n**Step",
+                            "\n## Step",
+                            "\n- Step",
+                            "- Step",
+                            "\nStep",],
+            answer_patterns=["<end of response>",
+                          "<|im_end|>"],
             max_tokens_per_step=config.generation.max_new_tokens,
         )
         step_generator = StepCandidateGeneratorThroughHuggingface(
@@ -802,6 +807,7 @@ def main(config):
     results_path = Path(output_dir) / "results.json"
     results, processed_indices = load_results_json(results_path)
 
+    dataset = dataset.shuffle(seed=config.system.seed)
     # Generate trajectories
     results = generate_trajectories(
         results=results,

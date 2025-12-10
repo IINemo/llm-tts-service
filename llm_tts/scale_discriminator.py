@@ -51,7 +51,7 @@ class MURDiscriminator(DiscriminatorBase):
 class RandomDiscriminator(DiscriminatorBase):
     """Random discriminator for testing"""
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.step_num = 0
 
     def should_scale(self, cur_signal: float) -> bool:
@@ -66,7 +66,7 @@ class RandomDiscriminator(DiscriminatorBase):
 class AverageDiscriminator(DiscriminatorBase):
     """Average-based discriminator"""
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.signal_history = []
         self.step_num = 0
 
@@ -84,7 +84,7 @@ class AverageDiscriminator(DiscriminatorBase):
 class AlwaysDiscriminator(DiscriminatorBase):
     """Always generate candidates discriminator"""
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.step_num = 0
         self.current_signal = 0.0
 
@@ -96,23 +96,6 @@ class AlwaysDiscriminator(DiscriminatorBase):
         self.step_num += 1
         self.current_signal = cur_signal
 
-
-class ThresholdDiscriminator(DiscriminatorBase):
-    """Threshold-based discriminator"""
-
-    def __init__(self, threshold: float = 0.5):
-        self.threshold = threshold
-        self.step_num = 0
-
-    def should_scale(self, cur_signal: float) -> bool:
-        return self.current_signal < self.threshold
-
-    def update(self, cur_signal: float) -> float:
-        """Update state of the discriminator"""
-        self.current_signal = cur_signal
-        self.step_num += 1
-
-
 class ScaleDiscriminator:
 
     def __init__(self, criterion: str, **kwargs):
@@ -121,17 +104,16 @@ class ScaleDiscriminator:
         if self.criterion == "momentum":
             self.discriminator = MURDiscriminator(**kwargs)
         elif self.criterion == "random":
-            self.discriminator = RandomDiscriminator()
+            self.discriminator = RandomDiscriminator(**kwargs)
         elif self.criterion == "average":
-            self.discriminator = AverageDiscriminator()
+            self.discriminator = AverageDiscriminator(**kwargs)
         elif self.criterion == "always":
-            self.discriminator = AlwaysDiscriminator()
-        elif self.criterion == "threshold":
-            self.discriminator = ThresholdDiscriminator(**kwargs)
+            self.discriminator = AlwaysDiscriminator(**kwargs)
         else:
             raise ValueError(
                 f"Invalid criterion: {self.criterion}. Valid criteria are: 'momentum', 'random', 'average', 'always', 'threshold'"
             )
+        self.discriminator_kwargs = kwargs
 
     def should_scale(self, cur_signal: float) -> bool:
         return self.discriminator.should_scale(cur_signal)
@@ -141,4 +123,4 @@ class ScaleDiscriminator:
         return self.discriminator.update(cur_signal)
 
     def reset(self):
-        self.discriminator.__init__()
+        self.discriminator.__init__(**self.discriminator_kwargs)
