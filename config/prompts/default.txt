@@ -11,5 +11,9 @@ Reasoning Steps:
 <Answer>: Your final answer
 <end of response>
 
+Follow the above output format STRICTLY! Do not add any other additional texts outside the template.
+Keep each reasoning step concise (single steps should not be too long).
+Each reasoning step must be on a single line (no line breaks within a step).
+
 Now answer:
 <Question>: {question}
