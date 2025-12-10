@@ -64,6 +64,26 @@ REGISTERED_STRATEGIES = [
             "test_adaptive_scaling.py",
         ],
         description="Adaptive scaling best-of-n strategy",
+    )
+    StrategyInfo(
+        name="uncert_cot",
+        class_name="StrategyUncertaintyCoT",
+        module_path="llm_tts/strategies/strategy_uncertainty_cot.py",
+        test_dir="tests/uncert_cot",
+        required_tests=[
+            "test_uncert_cot.py",
+        ],
+        description="Uncertainty-guided chain-of-thought with PD",
+    ),
+    StrategyInfo(
+        name="phi_decoding",
+        class_name="PhiDecoding",
+        module_path="llm_tts/strategies/phi.py",
+        test_dir="tests/phi_decoding",
+        required_tests=[
+            "test_phi_decoding.py",  # Strategy logic tests
+        ],
+        description="Phi decoding",
     ),
     StrategyInfo(
         name="tree_of_thoughts",

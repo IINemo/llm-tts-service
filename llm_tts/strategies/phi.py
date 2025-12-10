@@ -1,58 +1,64 @@
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List
+
+import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 from llm_tts.generators import (
     StepCandidate,
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
-    StepCandidateGeneratorThroughVLLM,
     covert_trajectory_to_string,
 )
-from llm_tts.scale_discriminator import ScaleDiscriminator
 
 from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 
 
-class AdaptiveScalingBestOfN(StrategyBase):
+def compute_softmax(x: List[float]) -> List[float]:
     """
-    Adaptive scaling online best-of-n strategy.
+    Compute softmax of a list of values.
+
+    Args:
+        x: List of values
+
+    Returns:
+        List of softmax values
+    """
+    x = np.array(x)
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum()
+
+
+class PhiDecoding(StrategyBase):
+    """
+    PhiDecoding: PhiDecoding for Large Language Models
     """
 
     def __init__(
         self,
-        scorer,
-        candidates_per_step: int,
-        max_steps: int,
         step_generator: (
-            StepCandidateGeneratorThroughAPI
-            | StepCandidateGeneratorThroughHuggingface
-            | StepCandidateGeneratorThroughVLLM
+            StepCandidateGeneratorThroughAPI | StepCandidateGeneratorThroughHuggingface
         ),
-        scaling_rate: float = 0.9,
-        momentum_rate: float = 0.9,
-        adaptive_scaling_method: str = "momentum",
+        scorer,
+        max_steps: int,
+        candidates_per_step: int = 4,
+        cluster_num: int = 2,
     ):
-        self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
-        self.scorer = scorer
+        self.candidates_per_step = candidates_per_step
         self.step_generator = step_generator
-        self.scaling_rate = scaling_rate
-        self.momentum_rate = momentum_rate
-        kwargs = {}
-        kwargs["momentum_rate"] = momentum_rate
-        kwargs["scaling_rate"] = scaling_rate
-        self.scale_discriminator = ScaleDiscriminator(
-            criterion=adaptive_scaling_method, **kwargs
-        )
+        self.scorer = scorer
+        self.cluster_num = cluster_num
 
     def generate_trajectory(self, request: List[Dict[str, str]]) -> Dict[str, any]:
         """
         Generate a trajectory step-by-step using specified criterion.
 
         Args:
-            prompt: Initial prompt/question
+            input: Initial prompt/question or a conversation
 
         Returns:
             Dictionary with:
@@ -64,6 +70,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         trajectory = []
         selected_steps = []
         validity_scores = []
+
         for step_num in range(self.max_steps):
             log.info(f"\n=== Step {step_num} ===")
 
@@ -72,36 +79,27 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 trajectory=trajectory,
                 candidates_per_step=1,
             )
-
             if not candidates:
                 log.info("No candidates generated, stopping")
                 break
 
-            # Score candidates
-            candidate_validity_scores = self.scorer.score_candidates(
-                request, candidates
-            )
             selected_candidate = candidates[0]
-            cur_signal = candidate_validity_scores[0]
 
-            log.info(f"Current signal: {cur_signal}")
-            log.info(f"Current candidate: {selected_candidate.text}")
+            # Phi scale
+            candidates = self.step_generator(
+                request,
+                trajectory=trajectory,
+                candidates_per_step=self.candidates_per_step,
+            )
+            scores_phi = self.scorer.score_candidates(request, candidates)
+            # Select best candidate
+            best_idx, _ = self.foresight_rerank(
+                request, candidates, trajectory, self.cluster_num, step_num
+            )
 
-            if self.scale_discriminator.should_scale(cur_signal):
-                log.info("Scaling step - generating new candidates")
-                candidates = self.step_generator(
-                    request,
-                    trajectory=trajectory,
-                    candidates_per_step=self.candidates_per_step,
-                )
-                all_candidate_scores = self.scorer.score_candidates(request, candidates)
-                # Select best candidate
-                best_idx, selected_candidate = self._select_best_candidate(
-                    candidates, all_candidate_scores
-                )
-                cur_signal = all_candidate_scores[best_idx]
-
-            self.scale_discriminator.update(cur_signal)
+            selected_candidate = candidates[best_idx]
+            cur_signal = scores_phi[best_idx]
+            validity_scores.append(cur_signal)
 
             # Update trajectory
             trajectory.append(selected_candidate)
@@ -119,7 +117,6 @@ class AdaptiveScalingBestOfN(StrategyBase):
             trajectory.append(final_answer)
             selected_steps.append(final_answer)
             validity_scores.append(final_validity)
-        self.scale_discriminator.reset()
 
         return {
             "trajectory": covert_trajectory_to_string(trajectory),
@@ -128,12 +125,41 @@ class AdaptiveScalingBestOfN(StrategyBase):
             "completed": len(selected_steps) > 0,
         }
 
-    def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
-        """Select the best candidate based on scores"""
+    # Simulate the future trajectory and rerank the candidates
+    def foresight_rerank(
+        self, request, step_candidates, trajectory, cluster_num, step_num
+    ):
+        foresight_texts, foresight_scores = [], []
+        for i in range(len(step_candidates)):
+            new_trajectory = trajectory + [step_candidates[i]]
+            candidate = self.step_generator(
+                request,
+                trajectory=new_trajectory,
+                candidates_per_step=1,
+            )
+            foresight_texts.append(candidate[0].text)
+            scores_simulate = self.scorer.score_candidates(request, candidate)
+            foresight_scores.append(scores_simulate[0] - 1.0)
+        try:
+            X = TfidfVectorizer().fit_transform(foresight_texts)
+            kmeans = KMeans(n_clusters=cluster_num, n_init="auto").fit(X)
+            labels = kmeans.labels_
 
-        # Higher validity is better
-        best_idx = min(range(len(scores)), key=lambda i: scores[i])
-        return best_idx, candidates[best_idx]
+            cluster_sizes = [list[Any](labels).count(i) for i in labels]
+            cluster_probs = compute_softmax(cluster_sizes)
+            foresight_probs = compute_softmax(foresight_scores)
+            combined_probs = [
+                (foresight_probs[i] + cluster_probs[i]) / 2
+                for i in range(len(foresight_scores))
+            ]
+
+            best_idx = np.random.choice(range(len(foresight_texts)), p=combined_probs)
+            return best_idx, foresight_texts[best_idx]
+        except Exception as e:
+            print("Clustering failed:", e)
+            fallback_probs = compute_softmax(foresight_scores)
+            best_idx = np.random.choice(range(len(foresight_scores)), p=fallback_probs)
+            return best_idx, foresight_texts[best_idx]
 
     def _generate_final_answer(
         self, chat: List[Dict[str, str]], trajectory: List[StepCandidate]
@@ -164,4 +190,3 @@ class AdaptiveScalingBestOfN(StrategyBase):
         """Clean up resources"""
 
         self.scorer.cleanup()
-        self.scale_discriminator.reset()

@@ -96,6 +96,7 @@ class AlwaysDiscriminator(DiscriminatorBase):
         self.step_num += 1
         self.current_signal = cur_signal
 
+
 class ScaleDiscriminator:
 
     def __init__(self, criterion: str, **kwargs):

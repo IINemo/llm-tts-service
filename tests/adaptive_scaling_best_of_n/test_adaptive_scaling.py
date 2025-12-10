@@ -3,11 +3,13 @@ import sys
 import torch
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 
+from llm_tts.generators import (
+    StepCandidateGeneratorThroughAPI,
+    StepCandidateGeneratorThroughHuggingface,
+    StepCandidateGeneratorThroughVLLM,
+)
 from llm_tts.scorers.step_scorer_uncertainty import StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
-from llm_tts.step_candidate_generator_through_huggingface import (
-    StepCandidateGeneratorThroughHuggingface,
-)
 from llm_tts.strategies import AdaptiveScalingBestOfN
 
 sys.path.insert(0, ".")
@@ -39,6 +41,7 @@ def create_request(question):
         {"role": "user", "content": prompt_template.format(question=question)},
     ]
     return request
+
 
 def test_adaptive_scaling_best_of_n():
     max_new_tokens = 100
@@ -74,7 +77,7 @@ def test_adaptive_scaling_best_of_n():
     )
     scorer = StepScorerUncertainty()
 
-    # Test Momentum 
+    # Test Momentum
     strategy = AdaptiveScalingBestOfN(
         step_generator=step_generator,
         scorer=scorer,
@@ -89,7 +92,6 @@ def test_adaptive_scaling_best_of_n():
     request = create_request(question)
     result = strategy.generate_trajectory(request)
     print(result)
-
 
     # Test Random
     strategy = AdaptiveScalingBestOfN(
@@ -121,7 +123,7 @@ def test_adaptive_scaling_best_of_n():
 
     # Test Always
     strategy = AdaptiveScalingBestOfN(
-        step_generator=step_generator,  
+        step_generator=step_generator,
         scorer=scorer,
         candidates_per_step=candidates_per_step,
         max_steps=max_steps,

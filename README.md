@@ -341,6 +341,7 @@ python service_app/main.py
 ## 📖 Documentation
 
 - **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Detailed architecture and components
+- **[Evaluation Protocol](docs/evaluation/README.md)** - Datasets, metrics (accuracy, tokens, FLOPs), and reporting guidelines
 - **[Strategy Registration](docs/STRATEGY_REGISTRATION.md)** - Adding new strategies with tests
 - **[Robustness Guide](docs/ROBUSTNESS.md)** - Incremental saving, resume, and reproducibility
 - **[DeepConf Guide](docs/deepconf/DeepConf.md)** - Confidence-based test-time scaling

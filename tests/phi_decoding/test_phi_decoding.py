@@ -6,7 +6,7 @@ from lm_polygraph.utils.generation_parameters import GenerationParameters
 from llm_tts.generators import StepCandidateGeneratorThroughHuggingface
 from llm_tts.scorers.step_scorer_uncertainty import StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
-from llm_tts.strategies import StrategyOnlineBestOfN
+from llm_tts.strategies import PhiDecoding
 
 sys.path.insert(0, ".")
 from omegaconf import OmegaConf
@@ -43,7 +43,7 @@ def create_request(question):
     return request
 
 
-def test_online_gest_of_n():
+def test_phi_decoding():
     max_new_tokens = 100
     max_length = 1024
     step_patterns = ["- Step", "<Answer>:", "\n<Answer>:"]
@@ -77,11 +77,12 @@ def test_online_gest_of_n():
         disable_thinking_mode=True,
     )
     scorer = StepScorerUncertainty()
-    strategy = StrategyOnlineBestOfN(
+    strategy = PhiDecoding(
         step_generator=step_generator,
         scorer=scorer,
         candidates_per_step=candidates_per_step,
         max_steps=max_steps,
+        cluster_num=2,
     )
 
     question = "Tom had 8 apples. He gave 3 to his friend and bought 5 more. How many apples does Tom have now?"
