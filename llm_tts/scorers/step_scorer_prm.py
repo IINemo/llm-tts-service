@@ -151,15 +151,28 @@ class StepScorerPRM(StepScorerRewardBase):
     Much cleaner and more efficient than going through the full pipeline.
     """
 
-    def __init__(self, prm_model_path: str, device: str, batch_size: int):
+    def __init__(self, prm_model_path: str, device: str, batch_size: int, torch_dtype: str):
         self.prm_model_path = prm_model_path
         self.device = device
         self.batch_size = batch_size
+        self.torch_dtype = torch_dtype
         self.prm_model = None
         self.prm_tokenizer = None
         self.steps_extractor = StepsExtractor(progress_bar=False)
 
         self.prepare_model()
+
+    def _get_torch_dtype(self):
+        """Convert string dtype to torch dtype."""
+        dtype_map = {
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+            "float32": torch.float32,
+            "auto": "auto",
+        }
+        if self.torch_dtype not in dtype_map:
+            raise ValueError(f"Invalid torch_dtype: {self.torch_dtype}. Options: {list(dtype_map.keys())}")
+        return dtype_map[self.torch_dtype]
 
     def prepare_model(self):
         """Load PRM model and tokenizer"""
@@ -171,7 +184,7 @@ class StepScorerPRM(StepScorerRewardBase):
         self.prm_model = AutoModel.from_pretrained(
             self.prm_model_path,
             device_map=self.device,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=self._get_torch_dtype(),
             trust_remote_code=True,
         ).eval()
 
