@@ -19,5 +19,7 @@ def get_torch_dtype(dtype_str: str):
         "auto": "auto",
     }
     if dtype_str not in dtype_map:
-        raise ValueError(f"Invalid torch_dtype: {dtype_str}. Options: {list(dtype_map.keys())}")
+        raise ValueError(
+            f"Invalid torch_dtype: {dtype_str}. Options: {list(dtype_map.keys())}"
+        )
     return dtype_map[dtype_str]

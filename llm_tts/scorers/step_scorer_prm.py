@@ -153,7 +153,9 @@ class StepScorerPRM(StepScorerRewardBase):
     Much cleaner and more efficient than going through the full pipeline.
     """
 
-    def __init__(self, prm_model_path: str, device: str, batch_size: int, torch_dtype: str):
+    def __init__(
+        self, prm_model_path: str, device: str, batch_size: int, torch_dtype: str
+    ):
         self.prm_model_path = prm_model_path
         self.device = device
         self.batch_size = batch_size
