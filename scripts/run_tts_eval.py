@@ -80,6 +80,7 @@ from llm_tts.strategies import (
     StrategyTreeOfThoughts,
     StrategyUncertaintyCoT,
 )
+from llm_tts.utils import get_torch_dtype
 from llm_tts.utils.flops import FLOPCalculator
 
 # Load environment variables from .env file
@@ -95,14 +96,15 @@ def load_tokenizer(model_path: str):
     return tokenizer
 
 
-def load_model(model_path: str, device_map: str):
+def load_model(model_path: str, device_map: str, torch_dtype: str):
+    dtype = get_torch_dtype(torch_dtype)
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         device_map=device_map,
         trust_remote_code=True,
-        torch_dtype=torch.float16,  # Use float16 for memory efficiency
+        torch_dtype=dtype,
     )
-    log.info("Loaded model with float16")
+    log.info(f"Loaded model with {torch_dtype}")
     return model
 
 
@@ -204,6 +206,7 @@ def create_scorer(config):
             prm_model_path=config.scorer.model_path,
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
+            torch_dtype=config.system.torch_dtype,
         )
 
     elif config.scorer.type == "uncertainty":
@@ -318,7 +321,11 @@ def create_model(config):
         else:
             log.info(f"Loading model: {config.model.model_path}")
             tokenizer = load_tokenizer(config.model.model_path)
-            base_model = load_model(config.model.model_path, config.system.device)
+            base_model = load_model(
+                config.model.model_path,
+                config.system.device,
+                config.system.torch_dtype,
+            )
             base_model.eval()
             model = WhiteboxModel(base_model, tokenizer)
 
