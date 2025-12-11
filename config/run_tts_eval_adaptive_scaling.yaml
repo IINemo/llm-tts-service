@@ -1,0 +1,31 @@
+# @package _global_
+
+hydra:
+  run:
+    dir: ${save_dir}/eval/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+save_dir: "./workdir"  # Directory to save results (will create validity/redundancy subdirs)
+
+defaults:
+  - dataset: default
+  - model: hf_qwen3
+  - generation: default
+  - system: default
+  - scorer: perplexity
+  - evaluation/llm_judge: default
+  - evaluation/alignscore: default
+  - strategy: adaptive_bon
+  - _self_
+
+evaluation:
+  evaluators: [exact_match]
+
+# strategy:
+#   type: adaptive
+#   candidates_per_step: 3
+#   max_steps: 20
+#   scaling_rate: 0.9
+#   momentum_rate: 0.9
+#   adaptive_scaling_method: always # momentum, random, average, always, threshold
+
+report_to: none

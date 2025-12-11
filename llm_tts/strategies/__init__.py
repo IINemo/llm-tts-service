@@ -1,3 +1,4 @@
+from .adaptive_scaling_best_of_n import AdaptiveScalingBestOfN
 from .deepconf import StrategyDeepConf
 from .phi import PhiDecoding
 from .strategy_base import StrategyBase
@@ -14,6 +15,7 @@ __all__ = [
     "StrategyChainOfThought",
     "StrategySelfConsistency",
     "StrategyDeepConf",
+    "AdaptiveScalingBestOfN",
     "StrategyUncertaintyCoT",
     "PhiDecoding",
     "StrategyTreeOfThoughts",

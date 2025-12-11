@@ -55,6 +55,7 @@ from llm_tts.generators import (
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import (
+    StepScorerConfidence,
     StepScorerPRM,
     StepScorerUncertainty,
     TotValueScorer,
@@ -70,6 +71,7 @@ try:
 except ImportError:
     VLLM_GENERATOR_AVAILABLE = False
 from llm_tts.strategies import (
+    AdaptiveScalingBestOfN,
     PhiDecoding,
     StrategyBeamSearch,
     StrategyDeepConf,
@@ -206,7 +208,8 @@ def create_scorer(config):
 
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
-
+    elif config.scorer.type == "perplexity" or config.scorer.type == "entropy":
+        scorer = StepScorerConfidence()
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
 
@@ -295,7 +298,7 @@ def create_model(config):
 
     elif config.model.type == "local":
         scorer_type = config.scorer.type if config.scorer else None
-        if scorer_type == "uncertainty" or scorer_type == "uncertainty_pd":
+        if scorer_type in ["uncertainty", "uncertainty_pd", "entropy", "perplexity"]:
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
@@ -370,7 +373,13 @@ def create_model(config):
             from llm_tts.early_stopping import BoundaryEarlyStopping
 
             detector = StepBoundaryDetector(
-                step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
+                step_patterns=[
+                    "- Step",
+                    "<Answer>:",
+                    "\n<Answer>:",
+                    "### Step",
+                    "\nStep",
+                ],
                 answer_patterns=["<Answer>:", "\n<Answer>:"],
                 max_tokens_per_step=config.generation.max_new_tokens,
             )
@@ -411,6 +420,16 @@ def create_tts_strategy(config, model, step_generator, scorer):
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
+        )
+    elif config.strategy.type == "adaptive":
+        strategy = AdaptiveScalingBestOfN(
+            step_generator=step_generator,
+            scorer=scorer,
+            candidates_per_step=config.strategy.candidates_per_step,
+            max_steps=config.strategy.max_steps,
+            adaptive_scaling_method=config.strategy.adaptive_scaling_method,
+            scaling_rate=config.strategy.scaling_rate,
+            momentum_rate=config.strategy.momentum_rate,
         )
     elif config.strategy.type == "deepconf":
         # DeepConf supports both API models (with logprobs) and local HuggingFace models
@@ -1101,6 +1120,7 @@ def main(config):
     results_path = Path(output_dir) / "results.json"
     results, processed_indices = load_results_json(results_path)
 
+    dataset = dataset.shuffle(seed=config.system.seed)
     # Generate trajectories
     results = generate_trajectories(
         results=results,
