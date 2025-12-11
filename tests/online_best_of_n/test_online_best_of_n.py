@@ -5,7 +5,7 @@ from lm_polygraph.utils.generation_parameters import GenerationParameters
 
 from llm_tts.generators import StepCandidateGeneratorThroughHuggingface
 from llm_tts.scorers.step_scorer_uncertainty import StepScorerUncertainty
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StepBoundaryDetector
 from llm_tts.strategies import StrategyOnlineBestOfN
 
 sys.path.insert(0, ".")

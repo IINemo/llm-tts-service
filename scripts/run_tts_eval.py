@@ -61,7 +61,7 @@ from llm_tts.scorers import (
     TotValueScorer,
     TotVoteScorer,
 )
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StepBoundaryDetector
 
 # vLLM step generator (optional)
 try:

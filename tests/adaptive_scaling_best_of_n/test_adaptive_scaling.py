@@ -17,7 +17,7 @@ except ImportError:
     VLLM_AVAILABLE = False
 
 from llm_tts.scorers.step_scorer_uncertainty import StepScorerUncertainty
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StepBoundaryDetector
 from llm_tts.strategies import AdaptiveScalingBestOfN
 
 sys.path.insert(0, ".")
