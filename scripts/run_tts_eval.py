@@ -80,25 +80,13 @@ from llm_tts.strategies import (
     StrategyTreeOfThoughts,
     StrategyUncertaintyCoT,
 )
+from llm_tts.utils import get_torch_dtype
 from llm_tts.utils.flops import FLOPCalculator
 
 # Load environment variables from .env file
 load_dotenv()
 
 log = logging.getLogger(__name__)
-
-
-def get_torch_dtype(dtype_str: str):
-    """Convert string dtype to torch dtype."""
-    dtype_map = {
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "float32": torch.float32,
-        "auto": "auto",
-    }
-    if dtype_str not in dtype_map:
-        raise ValueError(f"Invalid torch_dtype: {dtype_str}. Options: {list(dtype_map.keys())}")
-    return dtype_map[dtype_str]
 
 
 def load_tokenizer(model_path: str):

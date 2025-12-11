@@ -13,6 +13,8 @@ from lm_polygraph.stat_calculators.extract_claims import Claim
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
+from llm_tts.utils import get_torch_dtype
+
 from .step_scorer_reward_base import StepScorerRewardBase
 
 log = logging.getLogger(__name__)
@@ -162,18 +164,6 @@ class StepScorerPRM(StepScorerRewardBase):
 
         self.prepare_model()
 
-    def _get_torch_dtype(self):
-        """Convert string dtype to torch dtype."""
-        dtype_map = {
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-            "float32": torch.float32,
-            "auto": "auto",
-        }
-        if self.torch_dtype not in dtype_map:
-            raise ValueError(f"Invalid torch_dtype: {self.torch_dtype}. Options: {list(dtype_map.keys())}")
-        return dtype_map[self.torch_dtype]
-
     def prepare_model(self):
         """Load PRM model and tokenizer"""
 
@@ -184,7 +174,7 @@ class StepScorerPRM(StepScorerRewardBase):
         self.prm_model = AutoModel.from_pretrained(
             self.prm_model_path,
             device_map=self.device,
-            torch_dtype=self._get_torch_dtype(),
+            torch_dtype=get_torch_dtype(self.torch_dtype),
             trust_remote_code=True,
         ).eval()
 
