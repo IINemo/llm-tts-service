@@ -1,13 +1,15 @@
 import logging
-from typing import Dict, List
+from typing import TYPE_CHECKING, Dict, List, Union
 
 from llm_tts.generators import (
     StepCandidate,
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
-    StepCandidateGeneratorThroughVLLM,
     covert_trajectory_to_string,
 )
+
+if TYPE_CHECKING:
+    from llm_tts.generators import StepCandidateGeneratorThroughVLLM
 from llm_tts.scale_discriminator import ScaleDiscriminator
 
 from .strategy_base import StrategyBase
@@ -25,11 +27,11 @@ class AdaptiveScalingBestOfN(StrategyBase):
         scorer,
         candidates_per_step: int,
         max_steps: int,
-        step_generator: (
-            StepCandidateGeneratorThroughAPI
-            | StepCandidateGeneratorThroughHuggingface
-            | StepCandidateGeneratorThroughVLLM
-        ),
+        step_generator: Union[
+            StepCandidateGeneratorThroughAPI,
+            StepCandidateGeneratorThroughHuggingface,
+            "StepCandidateGeneratorThroughVLLM",
+        ],
         scaling_rate: float = 0.9,
         momentum_rate: float = 0.9,
         adaptive_scaling_method: str = "momentum",
