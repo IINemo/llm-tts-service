@@ -6,8 +6,16 @@ from lm_polygraph.utils.generation_parameters import GenerationParameters
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
-    StepCandidateGeneratorThroughVLLM,
 )
+
+# Check if vllm is available
+try:
+    from llm_tts.generators import StepCandidateGeneratorThroughVLLM
+
+    VLLM_AVAILABLE = True
+except ImportError:
+    VLLM_AVAILABLE = False
+
 from llm_tts.scorers.step_scorer_uncertainty import StepScorerUncertainty
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 from llm_tts.strategies import AdaptiveScalingBestOfN
