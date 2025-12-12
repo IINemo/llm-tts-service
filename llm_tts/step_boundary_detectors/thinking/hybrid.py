@@ -8,9 +8,9 @@ import logging
 import re
 from typing import Any, List, Optional
 
-from .base import StepBoundaryDetectorBase
-from .thinking_marker import ThinkingMarkerDetector
-from .thinking_sentence import ThinkingSentenceDetector
+from ..base import StepBoundaryDetectorBase
+from .marker import ThinkingMarkerDetector
+from .sentence import ThinkingSentenceDetector
 
 log = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ import logging
 import re
 from typing import Any, Callable, List, Optional, Tuple
 
-from .base import StepBoundaryDetectorBase
+from ..base import StepBoundaryDetectorBase
 
 log = logging.getLogger(__name__)
 

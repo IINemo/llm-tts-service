@@ -219,11 +219,13 @@ steps = detector.detect_steps(thinking_content)
 
 - **Detectors implementation**: [`llm_tts/step_boundary_detectors/`](../llm_tts/step_boundary_detectors/)
   - `base.py` - Abstract base class (`StepBoundaryDetectorBase`)
-  - `non_thinking.py` - For non-thinking mode with explicit markers (`StructuredStepDetector`)
-  - `thinking_sentence.py` - Sentence/paragraph-based detector
-  - `thinking_marker.py` - Marker-based detector (includes v2 markers)
-  - `thinking_hybrid.py` - Hybrid and adaptive detectors
-  - `thinking_llm.py` - LLM-based detector (GPT-4.1, vLLM)
+  - `non_thinking/` - Detectors for non-thinking mode (structured responses with explicit markers)
+    - `structured.py` - `StructuredStepDetector` for "- Step 1:", "- Step 2:" formats
+  - `thinking/` - Detectors for native thinking mode (`<think>` tags)
+    - `sentence.py` - `ThinkingSentenceDetector` (paragraph/sentence-based)
+    - `marker.py` - `ThinkingMarkerDetector` (linguistic markers, includes v2)
+    - `hybrid.py` - `ThinkingHybridDetector`, `ThinkingAdaptiveDetector`
+    - `llm.py` - `ThinkingLLMDetector`, `ThinkingLLMDetectorVLLM`
 - **Analysis script**: `scripts/analyze_thinking_steps.py`
 - **Results**: `outputs/2025-12-11/aime2025_thinking_vllm_22-50-50/by_detector/`
 - **Detailed analysis log**: `outputs/2025-12-11/aime2025_thinking_vllm_22-50-50/marker_semantic_v2_analysis.log`

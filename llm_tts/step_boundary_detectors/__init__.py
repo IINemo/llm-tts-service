@@ -5,17 +5,17 @@ This module provides different strategies for detecting step boundaries
 in LLM reasoning outputs, supporting both structured responses and
 native thinking mode.
 
-Detectors:
+Structure:
 ---------
-Structured Response Detectors (non-thinking mode):
-    StructuredStepDetector: For explicit step markers (- Step 1:, - Step 2:, etc.)
-
-Thinking Mode Detectors (native <think> tags):
-    ThinkingSentenceDetector: Split by sentences/paragraphs
-    ThinkingMarkerDetector: Split by linguistic markers (so, therefore, let me...)
-    ThinkingLLMDetector: Use secondary LLM to parse steps
-    ThinkingHybridDetector: Combine markers with fallback to sentences
-    ThinkingAdaptiveDetector: Auto-select strategy based on content
+step_boundary_detectors/
+├── base.py                 # Abstract base class
+├── non_thinking/           # For structured responses (- Step 1:, - Step 2:)
+│   └── structured.py       # StructuredStepDetector
+└── thinking/               # For native thinking mode (<think> tags)
+    ├── sentence.py         # ThinkingSentenceDetector
+    ├── marker.py           # ThinkingMarkerDetector
+    ├── hybrid.py           # ThinkingHybridDetector, ThinkingAdaptiveDetector
+    └── llm.py              # ThinkingLLMDetector, ThinkingLLMDetectorVLLM
 
 Usage:
 ------
@@ -28,7 +28,7 @@ detector = StructuredStepDetector(
 )
 steps = detector.detect_steps(response_text)
 
-# For native thinking mode (recommended: marker_semantic_v2 config)
+# For native thinking mode (recommended: marker with v2 config)
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 detector = ThinkingMarkerDetector(
     use_structure=False,
@@ -41,15 +41,19 @@ steps = detector.detect_steps(thinking_content)
 
 from .base import StepBoundaryDetectorBase
 from .non_thinking import StructuredStepDetector
-from .thinking_hybrid import ThinkingAdaptiveDetector, ThinkingHybridDetector
-from .thinking_llm import ThinkingLLMDetector, ThinkingLLMDetectorVLLM
-from .thinking_marker import ThinkingMarkerDetector
-from .thinking_sentence import ThinkingSentenceDetector
+from .thinking import (
+    ThinkingAdaptiveDetector,
+    ThinkingHybridDetector,
+    ThinkingLLMDetector,
+    ThinkingLLMDetectorVLLM,
+    ThinkingMarkerDetector,
+    ThinkingSentenceDetector,
+)
 
 __all__ = [
     # Base
     "StepBoundaryDetectorBase",
-    # Structured response detector (non-thinking mode)
+    # Non-thinking mode (structured responses)
     "StructuredStepDetector",
     # Thinking mode detectors
     "ThinkingSentenceDetector",

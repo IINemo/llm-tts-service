@@ -8,7 +8,7 @@ Detects reasoning transitions using linguistic markers like
 import re
 from typing import List, Optional, Set
 
-from .base import StepBoundaryDetectorBase
+from ..base import StepBoundaryDetectorBase
 
 
 class ThinkingMarkerDetector(StepBoundaryDetectorBase):

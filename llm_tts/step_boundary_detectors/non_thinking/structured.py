@@ -7,7 +7,7 @@ For native thinking mode (<think> tags), see thinking_*.py modules.
 
 from typing import List, Optional
 
-from .base import StepBoundaryDetectorBase
+from ..base import StepBoundaryDetectorBase
 
 
 class StructuredStepDetector(StepBoundaryDetectorBase):
