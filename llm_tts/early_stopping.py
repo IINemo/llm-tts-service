@@ -123,8 +123,11 @@ class ThinkingStepEarlyStopping(EarlyStopping):
     Args:
         detector: ThinkingMarkerDetector instance. If None, creates default
             marker_semantic_v2 configuration.
-        step_scorer: Optional scorer to evaluate step quality. Must have
-            `evaluate(step_text) -> float` method and `threshold` attribute.
+        step_scorer: Optional StepScorerBase instance to evaluate step quality.
+            Uses score_candidates(chat, [step], aggregation) interface.
+        score_threshold: Threshold below which a step is considered low quality.
+            Only used if step_scorer is provided.
+        score_aggregation: Aggregation method for scorer ('mean', 'min', 'max').
         stop_on_each_step: If True, stops at every step boundary (for step-by-step
             TTS). If False, only stops when step_scorer returns low score.
         min_chars_for_step: Minimum characters before considering step detection.
@@ -134,7 +137,9 @@ class ThinkingStepEarlyStopping(EarlyStopping):
     def __init__(
         self,
         detector: Optional[ThinkingMarkerDetector] = None,
-        step_scorer=None,
+        step_scorer=None,  # StepScorerBase
+        score_threshold: float = 0.5,
+        score_aggregation: str = "mean",
         stop_on_each_step: bool = True,
         min_chars_for_step: int = 100,
     ):
@@ -152,13 +157,30 @@ class ThinkingStepEarlyStopping(EarlyStopping):
             max_step_chars=600,
         )
         self.step_scorer = step_scorer
+        self.score_threshold = score_threshold
+        self.score_aggregation = score_aggregation
         self.stop_on_each_step = stop_on_each_step
         self.min_chars_for_step = min_chars_for_step
+
+        # Chat context for scorer (set via set_chat before generation)
+        self._chat: Optional[List[Dict[str, str]]] = None
 
         # Internal state
         self._detected_steps: List[str] = []
         self._stop_reason: Optional[str] = None
         self._last_step_score: Optional[float] = None
+
+    def set_chat(self, chat: List[Dict[str, str]]):
+        """
+        Set the chat context for step scoring.
+
+        Must be called before generation if using a step_scorer, as the scorer
+        needs the conversation context to evaluate steps.
+
+        Args:
+            chat: List of chat messages [{"role": "user", "content": "..."}]
+        """
+        self._chat = chat
 
     def should_stop(self, state: Dict) -> bool:
         text = state.get("text", "")
@@ -176,16 +198,19 @@ class ThinkingStepEarlyStopping(EarlyStopping):
             self._detected_steps = current_steps
 
             # Evaluate step if scorer provided
-            if self.step_scorer is not None:
-                score = self.step_scorer.evaluate(new_step)
+            if self.step_scorer is not None and self._chat is not None:
+                # Use StepScorerBase interface: score_candidates(chat, candidates, aggregation)
+                scores = self.step_scorer.score_candidates(
+                    self._chat, [new_step], aggregation=self.score_aggregation
+                )
+                score = scores[0] if scores else 0.5
                 self._last_step_score = score
 
-                if hasattr(self.step_scorer, "threshold"):
-                    if score < self.step_scorer.threshold:
-                        self._stop_reason = f"low_step_score:{score:.3f}"
-                        return True
+                if score < self.score_threshold:
+                    self._stop_reason = f"low_step_score:{score:.3f}"
+                    return True
 
-                # If scorer provided but no threshold issue, continue unless stop_on_each_step
+                # If scorer provided but score OK, continue unless stop_on_each_step
                 if not self.stop_on_each_step:
                     return False
 
@@ -206,11 +231,16 @@ class ThinkingStepEarlyStopping(EarlyStopping):
         """Return score of last evaluated step, if any."""
         return self._last_step_score
 
+    def get_current_step_count(self) -> int:
+        """Return number of steps detected so far."""
+        return len(self._detected_steps)
+
     def reset(self):
         """Reset internal state for new generation."""
         self._detected_steps = []
         self._stop_reason = None
         self._last_step_score = None
+        # Note: _chat is NOT reset - it should persist across retries
 
 
 class CompositeEarlyStopping(EarlyStopping):
