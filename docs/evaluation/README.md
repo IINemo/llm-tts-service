@@ -219,6 +219,56 @@ model:
 | DeepConf | Confidence-filtered voting | [Yao et al., 2025](https://arxiv.org/abs/2508.15260) |
 | Tree of Thoughts | Branching search with backtracking | [Yao et al., 2023](https://arxiv.org/abs/2305.10601) |
 | CoT | Single chain-of-thought | [Wei et al., 2022](https://arxiv.org/abs/2201.11903) |
+| Online Best-of-N | Step-by-step candidate selection | - |
+| Beam Search | Beam search over reasoning steps | - |
+| Phi Decoding | Phi-based step selection | [φ-Decoding](https://arxiv.org/abs/2503.13288) |
+
+---
+
+## Inference Framework Selection Guide
+
+### By Strategy Type
+
+| Strategy | Generation Type | Recommended Framework | Generator Class |
+|----------|----------------|----------------------|-----------------|
+| **Self-Consistency** | Full trace | vLLM | - (uses model directly) |
+| **DeepConf** | Full trace | vLLM | - (uses model directly) |
+| **CoT** | Full trace | vLLM | - (uses model directly) |
+| **Tree of Thoughts** | Custom | vLLM / HuggingFace | - (custom implementation) |
+| **Online Best-of-N** | Step-by-step | HuggingFace | `StepCandidateGeneratorThroughHuggingface` |
+| **Beam Search** | Step-by-step | HuggingFace | `StepCandidateGeneratorThroughHuggingface` |
+| **Phi Decoding** | Step-by-step | HuggingFace | `StepCandidateGeneratorThroughHuggingface` |
+| **Adaptive Scaling** | Step-by-step | HuggingFace | `StepCandidateGeneratorThroughHuggingface` |
+
+### By Mode (Thinking vs Non-Thinking)
+
+| Mode | Step Detection | Framework | Stopping Criteria | Detector |
+|------|---------------|-----------|-------------------|----------|
+| **Non-thinking** (explicit markers) | `"- Step N:"` | vLLM ✅ | Stop tokens | `StructuredStepDetector` |
+| **Non-thinking** (explicit markers) | `"- Step N:"` | HuggingFace ✅ | `BatchStepStoppingCriteria` | `StructuredStepDetector` |
+| **Thinking mode** (semantic markers) | `"wait"`, `"so"`, `"let me"` | vLLM ❌ | Not supported | - |
+| **Thinking mode** (semantic markers) | `"wait"`, `"so"`, `"let me"` | HuggingFace ✅ | `ThinkingStepStoppingCriteria` | `ThinkingMarkerDetector` |
+
+### Complete Matrix: Strategy × Mode × Framework
+
+| Strategy | Non-Thinking + vLLM | Non-Thinking + HF | Thinking + vLLM | Thinking + HF |
+|----------|---------------------|-------------------|-----------------|---------------|
+| Self-Consistency | ✅ | ✅ | ✅ (post-hoc split) | ✅ (post-hoc split) |
+| DeepConf | ✅ | ✅ | ✅ (post-hoc split) | ✅ (post-hoc split) |
+| CoT | ✅ | ✅ | ✅ | ✅ |
+| Online Best-of-N | ✅ (stop tokens) | ✅ (`BatchStepStoppingCriteria`) | ❌ | ✅ (`ThinkingStepStoppingCriteria`) |
+| Beam Search | ✅ (stop tokens) | ✅ (`BatchStepStoppingCriteria`) | ❌ | ✅ (`ThinkingStepStoppingCriteria`) |
+| Phi Decoding | ✅ (stop tokens) | ✅ (`BatchStepStoppingCriteria`) | ❌ | ✅ (`ThinkingStepStoppingCriteria`) |
+
+### Key Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `BatchStepStoppingCriteria` | `llm_tts/generators/huggingface.py` | Stop at explicit step markers during HF generation |
+| `ThinkingStepStoppingCriteria` | `llm_tts/generators/huggingface.py` | Stop at semantic markers during HF generation |
+| `StructuredStepDetector` | `llm_tts/step_boundary_detectors/non_thinking/` | Detect `"- Step N:"` patterns |
+| `ThinkingMarkerDetector` | `llm_tts/step_boundary_detectors/thinking/` | Detect semantic markers (`"wait"`, `"so"`, etc.) |
+| `ThinkingStepEarlyStopping` | `llm_tts/early_stopping.py` | For API streaming (OpenAI-compatible) |
 
 ---
 
