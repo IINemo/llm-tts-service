@@ -253,19 +253,24 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         return sorted(positions)
 
     def _split_at_positions(self, text: str, positions: List[int]) -> List[str]:
-        """Split text at the given positions."""
+        """Split text at the given positions, only at sentence boundaries."""
         if not positions:
             return [text] if text.strip() else []
 
         parts = []
         prev_pos = 0
+        sentence_endings = ".!?\n"
 
         for pos in positions:
             if pos > prev_pos:
                 part = text[prev_pos:pos].strip()
                 if part:
-                    parts.append(part)
-            prev_pos = pos
+                    # Only split if part ends with sentence punctuation
+                    # This avoids mid-sentence splits
+                    if part[-1] in sentence_endings:
+                        parts.append(part)
+                        prev_pos = pos
+                    # Otherwise, don't split here - continue accumulating
 
         # Add remaining text
         if prev_pos < len(text):
@@ -317,16 +322,51 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         if not hasattr(self, "_last_step_count"):
             self._last_step_count = 0
             self._trajectory_complete = False
+            self._last_marker_pos = 0
+            self._last_step_end_pos = 0
+            self._step_boundary_pos = None  # Position where current step ends
+
+    def reset_online_state(self):
+        """Reset state for a new generation session."""
+        self._last_step_count = 0
+        self._trajectory_complete = False
+        self._last_marker_pos = 0
+        self._last_step_end_pos = 0
+        self._step_boundary_pos = None
+
+    def mark_step_complete(self, generated_text: str):
+        """
+        Mark current step as complete and update state.
+
+        Call this after is_step_complete() returns True to advance
+        the internal position tracker for the next step.
+
+        Args:
+            generated_text: The full generated text at step completion
+        """
+        self.__init_online_state__()
+        text = self._extract_thinking_content(generated_text)
+
+        # Advance to boundary position if set, otherwise to end of text
+        if self._step_boundary_pos is not None:
+            self._last_step_end_pos = self._step_boundary_pos
+        else:
+            self._last_step_end_pos = len(text)
+
+        self._last_step_count += 1
+        self._step_boundary_pos = None  # Reset for next step
 
     def is_step_complete(self, generated_text: str, token_count: int = None) -> bool:
         """
         Check if current generation represents a complete step.
 
-        For thinking mode, a step is complete when we detect a new marker boundary.
-        This is used by BatchStepStoppingCriteria during generation.
+        Strategy: Match offline detect_steps() behavior.
+        - Find markers in new content since last step
+        - Complete step when we have a marker AND enough content (min_step_chars)
+        - Or when content exceeds max_step_chars (force split)
 
         Args:
-            generated_text: Text generated so far
+            generated_text: Text generated so far (cumulative)
             token_count: Number of tokens generated (optional)
 
         Returns:
@@ -336,26 +376,49 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
 
         # Check for trajectory completion first
         if self.is_trajectory_complete(generated_text):
+            self._step_boundary_pos = None  # No truncation, use full text
             return True
 
-        # Extract thinking content and detect steps
-        steps = self.detect_steps(generated_text)
+        text = self._extract_thinking_content(generated_text)
 
-        # Step complete when we have at least one full step
-        # (detected step count increases from 0 to 1+)
-        if len(steps) >= 1 and len(generated_text) >= self.min_step_chars:
-            # Check if text ends near a marker (indicating we're at a boundary)
-            marker_positions = self._find_marker_positions(
-                self._extract_thinking_content(generated_text)
-            )
+        # Content since last step completed
+        new_content = text[self._last_step_end_pos:]
+        new_content_len = len(new_content.strip())
 
-            # If we have markers and text is long enough, step is complete
-            if marker_positions and len(generated_text) >= self.min_step_chars * 2:
-                return True
+        # Not enough content yet
+        if new_content_len < self.min_step_chars:
+            return False
 
-            # Also complete if we hit max step chars
-            if len(generated_text) >= self.max_step_chars:
-                return True
+        # Find marker positions in new content
+        marker_positions = self._find_marker_positions(new_content)
+
+        # If we have enough content AND found a marker after min_step_chars,
+        # that marker indicates start of next step -> current step is complete
+        if marker_positions:
+            # Find first marker that's past min_step_chars
+            # IMPORTANT: Ignore markers too close to end of text because
+            # end-of-string acts as word boundary, causing false positives
+            # (e.g., "to so" matches \bso\b but full text is "to some")
+            min_lookahead = 5  # Require at least 5 chars after marker
+            sentence_endings = ".!?\n"
+            for pos in marker_positions:
+                # Skip markers too close to end (false positive risk)
+                if pos > len(new_content) - min_lookahead:
+                    continue
+                content_before_marker = new_content[:pos].strip()
+                if len(content_before_marker) >= self.min_step_chars:
+                    # Only split at sentence boundaries to avoid mid-sentence cuts
+                    # Check if content before marker ends with sentence punctuation
+                    if content_before_marker and content_before_marker[-1] in sentence_endings:
+                        # Store boundary position (absolute in full text)
+                        # Step ends AT the marker, not after it
+                        self._step_boundary_pos = self._last_step_end_pos + pos
+                        return True
+
+        # Force split if exceeds max (even without marker)
+        if new_content_len >= self.max_step_chars:
+            self._step_boundary_pos = None  # No truncation, use full text
+            return True
 
         return False
 
@@ -400,11 +463,22 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         return False
 
     def extract_step_text(self, generated_text: str) -> str:
-        """Extract the step text from generated content."""
-        steps = self.detect_steps(generated_text)
-        if steps:
-            return steps[-1]  # Return the last detected step
-        return generated_text.strip()
+        """
+        Extract the step text from generated content.
+
+        For online generation, returns text from last step end to boundary position.
+        This ensures steps don't include content past the marker.
+
+        Call this AFTER is_step_complete() returns True but BEFORE mark_step_complete().
+        """
+        self.__init_online_state__()
+        text = self._extract_thinking_content(generated_text)
+
+        # Extract text from last step end to boundary (or end of text)
+        start = self._last_step_end_pos
+        end = self._step_boundary_pos if self._step_boundary_pos is not None else len(text)
+
+        return text[start:end].strip()
 
     # Default answer patterns for trajectory completion
     @property

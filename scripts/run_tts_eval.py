@@ -336,9 +336,19 @@ def create_model(config):
 
         if use_thinking_detector:
             log.info("Using ThinkingMarkerDetector for thinking mode")
+            # marker_semantic_v2 settings (see tests/boundary_detectors/)
             detector = ThinkingMarkerDetector(
-                min_step_chars=config.strategy.get("min_step_chars", 50),
-                max_step_chars=config.strategy.get("max_step_chars", 800),
+                min_step_chars=config.strategy.get("min_step_chars", 200),
+                max_step_chars=config.strategy.get("max_step_chars", 1200),
+                use_sequence=config.strategy.get("use_sequence", True),
+                use_conclusion=config.strategy.get("use_conclusion", True),
+                use_thinking=config.strategy.get("use_thinking", True),
+                use_verification=config.strategy.get("use_verification", True),
+                use_structure=config.strategy.get("use_structure", False),
+                use_reasoning=config.strategy.get("use_reasoning", False),  # Default False to avoid over-splitting
+                use_sentence_start=config.strategy.get("use_sentence_start", False),
+                use_correction=config.strategy.get("use_correction", False),
+                custom_markers=config.strategy.get("custom_markers"),  # marker_semantic_v2 additions
             )
             # Set answer patterns if provided
             if config.strategy.get("detector_answer_patterns"):

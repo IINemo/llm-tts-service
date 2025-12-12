@@ -49,10 +49,25 @@ strategy:
   type: online_best_of_n
   candidates_per_step: 4
   max_steps: 10
-  # Use ThinkingMarkerDetector for semantic step boundaries
+  # Use ThinkingMarkerDetector with marker_semantic_v2 settings
   detector_type: thinking_marker
-  min_step_chars: 50
-  max_step_chars: 800
+  # marker_semantic_v2 config (see tests/boundary_detectors/)
+  min_step_chars: 200  # Higher for online to avoid micro-steps
+  max_step_chars: 1200  # Allow longer thinking steps
+  # Marker categories
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: false       # No paragraph/bullet splitting
+  use_reasoning: false       # REASONING_MARKERS has too many patterns
+  use_sentence_start: false  # Avoid "but", "however" over-splitting
+  use_correction: false
+  # Only the 3 selective marker_semantic_v2 additions
+  custom_markers:
+    - "\\bfor example\\b"
+    - "\\bgiven that\\b"
+    - "\\bsimilarly\\b"
   detector_answer_patterns:
     - "</think>"
     - "<Answer>:"
