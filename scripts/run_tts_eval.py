@@ -61,7 +61,7 @@ from llm_tts.scorers import (
     TotValueScorer,
     TotVoteScorer,
 )
-from llm_tts.step_boundary_detectors import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StructuredStepDetector
 
 # vLLM step generator (optional)
 try:
@@ -267,7 +267,7 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            detector = StepBoundaryDetector(
+            detector = StructuredStepDetector(
                 step_patterns=config.strategy.get(
                     "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
                 ),
@@ -322,7 +322,7 @@ def create_model(config):
             base_model.eval()
             model = WhiteboxModel(base_model, tokenizer)
 
-        detector = StepBoundaryDetector(
+        detector = StructuredStepDetector(
             step_patterns=config.strategy.get(
                 "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
             ),
@@ -372,7 +372,7 @@ def create_model(config):
             # Other strategies use boundary detection via early stopping
             from llm_tts.early_stopping import BoundaryEarlyStopping
 
-            detector = StepBoundaryDetector(
+            detector = StructuredStepDetector(
                 step_patterns=[
                     "- Step",
                     "<Answer>:",

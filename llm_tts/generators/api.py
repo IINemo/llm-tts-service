@@ -14,7 +14,7 @@ from llm_tts.generators.base import (
     StepCandidateGeneratorBase,
     covert_trajectory_to_string,
 )
-from llm_tts.step_boundary_detectors import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StructuredStepDetector
 
 log = logging.getLogger(__name__)
 
@@ -25,13 +25,13 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
     def __init__(
         self,
         model: BlackboxModel,
-        detector: StepBoundaryDetector,
+        detector: StructuredStepDetector,
         prefill_mode: bool,
     ):
         super().__init__(1)  # TODO:
 
         self.model = model
-        self.detector = detector or StepBoundaryDetector()
+        self.detector = detector or StructuredStepDetector()
         self.prefill_mode = prefill_mode
 
     def generate_candidates(

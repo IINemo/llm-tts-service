@@ -8,7 +8,7 @@ text generation (confidence-based, boundary-based, etc.).
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
-from llm_tts.step_boundary_detectors import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StructuredStepDetector
 
 
 class EarlyStopping(ABC):
@@ -79,8 +79,8 @@ class ConfidenceEarlyStopping(EarlyStopping):
 class BoundaryEarlyStopping(EarlyStopping):
     """Stop generation when text boundary is detected (Best-of-N style)."""
 
-    def __init__(self, detector: Optional[StepBoundaryDetector] = None):
-        self.detector = detector or StepBoundaryDetector(
+    def __init__(self, detector: Optional[StructuredStepDetector] = None):
+        self.detector = detector or StructuredStepDetector(
             step_patterns=None, answer_patterns=None, max_tokens_per_step=512
         )
         self._stop_reason = None

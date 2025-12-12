@@ -10,7 +10,7 @@ Available generators:
 - StepCandidateGeneratorThroughVLLM: vLLM for fast batched inference
 
 Also includes:
-- StepBoundaryDetector: Detects step and answer boundaries in generated text
+- StructuredStepDetector: Detects step and answer boundaries in generated text
 - StepCandidate: Data class representing a candidate step
 """
 

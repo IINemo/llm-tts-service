@@ -16,7 +16,7 @@ from llm_tts.generators.base import (
     StepCandidateGeneratorBase,
     covert_trajectory_to_string,
 )
-from llm_tts.step_boundary_detectors import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StructuredStepDetector
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class BatchStepStoppingCriteria(StoppingCriteria):
         self,
         tokenizer,
         start_length: int,
-        detector: StepBoundaryDetector,
+        detector: StructuredStepDetector,
         batch_size: int,
     ):
         self.tokenizer = tokenizer
@@ -63,7 +63,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
     def __init__(
         self,
         model: WhiteboxModel,
-        detector: StepBoundaryDetector,
+        detector: StructuredStepDetector,
         temperature: float,
         top_p: float,
         top_k: int,
@@ -76,7 +76,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         super().__init__(generation_batch_size)
 
         self.model = model
-        self.detector = detector or StepBoundaryDetector()
+        self.detector = detector or StructuredStepDetector()
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k

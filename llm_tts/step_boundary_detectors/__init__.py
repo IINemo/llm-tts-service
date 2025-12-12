@@ -46,15 +46,11 @@ from .thinking_llm import ThinkingLLMDetector, ThinkingLLMDetectorVLLM
 from .thinking_marker import ThinkingMarkerDetector
 from .thinking_sentence import ThinkingSentenceDetector
 
-# Backward compatibility alias
-StepBoundaryDetector = StructuredStepDetector
-
 __all__ = [
     # Base
     "StepBoundaryDetectorBase",
     # Structured response detector (non-thinking mode)
     "StructuredStepDetector",
-    "StepBoundaryDetector",  # Backward compatibility alias
     # Thinking mode detectors
     "ThinkingSentenceDetector",
     "ThinkingMarkerDetector",
