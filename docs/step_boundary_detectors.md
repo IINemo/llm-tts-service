@@ -218,7 +218,8 @@ steps = detector.detect_steps(thinking_content)
 ## Files
 
 - **Detectors implementation**: [`llm_tts/step_boundary_detectors/`](../llm_tts/step_boundary_detectors/)
-  - `base.py` - Base class and structured response detector
+  - `base.py` - Abstract base class (`StepBoundaryDetectorBase`)
+  - `non_thinking.py` - For non-thinking mode with explicit markers (`StructuredStepDetector`)
   - `thinking_sentence.py` - Sentence/paragraph-based detector
   - `thinking_marker.py` - Marker-based detector (includes v2 markers)
   - `thinking_hybrid.py` - Hybrid and adaptive detectors
