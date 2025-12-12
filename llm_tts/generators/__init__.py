@@ -20,7 +20,11 @@ from llm_tts.generators.base import (
     StepCandidateGeneratorBase,
     covert_trajectory_to_string,
 )
-from llm_tts.generators.huggingface import StepCandidateGeneratorThroughHuggingface
+from llm_tts.generators.huggingface import (
+    BatchStepStoppingCriteria,
+    StepCandidateGeneratorThroughHuggingface,
+    ThinkingStepStoppingCriteria,
+)
 
 # vLLM generators (optional)
 try:
@@ -34,5 +38,7 @@ __all__ = [
     "StepCandidateGeneratorThroughAPI",
     "StepCandidateGeneratorThroughHuggingface",
     "StepCandidateGeneratorThroughVLLM",
+    "BatchStepStoppingCriteria",
+    "ThinkingStepStoppingCriteria",
     "covert_trajectory_to_string",
 ]

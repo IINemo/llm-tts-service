@@ -16,7 +16,10 @@ from llm_tts.generators.base import (
     StepCandidateGeneratorBase,
     covert_trajectory_to_string,
 )
-from llm_tts.step_boundary_detectors import StructuredStepDetector
+from llm_tts.step_boundary_detectors import (
+    StructuredStepDetector,
+    ThinkingMarkerDetector,
+)
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +58,79 @@ class BatchStepStoppingCriteria(StoppingCriteria):
 
         # Stop when all sequences are finished
         return all(self.finished)
+
+
+class ThinkingStepStoppingCriteria(StoppingCriteria):
+    """
+    Stopping criteria for thinking mode step generation.
+
+    Uses ThinkingMarkerDetector to detect semantic step boundaries during generation.
+    Stops when a new step boundary is detected (step count increases).
+
+    Args:
+        tokenizer: Tokenizer for decoding generated ids
+        start_length: Length of input (to extract only generated tokens)
+        detector: ThinkingMarkerDetector instance for step detection
+        batch_size: Number of sequences in batch
+        min_chars_for_step: Minimum characters before checking for steps
+    """
+
+    def __init__(
+        self,
+        tokenizer,
+        start_length: int,
+        detector: ThinkingMarkerDetector,
+        batch_size: int,
+        min_chars_for_step: int = 100,
+    ):
+        self.tokenizer = tokenizer
+        self.start_length = start_length
+        self.detector = detector
+        self.batch_size = batch_size
+        self.min_chars_for_step = min_chars_for_step
+
+        # Track state per sequence
+        self.finished = [False] * batch_size
+        self.step_counts = [0] * batch_size  # Track detected steps per sequence
+        self.detected_steps = [
+            [] for _ in range(batch_size)
+        ]  # Store steps per sequence
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> bool:
+        """Check if new step boundary detected for each sequence in batch."""
+
+        for i in range(min(input_ids.shape[0], self.batch_size)):
+            if not self.finished[i]:
+                generated_ids = input_ids[i][self.start_length :]
+                generated_text = self.tokenizer.decode(
+                    generated_ids, skip_special_tokens=True
+                )
+
+                # Skip if text too short
+                if len(generated_text) < self.min_chars_for_step:
+                    continue
+
+                # Detect steps in generated text
+                current_steps = self.detector.detect_steps(generated_text)
+
+                # New step boundary detected?
+                if len(current_steps) > self.step_counts[i]:
+                    self.step_counts[i] = len(current_steps)
+                    self.detected_steps[i] = current_steps
+                    self.finished[i] = True
+
+        # Stop when all sequences have hit a step boundary
+        return all(self.finished)
+
+    def get_detected_steps(self, sequence_idx: int = 0) -> list:
+        """Get detected steps for a specific sequence."""
+        return self.detected_steps[sequence_idx]
+
+    def reset(self):
+        """Reset state for new generation."""
+        self.finished = [False] * self.batch_size
+        self.step_counts = [0] * self.batch_size
+        self.detected_steps = [[] for _ in range(self.batch_size)]
 
 
 class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
