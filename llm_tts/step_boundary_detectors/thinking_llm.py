@@ -6,27 +6,34 @@ Uses a secondary LLM to semantically parse thinking content into steps.
 
 import logging
 import re
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Tuple
 
 from .base import StepBoundaryDetectorBase
 
 log = logging.getLogger(__name__)
 
+# Approximate chars per token (conservative estimate)
+CHARS_PER_TOKEN = 4
+
 
 # Default prompt for step extraction
-DEFAULT_STEP_EXTRACTION_PROMPT = """You are an expert at analyzing reasoning processes. Given the following thinking/reasoning text, identify and extract the distinct reasoning steps.
+DEFAULT_STEP_EXTRACTION_PROMPT = """You are a text segmentation expert. Your task is to split the following reasoning text into logical steps WITHOUT changing, summarizing, or omitting ANY words.
 
 <thinking>
 {thinking_content}
 </thinking>
 
-Extract each logical reasoning step. Output ONLY the steps, one per line, starting each with "Step N:" where N is the step number.
+CRITICAL RULES:
+1. Output EVERY SINGLE WORD from the input - do not skip, summarize, or paraphrase anything
+2. Only add "Step N:" markers to indicate where each step begins
+3. Each step should be a complete thought or reasoning unit
+4. The concatenation of all steps must exactly reproduce the original text
+5. Do not add any commentary, interpretation, or extra text
 
-Rules:
-1. Each step should be a complete thought or reasoning unit
-2. Preserve the original wording as much as possible
-3. Don't add interpretation or explanation
-4. If the text has no clear steps, output it as a single "Step 1:"
+Output format - just add step markers before each logical segment:
+Step 1: [exact original text of first reasoning step]
+Step 2: [exact original text of second reasoning step]
+...
 
 Output:"""
 
@@ -52,6 +59,8 @@ class ThinkingLLMDetector(StepBoundaryDetectorBase):
         temperature: float = 0.0,
         max_tokens: int = 2048,
         cache_results: bool = True,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: int = 200,
     ):
         """
         Args:
@@ -64,6 +73,8 @@ class ThinkingLLMDetector(StepBoundaryDetectorBase):
             temperature: Sampling temperature (0 for deterministic)
             max_tokens: Maximum tokens in response
             cache_results: Whether to cache results for identical inputs
+            chunk_size: Max chars per chunk (auto-calculated if None based on max_tokens)
+            chunk_overlap: Overlap between chunks in chars to avoid cutting steps
         """
         self.llm_client = llm_client
         self.llm_generate_fn = llm_generate_fn
@@ -74,6 +85,16 @@ class ThinkingLLMDetector(StepBoundaryDetectorBase):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.cache_results = cache_results
+        self.chunk_overlap = chunk_overlap
+
+        # Auto-calculate chunk size: smaller chunks = better preservation
+        # For verbatim output, input and output are same size, so chunk must fit in context
+        # GPT-4.1-mini has 128k context, but smaller chunks = more accurate preservation
+        if chunk_size is None:
+            # Use ~8k chars per chunk for better word preservation
+            self.chunk_size = 8000
+        else:
+            self.chunk_size = chunk_size
 
         # Simple in-memory cache
         self._cache: dict = {}
@@ -123,10 +144,15 @@ class ThinkingLLMDetector(StepBoundaryDetectorBase):
                 log.debug("Using cached step detection result")
                 return self._cache[cache_key]
 
-        # Generate step extraction
+        # Generate step extraction (with chunking for long content)
         try:
-            llm_output = self._call_llm(text)
-            steps = self._parse_llm_output(llm_output)
+            if len(text) <= self.chunk_size:
+                # Short content: process in one call
+                llm_output = self._call_llm(text)
+                steps = self._parse_llm_output(llm_output)
+            else:
+                # Long content: process in chunks
+                steps = self._process_chunks(text)
         except Exception as e:
             log.error(f"LLM step detection failed: {e}")
             # Fallback: return entire text as single step
@@ -137,6 +163,83 @@ class ThinkingLLMDetector(StepBoundaryDetectorBase):
             self._cache[cache_key] = steps
 
         return steps
+
+    def _split_into_chunks(self, text: str) -> List[Tuple[int, str]]:
+        """
+        Split text into overlapping chunks at paragraph boundaries.
+
+        Returns:
+            List of (start_position, chunk_text) tuples
+        """
+        chunks = []
+        start = 0
+
+        while start < len(text):
+            end = start + self.chunk_size
+
+            if end >= len(text):
+                # Last chunk
+                chunks.append((start, text[start:]))
+                break
+
+            # Try to find a paragraph boundary near the end
+            # Look for double newline within last 20% of chunk
+            search_start = end - int(self.chunk_size * 0.2)
+            search_region = text[search_start:end]
+
+            # Find last paragraph break in search region
+            para_break = search_region.rfind("\n\n")
+            if para_break != -1:
+                end = search_start + para_break + 2  # Include the newlines
+            else:
+                # No paragraph break, try single newline
+                newline_break = search_region.rfind("\n")
+                if newline_break != -1:
+                    end = search_start + newline_break + 1
+
+            chunks.append((start, text[start:end]))
+
+            # Next chunk starts with overlap
+            start = max(start + 1, end - self.chunk_overlap)
+
+        return chunks
+
+    def _process_chunks(self, text: str) -> List[str]:
+        """
+        Process long text in chunks and merge results.
+
+        Returns:
+            Merged list of steps from all chunks
+        """
+        chunks = self._split_into_chunks(text)
+        log.info(f"Processing {len(chunks)} chunks for long content ({len(text)} chars)")
+
+        all_steps = []
+        seen_steps = set()  # Track unique steps to handle overlaps
+
+        for i, (start_pos, chunk) in enumerate(chunks):
+            log.info(f"Processing chunk {i+1}/{len(chunks)} (start={start_pos}, len={len(chunk)} chars)")
+
+            try:
+                llm_output = self._call_llm(chunk)
+                log.info(f"Chunk {i+1} LLM response ({len(llm_output)} chars):\n{llm_output}")
+                chunk_steps = self._parse_llm_output(llm_output)
+                total_step_chars = sum(len(s) for s in chunk_steps)
+                log.info(f"Chunk {i+1}: got {len(chunk_steps)} steps, {total_step_chars} chars (input was {len(chunk)} chars, coverage {total_step_chars/len(chunk)*100:.1f}%)")
+
+                for step in chunk_steps:
+                    # Use first 100 chars as dedup key to handle slight variations
+                    step_key = step[:100].strip().lower()
+                    if step_key not in seen_steps:
+                        seen_steps.add(step_key)
+                        all_steps.append(step)
+
+            except Exception as e:
+                log.warning(f"Chunk {i+1} failed: {e}")
+                # Add chunk as single step on failure
+                all_steps.append(chunk)
+
+        return all_steps
 
     def _extract_thinking_content(self, text: str) -> str:
         """Extract content from <think> tags if present."""
