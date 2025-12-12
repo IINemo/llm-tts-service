@@ -151,6 +151,31 @@ model:
 - Native batched generation for multiple traces
 - Higher throughput than HuggingFace
 
+**vLLM Limitations:**
+
+> ⚠️ **Important**: vLLM does **not** support custom stopping criteria callbacks. It only supports:
+> - `stop` - list of exact strings to stop on
+> - `stop_token_ids` - list of token IDs to stop on
+>
+> This means vLLM **cannot** be used with strategies that require dynamic step boundary detection during generation (e.g., Online Best-of-N, Beam Search in thinking mode).
+>
+> **Impact on strategies:**
+> | Strategy | vLLM Support | Notes |
+> |----------|--------------|-------|
+> | Self-Consistency | ✅ Full | Generates complete traces |
+> | DeepConf | ✅ Full | Generates complete traces |
+> | Online Best-of-N | ⚠️ Limited | Only works with explicit step markers (`"- Step N:"`), not semantic markers |
+> | Beam Search | ⚠️ Limited | Same limitation as Best-of-N |
+> | Thinking Mode TTS | ❌ Not supported | Requires semantic step detection during generation |
+>
+> **Workarounds:**
+> 1. Use **HuggingFace** inference for step-by-step strategies (supports `StoppingCriteria` callbacks)
+> 2. Use **post-hoc splitting** - generate full response, then split into steps with `ThinkingMarkerDetector`
+>
+> **References:**
+> - [GitHub Issue #551](https://github.com/vllm-project/vllm/issues/551) - Feature request for custom stop functions
+> - [vLLM Forums Discussion](https://discuss.vllm.ai/t/custom-function-based-stopping-criteria/1338) - Community discussion on this limitation
+
 ### API-Based Models
 
 For OpenRouter/OpenAI:
