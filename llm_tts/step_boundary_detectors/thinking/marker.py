@@ -308,6 +308,130 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
 
         return steps
 
+    # =========================================================================
+    # Methods for online generation (StoppingCriteria compatibility)
+    # =========================================================================
+
+    def __init_online_state__(self):
+        """Initialize state for online generation tracking."""
+        if not hasattr(self, "_last_step_count"):
+            self._last_step_count = 0
+            self._trajectory_complete = False
+
+    def is_step_complete(self, generated_text: str, token_count: int = None) -> bool:
+        """
+        Check if current generation represents a complete step.
+
+        For thinking mode, a step is complete when we detect a new marker boundary.
+        This is used by BatchStepStoppingCriteria during generation.
+
+        Args:
+            generated_text: Text generated so far
+            token_count: Number of tokens generated (optional)
+
+        Returns:
+            True if step boundary detected
+        """
+        self.__init_online_state__()
+
+        # Check for trajectory completion first
+        if self.is_trajectory_complete(generated_text):
+            return True
+
+        # Extract thinking content and detect steps
+        steps = self.detect_steps(generated_text)
+
+        # Step complete when we have at least one full step
+        # (detected step count increases from 0 to 1+)
+        if len(steps) >= 1 and len(generated_text) >= self.min_step_chars:
+            # Check if text ends near a marker (indicating we're at a boundary)
+            marker_positions = self._find_marker_positions(
+                self._extract_thinking_content(generated_text)
+            )
+
+            # If we have markers and text is long enough, step is complete
+            if marker_positions and len(generated_text) >= self.min_step_chars * 2:
+                return True
+
+            # Also complete if we hit max step chars
+            if len(generated_text) >= self.max_step_chars:
+                return True
+
+        return False
+
+    def is_trajectory_complete(
+        self, generated_text: str, reached_eos: bool = False
+    ) -> bool:
+        """
+        Check if trajectory is complete (answer found or end of thinking).
+
+        Args:
+            generated_text: Full generated text
+            reached_eos: Whether EOS token was reached
+
+        Returns:
+            True if trajectory is complete
+        """
+        self.__init_online_state__()
+
+        # Check for </think> tag (end of thinking)
+        if "</think>" in generated_text:
+            self._trajectory_complete = True
+            return True
+
+        # Check for answer patterns
+        for pattern in self.answer_patterns:
+            if pattern in generated_text:
+                self._trajectory_complete = True
+                return True
+
+        # Check EOS
+        if reached_eos:
+            self._trajectory_complete = True
+            return True
+
+        return False
+
+    def contains_answer_pattern(self, generated_text: str) -> bool:
+        """Check if text contains any answer pattern."""
+        for pattern in self.answer_patterns:
+            if pattern in generated_text:
+                return True
+        return False
+
+    def extract_step_text(self, generated_text: str) -> str:
+        """Extract the step text from generated content."""
+        steps = self.detect_steps(generated_text)
+        if steps:
+            return steps[-1]  # Return the last detected step
+        return generated_text.strip()
+
+    # Default answer patterns for trajectory completion
+    @property
+    def answer_patterns(self) -> List[str]:
+        """Answer patterns that indicate trajectory completion."""
+        if not hasattr(self, "_answer_patterns"):
+            self._answer_patterns = [
+                "</think>",
+                "<Answer>:",
+                "\n<Answer>:",
+                "\\boxed{",
+            ]
+        return self._answer_patterns
+
+    @answer_patterns.setter
+    def answer_patterns(self, patterns: List[str]):
+        """Set custom answer patterns."""
+        self._answer_patterns = patterns
+
+    # Step patterns property for vLLM stop tokens
+    @property
+    def step_patterns(self) -> List[str]:
+        """Step patterns for vLLM stop tokens (not used in marker detection)."""
+        # For thinking mode, we don't use explicit step patterns like "- Step"
+        # Instead, return answer patterns as stop tokens
+        return self.answer_patterns
+
     def get_marker_stats(self, text: str) -> dict:
         """
         Get statistics about markers found in text.

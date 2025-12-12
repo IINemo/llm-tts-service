@@ -61,7 +61,7 @@ from llm_tts.scorers import (
     TotValueScorer,
     TotVoteScorer,
 )
-from llm_tts.step_boundary_detectors import StructuredStepDetector
+from llm_tts.step_boundary_detectors import StructuredStepDetector, ThinkingMarkerDetector
 
 # vLLM step generator (optional)
 try:
@@ -305,6 +305,11 @@ def create_model(config):
 
             import importlib
 
+            # Add working directory to path for config module imports
+            cwd = os.getcwd()
+            if cwd not in sys.path:
+                sys.path.insert(0, cwd)
+
             mod = importlib.import_module(config.scorer.uncertainty_model_creator)
             model = mod.create_uncertainty_model(config)
             model.generation_parameters = GenerationParameters()
@@ -322,15 +327,33 @@ def create_model(config):
             base_model.eval()
             model = WhiteboxModel(base_model, tokenizer)
 
-        detector = StructuredStepDetector(
-            step_patterns=config.strategy.get(
-                "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
-            ),
-            answer_patterns=config.strategy.get(
-                "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
-            ),
-            max_tokens_per_step=config.generation.max_new_tokens,
+        # Choose detector based on thinking mode
+        detector_type = config.strategy.get("detector_type", "structured")
+        use_thinking_detector = (
+            detector_type == "thinking_marker"
+            or (not config.model.disable_thinking_mode and detector_type == "auto")
         )
+
+        if use_thinking_detector:
+            log.info("Using ThinkingMarkerDetector for thinking mode")
+            detector = ThinkingMarkerDetector(
+                min_step_chars=config.strategy.get("min_step_chars", 50),
+                max_step_chars=config.strategy.get("max_step_chars", 800),
+            )
+            # Set answer patterns if provided
+            if config.strategy.get("detector_answer_patterns"):
+                detector.answer_patterns = config.strategy.get("detector_answer_patterns")
+        else:
+            log.info("Using StructuredStepDetector")
+            detector = StructuredStepDetector(
+                step_patterns=config.strategy.get(
+                    "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+                ),
+                answer_patterns=config.strategy.get(
+                    "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+                ),
+                max_tokens_per_step=config.generation.max_new_tokens,
+            )
         step_generator = StepCandidateGeneratorThroughHuggingface(
             model=model,
             detector=detector,
@@ -349,8 +372,6 @@ def create_model(config):
         log.info(f"Using OpenAI API model: {model_path}")
 
         # Check provider for API key and base URL (applies to all strategies)
-        import os
-
         if config.model.get("provider") == "openrouter":
             api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
             base_url = "https://openrouter.ai/api/v1"
