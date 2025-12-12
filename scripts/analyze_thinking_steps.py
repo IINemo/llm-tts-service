@@ -15,12 +15,12 @@ import argparse
 import json
 import logging
 import re
+import statistics
 import sys
 import time
-import statistics
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from dataclasses import dataclass, field
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
