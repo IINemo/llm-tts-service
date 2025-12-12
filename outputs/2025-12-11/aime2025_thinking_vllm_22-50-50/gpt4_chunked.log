@@ -1,0 +1,36 @@
+Loading results from: outputs/2025-12-11/aime2025_thinking_vllm_22-50-50/results.json
+Loaded 5 samples
+Added GPT-4.1-mini detector
+Processing sample 1/5: index=0
+Processing 2 chunks for long content (53541 chars)
+HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+Processing sample 2/5: index=1
+HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+Processing sample 3/5: index=2
+Processing 2 chunks for long content (41963 chars)
+HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+Processing sample 4/5: index=3
+Processing 2 chunks for long content (48870 chars)
+HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+Processing sample 5/5: index=4
+Processing 2 chunks for long content (42285 chars)
+HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+Saving analysis to: outputs/2025-12-11/aime2025_thinking_vllm_22-50-50/step_boundary_timing_n5_gpt4_chunked.json
+
+========================================================================================================================
+SUMMARY STATISTICS
+========================================================================================================================
+Detector               Steps   Avg/Tr  AvgChar  MinChar  MaxChar  MedChar      AvgMs      TotalMs
+------------------------------------------------------------------------------------------------------------------------
+sentence_paragraph       859    171.8    225.0       46     4084    139.0       0.14         0.69
+sentence_both           1183    236.6    163.1       46      817    106.0       0.36         1.80
+marker_all              1733    346.6    111.0       41      592     88.0      44.02       220.11
+marker_semantic         1038    207.6    186.8       29     1340    155.0      37.72       188.58
+hybrid                   142     28.4   1365.9      268     3101   1405.0      43.33       216.64
+adaptive                1733    346.6    111.0       41      592     88.0      43.92       219.60
+llm_gpt4                 912    182.4     74.4        3      434     66.0   65746.38    328731.89
+========================================================================================================================
