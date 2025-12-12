@@ -5,7 +5,7 @@ Splits thinking content by sentences or paragraphs.
 """
 
 import re
-from typing import List, Optional
+from typing import List
 
 from ..base import StepBoundaryDetectorBase
 

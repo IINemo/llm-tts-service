@@ -71,7 +71,6 @@ class StructuredStepDetector(StepBoundaryDetectorBase):
             List of step strings
         """
         steps = []
-        current_pos = 0
 
         # Find all "- Step" occurrences
         step_marker = "- Step"
