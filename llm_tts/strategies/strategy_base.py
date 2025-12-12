@@ -9,9 +9,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Fallback patterns if detector doesn't have answer_patterns
-DEFAULT_ANSWER_PATTERNS = ["<Answer>:", "Answer:", "Final Answer:"]
-
 
 class StrategyBase(ABC):
     """Abstract base class for TTS strategies with parallel generation support"""
@@ -80,18 +77,19 @@ class StrategyBase(ABC):
         Returns:
             True if answer content is present, False otherwise
         """
-        # Get answer_patterns from detector, fallback to defaults
-        answer_patterns = DEFAULT_ANSWER_PATTERNS
-        if hasattr(self, "step_generator") and hasattr(
+        # Get answer_patterns from detector
+        if not hasattr(self, "step_generator") or not hasattr(
             self.step_generator, "detector"
         ):
-            detector = self.step_generator.detector
-            if hasattr(detector, "answer_patterns"):
-                answer_patterns = detector.answer_patterns
+            return False
+
+        detector = self.step_generator.detector
+        if not hasattr(detector, "answer_patterns"):
+            return False
 
         text = candidate.raw_text if candidate.raw_text else candidate.text
 
-        for pattern in answer_patterns:
+        for pattern in detector.answer_patterns:
             pos = text.find(pattern)
             if pos != -1:
                 content_after = text[pos + len(pattern) :].strip()
