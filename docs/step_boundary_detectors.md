@@ -221,9 +221,25 @@ steps = detector.detect_steps(thinking_content)
 - **Results**: `outputs/2025-12-11/aime2025_thinking_vllm_22-50-50/by_detector/`
 - **Detailed analysis log**: `outputs/2025-12-11/aime2025_thinking_vllm_22-50-50/marker_semantic_v2_analysis.log`
 
+## Limitations
+
+**Important:** This analysis is based on a specific model and dataset:
+- **Model**: Qwen3-8B
+- **Dataset**: AIME 2025 (mathematical reasoning)
+- **Samples**: First 5 problems
+
+The optimal markers may differ for:
+- **Other models**: Different models have different reasoning styles and vocabulary. For example, Claude may use different transition phrases than Qwen3 or GPT-4.
+- **Other datasets**: Mathematical reasoning (AIME) uses specific language patterns. Code generation, scientific reasoning, or general QA may require different markers.
+- **Other languages**: Non-English reasoning traces will need language-specific markers.
+
+The `marker_semantic_v2` configuration is optimized for Qwen3-8B on math problems. It should be re-evaluated when applying to different models or domains.
+
 ## Future Work
 
-1. **Human annotation baseline**: Create ground-truth step boundaries for validation
-2. **Domain-specific markers**: Different reasoning styles may need different markers
-3. **Adaptive marker selection**: Learn which markers work best for each content type
-4. **Lighter LLM baseline**: Test smaller models (GPT-4o-mini, Claude Haiku) as cheaper references
+1. **Cross-model analysis**: Test markers on other thinking models (DeepSeek-R1, Claude, o1) to find universal vs model-specific patterns
+2. **Cross-dataset analysis**: Evaluate on different reasoning tasks (code, science, commonsense) to identify domain-specific markers
+3. **Human annotation baseline**: Create ground-truth step boundaries for validation
+4. **Adaptive marker selection**: Learn which markers work best for each model/content type
+5. **Lighter LLM baseline**: Test smaller models (GPT-4o-mini, Claude Haiku) as cheaper references
+6. **Automatic marker discovery**: Mine reasoning traces to automatically discover effective markers for new models/domains
