@@ -18,35 +18,35 @@ Follow these steps to run a reproducible evaluation:
 
 ### Step 1: Configure Reproducibility
 
-Set `seed=42` for all experiments. The seed must be propagated to all components.
+Set `seed=42` and consistent `torch_dtype` for all experiments. These must be propagated to all components.
 
 ```yaml
 # config/system/default.yaml
 system:
-  seed: 42  # REQUIRED for reproducibility
+  seed: 42                # REQUIRED for reproducibility
+  torch_dtype: "bfloat16" # Options: float16, bfloat16, float32, auto
 ```
 
-**Seed propagation checklist:**
+**Reproducibility checklist:**
 
 | Component | Setting | Verified |
 |-----------|---------|----------|
 | System config | `system.seed: 42` | [ ] |
+| System config | `system.torch_dtype: bfloat16` | [ ] |
 | vLLM SamplingParams | `seed=config.system.seed` | [ ] |
 | Strategy (DeepConf/Self-Consistency) | `seed=config.system.seed` | [ ] |
 
 ### Step 2: Configure Model and Thinking Mode
 
-For models with thinking mode (e.g., Qwen3), disable it for fair comparison:
+For models with thinking mode (e.g., Qwen3), set `disable_thinking_mode` based on your experiment:
 
 ```yaml
 # config/model/vllm_qwen3.yaml
 model:
   type: vllm
   model_path: "Qwen/Qwen3-8B"
-  disable_thinking_mode: true  # REQUIRED for non-thinking evaluation
+  disable_thinking_mode: true  # Set to false for thinking mode experiments
 ```
-
-**Why disable thinking mode?** Thinking mode uses internal reasoning tokens that inflate compute costs. For fair comparison with other models, use non-thinking mode.
 
 ### Step 3: Configure Generation Parameters
 
@@ -121,8 +121,9 @@ Before running any experiment, verify:
 | Setting | Value | Why |
 |---------|-------|-----|
 | `system.seed` | `42` | Reproducibility |
-| `model.disable_thinking_mode` | `true` | Fair comparison (for Qwen3) |
-| `generation.temperature` | `0.7` | Non-greedy sampling |
+| `system.torch_dtype` | `bfloat16` | Consistent precision |
+| `model.disable_thinking_mode` | `true/false` | Depends on experiment type |
+| `generation.temperature` | `0.7` / `0.6` | Non-thinking / Thinking mode |
 | `generation.top_p` | `0.8` | Qwen3 recommended |
 | `generation.top_k` | `20` | Qwen3 recommended |
 | `strategy.temperature` | Same as generation | Consistency |
@@ -132,9 +133,9 @@ Before running any experiment, verify:
 
 ## Inference Backends
 
-### vLLM (Recommended)
+### vLLM
 
-Use vLLM for all local model evaluations:
+High-performance inference engine optimized for throughput.
 
 ```yaml
 model:
@@ -146,57 +147,82 @@ model:
   max_model_len: 32768
 ```
 
-**Why vLLM?**
-- PagedAttention prevents OOM on long sequences
-- Native batched generation for multiple traces
-- Higher throughput than HuggingFace
+| Pros | Cons |
+|------|------|
+| PagedAttention prevents OOM on long sequences | No custom stopping criteria callbacks |
+| Native batched generation for multiple traces | Only supports exact string stop tokens |
+| Higher throughput than HuggingFace | Cannot do semantic step boundary detection |
+| Prefix caching for repeated prompts | |
 
-**vLLM Limitations:**
+### HuggingFace
 
-> ⚠️ **Important**: vLLM does **not** support custom stopping criteria callbacks. It only supports:
-> - `stop` - list of exact strings to stop on
-> - `stop_token_ids` - list of token IDs to stop on
->
-> **Example - why this is a limitation:**
->
-> For **non-thinking mode** with explicit markers, stop tokens work fine:
-> ```
-> Model output: "- Step 1: Calculate x = 5\n- Step 2: ..."
->                                           ↑ stop=["- Step"] triggers here ✅
-> ```
->
-> For **thinking mode** with semantic markers, stop tokens fail:
-> ```
-> Model output: "The value is 5, so that means x = 10. Wait, let me reconsider..."
->                              ↑ stop=["so"] triggers here ❌
->                                (mid-sentence "so", not a step boundary!)
-> ```
->
-> With `StoppingCriteria`, we can use `ThinkingMarkerDetector` which:
-> - Uses `min_step_chars` to merge short segments (avoids splitting on every "so")
-> - Uses lookbehind patterns for some markers: `(?<=[.!?\n])\s*\bbut\b` (only after sentence end)
-> - Prefers multi-word phrases like "for example", "let me" (rarely mid-sentence)
->
-> vLLM can only do exact string matching - no such logic possible.
->
-> This means vLLM **cannot** be used with strategies that require dynamic step boundary detection during generation (e.g., Online Best-of-N, Beam Search in thinking mode).
->
-> **Impact on strategies:**
-> | Strategy | vLLM Support | Notes |
-> |----------|--------------|-------|
-> | Self-Consistency | ✅ Full | Generates complete traces |
-> | DeepConf | ✅ Full | Generates complete traces |
-> | Online Best-of-N | ⚠️ Limited | Only works with explicit step markers (`"- Step N:"`), not semantic markers |
-> | Beam Search | ⚠️ Limited | Same limitation as Best-of-N |
-> | Thinking Mode TTS | ❌ Not supported | Requires semantic step detection during generation |
->
-> **Workarounds:**
-> 1. Use **HuggingFace** inference for step-by-step strategies (supports `StoppingCriteria` callbacks)
-> 2. Use **post-hoc splitting** - generate full response, then split into steps with `ThinkingMarkerDetector`
->
-> **References:**
-> - [GitHub Issue #551](https://github.com/vllm-project/vllm/issues/551) - Feature request for custom stop functions
-> - [vLLM Forums Discussion](https://discuss.vllm.ai/t/custom-function-based-stopping-criteria/1338) - Community discussion on this limitation
+Standard inference with full control over generation process.
+
+```yaml
+model:
+  type: huggingface
+  model_path: "Qwen/Qwen3-8B"
+  device_map: auto
+  torch_dtype: bfloat16
+```
+
+| Pros | Cons |
+|------|------|
+| Full `StoppingCriteria` callback support | Lower throughput than vLLM |
+| Custom step boundary detection during generation | Higher memory usage |
+| Works with thinking mode semantic markers | May OOM on very long sequences |
+| Fine-grained control over generation | |
+
+### Framework Selection Guide
+
+| Use Case | Framework | Why |
+|----------|-----------|-----|
+| Self-Consistency / DeepConf | vLLM | Full trace generation, high throughput |
+| CoT (single trace) | vLLM | No step detection needed |
+| Online Best-of-N (non-thinking) | vLLM or HF | Explicit markers work with stop tokens |
+| Online Best-of-N (thinking mode) | HuggingFace | Requires `ThinkingStepStoppingCriteria` |
+| Beam Search (thinking mode) | HuggingFace | Requires semantic step detection |
+| Phi Decoding (thinking mode) | HuggingFace | Requires semantic step detection |
+
+> **Note**: For thinking mode with step-by-step strategies, vLLM cannot detect semantic boundaries like "wait", "so", "let me" during generation. Use HuggingFace with `ThinkingMarkerDetector` instead.
+
+**Why HuggingFace for step detection?**
+
+HuggingFace's `StoppingCriteria` is more universal for step detection - it allows passing any custom detector that can inspect generated tokens and apply arbitrary logic (regex patterns, minimum character thresholds, lookbehind assertions, etc.):
+
+```python
+from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
+from llm_tts.generators.huggingface import ThinkingStepStoppingCriteria
+
+# Create detector with semantic markers
+detector = ThinkingMarkerDetector(min_step_chars=100)
+
+# Pass detector to stopping criteria - inspects tokens during generation
+stopping_criteria = ThinkingStepStoppingCriteria(
+    tokenizer=tokenizer,
+    detector=detector,  # ✅ Custom logic possible
+    start_length=input_length,
+    batch_size=batch_size,
+)
+
+# Generate with custom stopping
+outputs = model.generate(
+    input_ids,
+    stopping_criteria=[stopping_criteria],  # ✅ Works
+)
+```
+
+vLLM only supports exact string matching:
+
+```python
+from vllm import SamplingParams
+
+params = SamplingParams(
+    stop=["- Step"],     # ✅ Exact strings only
+    stop_token_ids=[],   # ✅ Token IDs only
+    # stopping_criteria=  # ❌ Not supported
+)
+```
 
 ### API-Based Models
 
@@ -222,53 +248,6 @@ model:
 | Online Best-of-N | Step-by-step candidate selection | - |
 | Beam Search | Beam search over reasoning steps | - |
 | Phi Decoding | Phi-based step selection | [φ-Decoding](https://arxiv.org/abs/2503.13288) |
-
----
-
-## Inference Framework Selection Guide
-
-### By Strategy Type
-
-| Strategy | Generation Type | Recommended Framework | Generator Class |
-|----------|----------------|----------------------|-----------------|
-| **Self-Consistency** | Full trace | vLLM | - (uses model directly) |
-| **DeepConf** | Full trace | vLLM | - (uses model directly) |
-| **CoT** | Full trace | vLLM | - (uses model directly) |
-| **Tree of Thoughts** | Custom | vLLM / HuggingFace | - (custom implementation) |
-| **Online Best-of-N** | Step-by-step | HuggingFace | `StepCandidateGeneratorThroughHuggingface` |
-| **Beam Search** | Step-by-step | HuggingFace | `StepCandidateGeneratorThroughHuggingface` |
-| **Phi Decoding** | Step-by-step | HuggingFace | `StepCandidateGeneratorThroughHuggingface` |
-| **Adaptive Scaling** | Step-by-step | HuggingFace | `StepCandidateGeneratorThroughHuggingface` |
-
-### By Mode (Thinking vs Non-Thinking)
-
-| Mode | Step Detection | Framework | Stopping Criteria | Detector |
-|------|---------------|-----------|-------------------|----------|
-| **Non-thinking** (explicit markers) | `"- Step N:"` | vLLM ✅ | Stop tokens | `StructuredStepDetector` |
-| **Non-thinking** (explicit markers) | `"- Step N:"` | HuggingFace ✅ | `BatchStepStoppingCriteria` | `StructuredStepDetector` |
-| **Thinking mode** (semantic markers) | `"wait"`, `"so"`, `"let me"` | vLLM ❌ | Not supported | - |
-| **Thinking mode** (semantic markers) | `"wait"`, `"so"`, `"let me"` | HuggingFace ✅ | `ThinkingStepStoppingCriteria` | `ThinkingMarkerDetector` |
-
-### Complete Matrix: Strategy × Mode × Framework
-
-| Strategy | Non-Thinking + vLLM | Non-Thinking + HF | Thinking + vLLM | Thinking + HF |
-|----------|---------------------|-------------------|-----------------|---------------|
-| Self-Consistency | ✅ | ✅ | ✅ (post-hoc split) | ✅ (post-hoc split) |
-| DeepConf | ✅ | ✅ | ✅ (post-hoc split) | ✅ (post-hoc split) |
-| CoT | ✅ | ✅ | ✅ | ✅ |
-| Online Best-of-N | ✅ (stop tokens) | ✅ (`BatchStepStoppingCriteria`) | ❌ | ✅ (`ThinkingStepStoppingCriteria`) |
-| Beam Search | ✅ (stop tokens) | ✅ (`BatchStepStoppingCriteria`) | ❌ | ✅ (`ThinkingStepStoppingCriteria`) |
-| Phi Decoding | ✅ (stop tokens) | ✅ (`BatchStepStoppingCriteria`) | ❌ | ✅ (`ThinkingStepStoppingCriteria`) |
-
-### Key Components
-
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| `BatchStepStoppingCriteria` | `llm_tts/generators/huggingface.py` | Stop at explicit step markers during HF generation |
-| `ThinkingStepStoppingCriteria` | `llm_tts/generators/huggingface.py` | Stop at semantic markers during HF generation |
-| `StructuredStepDetector` | `llm_tts/step_boundary_detectors/non_thinking/` | Detect `"- Step N:"` patterns |
-| `ThinkingMarkerDetector` | `llm_tts/step_boundary_detectors/thinking/` | Detect semantic markers (`"wait"`, `"so"`, etc.) |
-| `ThinkingStepEarlyStopping` | `llm_tts/early_stopping.py` | For API streaming (OpenAI-compatible) |
 
 ---
 
