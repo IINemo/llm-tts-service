@@ -107,40 +107,92 @@ selected_answer = max(answer_weights, key=answer_weights.get)
 
 Online strategies generate reasoning step-by-step, scoring and selecting at each step.
 
-### Architecture
+### Sequence Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                            STRATEGY                                      │
-│  (StrategyOnlineBestOfN, PhiDecoding, AdaptiveScalingBestOfN)           │
-│                                                                          │
-│  Orchestrates the generation loop:                                       │
-│  1. Call step_generator to get candidates                                │
-│  2. Call scorer to rank candidates                                       │
-│  3. Select best candidate, add to trajectory                             │
-│  4. Repeat until complete or max_steps                                   │
-└─────────────────────────────────────────────────────────────────────────┘
-          │                                      │
-          ▼                                      ▼
-┌─────────────────────────┐          ┌─────────────────────────┐
-│    STEP GENERATOR       │          │      STEP SCORER        │
-│ (StepCandidateGenerator │          │ (StepScorerUncertainty, │
-│  ThroughHuggingface)    │          │  StepScorerPRM, etc.)   │
-│                         │          │                         │
-│ Generates N candidate   │          │ Scores candidates to    │
-│ steps using the model   │          │ select the best one     │
-└─────────────────────────┘          └─────────────────────────┘
-          │
-          ▼
-┌─────────────────────────┐
-│ STEP BOUNDARY DETECTOR  │
-│ (StructuredStepDetector,│
-│  ThinkingMarkerDetector)│
-│                         │
-│ Detects step boundaries │
-│ during generation via   │
-│ StoppingCriteria        │
-└─────────────────────────┘
+STRATEGY                 STEP_GENERATOR              DETECTOR                 SCORER
+   │                          │                          │                       │
+   │  generate_candidates()   │                          │                       │
+   │─────────────────────────>│                          │                       │
+   │                          │                          │                       │
+   │                          │  ┌──────────────────────────────────────────┐   │
+   │                          │  │ FOR each candidate (1..N):               │   │
+   │                          │  │                                          │   │
+   │                          │  │   model.generate() with StoppingCriteria │   │
+   │                          │  │         │                                │   │
+   │                          │  │         │  is_step_complete(text)?       │   │
+   │                          │  │         │────────────────────────────>│  │   │
+   │                          │  │         │                             │  │   │
+   │                          │  │         │  True/False + answer_found  │  │   │
+   │                          │  │         │<────────────────────────────│  │   │
+   │                          │  │         │                                │   │
+   │                          │  │   if True: stop generation              │   │
+   │                          │  │   return StepCandidate                  │   │
+   │                          │  └──────────────────────────────────────────┘   │
+   │                          │                          │                       │
+   │  List[StepCandidate]     │                          │                       │
+   │<─────────────────────────│                          │                       │
+   │                          │                          │                       │
+   │  score_candidates(candidates)                       │                       │
+   │────────────────────────────────────────────────────────────────────────────>│
+   │                          │                          │                       │
+   │                          │                          │       List[float]     │
+   │<────────────────────────────────────────────────────────────────────────────│
+   │                          │                          │                       │
+   │  select best candidate   │                          │                       │
+   │  add to trajectory       │                          │                       │
+   │                          │                          │                       │
+   │  if is_trajectory_complete: break                   │                       │
+   │  else: repeat for next step                         │                       │
+   │                          │                          │                       │
+```
+
+### Component Relationships
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              STRATEGY                                        │
+│  (StrategyOnlineBestOfN, PhiDecoding, AdaptiveScalingBestOfN)               │
+│                                                                              │
+│  - Holds step_generator and scorer                                           │
+│  - Runs main loop: generate → score → select → repeat                        │
+│  - Checks is_trajectory_complete to know when answer is found                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                    │ owns                              │ owns
+                    ▼                                   ▼
+┌───────────────────────────────────┐    ┌────────────────────────────────────┐
+│         STEP GENERATOR            │    │           STEP SCORER              │
+│ (StepCandidateGeneratorThrough    │    │ (StepScorerUncertainty,            │
+│  Huggingface)                     │    │  StepScorerPRM)                    │
+│                                   │    │                                    │
+│ - Holds model + detector          │    │ - Scores candidates independently  │
+│ - Creates StoppingCriteria        │    │ - Returns List[float] scores       │
+│ - Returns List[StepCandidate]     │    │                                    │
+└───────────────────────────────────┘    └────────────────────────────────────┘
+                    │ owns
+                    ▼
+┌───────────────────────────────────┐
+│      STEP BOUNDARY DETECTOR       │
+│ (StructuredStepDetector,          │
+│  ThinkingMarkerDetector)          │
+│                                   │
+│ - Defines step_patterns           │
+│ - Defines answer_patterns         │
+│ - is_step_complete(text) → bool   │
+│ - is_trajectory_complete → bool   │
+└───────────────────────────────────┘
+                    │ used by
+                    ▼
+┌───────────────────────────────────┐
+│       STOPPING CRITERIA           │
+│ (BatchStepStoppingCriteria,       │
+│  ThinkingStepStoppingCriteria)    │
+│                                   │
+│ - HuggingFace callback            │
+│ - Called after each token         │
+│ - Calls detector.is_step_complete │
+│ - Returns True to stop generation │
+└───────────────────────────────────┘
 ```
 
 ### Online Best-of-N Flow
