@@ -167,13 +167,17 @@ model:
 >
 > For **thinking mode** with semantic markers, stop tokens fail:
 > ```
-> Model output: "Let me think about this problem. So first I need to..."
->                                                 ↑ stop=["so"] would stop here ❌
->                                                   (but "so" appears mid-sentence, not a step boundary!)
+> Model output: "The value is 5, so that means x = 10. Wait, let me reconsider..."
+>                              ↑ stop=["so"] triggers here ❌
+>                                (mid-sentence "so", not a step boundary!)
 > ```
 >
-> We need custom logic to detect WHEN "so", "wait", "let me" indicate a new step vs. normal text.
-> HuggingFace's `StoppingCriteria` allows this; vLLM does not.
+> With `StoppingCriteria`, we can use `ThinkingMarkerDetector` which:
+> - Uses `min_step_chars` to merge short segments (avoids splitting on every "so")
+> - Uses lookbehind patterns for some markers: `(?<=[.!?\n])\s*\bbut\b` (only after sentence end)
+> - Prefers multi-word phrases like "for example", "let me" (rarely mid-sentence)
+>
+> vLLM can only do exact string matching - no such logic possible.
 >
 > This means vLLM **cannot** be used with strategies that require dynamic step boundary detection during generation (e.g., Online Best-of-N, Beam Search in thinking mode).
 >
