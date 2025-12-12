@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from sklearn.cluster import KMeans
@@ -12,7 +12,7 @@ from llm_tts.generators import (
     covert_trajectory_to_string,
 )
 
-from .strategy_base import StrategyBase
+from .strategy_base import DEFAULT_ANSWER_PATTERNS, StrategyBase
 
 log = logging.getLogger(__name__)
 
@@ -46,12 +46,14 @@ class PhiDecoding(StrategyBase):
         max_steps: int,
         candidates_per_step: int = 4,
         cluster_num: int = 2,
+        answer_patterns: Optional[List[str]] = None,
     ):
         self.max_steps = max_steps
         self.candidates_per_step = candidates_per_step
         self.step_generator = step_generator
         self.scorer = scorer
         self.cluster_num = cluster_num
+        self.answer_patterns = answer_patterns or DEFAULT_ANSWER_PATTERNS
 
     def generate_trajectory(self, request: List[Dict[str, str]]) -> Dict[str, any]:
         """

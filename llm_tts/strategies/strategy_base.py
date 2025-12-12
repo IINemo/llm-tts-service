@@ -10,8 +10,14 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+DEFAULT_ANSWER_PATTERNS = ["<Answer>:", "Answer:", "Final Answer:"]
+
+
 class StrategyBase(ABC):
     """Abstract base class for TTS strategies with parallel generation support"""
+
+    # Default answer patterns, can be overridden in subclasses
+    answer_patterns: List[str] = DEFAULT_ANSWER_PATTERNS
 
     @abstractmethod
     def generate_trajectory(self, input_chat: List[Dict[str, str]]) -> Dict[str, any]:
@@ -74,10 +80,9 @@ class StrategyBase(ABC):
         Returns:
             True if answer content is present, False otherwise
         """
-        answer_patterns = ["<Answer>:", "\n<Answer>:", "\n\nAnswer:", "Final Answer:"]
         text = candidate.raw_text if candidate.raw_text else candidate.text
 
-        for pattern in answer_patterns:
+        for pattern in self.answer_patterns:
             pos = text.find(pattern)
             if pos != -1:
                 content_after = text[pos + len(pattern) :].strip()

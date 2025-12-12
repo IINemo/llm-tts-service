@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from llm_tts.generators import (
     StepCandidate,
@@ -8,7 +8,7 @@ from llm_tts.generators import (
     covert_trajectory_to_string,
 )
 
-from .strategy_base import StrategyBase
+from .strategy_base import DEFAULT_ANSWER_PATTERNS, StrategyBase
 
 log = logging.getLogger(__name__)
 
@@ -26,11 +26,13 @@ class StrategyOnlineBestOfN(StrategyBase):
         step_generator: (
             StepCandidateGeneratorThroughAPI | StepCandidateGeneratorThroughHuggingface
         ),
+        answer_patterns: Optional[List[str]] = None,
     ):
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
         self.scorer = scorer
         self.step_generator = step_generator
+        self.answer_patterns = answer_patterns or DEFAULT_ANSWER_PATTERNS
 
     def generate_trajectory(self, request: List[Dict[str, str]]) -> Dict[str, any]:
         """

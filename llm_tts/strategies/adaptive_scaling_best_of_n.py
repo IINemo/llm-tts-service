@@ -1,5 +1,5 @@
 import logging
-from typing import TYPE_CHECKING, Dict, List, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 from llm_tts.generators import (
     StepCandidate,
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from llm_tts.generators import StepCandidateGeneratorThroughVLLM
 from llm_tts.scale_discriminator import ScaleDiscriminator
 
-from .strategy_base import StrategyBase
+from .strategy_base import DEFAULT_ANSWER_PATTERNS, StrategyBase
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         scaling_rate: float = 0.9,
         momentum_rate: float = 0.9,
         adaptive_scaling_method: str = "momentum",
+        answer_patterns: Optional[List[str]] = None,
     ):
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
@@ -42,6 +43,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         self.step_generator = step_generator
         self.scaling_rate = scaling_rate
         self.momentum_rate = momentum_rate
+        self.answer_patterns = answer_patterns or DEFAULT_ANSWER_PATTERNS
         kwargs = {}
         kwargs["momentum_rate"] = momentum_rate
         kwargs["scaling_rate"] = scaling_rate
