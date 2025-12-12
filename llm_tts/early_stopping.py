@@ -8,7 +8,10 @@ text generation (confidence-based, boundary-based, etc.).
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
-from llm_tts.step_boundary_detectors import StructuredStepDetector
+from llm_tts.step_boundary_detectors import (
+    StructuredStepDetector,
+    ThinkingMarkerDetector,
+)
 
 
 class EarlyStopping(ABC):
@@ -102,6 +105,112 @@ class BoundaryEarlyStopping(EarlyStopping):
 
     def get_reason(self) -> str:
         return self._stop_reason or "not-stopped"
+
+
+class ThinkingStepEarlyStopping(EarlyStopping):
+    """
+    Stop generation when a reasoning step boundary is detected in thinking mode.
+
+    Uses ThinkingMarkerDetector (marker_semantic_v2) to detect step boundaries
+    during streaming generation. When a new step is completed, optionally evaluates
+    it using a step scorer and stops if the score is below threshold.
+
+    This enables Test-Time Scaling (TTS) strategies to:
+    1. Detect when a reasoning step is complete
+    2. Evaluate the step quality
+    3. Decide whether to continue or backtrack/regenerate
+
+    Args:
+        detector: ThinkingMarkerDetector instance. If None, creates default
+            marker_semantic_v2 configuration.
+        step_scorer: Optional scorer to evaluate step quality. Must have
+            `evaluate(step_text) -> float` method and `threshold` attribute.
+        stop_on_each_step: If True, stops at every step boundary (for step-by-step
+            TTS). If False, only stops when step_scorer returns low score.
+        min_chars_for_step: Minimum characters before considering step detection.
+            Prevents false positives on very short accumulated text.
+    """
+
+    def __init__(
+        self,
+        detector: Optional[ThinkingMarkerDetector] = None,
+        step_scorer=None,
+        stop_on_each_step: bool = True,
+        min_chars_for_step: int = 100,
+    ):
+        # Default to marker_semantic_v2 configuration
+        self.detector = detector or ThinkingMarkerDetector(
+            use_sequence=True,
+            use_conclusion=True,
+            use_thinking=True,
+            use_verification=True,
+            use_reasoning=True,  # v2: for example, given that, similarly
+            use_structure=False,
+            use_sentence_start=False,
+            use_correction=False,
+            min_step_chars=100,
+            max_step_chars=600,
+        )
+        self.step_scorer = step_scorer
+        self.stop_on_each_step = stop_on_each_step
+        self.min_chars_for_step = min_chars_for_step
+
+        # Internal state
+        self._detected_steps: List[str] = []
+        self._stop_reason: Optional[str] = None
+        self._last_step_score: Optional[float] = None
+
+    def should_stop(self, state: Dict) -> bool:
+        text = state.get("text", "")
+
+        # Skip detection if text too short
+        if len(text) < self.min_chars_for_step:
+            return False
+
+        # Detect steps in accumulated text
+        current_steps = self.detector.detect_steps(text)
+
+        # Check if new step boundary detected
+        if len(current_steps) > len(self._detected_steps):
+            new_step = current_steps[-1]
+            self._detected_steps = current_steps
+
+            # Evaluate step if scorer provided
+            if self.step_scorer is not None:
+                score = self.step_scorer.evaluate(new_step)
+                self._last_step_score = score
+
+                if hasattr(self.step_scorer, "threshold"):
+                    if score < self.step_scorer.threshold:
+                        self._stop_reason = f"low_step_score:{score:.3f}"
+                        return True
+
+                # If scorer provided but no threshold issue, continue unless stop_on_each_step
+                if not self.stop_on_each_step:
+                    return False
+
+            # Stop at step boundary
+            self._stop_reason = f"step_boundary:{len(current_steps)}"
+            return True
+
+        return False
+
+    def get_reason(self) -> str:
+        return self._stop_reason or "not-stopped"
+
+    def get_detected_steps(self) -> List[str]:
+        """Return list of detected steps so far."""
+        return self._detected_steps.copy()
+
+    def get_last_step_score(self) -> Optional[float]:
+        """Return score of last evaluated step, if any."""
+        return self._last_step_score
+
+    def reset(self):
+        """Reset internal state for new generation."""
+        self._detected_steps = []
+        self._stop_reason = None
+        self._last_step_score = None
 
 
 class CompositeEarlyStopping(EarlyStopping):
