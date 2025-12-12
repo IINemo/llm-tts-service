@@ -1,8 +1,11 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List
+from typing import TYPE_CHECKING, Any, Callable, Dict, List
 
 from llm_tts.utils.parallel import parallel_execute
+
+if TYPE_CHECKING:
+    from llm_tts.generators import StepCandidate
 
 log = logging.getLogger(__name__)
 
@@ -53,3 +56,38 @@ class StrategyBase(ABC):
             desc=desc,
             model=model,
         )
+
+    def _has_answer_content(
+        self, candidate: "StepCandidate", min_answer_chars: int = 1
+    ) -> bool:
+        """
+        Check if candidate has actual answer content after the answer pattern.
+
+        When using HuggingFace/vLLM with stopping criteria, generation may stop
+        right at "<Answer>:" without generating the actual answer content.
+        This checks if there's meaningful content after the answer pattern.
+
+        Args:
+            candidate: The step candidate to check
+            min_answer_chars: Minimum characters expected after answer pattern
+
+        Returns:
+            True if answer content is present, False otherwise
+        """
+        answer_patterns = ["<Answer>:", "\n<Answer>:", "\n\nAnswer:", "Final Answer:"]
+        text = candidate.raw_text if candidate.raw_text else candidate.text
+
+        for pattern in answer_patterns:
+            pos = text.find(pattern)
+            if pos != -1:
+                content_after = text[pos + len(pattern) :].strip()
+                if len(content_after) >= min_answer_chars:
+                    return True
+                log.debug(
+                    f"Answer pattern found but content too short: "
+                    f"'{content_after}' ({len(content_after)} chars)"
+                )
+                return False
+
+        # No answer pattern found
+        return False
