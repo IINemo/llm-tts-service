@@ -171,6 +171,12 @@ class PhiDecoding(StrategyBase):
             best_idx = np.random.choice(range(len(foresight_scores)), p=fallback_probs)
             return best_idx, foresight_texts[best_idx]
 
+    def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
+        """Select the best candidate based on scores"""
+        # Higher validity is better
+        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        return best_idx, candidates[best_idx]
+
     def _generate_final_answer(
         self, chat: List[Dict[str, str]], trajectory: List[StepCandidate]
     ) -> tuple:
