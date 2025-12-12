@@ -41,6 +41,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class StepStats:
     """Statistics for steps detected in a single sample."""
+
     num_steps: int = 0
     total_chars: int = 0
     min_chars: int = 0
@@ -112,11 +113,18 @@ def analyze_trajectory(
 
             # For marker detector, also get marker stats
             if hasattr(detector, "get_marker_stats"):
-                results[name]["marker_stats"] = detector.get_marker_stats(thinking_content)
+                results[name]["marker_stats"] = detector.get_marker_stats(
+                    thinking_content
+                )
 
         except Exception as e:
             log.warning(f"Detector {name} failed: {e}")
-            results[name] = {"error": str(e), "num_steps": 0, "steps": [], "processing_time_ms": 0}
+            results[name] = {
+                "error": str(e),
+                "num_steps": 0,
+                "steps": [],
+                "processing_time_ms": 0,
+            }
 
     return results
 
@@ -206,9 +214,11 @@ def analyze_results_file(
             api_key = openai_api_key
             if not api_key:
                 import os
+
                 api_key = os.environ.get("OPENAI_API_KEY")
             if api_key:
                 from openai import OpenAI
+
                 client = OpenAI(api_key=api_key)
                 detectors["llm_gpt4"] = ThinkingLLMDetector(
                     llm_client=client,
@@ -224,6 +234,7 @@ def analyze_results_file(
         if use_qwen3:
             try:
                 from vllm import LLM
+
                 log.info("Loading Qwen3-8B via vLLM...")
                 vllm_engine = LLM(
                     model="Qwen/Qwen3-8B",
@@ -255,7 +266,9 @@ def analyze_results_file(
     }
 
     for i, sample in enumerate(results):
-        log.info(f"Processing sample {i + 1}/{len(results)}: index={sample.get('index')}")
+        log.info(
+            f"Processing sample {i + 1}/{len(results)}: index={sample.get('index')}"
+        )
 
         # Get all traces
         all_traces = sample.get("all_traces", [])
@@ -287,10 +300,16 @@ def analyze_results_file(
 
             # Update summary stats
             for detector_name, det_result in detection_results.items():
-                summary_stats[detector_name]["total_steps"] += det_result.get("num_steps", 0)
+                summary_stats[detector_name]["total_steps"] += det_result.get(
+                    "num_steps", 0
+                )
                 summary_stats[detector_name]["samples"] += 1
-                summary_stats[detector_name]["total_time_ms"] += det_result.get("processing_time_ms", 0)
-                summary_stats[detector_name]["all_step_lengths"].extend(det_result.get("step_lengths", []))
+                summary_stats[detector_name]["total_time_ms"] += det_result.get(
+                    "processing_time_ms", 0
+                )
+                summary_stats[detector_name]["all_step_lengths"].extend(
+                    det_result.get("step_lengths", [])
+                )
 
         # Build analyzed sample
         analyzed_sample = {
@@ -298,7 +317,8 @@ def analyze_results_file(
             "question": sample.get("question"),
             "gold_answer": sample.get("gold_answer"),
             "generated_answer": sample.get("generated_answer"),
-            "correct": str(sample.get("generated_answer")) == str(sample.get("gold_answer")),
+            "correct": str(sample.get("generated_answer"))
+            == str(sample.get("gold_answer")),
             "analyzed_traces": analyzed_traces,
         }
         analyzed_results.append(analyzed_sample)
@@ -352,7 +372,14 @@ def analyze_results_file(
                     for k, v in det.__dict__.items()
                     if not k.startswith("_")
                     and not callable(v)
-                    and k not in ("pattern", "marker_detector", "sentence_detector", "hybrid_detector", "llm_detector")
+                    and k
+                    not in (
+                        "pattern",
+                        "marker_detector",
+                        "sentence_detector",
+                        "hybrid_detector",
+                        "llm_detector",
+                    )
                 },
             }
             for name, det in detectors.items()
@@ -370,7 +397,9 @@ def analyze_results_file(
     log.info("\n" + "=" * 120)
     log.info("SUMMARY STATISTICS")
     log.info("=" * 120)
-    log.info(f"{'Detector':<20} {'Steps':>7} {'Avg/Tr':>8} {'AvgChar':>8} {'MinChar':>8} {'MaxChar':>8} {'MedChar':>8} {'AvgMs':>10} {'TotalMs':>12}")
+    log.info(
+        f"{'Detector':<20} {'Steps':>7} {'Avg/Tr':>8} {'AvgChar':>8} {'MinChar':>8} {'MaxChar':>8} {'MedChar':>8} {'AvgMs':>10} {'TotalMs':>12}"
+    )
     log.info("-" * 120)
     for detector_name, stats in summary_stats.items():
         log.info(

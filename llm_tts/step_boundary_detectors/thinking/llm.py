@@ -212,20 +212,28 @@ class ThinkingLLMDetector(StepBoundaryDetectorBase):
             Merged list of steps from all chunks
         """
         chunks = self._split_into_chunks(text)
-        log.info(f"Processing {len(chunks)} chunks for long content ({len(text)} chars)")
+        log.info(
+            f"Processing {len(chunks)} chunks for long content ({len(text)} chars)"
+        )
 
         all_steps = []
         seen_steps = set()  # Track unique steps to handle overlaps
 
         for i, (start_pos, chunk) in enumerate(chunks):
-            log.info(f"Processing chunk {i+1}/{len(chunks)} (start={start_pos}, len={len(chunk)} chars)")
+            log.info(
+                f"Processing chunk {i+1}/{len(chunks)} (start={start_pos}, len={len(chunk)} chars)"
+            )
 
             try:
                 llm_output = self._call_llm(chunk)
-                log.info(f"Chunk {i+1} LLM response ({len(llm_output)} chars):\n{llm_output}")
+                log.info(
+                    f"Chunk {i+1} LLM response ({len(llm_output)} chars):\n{llm_output}"
+                )
                 chunk_steps = self._parse_llm_output(llm_output)
                 total_step_chars = sum(len(s) for s in chunk_steps)
-                log.info(f"Chunk {i+1}: got {len(chunk_steps)} steps, {total_step_chars} chars (input was {len(chunk)} chars, coverage {total_step_chars/len(chunk)*100:.1f}%)")
+                log.info(
+                    f"Chunk {i+1}: got {len(chunk_steps)} steps, {total_step_chars} chars (input was {len(chunk)} chars, coverage {total_step_chars/len(chunk)*100:.1f}%)"
+                )
 
                 for step in chunk_steps:
                     # Use first 100 chars as dedup key to handle slight variations
