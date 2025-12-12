@@ -18,6 +18,7 @@ To develop and evaluate step boundary detectors, we analyzed thinking traces fro
 - **Model**: Qwen3-8B with native thinking mode (`<think>` tags)
 - **Dataset**: AIME 2025 (first 5 samples)
 - **Source**: `outputs/2025-12-11/aime2025_thinking_vllm_22-50-50/results.json`
+- **WandB run**: [nlpresearch.group/llm-tts-eval-aime2025/runs/jlbbglne](https://wandb.ai/nlpresearch.group/llm-tts-eval-aime2025/runs/jlbbglne)
 - **Baseline**: GPT-4.1-mini as reference for "good" step boundaries
 
 ### Process
