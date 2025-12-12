@@ -203,3 +203,72 @@ All original marker_semantic markers PLUS:
 Parameters: min_step_chars=100, max_step_chars=600
 
 =============================================================================
+
+=============================================================================
+STEP 7: STEP CONTENT ALIGNMENT ANALYSIS
+=============================================================================
+
+Compared actual step content between GPT-4.1 and marker_semantic_v2.
+
+CONTENT SIMILARITY:
+  - Matched steps (>50% similar): 682/1084 (62.9%)
+  - High matches (>70% similar): 334/1084 (30.8%)
+
+BOUNDARY POSITION ALIGNMENT:
+  Per-sample analysis (boundaries within 100 chars):
+    Sample 1: 78% boundaries align
+    Sample 2: 99% boundaries align  
+    Sample 3: 91% boundaries align
+    Sample 4: 80% boundaries align
+    Sample 5: 91% boundaries align
+
+  Overall:
+    - Exact matches (within 10 chars): 144/1079 (13.3%)
+    - Close matches (within 100 chars): 927/1079 (85.9%)
+
+KEY INSIGHT: 85.9% of GPT-4.1 boundaries have a marker_semantic_v2 boundary
+within 100 characters. The detectors split at similar locations, just with
+slight offsets due to different marker positions.
+
+=============================================================================
+STEP 8: ANALYSIS OF MISSED BOUNDARIES
+=============================================================================
+
+Looking at boundaries GPT-4.1 creates that marker_semantic_v2 misses:
+
+Most missed splits happen at "Alternatively" - GPT-4.1 frequently splits on
+this word, but marker_semantic_v2 doesn't include it (intentionally, to avoid
+over-splitting).
+
+Examples of GPT-4.1 splits that v2 misses:
+  - "...behavior. Alternatively, since the function..."
+  - "...complicated here. Alternatively, maybe we can..."
+  - "...at a minimum. Alternatively, maybe the function..."
+  - "...equation, perhaps? Alternatively, maybe we can..."
+
+This confirms our earlier finding: "alternatively" is a high-frequency
+GPT-4.1 splitter (89x), but adding it causes over-splitting in rule-based
+detection because GPT-4.1 is selective about WHEN to split on it.
+
+=============================================================================
+CONCLUSION: ALIGNMENT QUALITY
+=============================================================================
+
+STATISTICAL ALIGNMENT: 0.8% difference in avg steps/trace
+BOUNDARY ALIGNMENT: 85.9% of boundaries within 100 chars
+CONTENT ALIGNMENT: 62.9% of steps match (>50% similar)
+
+The 0.8% statistical match doesn't mean identical steps - it means the
+DISTRIBUTION of step sizes is similar. The actual step boundaries differ
+because:
+
+1. GPT-4.1 uses semantic understanding to decide WHEN to split
+2. marker_semantic_v2 uses pattern matching (always splits on markers)
+3. GPT-4.1 splits on "alternatively" selectively, we don't at all
+
+TRADE-OFF:
+- Adding "alternatively" would improve boundary alignment
+- But would worsen statistical alignment (over-splitting)
+- Current balance (0.8% stat diff, 86% boundary alignment) is good
+
+=============================================================================
