@@ -220,12 +220,27 @@ Since GPT-4.1 is expensive (~195 seconds/sample, ~$0.01-0.05 per sample dependin
 | sentence_paragraph | 171.8 | 225.0 | 139 | ~0.15ms | Good |
 | sentence_both | 236.6 | 163.1 | 106 | ~0.35ms | Decent |
 
-**Recommendation: `marker_semantic`** is the best cost-effective alternative to GPT-4.1:
-- **Steps/trace**: 207.6 vs 216.8 (4% difference)
-- **Avg chars/step**: 186.8 vs 179.1 (4% difference)
+**Recommendation: `marker_semantic_v2`** is the best cost-effective alternative to GPT-4.1:
+- **Steps/trace**: 215.0 vs 216.8 (**0.8% difference**)
+- **Avg chars/step**: 180.1 vs 179.1 (**0.6% difference**)
 - **Speed**: ~5400x faster (36ms vs 195,000ms)
 - **Cost**: Free (no API calls)
 
-`marker_semantic` uses semantic transition markers (sequence, conclusion, thinking, verification) without structural markers like paragraph breaks, producing semantically meaningful boundaries similar to LLM-based detection.
+### marker_semantic_v2 Improvements
 
-For applications requiring the highest quality semantic boundaries and where cost/latency is acceptable, GPT-4.1 remains the best choice. For production use with cost constraints, `marker_semantic` provides comparable results at negligible cost.
+Analysis of GPT-4.1's actual step boundaries revealed key missing markers. Adding selective multi-word phrases improved alignment from 4.2% to 0.8%:
+
+| Version | Steps/Trace | Avg Chars | Diff from GPT-4.1 |
+|---------|-------------|-----------|-------------------|
+| marker_semantic | 207.6 | 186.8 | 4.2% |
+| **marker_semantic_v2** | 215.0 | 180.1 | **0.8%** |
+| GPT-4.1 | 216.8 | 179.1 | Reference |
+
+**New markers added in v2:**
+- `for example` - example transitions
+- `given that` - premise statements
+- `similarly` - comparison transitions
+
+These are selective multi-word phrases that GPT-4.1 commonly uses as step boundaries but don't cause over-splitting like single words (`but`, `however`, `alternatively`).
+
+For production use, `marker_semantic_v2` provides nearly identical results to GPT-4.1 at negligible cost.

@@ -17,9 +17,13 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
 
     Looks for natural reasoning transition markers:
     - Sequence markers: "first", "second", "then", "next", "finally"
-    - Conclusion markers: "so", "therefore", "thus", "hence"
-    - Thinking markers: "let me", "I need to", "wait", "hmm", "okay"
+    - Conclusion markers: "so", "therefore", "thus", "hence", "the answer"
+    - Thinking markers: "let me", "I need to", "wait", "hmm", "okay", "wait but"
     - Verification markers: "let's check", "to verify", "this means"
+    - Reasoning markers: "alternatively", "for example", "consider", "suppose"
+    - Sentence-start markers: "but", "however", "since" (only after .!?\\n)
+    - Correction markers: "mistake", "error", "wrong"
+    - Structure markers: paragraph breaks, bullet points, numbered lists
 
     Best for: Semantic understanding of reasoning flow.
     """
@@ -46,6 +50,8 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         r"\bthis means\b",
         r"\bwhich means\b",
         r"\bwhich gives\b",
+        r"\bthis suggests\b",
+        r"\bthe answer\b",
     ]
 
     THINKING_MARKERS = [
@@ -60,6 +66,18 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         r"\bokay\b",
         r"\boh\b",
         r"\bactually\b",
+        # Extended thinking patterns
+        r"\blet me think\b",
+        r"\blet me consider\b",
+        r"\blet me compute\b",
+        r"\blet me try\b",
+        r"\blet me denote\b",
+        r"\bwait but\b",
+        r"\bwait no\b",
+        r"\bwait maybe\b",
+        r"\bwait perhaps\b",
+        r"\bso maybe\b",
+        r"\bso perhaps\b",
     ]
 
     VERIFICATION_MARKERS = [
@@ -71,6 +89,42 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         r"\bplugging in\b",
         r"\bif we\b",
         r"\bwhen we\b",
+    ]
+
+    # Markers safe to use anywhere (multi-word phrases unlikely mid-sentence)
+    REASONING_MARKERS = [
+        r"\balternatively\b",
+        r"\bfor example\b",
+        r"\bsimilarly\b",
+        r"\bnote that\b",
+        r"\brecall that\b",
+        r"\bgiven that\b",
+        r"\bconsider\b",
+        r"\bassume\b",
+        r"\bsuppose\b",
+        r"\bwe have\b",
+        r"\bwe can\b",
+        r"\bwe need\b",
+    ]
+
+    # Markers that should only match at sentence start (after . ! ? or newline)
+    # These are common words that would cause over-splitting if matched mid-sentence
+    SENTENCE_START_MARKERS = [
+        r"(?<=[.!?\n])\s*\bbut\b",
+        r"(?<=[.!?\n])\s*\bhowever\b",
+        r"(?<=[.!?\n])\s*\bsince\b",
+        r"(?<=[.!?\n])\s*\bbecause\b",
+        r"(?<=[.!?\n])\s*\bno\b",
+        r"(?<=[.!?\n])\s*\byes\b",
+        r"(?<=[.!?\n])\s*\bright\b",
+        r"(?<=[.!?\n])\s*\bcorrect\b",
+    ]
+
+    # Self-correction markers (important for reasoning traces)
+    CORRECTION_MARKERS = [
+        r"\bmistake\b",
+        r"\berror\b",
+        r"\bwrong\b",
     ]
 
     STRUCTURE_MARKERS = [
@@ -87,6 +141,9 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         use_thinking: bool = True,
         use_verification: bool = True,
         use_structure: bool = True,
+        use_reasoning: bool = True,
+        use_sentence_start: bool = True,
+        use_correction: bool = True,
         custom_markers: Optional[List[str]] = None,
         min_step_chars: int = 50,
         max_step_chars: int = 800,
@@ -99,6 +156,9 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
             use_thinking: Include thinking markers (let me, wait...)
             use_verification: Include verification markers (to check, verify...)
             use_structure: Include structure markers (paragraphs, bullets...)
+            use_reasoning: Include reasoning markers (alternatively, for example, consider...)
+            use_sentence_start: Include sentence-start markers (but, however, since... only after .!?\\n)
+            use_correction: Include self-correction markers (mistake, error, wrong)
             custom_markers: Additional custom marker patterns
             min_step_chars: Minimum characters per step
             max_step_chars: Maximum characters per step
@@ -120,6 +180,12 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
             self.markers.extend(self.VERIFICATION_MARKERS)
         if use_structure:
             self.markers.extend(self.STRUCTURE_MARKERS)
+        if use_reasoning:
+            self.markers.extend(self.REASONING_MARKERS)
+        if use_sentence_start:
+            self.markers.extend(self.SENTENCE_START_MARKERS)
+        if use_correction:
+            self.markers.extend(self.CORRECTION_MARKERS)
         if custom_markers:
             self.markers.extend(custom_markers)
 
