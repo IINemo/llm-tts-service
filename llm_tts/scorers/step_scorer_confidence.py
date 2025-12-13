@@ -20,7 +20,7 @@ class StepScorerConfidence(StepScorerBase):
             else:
                 # in vllm, the uncertainty score is stored in the generation_scores dictionary
                 # TODO: need to reimplement
-                uncertainty_score = candidate.generation_scores['perplexity']
+                uncertainty_score = candidate.generation_scores["perplexity"]
             if not isinstance(uncertainty_score, Iterable):
                 uncertainty_score = [uncertainty_score]
 

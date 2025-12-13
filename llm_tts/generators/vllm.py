@@ -1,5 +1,5 @@
-from typing import List, Dict
 import inspect
+from typing import Dict, List
 
 import numpy as np
 from vllm import LLM, SamplingParams
@@ -8,7 +8,7 @@ from vllm.outputs import CompletionOutput
 from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
-    covert_trajectory_to_string
+    covert_trajectory_to_string,
 )
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 
@@ -49,10 +49,10 @@ class StepCandidateGeneratorThroughVLLM(StepCandidateGeneratorBase):
         return -1.0 * res / len(candidate.token_ids)
 
     def generate_candidates(
-        self, 
-        request: List[Dict[str, str]], 
+        self,
+        request: List[Dict[str, str]],
         trajectory: List[StepCandidate],
-        candidates_per_step: int = 1
+        candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
         """Generate N candidate next steps from current trajectory"""
 
@@ -61,12 +61,10 @@ class StepCandidateGeneratorThroughVLLM(StepCandidateGeneratorBase):
         candidates = []
 
         self.sampling_params.n = candidates_per_step
-        
-        tokenizer_signature = inspect.signature(
-            self.tokenizer.apply_chat_template
-        )
+
+        tokenizer_signature = inspect.signature(self.tokenizer.apply_chat_template)
         has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
-        
+
         if has_enable_thinking:
             request_str = self.tokenizer.apply_chat_template(
                 [request],
@@ -78,23 +76,27 @@ class StepCandidateGeneratorThroughVLLM(StepCandidateGeneratorBase):
             request_str = self.tokenizer.apply_chat_template(
                 [request], tokenize=False, add_generation_prompt=True
             )
-        
+
         if isinstance(request_str, str):
             request_str = [request_str]
 
         if self.disable_thinking_mode and not has_enable_thinking:
             request_str[0] += "\n<think>\n\n</think>\n\n"
 
-        request_str[0] = request_str[0] + covert_trajectory_to_string(trajectory) + f"\n- Step {len(trajectory)+1}: "
+        request_str[0] = (
+            request_str[0]
+            + covert_trajectory_to_string(trajectory)
+            + f"\n- Step {len(trajectory)+1}: "
+        )
 
         # import pdb; pdb.set_trace();
-        answers = self.model.generate(request_str[0], sampling_params=self.sampling_params)[
-            0
-        ].outputs
+        answers = self.model.generate(
+            request_str[0], sampling_params=self.sampling_params
+        )[0].outputs
         # return answers
         for i in range(candidates_per_step):
             # Extract step using detector
-            step_text = f"\n-Step {len(trajectory)+1}: " + answers[i].text
+            step_text = f"\n- Step {len(trajectory)+1}: " + answers[i].text
             is_complete = True
 
             is_trajectory_complete = self.detector.is_trajectory_complete(
@@ -121,10 +123,11 @@ class StepCandidateGeneratorThroughVLLM(StepCandidateGeneratorBase):
 
     # Single request
     def generate_answer_candidates(
-        self, 
-        request: List[Dict[str, str]], 
+        self,
+        request: List[Dict[str, str]],
         trajectory: List[StepCandidate],
-        candidates_per_step: int, more_information=False
+        candidates_per_step: int,
+        more_information=False,
     ) -> str:
         """Generate and select best final answer based on criterion"""
         if not more_information:
