@@ -1,4 +1,5 @@
-from typing import List
+from typing import List, Dict
+import inspect
 
 import numpy as np
 from vllm import LLM, SamplingParams
@@ -7,6 +8,7 @@ from vllm.outputs import CompletionOutput
 from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
+    covert_trajectory_to_string
 )
 from llm_tts.step_boundary_detector import StepBoundaryDetector
 
@@ -21,10 +23,15 @@ class StepCandidateGeneratorThroughVLLM(StepCandidateGeneratorBase):
         model: LLM,
         detector: StepBoundaryDetector,
         sampling_params: SamplingParams,
+        disable_thinking_mode: bool,
+        generation_batch_size: int,
     ):
+        super().__init__(generation_batch_size)
         self.model = model
         self.detector = detector or StepBoundaryDetector()
         self.sampling_params = sampling_params
+        self.disable_thinking_mode = disable_thinking_mode
+        self.tokenizer = self.model.get_tokenizer()
 
     def calculate_perplexity(self, candidate: CompletionOutput) -> float:
         """Calculate perplexity of the response"""
@@ -42,7 +49,10 @@ class StepCandidateGeneratorThroughVLLM(StepCandidateGeneratorBase):
         return -1.0 * res / len(candidate.token_ids)
 
     def generate_candidates(
-        self, request, candidates_per_step: int = 1
+        self, 
+        request: List[Dict[str, str]], 
+        trajectory: List[StepCandidate],
+        candidates_per_step: int = 1
     ) -> List[StepCandidate]:
         """Generate N candidate next steps from current trajectory"""
 
@@ -51,13 +61,40 @@ class StepCandidateGeneratorThroughVLLM(StepCandidateGeneratorBase):
         candidates = []
 
         self.sampling_params.n = candidates_per_step
-        answers = self.model.generate(request, sampling_params=self.sampling_params)[
+        
+        tokenizer_signature = inspect.signature(
+            self.tokenizer.apply_chat_template
+        )
+        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
+        
+        if has_enable_thinking:
+            request_str = self.tokenizer.apply_chat_template(
+                [request],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=(not self.disable_thinking_mode),
+            )
+        else:
+            request_str = self.tokenizer.apply_chat_template(
+                [request], tokenize=False, add_generation_prompt=True
+            )
+        
+        if isinstance(request_str, str):
+            request_str = [request_str]
+
+        if self.disable_thinking_mode and not has_enable_thinking:
+            request_str[0] += "\n<think>\n\n</think>\n\n"
+
+        request_str[0] = request_str[0] + covert_trajectory_to_string(trajectory) + f"\n- Step {len(trajectory)+1}: "
+
+        # import pdb; pdb.set_trace();
+        answers = self.model.generate(request_str[0], sampling_params=self.sampling_params)[
             0
         ].outputs
         # return answers
         for i in range(candidates_per_step):
             # Extract step using detector
-            step_text = answers[i].text
+            step_text = f"\n-Step {len(trajectory)+1}: " + answers[i].text
             is_complete = True
 
             is_trajectory_complete = self.detector.is_trajectory_complete(
@@ -83,14 +120,17 @@ class StepCandidateGeneratorThroughVLLM(StepCandidateGeneratorBase):
         return candidates
 
     # Single request
-    def generate_answer(
-        self, request, candidates_per_step: int, more_information=False
+    def generate_answer_candidates(
+        self, 
+        request: List[Dict[str, str]], 
+        trajectory: List[StepCandidate],
+        candidates_per_step: int, more_information=False
     ) -> str:
         """Generate and select best final answer based on criterion"""
         if not more_information:
-            return self.generate_candidates(request, candidates_per_step)
+            return self.generate_candidates(request, trajectory, candidates_per_step)
 
-        return self.generate_candidates(request, candidates_per_step)
+        return self.generate_candidates(request, trajectory, candidates_per_step)
 
     # Batch request
     def generate_batch(

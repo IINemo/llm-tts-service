@@ -15,8 +15,12 @@ class StepScorerConfidence(StepScorerBase):
     ) -> List[CandidateScore]:
         result = []
         for candidate in candidates:
-            uncertainty_score = candidate.other_data["uncertainty_score"]
-
+            if hasattr(candidate, "other_data") and candidate.other_data:
+                uncertainty_score = candidate.other_data["uncertainty_score"]
+            else:
+                # in vllm, the uncertainty score is stored in the generation_scores dictionary
+                # TODO: need to reimplement
+                uncertainty_score = candidate.generation_scores['perplexity']
             if not isinstance(uncertainty_score, Iterable):
                 uncertainty_score = [uncertainty_score]
 
