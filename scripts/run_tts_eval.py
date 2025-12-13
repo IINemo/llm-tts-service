@@ -63,9 +63,10 @@ from llm_tts.scorers import (
 )
 from llm_tts.step_boundary_detectors import StructuredStepDetector, ThinkingMarkerDetector
 
-# vLLM step generator (optional)
+# vLLM step generators (optional)
 try:
     from llm_tts.generators import StepCandidateGeneratorThroughVLLM
+    from llm_tts.generators.vllm import ThinkingStepGeneratorVLLM
 
     VLLM_GENERATOR_AVAILABLE = True
 except ImportError:
@@ -205,11 +206,15 @@ def create_scorer(config):
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
         )
-
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
     elif config.scorer.type == "perplexity" or config.scorer.type == "entropy":
         scorer = StepScorerConfidence()
+    elif config.scorer.type == "generation":
+        # Use pre-computed generation scores (for vLLM)
+        from llm_tts.scorers import StepScorerGeneration
+        score_type = config.scorer.get("score_type", "mean_entropy")
+        scorer = StepScorerGeneration(score_type=score_type)
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
 
@@ -267,30 +272,61 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            detector = StructuredStepDetector(
-                step_patterns=config.strategy.get(
-                    "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
-                ),
-                answer_patterns=config.strategy.get(
-                    "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
-                ),
-                max_tokens_per_step=config.generation.max_new_tokens,
-            )
+            detector_type = config.strategy.get("detector_type", "structured")
 
-            # Create sampling params for step generation
-            step_sampling_params = SamplingParams(
-                max_tokens=config.generation.max_new_tokens,
-                temperature=config.generation.temperature,
-                top_p=config.generation.top_p,
-                logprobs=config.strategy.get("top_logprobs", 20),
-                stop=detector.step_patterns,
-            )
+            if detector_type == "thinking_marker":
+                # Use ThinkingStepGeneratorVLLM for thinking mode
+                log.info("Creating ThinkingStepGeneratorVLLM for thinking mode")
 
-            step_generator = StepCandidateGeneratorThroughVLLM(
-                model=llm,
-                detector=detector,
-                sampling_params=step_sampling_params,
-            )
+                step_generator = ThinkingStepGeneratorVLLM(
+                    model=llm,
+                    min_step_chars=config.strategy.get("min_step_chars", 200),
+                    max_step_chars=config.strategy.get("max_step_chars", 1200),
+                    max_new_tokens=config.generation.max_new_tokens,
+                    temperature=config.generation.temperature,
+                    top_p=config.generation.top_p,
+                    top_k=config.generation.get("top_k", 20),
+                    # Stop token configuration (matches ThinkingMarkerDetector)
+                    use_sequence=config.strategy.get("use_sequence", True),
+                    use_conclusion=config.strategy.get("use_conclusion", True),
+                    use_thinking=config.strategy.get("use_thinking", True),
+                    use_verification=config.strategy.get("use_verification", True),
+                    use_reasoning=config.strategy.get("use_reasoning", False),
+                    use_correction=config.strategy.get("use_correction", False),
+                    use_structure=config.strategy.get("use_structure", False),
+                    custom_words=config.strategy.get("custom_words", None),
+                    answer_patterns=config.strategy.get(
+                        "detector_answer_patterns", ["</think>", "<Answer>:", "\\boxed{"]
+                    ),
+                    # Thinking mode control (from model config)
+                    disable_thinking_mode=config.model.get("disable_thinking_mode", False),
+                )
+            else:
+                # Use StructuredStepDetector for structured mode
+                detector = StructuredStepDetector(
+                    step_patterns=config.strategy.get(
+                        "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+                    ),
+                    answer_patterns=config.strategy.get(
+                        "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+                    ),
+                    max_tokens_per_step=config.generation.max_new_tokens,
+                )
+
+                # Create sampling params for step generation
+                step_sampling_params = SamplingParams(
+                    max_tokens=config.generation.max_new_tokens,
+                    temperature=config.generation.temperature,
+                    top_p=config.generation.top_p,
+                    logprobs=config.strategy.get("top_logprobs", 20),
+                    stop=detector.step_patterns,
+                )
+
+                step_generator = StepCandidateGeneratorThroughVLLM(
+                    model=llm,
+                    detector=detector,
+                    sampling_params=step_sampling_params,
+                )
 
             log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
 
@@ -444,13 +480,14 @@ def create_model(config):
     return model, step_generator
 
 
-def create_tts_strategy(config, model, step_generator, scorer):
+def create_tts_strategy(config, model, step_generator, scorer, output_dir=None):
     if config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
+            output_dir=output_dir,
         )
     elif config.strategy.type == "adaptive":
         strategy = AdaptiveScalingBestOfN(
@@ -640,7 +677,7 @@ def generate_trajectories(
             },
         ]
 
-        result = strategy.generate_trajectory(request)
+        result = strategy.generate_trajectory(request, sample_idx=i)
 
         # Extract generated answer (but don't check correctness yet)
         # Use extracted_answer if available (e.g., from DeepConf's \boxed{} extraction)
@@ -1144,7 +1181,11 @@ def main(config):
 
     # Create tts strategy
     generator = create_tts_strategy(
-        config=config, model=model, step_generator=step_generator, scorer=scorer
+        config=config,
+        model=model,
+        step_generator=step_generator,
+        scorer=scorer,
+        output_dir=output_dir,
     )
 
     # Load existing results if available (for resuming interrupted runs)

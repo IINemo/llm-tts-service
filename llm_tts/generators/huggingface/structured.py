@@ -335,27 +335,127 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         trajectory: List[StepCandidate],
         candidates_per_step: int,
     ) -> List[StepCandidate]:
-        """Generate and select best final answer based on criterion"""
+        """Generate final answer without step boundary stopping.
 
-        ending_trajectory = [e for e in trajectory]
-        ending_trajectory.append(
-            StepCandidate(
-                text="\n<Answer>:\n",  # TODO: get configuration from the step boundary detector
-                token_ids=[],
-                is_complete=False,
-                is_trajectory_complete=False,
-                generation_scores=None,
-                raw_text="\n<Answer>:\n",
+        Unlike step generation, answer generation continues until:
+        - </think> tag (thinking mode)
+        - <end of response> marker
+        - \\boxed{} pattern
+        - EOS token or max tokens
+        """
+        # Build input same as generate_candidates but without step stopping
+        tokenizer_signature = inspect.signature(
+            self.model.tokenizer.apply_chat_template
+        )
+        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
+
+        if has_enable_thinking:
+            inputs = self.model.tokenizer.apply_chat_template(
+                [request],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=(not self.disable_thinking_mode),
             )
-        )
+        else:
+            inputs = self.model.tokenizer.apply_chat_template(
+                [request], tokenize=False, add_generation_prompt=True
+            )
 
-        candidates = self.generate_candidates(
-            request, ending_trajectory, candidates_per_step
-        )
+        if isinstance(inputs, str):
+            inputs = [inputs]
 
-        for cand in candidates:
-            cand.is_trajectory_complete = True
-            cand.text = "\n<Answer>:\n" + cand.text
-            cand.raw_text = "\n<Answer>:\n" + cand.raw_text
+        if self.disable_thinking_mode and not has_enable_thinking:
+            inputs[0] += "\n<think>\n\n</think>\n\n"
+
+        inputs[0] = inputs[0] + covert_trajectory_to_string(trajectory)
+
+        inputs = self.model.tokenizer(
+            inputs,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            add_special_tokens=False,
+            max_length=self.max_length,
+        )
+        input_length = inputs["input_ids"].shape[1]
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+        start_time = time.time()
+
+        # Generate WITHOUT step boundary stopping criteria
+        # Let model generate until EOS or max tokens
+        gen_params = {
+            "max_new_tokens": self.max_new_tokens,
+            "do_sample": True,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "num_return_sequences": candidates_per_step,
+            "output_scores": True,
+            "return_dict_in_generate": True,
+            "pad_token_id": self.model.tokenizer.eos_token_id,
+            "eos_token_id": self.model.tokenizer.eos_token_id,
+        }
+
+        log.info(f"Generating {candidates_per_step} answer candidates (no step stopping)")
+
+        # Override model's generation parameters
+        old_do_sample = self.model.generation_parameters.do_sample
+        old_temperature = self.model.generation_parameters.temperature
+        old_top_p = self.model.generation_parameters.top_p
+        old_top_k = self.model.generation_parameters.top_k
+
+        self.model.generation_parameters.do_sample = True
+        self.model.generation_parameters.temperature = self.temperature
+        self.model.generation_parameters.top_p = self.top_p
+        self.model.generation_parameters.top_k = self.top_k
+
+        with torch.no_grad():
+            outputs = self.model.generate(**inputs, **gen_params)
+
+        # Restore original parameters
+        self.model.generation_parameters.do_sample = old_do_sample
+        self.model.generation_parameters.temperature = old_temperature
+        self.model.generation_parameters.top_p = old_top_p
+        self.model.generation_parameters.top_k = old_top_k
+
+        generation_time = time.time() - start_time
+        log.info(f"Generated answer candidates in {generation_time:.2f}s")
+
+        # Extract answer candidates
+        candidates = []
+        for i, sequence in enumerate(outputs.sequences):
+            new_tokens = sequence[input_length:]
+            raw_generated_text = self.model.tokenizer.decode(
+                new_tokens, skip_special_tokens=False
+            )
+
+            # Get generation scores if available
+            gen_scores = None
+            if (
+                self.return_generation_scores
+                and hasattr(outputs, "scores")
+                and outputs.scores
+            ):
+                gen_scores = (
+                    torch.stack(outputs.scores, dim=1)[i]
+                    if i < len(outputs.scores)
+                    else None
+                )
+
+            candidate = StepCandidate(
+                text=raw_generated_text.strip(),
+                token_ids=new_tokens.tolist(),
+                is_complete=True,
+                is_trajectory_complete=True,
+                generation_scores=gen_scores,
+                raw_text=raw_generated_text,
+                other_data=(
+                    {"uncertainty_score": outputs.uncertainty_score[i]}
+                    if hasattr(outputs, "uncertainty_score")
+                    else None
+                ),
+            )
+            candidates.append(candidate)
 
         return candidates

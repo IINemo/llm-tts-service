@@ -395,29 +395,25 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         # If we have enough content AND found a marker after min_step_chars,
         # that marker indicates start of next step -> current step is complete
         if marker_positions:
-            # Find first marker that's past min_step_chars
-            # IMPORTANT: Ignore markers too close to end of text because
-            # end-of-string acts as word boundary, causing false positives
-            # (e.g., "to so" matches \bso\b but full text is "to some")
-            min_lookahead = 5  # Require at least 5 chars after marker
             sentence_endings = ".!?\n"
             for pos in marker_positions:
-                # Skip markers too close to end (false positive risk)
-                if pos > len(new_content) - min_lookahead:
-                    continue
                 content_before_marker = new_content[:pos].strip()
+                # Must have >= min_step_chars before marker
                 if len(content_before_marker) >= self.min_step_chars:
                     # Only split at sentence boundaries to avoid mid-sentence cuts
-                    # Check if content before marker ends with sentence punctuation
                     if content_before_marker and content_before_marker[-1] in sentence_endings:
-                        # Store boundary position (absolute in full text)
-                        # Step ends AT the marker, not after it
                         self._step_boundary_pos = self._last_step_end_pos + pos
                         return True
 
-        # Force split if exceeds max (even without marker)
-        if new_content_len >= self.max_step_chars:
-            self._step_boundary_pos = None  # No truncation, use full text
+        # If over max and no valid split found, keep accumulating until marker found
+        # This matches offline behavior where max is a soft limit checked after merging
+        # Don't force split - wait for next marker at sentence boundary
+
+        # Hard limit: force split if way over max (4x) to prevent infinite accumulation
+        # Using 4x allows offline-like behavior where steps can grow significantly
+        # before finding a valid marker/sentence boundary
+        if new_content_len >= self.max_step_chars * 4:
+            self._step_boundary_pos = None
             return True
 
         return False
