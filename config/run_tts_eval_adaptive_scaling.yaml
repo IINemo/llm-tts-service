@@ -28,4 +28,4 @@ evaluation:
 #   momentum_rate: 0.9
 #   adaptive_scaling_method: always # momentum, random, average, always, threshold
 
-report_to: none
+report_to: wandb
