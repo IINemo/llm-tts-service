@@ -7,8 +7,7 @@ import torch
 
 from llm_tts.generators import (
     StepCandidate,
-    StepCandidateGeneratorThroughAPI,
-    StepCandidateGeneratorThroughHuggingface,
+    StepCandidateGeneratorBase,
     covert_trajectory_to_string,
 )
 from llm_tts.strategies.deepconf.utils import extract_answer
@@ -21,6 +20,8 @@ log = logging.getLogger(__name__)
 class StrategyOnlineBestOfN(StrategyBase):
     """
     Greedy online best-of-n strategy.
+
+    Works with any step generator (HuggingFace, API, or vLLM).
     """
 
     def __init__(
@@ -28,9 +29,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         scorer,
         candidates_per_step: int,
         max_steps: int,
-        step_generator: (
-            StepCandidateGeneratorThroughAPI | StepCandidateGeneratorThroughHuggingface
-        ),
+        step_generator: StepCandidateGeneratorBase,
         output_dir: Optional[str] = None,
     ):
         self.candidates_per_step = candidates_per_step

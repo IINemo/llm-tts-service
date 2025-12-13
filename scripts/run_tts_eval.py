@@ -61,7 +61,10 @@ from llm_tts.scorers import (
     TotValueScorer,
     TotVoteScorer,
 )
-from llm_tts.step_boundary_detectors import StructuredStepDetector, ThinkingMarkerDetector
+from llm_tts.step_boundary_detectors import (
+    StructuredStepDetector,
+    ThinkingMarkerDetector,
+)
 
 # vLLM step generators (optional)
 try:
@@ -76,6 +79,7 @@ from llm_tts.strategies import (
     PhiDecoding,
     StrategyBeamSearch,
     StrategyDeepConf,
+    StrategyOfflineBestOfN,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
     StrategyTreeOfThoughts,
@@ -488,6 +492,43 @@ def create_tts_strategy(config, model, step_generator, scorer, output_dir=None):
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
             output_dir=output_dir,
+        )
+    elif config.strategy.type == "offline_best_of_n":
+        # Offline Best-of-N requires vLLM model directly (not step_generator)
+        # It generates N complete trajectories and selects the best
+        from vllm import LLM
+
+        # Get the underlying vLLM LLM object (may be wrapped in WhiteboxModelvLLM)
+        vllm_model = getattr(model, "vllm_engine", model)
+        if not isinstance(vllm_model, LLM):
+            raise ValueError(
+                f"Offline Best-of-N requires vLLM LLM model, got {type(model).__name__}"
+            )
+
+        strategy = StrategyOfflineBestOfN(
+            model=vllm_model,
+            scorer=scorer,
+            num_trajectories=config.strategy.get("num_trajectories", 4),
+            max_thinking_tokens=config.strategy.get("max_thinking_tokens", 4096),
+            max_response_tokens=config.strategy.get("max_response_tokens", 1024),
+            temperature=config.generation.get("temperature", 0.6),
+            top_p=config.generation.get("top_p", 0.95),
+            top_k=config.generation.get("top_k", 20),
+            answer_patterns=config.strategy.get(
+                "detector_answer_patterns", ["<end of response>"]
+            ),
+            disable_thinking_mode=config.model.get("disable_thinking_mode", False),
+            output_dir=output_dir,
+            # Step boundary detector settings (same as online mode)
+            min_step_chars=config.strategy.get("min_step_chars", 200),
+            max_step_chars=config.strategy.get("max_step_chars", 1200),
+            use_sequence=config.strategy.get("use_sequence", True),
+            use_conclusion=config.strategy.get("use_conclusion", True),
+            use_thinking=config.strategy.get("use_thinking", True),
+            use_verification=config.strategy.get("use_verification", True),
+            use_reasoning=config.strategy.get("use_reasoning", False),
+            use_correction=config.strategy.get("use_correction", False),
+            use_structure=config.strategy.get("use_structure", False),
         )
     elif config.strategy.type == "adaptive":
         strategy = AdaptiveScalingBestOfN(

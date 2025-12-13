@@ -1,0 +1,79 @@
+# @package _global_
+# Offline Best-of-N with Thinking Mode
+# Generates N complete trajectories (thinking + response), then selects the best one
+
+defaults:
+  - /config
+  - /dataset/aime_2025
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - _self_
+
+# Run naming
+run_name: "aime2025_offline_bon_thinking_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-aime2025
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
+  disable_thinking_mode: false  # ENABLE native thinking mode
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (thinking mode settings)
+generation:
+  max_new_tokens: 4096
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 32768
+
+# Scorer - use generation scores from vLLM (similar to online vLLM experiment)
+scorer:
+  type: generation
+  score_type: mean_entropy
+
+# Strategy - Offline Best-of-N
+strategy:
+  type: offline_best_of_n
+  num_trajectories: 4        # Number of complete trajectories to generate
+  max_thinking_tokens: 32768  # Max tokens for thinking phase
+  max_response_tokens: 1024   # Max tokens for response phase
+  detector_answer_patterns:
+    - "<end of response>"
+  # Step boundary detector settings (larger steps for offline mode)
+  min_step_chars: 500
+  max_step_chars: 2000
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+
+# Dataset configuration
+dataset:
+  subset: 5  # Start with 5 samples for testing
+  offset: 0
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match
