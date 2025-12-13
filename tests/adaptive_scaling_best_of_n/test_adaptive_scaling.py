@@ -17,7 +17,7 @@ except ImportError:
     VLLM_AVAILABLE = False
 
 from llm_tts.scorers.step_scorer_uncertainty import StepScorerUncertainty
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StructuredStepDetector
 from llm_tts.strategies import AdaptiveScalingBestOfN
 
 sys.path.insert(0, ".")
@@ -67,7 +67,7 @@ def test_adaptive_scaling_best_of_n():
     polygraph_model = create_uncertainty_model(omega_config)
     polygraph_model.generation_parameters = GenerationParameters()
 
-    step_boundary_detector = StepBoundaryDetector(
+    step_boundary_detector = StructuredStepDetector(
         step_patterns=step_patterns,
         answer_patterns=answer_patterns,
         max_tokens_per_step=max_new_tokens,
