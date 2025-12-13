@@ -11,6 +11,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
     covert_trajectory_to_string,
 )
+from llm_tts.strategies.deepconf.utils import extract_answer
 
 from .strategy_base import StrategyBase
 
@@ -96,6 +97,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             # Update trajectory
             trajectory.append(selected_candidate)
             selected_steps.append(selected_candidate)
+            validity_scores.append(candidate_validity_scores[best_idx])
 
             # Get full trajectory for logging
             full_trajectory = covert_trajectory_to_string(trajectory)
@@ -148,8 +150,12 @@ class StrategyOnlineBestOfN(StrategyBase):
         self._save_steps_log()
         self._save_trajectory_log(final_trajectory)
 
+        # Extract answer from trajectory (e.g., content between <Answer>: and <end of response>)
+        extracted = extract_answer(final_trajectory)
+
         return {
             "trajectory": final_trajectory,
+            "extracted_answer": extracted,
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,

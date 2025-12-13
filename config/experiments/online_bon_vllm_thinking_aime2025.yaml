@@ -1,34 +1,38 @@
 # @package _global_
-# Online Best-of-N with Thinking Mode + ThinkingMarkerDetector
-# Uses semantic marker detection for step boundaries in <think> content
+# Online Best-of-N with vLLM + Thinking Mode
+# Same as online_bon_thinking_aime2025.yaml but using vLLM backend with stop tokens
 
 defaults:
   - /config
   - /dataset/aime_2025
-  - /model/hf_qwen3
+  - /model/vllm_qwen3
   - /generation/default
   - /system/default
   - _self_
 
 # Run naming
-run_name: "aime2025_online_bon_thinking_${now:%H-%M-%S}"
+run_name: "aime2025_online_bon_vllm_thinking_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-aime2025
 
-# Model configuration
+# Model configuration (vLLM backend)
 model:
-  type: "local"
+  type: "vllm"
   model_path: "Qwen/Qwen3-8B"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
   disable_thinking_mode: false  # ENABLE native thinking mode
 
 # System configuration
 system:
   device: cuda
   seed: 42
-  torch_dtype: "bfloat16"
 
 # Generation configuration (thinking mode settings)
 generation:
@@ -39,35 +43,36 @@ generation:
   batch_size: 1
   max_length: 8192
 
-# Scorer - entropy-based uncertainty for step selection
+# Scorer - use generation scores from vLLM (perplexity/entropy computed during generation)
+# Note: HuggingFace uses uncertainty scorer, but vLLM doesn't compute uncertainty_score
+# So we use generation scorer which uses perplexity/mean_entropy from vLLM
 scorer:
-  type: uncertainty
-  uncertainty_model_creator: config.scorer.uncertainty_entropy
+  type: generation
+  score_type: mean_entropy
 
 # Strategy - Online Best-of-N with thinking marker detector
 strategy:
   type: online_best_of_n
   candidates_per_step: 4
   max_steps: 250
-  # Use ThinkingMarkerDetector with marker_semantic_v2 settings
+  # Use ThinkingStepGeneratorVLLM
   detector_type: thinking_marker
-  # marker_semantic_v2 config (see tests/boundary_detectors/)
-  min_step_chars: 200  # Higher for online to avoid micro-steps
-  max_step_chars: 1200  # Allow longer thinking steps
-  # Marker categories
+  # Same settings as HuggingFace experiment
+  min_step_chars: 200
+  max_step_chars: 1200
+  # Marker categories (for vLLM stop token generation)
   use_sequence: true
   use_conclusion: true
   use_thinking: true
   use_verification: true
-  use_structure: false       # No paragraph/bullet splitting
-  use_reasoning: false       # REASONING_MARKERS has too many patterns
-  use_sentence_start: false  # Avoid "but", "however" over-splitting
+  use_structure: false
+  use_reasoning: false
   use_correction: false
-  # Only the 3 selective marker_semantic_v2 additions
-  custom_markers:
-    - "\\bfor example\\b"
-    - "\\bgiven that\\b"
-    - "\\bsimilarly\\b"
+  # Custom words for stop tokens
+  custom_words:
+    - "for example"
+    - "given that"
+    - "similarly"
   detector_answer_patterns:
     - "<end of response>"
 

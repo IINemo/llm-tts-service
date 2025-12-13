@@ -1,8 +1,13 @@
 """
 vLLM step candidate generator for thinking mode.
 
-Uses semantic stop tokens derived from ThinkingMarkerDetector patterns
-with post-stop validation for min_step_chars and sentence boundaries.
+Two-phase generation:
+1. generate_thinking_step() - generates thinking content inside <think>...</think>
+   - Uses semantic stop tokens for step boundaries
+   - Stops at </think> to end thinking phase
+2. generate_response() - generates response after thinking
+   - Generates <start of response>...<end of response>
+   - Stops at <end of response>
 """
 
 import logging
@@ -28,14 +33,15 @@ log = logging.getLogger(__name__)
 
 class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
     """
-    vLLM step generator for thinking mode (<think> tags).
+    vLLM step generator for thinking mode with two-phase generation.
 
-    Uses semantic stop tokens (e.g., "\\nSo ", "\\nLet me ") derived from
-    ThinkingMarkerDetector patterns. After each stop, validates:
-    - min_step_chars: Minimum characters per step
-    - Sentence boundary: Step should end at sentence punctuation
+    Phase 1 (Thinking): Generates content inside <think>...</think>
+    - Uses semantic stop tokens for step boundaries
+    - Stops when </think> is encountered
 
-    If validation fails, continues generation until a valid boundary.
+    Phase 2 (Response): Generates <start of response>...<end of response>
+    - Called after thinking phase completes
+    - Stops at <end of response>
     """
 
     def __init__(
@@ -56,7 +62,7 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         use_correction: bool = False,
         use_structure: bool = False,
         custom_words: Optional[List[str]] = None,
-        # Answer patterns for trajectory completion
+        # Answer patterns for response completion
         answer_patterns: Optional[List[str]] = None,
         # Thinking mode control
         disable_thinking_mode: bool = False,
@@ -71,11 +77,12 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         self.top_p = top_p
         self.top_k = top_k
 
-        # Answer patterns for trajectory completion
-        self.answer_patterns = answer_patterns or ANSWER_TOKENS
+        # Answer patterns for response phase (default: <end of response>)
+        # Convert to regular list in case it's OmegaConf ListConfig
+        self.answer_patterns = list(answer_patterns) if answer_patterns else ["<end of response>"]
 
-        # Build stop tokens from marker categories
-        self.stop_tokens = get_stop_tokens_compact(
+        # Build stop tokens for THINKING phase (step boundaries + </think>)
+        self.thinking_stop_tokens = get_stop_tokens_compact(
             use_sequence=use_sequence,
             use_conclusion=use_conclusion,
             use_thinking=use_thinking,
@@ -85,9 +92,11 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
             use_structure=use_structure,
             custom_words=custom_words,
         )
+        # Add </think> to stop thinking phase
+        self.thinking_stop_tokens = list(set(self.thinking_stop_tokens + ["</think>"]))
 
-        # Add answer patterns to stop tokens so generation stops at answer boundaries
-        self.stop_tokens = list(set(self.stop_tokens + self.answer_patterns))
+        # Stop tokens for RESPONSE phase (answer patterns only)
+        self.response_stop_tokens = self.answer_patterns.copy()
 
         # Create detector for validation logic
         self.detector = ThinkingMarkerDetector(
@@ -103,24 +112,20 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         )
         self.detector.answer_patterns = self.answer_patterns
 
-        log.info(f"ThinkingStepGeneratorVLLM initialized with {len(self.stop_tokens)} stop tokens")
+        log.info(
+            f"ThinkingStepGeneratorVLLM initialized: "
+            f"{len(self.thinking_stop_tokens)} thinking stops, "
+            f"{len(self.response_stop_tokens)} response stops"
+        )
 
     def _create_sampling_params(
         self,
+        stop_tokens: List[str],
         n: int = 1,
-        include_stop_tokens: bool = True,
         max_tokens: Optional[int] = None,
-        min_tokens: Optional[int] = None,
+        min_tokens: int = 0,
     ) -> SamplingParams:
-        """Create SamplingParams with appropriate stop tokens."""
-        stop = self.stop_tokens if include_stop_tokens else self.answer_patterns
-
-        # Use min_tokens to force minimum generation before stop tokens apply
-        # This prevents stop tokens from triggering at the very start of generation
-        # Approximate: 4 chars per token, so min_step_chars / 4
-        if min_tokens is None and include_stop_tokens:
-            min_tokens = max(1, self.min_step_chars // 4)
-
+        """Create SamplingParams with specified stop tokens."""
         return SamplingParams(
             n=n,
             max_tokens=max_tokens or self.max_new_tokens,
@@ -129,7 +134,7 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
             top_p=self.top_p,
             top_k=self.top_k,
             logprobs=20,
-            stop=stop,
+            stop=stop_tokens,
         )
 
     def _calculate_perplexity(self, candidate: CompletionOutput) -> float:
@@ -177,12 +182,9 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
 
         return False
 
-    def _is_trajectory_complete(self, text: str) -> bool:
-        """Check if trajectory is complete (answer pattern found)."""
-        for pattern in self.answer_patterns:
-            if pattern in text:
-                return True
-        return False
+    def _is_thinking_complete(self, text: str) -> bool:
+        """Check if thinking phase is complete (contains </think>)."""
+        return "</think>" in text
 
     def _build_prompt(
         self,
@@ -217,7 +219,6 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
             return prompt
 
         # For CONTINUATION (has trajectory): build base prompt then append trajectory
-        # Don't use apply_chat_template with trajectory - it mangles the thinking blocks
         if has_enable_thinking:
             base_prompt = self.tokenizer.apply_chat_template(
                 request,
@@ -238,75 +239,82 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         trajectory_text = covert_trajectory_to_string(trajectory)
         return base_prompt + trajectory_text
 
-    def generate_candidates(
+    def generate_thinking_step(
         self,
         request: List[Dict[str, str]],
         trajectory: Optional[List[StepCandidate]] = None,
         candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
         """
-        Generate N candidate next steps from current trajectory.
+        Generate thinking step candidates (inside <think> block).
 
-        Uses stop tokens to detect potential boundaries, then validates.
-        If validation fails, continues generation.
+        Stops at:
+        - Semantic step boundaries (e.g., "\\nSo ", "\\nLet me ")
+        - </think> tag (end of thinking phase)
+
+        Returns candidates with is_trajectory_complete=True if </think> was reached.
         """
         trajectory = trajectory or []
         candidates = []
 
         for i in range(candidates_per_step):
-            candidate = self._generate_single_step(request, trajectory)
+            candidate = self._generate_single_thinking_step(request, trajectory)
             candidates.append(candidate)
 
         return candidates
 
-    def _generate_single_step(
+    def _generate_single_thinking_step(
         self,
         request: List[Dict[str, str]],
         trajectory: List[StepCandidate],
     ) -> StepCandidate:
         """
-        Generate a single step with boundary validation.
+        Generate a single thinking step with boundary validation.
 
         Continues generation if initial stop is not a valid boundary.
+        Marks is_trajectory_complete=True when </think> is reached.
         """
-        # Build initial prompt
         prompt = self._build_prompt(request, trajectory)
         accumulated_text = ""
         accumulated_tokens = []
         accumulated_logprobs = []
         max_continuation_attempts = 5
 
+        # Minimum tokens before stop tokens apply
+        min_tokens = max(1, self.min_step_chars // 4)
+
         for attempt in range(max_continuation_attempts):
-            # Create sampling params
             remaining_tokens = self.max_new_tokens - len(accumulated_tokens)
             if remaining_tokens <= 0:
                 break
 
             sampling_params = self._create_sampling_params(
+                stop_tokens=self.thinking_stop_tokens,
                 n=1,
-                include_stop_tokens=True,
                 max_tokens=remaining_tokens,
+                min_tokens=min_tokens if attempt == 0 else 0,
             )
 
-            # Generate
             current_prompt = prompt + accumulated_text
             outputs = self.model.generate([current_prompt], sampling_params)
             output = outputs[0].outputs[0]
 
-            # Accumulate
             accumulated_text += output.text
             accumulated_tokens.extend(output.token_ids)
             if output.logprobs:
                 accumulated_logprobs.extend(output.logprobs)
 
-            # Check trajectory completion first
-            if self._is_trajectory_complete(accumulated_text):
-                log.debug(f"Trajectory complete after {attempt + 1} attempts")
+            # Check if thinking phase is complete
+            if self._is_thinking_complete(accumulated_text):
+                log.debug(f"Thinking complete (</think>) after {attempt + 1} attempts")
+                # Truncate at </think>
+                think_pos = accumulated_text.find("</think>")
+                accumulated_text = accumulated_text[: think_pos + len("</think>")]
                 break
 
-            # Validate boundary
+            # Validate step boundary
             if self._is_valid_step_boundary(accumulated_text):
-                log.debug(f"Valid step boundary after {attempt + 1} attempts")
+                log.debug(f"Valid thinking step boundary after {attempt + 1} attempts")
                 break
 
             # Check max step chars
@@ -319,13 +327,13 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
                 f"(len={len(accumulated_text)}, min={self.min_step_chars}), continuing..."
             )
 
-        # Build candidate
-        is_trajectory_complete = self._is_trajectory_complete(accumulated_text)
+        # Check if thinking is complete
+        thinking_complete = self._is_thinking_complete(accumulated_text)
 
-        # Calculate scores from accumulated logprobs
+        # Calculate scores
         generation_scores = {}
         if accumulated_logprobs and accumulated_tokens:
-            # Create mock output for score calculation
+
             class MockOutput:
                 def __init__(self, tokens, logprobs):
                     self.token_ids = tokens
@@ -341,10 +349,96 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
             text=accumulated_text.strip(),
             token_ids=accumulated_tokens,
             is_complete=True,
-            is_trajectory_complete=is_trajectory_complete,
+            is_trajectory_complete=thinking_complete,  # True when </think> reached
             generation_scores=generation_scores,
             raw_text=accumulated_text,
         )
+
+    def generate_response(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int = 1,
+    ) -> List[StepCandidate]:
+        """
+        Generate response after thinking phase.
+
+        Generates <start of response>...<end of response>.
+        Should only be called after thinking phase is complete (trajectory contains </think>).
+
+        Args:
+            request: Original user request
+            trajectory: Completed thinking trajectory (must contain </think>)
+            candidates_per_step: Number of response candidates to generate
+
+        Returns:
+            List of response candidates, each with is_trajectory_complete=True
+        """
+        candidates = []
+        prompt = self._build_prompt(request, trajectory)
+
+        sampling_params = self._create_sampling_params(
+            stop_tokens=self.response_stop_tokens,
+            n=candidates_per_step,
+            max_tokens=self.max_new_tokens,
+            min_tokens=0,  # No minimum for response phase
+        )
+
+        outputs = self.model.generate([prompt], sampling_params)
+
+        for output in outputs[0].outputs:
+            text = output.text
+
+            # Ensure we include the stop token in the output
+            # vLLM may or may not include it depending on settings
+            for pattern in self.answer_patterns:
+                if pattern not in text:
+                    text = text + pattern
+                    break
+
+            generation_scores = {
+                "perplexity": self._calculate_perplexity(output),
+                "mean_entropy": self._calculate_mean_entropy(output),
+            }
+
+            candidate = StepCandidate(
+                text=text.strip(),
+                token_ids=output.token_ids,
+                is_complete=True,
+                is_trajectory_complete=True,  # Response phase always completes trajectory
+                generation_scores=generation_scores,
+                raw_text=output.text,
+            )
+            candidates.append(candidate)
+
+        return candidates
+
+    def generate_candidates(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: Optional[List[StepCandidate]] = None,
+        candidates_per_step: int = 1,
+    ) -> List[StepCandidate]:
+        """
+        Generate N candidate next steps from current trajectory.
+
+        Automatically determines phase:
+        - If trajectory doesn't contain </think>: generate thinking step
+        - If trajectory contains </think>: generate response
+        """
+        trajectory = trajectory or []
+
+        # Check if thinking phase is complete
+        full_trajectory = covert_trajectory_to_string(trajectory)
+        thinking_complete = "</think>" in full_trajectory
+
+        if thinking_complete:
+            # Phase 2: Generate response
+            log.info("Thinking complete, generating response")
+            return self.generate_response(request, trajectory, candidates_per_step)
+        else:
+            # Phase 1: Generate thinking step
+            return self.generate_thinking_step(request, trajectory, candidates_per_step)
 
     def generate_answer_candidates(
         self,
@@ -352,40 +446,8 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         trajectory: List[StepCandidate],
         candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
-        """
-        Generate final answer candidates.
-
-        Uses only answer patterns as stop tokens, not step boundary tokens.
-        """
-        candidates = []
-        prompt = self._build_prompt(request, trajectory)
-
-        # Create sampling params with only answer tokens as stops
-        sampling_params = self._create_sampling_params(
-            n=candidates_per_step,
-            include_stop_tokens=False,  # Only use answer patterns
-            max_tokens=self.max_new_tokens,
-        )
-
-        outputs = self.model.generate([prompt], sampling_params)
-
-        for output in outputs[0].outputs:
-            generation_scores = {
-                "perplexity": self._calculate_perplexity(output),
-                "mean_entropy": self._calculate_mean_entropy(output),
-            }
-
-            candidate = StepCandidate(
-                text=output.text.strip(),
-                token_ids=output.token_ids,
-                is_complete=True,
-                is_trajectory_complete=True,
-                generation_scores=generation_scores,
-                raw_text=output.text,
-            )
-            candidates.append(candidate)
-
-        return candidates
+        """Alias for generate_response (for strategy compatibility)."""
+        return self.generate_response(request, trajectory, candidates_per_step)
 
     def __call__(
         self,
@@ -409,17 +471,24 @@ if __name__ == "__main__":
         model=model,
         min_step_chars=200,
         max_step_chars=1200,
-        use_sequence=True,
-        use_conclusion=True,
-        use_thinking=True,
-        use_verification=True,
+        answer_patterns=["<end of response>"],
     )
 
     request = [{"role": "user", "content": "What is the sum of 2+2?"}]
-    candidates = generator.generate_candidates(request, candidates_per_step=2)
 
-    for i, c in enumerate(candidates):
-        print(f"\n=== Candidate {i} ===")
-        print(f"Text: {c.text[:200]}...")
-        print(f"Complete: {c.is_trajectory_complete}")
-        print(f"Scores: {c.generation_scores}")
+    # Test thinking phase
+    print("=== THINKING PHASE ===")
+    trajectory = []
+    for step in range(10):
+        candidates = generator.generate_thinking_step(request, trajectory)
+        best = candidates[0]
+        trajectory.append(best)
+        print(f"\nStep {step}: {best.text[:100]}...")
+        print(f"  Thinking complete: {best.is_trajectory_complete}")
+        if best.is_trajectory_complete:
+            break
+
+    # Test response phase
+    print("\n=== RESPONSE PHASE ===")
+    response_candidates = generator.generate_response(request, trajectory)
+    print(f"Response: {response_candidates[0].text}")

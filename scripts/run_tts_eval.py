@@ -693,7 +693,7 @@ def generate_trajectories(
 
         # Log detailed traces
         log.info("\n" + "-" * 60)
-        log.info("GENERATED TRACES:")
+        log.info("GENERATED STEPS:")
         log.info("-" * 60)
 
         # For DeepConf, steps contain the individual traces
@@ -711,8 +711,10 @@ def generate_trajectories(
                     if isinstance(validity, (int, float))
                     else validity
                 )
-                log.info(f"\nTrace {step_idx + 1} (confidence: {confidence_str}):")
-                log.info(step)
+                log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
+                # Log full step text, not truncated repr
+                step_text = step.text if hasattr(step, 'text') else str(step)
+                log.info(step_text)
         else:
             # Fallback: show full trajectory
             log.info(f"\nFull trajectory:\n{result['trajectory']}")
@@ -724,7 +726,7 @@ def generate_trajectories(
         is_correct = grade_answer(str(generated_text), str(gold_answer_num))
         log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
         log.info("-" * 60)
-        log.info(f"Num traces: {len(result['steps'])}")
+        log.info(f"Num steps: {len(result['steps'])}")
         if "validity_scores" in result and result["validity_scores"]:
             scores = result["validity_scores"]
             log.info(
