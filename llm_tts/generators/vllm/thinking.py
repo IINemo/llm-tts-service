@@ -20,7 +20,7 @@ from vllm.outputs import CompletionOutput
 from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
-    covert_trajectory_to_string,
+    convert_trajectory_to_string,
 )
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
 from llm_tts.step_boundary_detectors.thinking.vllm import (
@@ -319,7 +319,7 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
                 base_prompt += "<think>\n\n</think>\n\n"
 
         # Append trajectory directly (model continues from here)
-        trajectory_text = covert_trajectory_to_string(trajectory)
+        trajectory_text = convert_trajectory_to_string(trajectory)
         return base_prompt + trajectory_text
 
     def generate_thinking_step(
@@ -518,7 +518,7 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         trajectory = trajectory or []
 
         # Check if thinking phase is complete
-        full_trajectory = covert_trajectory_to_string(trajectory)
+        full_trajectory = convert_trajectory_to_string(trajectory)
         thinking_complete = "</think>" in full_trajectory
 
         if thinking_complete:

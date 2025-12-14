@@ -14,7 +14,7 @@ from transformers import StoppingCriteria, StoppingCriteriaList
 from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
-    covert_trajectory_to_string,
+    convert_trajectory_to_string,
 )
 from llm_tts.step_boundary_detectors import (
     StructuredStepDetector,
@@ -198,7 +198,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         if self.disable_thinking_mode and not has_enable_thinking:
             inputs[0] += "\n<think>\n\n</think>\n\n"
 
-        inputs[0] = inputs[0] + covert_trajectory_to_string(trajectory)
+        inputs[0] = inputs[0] + convert_trajectory_to_string(trajectory)
 
         inputs = self.model.tokenizer(
             inputs,
@@ -367,7 +367,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         if self.disable_thinking_mode and not has_enable_thinking:
             inputs[0] += "\n<think>\n\n</think>\n\n"
 
-        inputs[0] = inputs[0] + covert_trajectory_to_string(trajectory)
+        inputs[0] = inputs[0] + convert_trajectory_to_string(trajectory)
 
         inputs = self.model.tokenizer(
             inputs,

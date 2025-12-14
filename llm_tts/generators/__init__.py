@@ -17,7 +17,7 @@ Each backend has:
 from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
-    covert_trajectory_to_string,
+    convert_trajectory_to_string,
 )
 
 # Backend submodules
@@ -43,7 +43,7 @@ __all__ = [
     # Base classes
     "StepCandidate",
     "StepCandidateGeneratorBase",
-    "covert_trajectory_to_string",
+    "convert_trajectory_to_string",
     # Submodules
     "api",
     "huggingface",

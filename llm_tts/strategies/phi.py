@@ -9,7 +9,7 @@ from llm_tts.generators import (
     StepCandidate,
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
-    covert_trajectory_to_string,
+    convert_trajectory_to_string,
 )
 
 from .strategy_base import StrategyBase
@@ -129,7 +129,7 @@ class PhiDecoding(StrategyBase):
             validity_scores.append(final_validity)
 
         return {
-            "trajectory": covert_trajectory_to_string(trajectory),
+            "trajectory": convert_trajectory_to_string(trajectory),
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,

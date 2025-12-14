@@ -8,7 +8,7 @@ import torch
 from llm_tts.generators import (
     StepCandidate,
     StepCandidateGeneratorBase,
-    covert_trajectory_to_string,
+    convert_trajectory_to_string,
 )
 from llm_tts.strategies.deepconf.utils import extract_answer
 
@@ -99,7 +99,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             validity_scores.append(candidate_validity_scores[best_idx])
 
             # Get full trajectory for logging
-            full_trajectory = covert_trajectory_to_string(trajectory)
+            full_trajectory = convert_trajectory_to_string(trajectory)
 
             # Log step to JSON (save every 5 steps)
             self._log_step(
@@ -145,7 +145,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             validity_scores.append(final_validity)
 
         # Save steps log and final trajectory to JSON
-        final_trajectory = covert_trajectory_to_string(trajectory)
+        final_trajectory = convert_trajectory_to_string(trajectory)
         self._save_steps_log()
         self._save_trajectory_log(final_trajectory)
 
