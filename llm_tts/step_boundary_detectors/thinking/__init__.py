@@ -9,14 +9,12 @@ Submodules:
 - vllm: vLLM-specific utilities (stop token generation)
 """
 
+# Backend-specific submodules
+from . import huggingface, vllm
 from .hybrid import ThinkingAdaptiveDetector, ThinkingHybridDetector
 from .llm import ThinkingLLMDetector, ThinkingLLMDetectorVLLM
 from .marker import ThinkingMarkerDetector
 from .sentence import ThinkingSentenceDetector
-
-# Backend-specific submodules
-from . import huggingface
-from . import vllm
 
 __all__ = [
     "ThinkingSentenceDetector",

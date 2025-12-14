@@ -9,6 +9,7 @@ from typing import Dict, List
 import numpy as np
 
 from llm_tts.generators.base import StepCandidate
+
 from .step_scorer_reward_base import CandidateScore, StepScorerBase
 
 

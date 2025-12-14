@@ -14,19 +14,16 @@ Each backend has:
 - thinking.py: Generators for thinking mode (<think> tags)
 """
 
+# Backend submodules
+from llm_tts.generators import api, huggingface, vllm
+
+# Re-export commonly used classes for backward compatibility
+from llm_tts.generators.api import StepCandidateGeneratorThroughAPI
 from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
     convert_trajectory_to_string,
 )
-
-# Backend submodules
-from llm_tts.generators import api
-from llm_tts.generators import huggingface
-from llm_tts.generators import vllm
-
-# Re-export commonly used classes for backward compatibility
-from llm_tts.generators.api import StepCandidateGeneratorThroughAPI
 from llm_tts.generators.huggingface import (
     BatchStepStoppingCriteria,
     StepCandidateGeneratorThroughHuggingface,
