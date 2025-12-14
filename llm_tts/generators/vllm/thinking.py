@@ -66,6 +66,8 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         answer_patterns: Optional[List[str]] = None,
         # Thinking mode control
         disable_thinking_mode: bool = False,
+        # Context length limit
+        max_model_len: int = 32768,
     ):
         self.model = model
         self.tokenizer = model.get_tokenizer()
@@ -76,6 +78,7 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
+        self.max_model_len = max_model_len
 
         # Answer patterns for response phase (default: <end of response>)
         # Convert to regular list in case it's OmegaConf ListConfig
@@ -186,6 +189,86 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         """Check if thinking phase is complete (contains </think>)."""
         return "</think>" in text
 
+    def _truncate_trajectory(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        reserved_tokens: int = 4096,
+    ) -> List[StepCandidate]:
+        """
+        Truncate trajectory to fit within max_model_len.
+
+        Keeps most recent steps, removing oldest ones first.
+
+        Args:
+            request: Original request messages
+            trajectory: List of step candidates
+            reserved_tokens: Tokens to reserve for new generation
+
+        Returns:
+            Truncated trajectory that fits within context limit
+        """
+        if not trajectory:
+            return trajectory
+
+        # Calculate base prompt tokens (without trajectory)
+        import inspect
+        tokenizer_signature = inspect.signature(self.tokenizer.apply_chat_template)
+        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
+
+        if has_enable_thinking:
+            base_prompt = self.tokenizer.apply_chat_template(
+                request,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=(not self.disable_thinking_mode),
+            )
+        else:
+            base_prompt = self.tokenizer.apply_chat_template(
+                request,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
+        base_tokens = len(self.tokenizer.encode(base_prompt))
+        available_tokens = self.max_model_len - base_tokens - reserved_tokens
+
+        if available_tokens <= 0:
+            log.warning(
+                f"Base prompt ({base_tokens} tokens) + reserved ({reserved_tokens}) "
+                f"exceeds max_model_len ({self.max_model_len}). Returning empty trajectory."
+            )
+            return []
+
+        # Calculate tokens for each step
+        step_tokens = []
+        for step in trajectory:
+            tokens = len(self.tokenizer.encode(step.text))
+            step_tokens.append(tokens)
+
+        total_tokens = sum(step_tokens)
+
+        # If fits, return as-is
+        if total_tokens <= available_tokens:
+            return trajectory
+
+        # Truncate from the beginning (keep recent steps)
+        truncated = list(trajectory)
+        truncated_tokens = list(step_tokens)
+
+        while sum(truncated_tokens) > available_tokens and truncated:
+            removed_step = truncated.pop(0)
+            removed_tokens = truncated_tokens.pop(0)
+            log.info(
+                f"Truncating trajectory: removed step with {removed_tokens} tokens "
+                f"(remaining: {len(truncated)} steps, {sum(truncated_tokens)} tokens)"
+            )
+
+        if not truncated:
+            log.warning("All trajectory steps truncated due to context length limit")
+
+        return truncated
+
     def _build_prompt(
         self,
         request: List[Dict[str, str]],
@@ -255,6 +338,12 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         Returns candidates with is_trajectory_complete=True if </think> was reached.
         """
         trajectory = trajectory or []
+
+        # Truncate trajectory if it exceeds context limit
+        trajectory = self._truncate_trajectory(
+            request, trajectory, reserved_tokens=self.max_new_tokens
+        )
+
         candidates = []
 
         for i in range(candidates_per_step):

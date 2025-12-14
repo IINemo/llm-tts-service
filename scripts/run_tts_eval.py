@@ -304,6 +304,8 @@ def create_model(config):
                     ),
                     # Thinking mode control (from model config)
                     disable_thinking_mode=config.model.get("disable_thinking_mode", False),
+                    # Context length limit for trajectory truncation
+                    max_model_len=config.model.get("max_model_len", 32768),
                 )
             else:
                 # Use StructuredStepDetector for structured mode
