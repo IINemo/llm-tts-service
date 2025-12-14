@@ -34,7 +34,7 @@ class StepCandidate:
         return f"StepCandidate(text='{self.text[:50]}...', complete={self.is_complete})"
 
 
-def covert_trajectory_to_string(trajectory: List[StepCandidate]) -> str:
+def convert_trajectory_to_string(trajectory: List[StepCandidate]) -> str:
     """Convert trajectory to string"""
     return "\n".join([step.text for step in trajectory])
 

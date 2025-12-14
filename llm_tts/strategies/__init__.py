@@ -9,8 +9,18 @@ from .strategy_self_consistency import StrategySelfConsistency
 from .strategy_uncertainty_cot import StrategyUncertaintyCoT
 from .tree_of_thoughts import StrategyTreeOfThoughts
 
+# vLLM-only strategies (optional - requires vllm package)
+try:
+    from .strategy_offline_best_of_n import StrategyOfflineBestOfN
+
+    VLLM_STRATEGIES_AVAILABLE = True
+except ImportError:
+    StrategyOfflineBestOfN = None
+    VLLM_STRATEGIES_AVAILABLE = False
+
 __all__ = [
     "StrategyOnlineBestOfN",
+    "StrategyOfflineBestOfN",
     "StrategyBeamSearch",
     "StrategyChainOfThought",
     "StrategySelfConsistency",
@@ -19,4 +29,5 @@ __all__ = [
     "StrategyUncertaintyCoT",
     "PhiDecoding",
     "StrategyTreeOfThoughts",
+    "VLLM_STRATEGIES_AVAILABLE",
 ]

@@ -5,7 +5,7 @@ from llm_tts.generators import (
     StepCandidate,
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
-    covert_trajectory_to_string,
+    convert_trajectory_to_string,
 )
 
 if TYPE_CHECKING:
@@ -111,7 +111,17 @@ class AdaptiveScalingBestOfN(StrategyBase):
 
             # Check if trajectory is complete
             if selected_candidate.is_trajectory_complete:
-                log.info("Answer pattern detected - generating final answer")
+                log.info("Answer pattern detected in step")
+                if not self._has_answer_content(selected_candidate):
+                    log.info("Answer content missing, generating final answer")
+                    trajectory.pop()
+                    selected_steps.pop()
+                    final_answer, final_validity = self._generate_final_answer(
+                        request, trajectory
+                    )
+                    trajectory.append(final_answer)
+                    selected_steps.append(final_answer)
+                    validity_scores.append(final_validity)
                 break
 
         if not selected_candidate.is_trajectory_complete:
@@ -124,7 +134,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         self.scale_discriminator.reset()
 
         return {
-            "trajectory": covert_trajectory_to_string(trajectory),
+            "trajectory": convert_trajectory_to_string(trajectory),
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,

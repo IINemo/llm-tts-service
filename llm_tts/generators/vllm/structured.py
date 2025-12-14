@@ -8,7 +8,7 @@ from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
 )
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StructuredStepDetector
 
 # log = logging.getLogger(__name__)
 
@@ -19,11 +19,11 @@ class StepCandidateGeneratorThroughVLLM(StepCandidateGeneratorBase):
     def __init__(
         self,
         model: LLM,
-        detector: StepBoundaryDetector,
+        detector: StructuredStepDetector,
         sampling_params: SamplingParams,
     ):
         self.model = model
-        self.detector = detector or StepBoundaryDetector()
+        self.detector = detector or StructuredStepDetector()
         self.sampling_params = sampling_params
 
     def calculate_perplexity(self, candidate: CompletionOutput) -> float:
@@ -156,7 +156,7 @@ if __name__ == "__main__":
         "## Step",
     ]
 
-    detector = StepBoundaryDetector(
+    detector = StructuredStepDetector(
         answer_patterns=answer_patterns,
         step_patterns=step_patterns,
         max_tokens_per_step=2048,

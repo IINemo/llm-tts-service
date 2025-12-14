@@ -1,19 +1,29 @@
 """
-Real-time step boundary detection during generation
+Step boundary detector for structured responses (non-thinking mode).
+
+This module handles responses with explicit step markers like "- Step 1:", "- Step 2:".
+For native thinking mode (<think> tags), see thinking_*.py modules.
 """
 
-from typing import List
+from typing import List, Optional
+
+from ..base import StepBoundaryDetectorBase
 
 
-class StepBoundaryDetector:
-    """Detects when a reasoning step is complete during generation"""
+class StructuredStepDetector(StepBoundaryDetectorBase):
+    """
+    Detects step boundaries in structured responses (non-thinking mode).
+
+    This detector is designed for responses that follow explicit step formatting
+    like "- Step 1:", "- Step 2:", etc.
+    """
 
     def __init__(
         self,
-        step_patterns: List[str],
-        answer_patterns: List[str],
-        max_tokens_per_step: int,
-        eos_patterns: List[str] = None,
+        step_patterns: Optional[List[str]] = None,
+        answer_patterns: Optional[List[str]] = None,
+        max_tokens_per_step: int = 512,
+        eos_patterns: Optional[List[str]] = None,
     ):
         """
         Args:
@@ -22,6 +32,7 @@ class StepBoundaryDetector:
             answer_patterns: Patterns that indicate final answer
                 (e.g., ["<Answer>:", "\n\nAnswer:"])
             max_tokens_per_step: Maximum tokens allowed per step
+            eos_patterns: Patterns indicating end of sequence
         """
         self.step_patterns = step_patterns or [
             "\n- Step",
@@ -49,20 +60,56 @@ class StepBoundaryDetector:
         ]
         self.max_tokens_per_step = max_tokens_per_step
 
-    def is_step_complete(self, generated_text: str, token_count: int = None) -> bool:
-        """Check if current generation represents a complete step"""
+    def detect_steps(self, text: str, **kwargs) -> List[str]:
+        """
+        Detect steps in structured response text.
 
-        # Immediate completion if we hit an answer pattern - triggers answer phase
+        Args:
+            text: Response text with explicit step markers
+
+        Returns:
+            List of step strings
+        """
+        steps = []
+
+        # Find all "- Step" occurrences
+        step_marker = "- Step"
+        positions = []
+        pos = text.find(step_marker)
+        while pos != -1:
+            positions.append(pos)
+            pos = text.find(step_marker, pos + 1)
+
+        # Extract steps between markers
+        for i, start_pos in enumerate(positions):
+            if i + 1 < len(positions):
+                end_pos = positions[i + 1]
+            else:
+                # Last step - find answer pattern or end
+                end_pos = len(text)
+                for pattern in self.answer_patterns:
+                    ans_pos = text.find(pattern, start_pos)
+                    if ans_pos != -1 and ans_pos < end_pos:
+                        end_pos = ans_pos
+
+            step_text = text[start_pos:end_pos].strip()
+            if step_text:
+                steps.append(step_text)
+
+        return steps
+
+    def is_step_complete(self, generated_text: str, token_count: int = None) -> bool:
+        """Check if current generation represents a complete step."""
+
+        # Immediate completion if we hit an answer pattern
         for pattern in self.answer_patterns:
             if pattern in generated_text and not generated_text.startswith(pattern):
                 return True
 
-        # Count occurrences of "- Step" pattern specifically
-        # We need to see it twice: once at the beginning of current step,
-        # once at the beginning of next step
+        # Count occurrences of "- Step" pattern
         step_count = generated_text.count("- Step")
 
-        # Stop when we see 2 or more "- Step" markers (current step + next step beginning)
+        # Stop when we see 2 or more "- Step" markers
         if step_count >= 2:
             return True
 
@@ -75,20 +122,15 @@ class StepBoundaryDetector:
     def is_trajectory_complete(
         self, generated_text: str, reached_eos: bool = False
     ) -> bool:
-        """Check if trajectory is complete (second step marker is answer tag)"""
+        """Check if trajectory is complete."""
         first_answer_pos = None
-        active_answer_pattern = None
         for pattern in self.answer_patterns:
             pos = generated_text.find(pattern)
             if pos != -1:
                 if first_answer_pos is None or pos < first_answer_pos:
                     first_answer_pos = pos
-                    active_answer_pattern = pattern  # noqa: F841
 
         if first_answer_pos is not None:
-            # If the answer marker occurs at the beginning of the current chunk it means
-            # we have just started the answer step (typically "\n<Answer>:" with leading newline).
-            # We treat this as a completed trajectory.
             return True
 
         if reached_eos:
@@ -101,28 +143,25 @@ class StepBoundaryDetector:
         return False
 
     def contains_answer_pattern(self, generated_text: str) -> bool:
-        """Check if text contains any answer pattern"""
+        """Check if text contains any answer pattern."""
         for pattern in self.answer_patterns:
             if pattern in generated_text:
                 return True
         return False
 
     def extract_step_text(self, generated_text: str) -> str:
-        """Extract the step text, removing boundary markers at the END only"""
-
+        """Extract the step text, removing boundary markers at the END only."""
         step_text = generated_text.strip()
 
-        # Special handling for "- Step" pattern
-        # If we have 2+ occurrences, remove everything from the second occurrence onwards
+        # Handle multiple "- Step" occurrences
         step_count = step_text.count("- Step")
         if step_count >= 2:
-            # Find the position of the second "- Step"
             first_pos = step_text.find("- Step")
             second_pos = step_text.find("- Step", first_pos + 1)
             if second_pos != -1:
                 step_text = step_text[:second_pos].strip()
 
-        # For answer patterns, remove from the first occurrence
+        # Remove answer patterns from end
         for pattern in self.answer_patterns:
             if pattern in step_text and not step_text.startswith(pattern):
                 pos = step_text.find(pattern)

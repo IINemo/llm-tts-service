@@ -61,11 +61,15 @@ from llm_tts.scorers import (
     TotValueScorer,
     TotVoteScorer,
 )
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import (
+    StructuredStepDetector,
+    ThinkingMarkerDetector,
+)
 
-# vLLM step generator (optional)
+# vLLM step generators (optional)
 try:
     from llm_tts.generators import StepCandidateGeneratorThroughVLLM
+    from llm_tts.generators.vllm import ThinkingStepGeneratorVLLM
 
     VLLM_GENERATOR_AVAILABLE = True
 except ImportError:
@@ -75,6 +79,7 @@ from llm_tts.strategies import (
     PhiDecoding,
     StrategyBeamSearch,
     StrategyDeepConf,
+    StrategyOfflineBestOfN,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
     StrategyTreeOfThoughts,
@@ -208,11 +213,16 @@ def create_scorer(config):
             batch_size=config.scorer.batch_size,
             torch_dtype=config.system.torch_dtype,
         )
-
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
     elif config.scorer.type == "perplexity" or config.scorer.type == "entropy":
         scorer = StepScorerConfidence()
+    elif config.scorer.type == "generation":
+        # Use pre-computed generation scores (for vLLM)
+        from llm_tts.scorers import StepScorerGeneration
+
+        score_type = config.scorer.get("score_type", "mean_entropy")
+        scorer = StepScorerGeneration(score_type=score_type)
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
 
@@ -270,30 +280,66 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            detector = StepBoundaryDetector(
-                step_patterns=config.strategy.get(
-                    "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
-                ),
-                answer_patterns=config.strategy.get(
-                    "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
-                ),
-                max_tokens_per_step=config.generation.max_new_tokens,
-            )
+            detector_type = config.strategy.get("detector_type", "structured")
 
-            # Create sampling params for step generation
-            step_sampling_params = SamplingParams(
-                max_tokens=config.generation.max_new_tokens,
-                temperature=config.generation.temperature,
-                top_p=config.generation.top_p,
-                logprobs=config.strategy.get("top_logprobs", 20),
-                stop=detector.step_patterns,
-            )
+            if detector_type == "thinking_marker":
+                # Use ThinkingStepGeneratorVLLM for thinking mode
+                log.info("Creating ThinkingStepGeneratorVLLM for thinking mode")
 
-            step_generator = StepCandidateGeneratorThroughVLLM(
-                model=llm,
-                detector=detector,
-                sampling_params=step_sampling_params,
-            )
+                step_generator = ThinkingStepGeneratorVLLM(
+                    model=llm,
+                    min_step_chars=config.strategy.get("min_step_chars", 200),
+                    max_step_chars=config.strategy.get("max_step_chars", 1200),
+                    max_new_tokens=config.generation.max_new_tokens,
+                    temperature=config.generation.temperature,
+                    top_p=config.generation.top_p,
+                    top_k=config.generation.get("top_k", 20),
+                    # Stop token configuration (matches ThinkingMarkerDetector)
+                    use_sequence=config.strategy.get("use_sequence", True),
+                    use_conclusion=config.strategy.get("use_conclusion", True),
+                    use_thinking=config.strategy.get("use_thinking", True),
+                    use_verification=config.strategy.get("use_verification", True),
+                    use_reasoning=config.strategy.get("use_reasoning", False),
+                    use_correction=config.strategy.get("use_correction", False),
+                    use_structure=config.strategy.get("use_structure", False),
+                    custom_words=config.strategy.get("custom_words", None),
+                    answer_patterns=config.strategy.get(
+                        "detector_answer_patterns",
+                        ["</think>", "<Answer>:", "\\boxed{"],
+                    ),
+                    # Thinking mode control (from model config)
+                    disable_thinking_mode=config.model.get(
+                        "disable_thinking_mode", False
+                    ),
+                    # Context length limit for trajectory truncation
+                    max_model_len=config.model.get("max_model_len", 32768),
+                )
+            else:
+                # Use StructuredStepDetector for structured mode
+                detector = StructuredStepDetector(
+                    step_patterns=config.strategy.get(
+                        "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+                    ),
+                    answer_patterns=config.strategy.get(
+                        "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+                    ),
+                    max_tokens_per_step=config.generation.max_new_tokens,
+                )
+
+                # Create sampling params for step generation
+                step_sampling_params = SamplingParams(
+                    max_tokens=config.generation.max_new_tokens,
+                    temperature=config.generation.temperature,
+                    top_p=config.generation.top_p,
+                    logprobs=config.strategy.get("top_logprobs", 20),
+                    stop=detector.step_patterns,
+                )
+
+                step_generator = StepCandidateGeneratorThroughVLLM(
+                    model=llm,
+                    detector=detector,
+                    sampling_params=step_sampling_params,
+                )
 
             log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
 
@@ -307,6 +353,11 @@ def create_model(config):
             )
 
             import importlib
+
+            # Add working directory to path for config module imports
+            cwd = os.getcwd()
+            if cwd not in sys.path:
+                sys.path.insert(0, cwd)
 
             mod = importlib.import_module(config.scorer.uncertainty_model_creator)
             model = mod.create_uncertainty_model(config)
@@ -329,15 +380,48 @@ def create_model(config):
             base_model.eval()
             model = WhiteboxModel(base_model, tokenizer)
 
-        detector = StepBoundaryDetector(
-            step_patterns=config.strategy.get(
-                "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
-            ),
-            answer_patterns=config.strategy.get(
-                "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
-            ),
-            max_tokens_per_step=config.generation.max_new_tokens,
+        # Choose detector based on thinking mode
+        detector_type = config.strategy.get("detector_type", "structured")
+        use_thinking_detector = detector_type == "thinking_marker" or (
+            not config.model.disable_thinking_mode and detector_type == "auto"
         )
+
+        if use_thinking_detector:
+            log.info("Using ThinkingMarkerDetector for thinking mode")
+            # marker_semantic_v2 settings (see tests/boundary_detectors/)
+            detector = ThinkingMarkerDetector(
+                min_step_chars=config.strategy.get("min_step_chars", 200),
+                max_step_chars=config.strategy.get("max_step_chars", 1200),
+                use_sequence=config.strategy.get("use_sequence", True),
+                use_conclusion=config.strategy.get("use_conclusion", True),
+                use_thinking=config.strategy.get("use_thinking", True),
+                use_verification=config.strategy.get("use_verification", True),
+                use_structure=config.strategy.get("use_structure", False),
+                use_reasoning=config.strategy.get(
+                    "use_reasoning", False
+                ),  # Default False to avoid over-splitting
+                use_sentence_start=config.strategy.get("use_sentence_start", False),
+                use_correction=config.strategy.get("use_correction", False),
+                custom_markers=config.strategy.get(
+                    "custom_markers"
+                ),  # marker_semantic_v2 additions
+            )
+            # Set answer patterns if provided
+            if config.strategy.get("detector_answer_patterns"):
+                detector.answer_patterns = config.strategy.get(
+                    "detector_answer_patterns"
+                )
+        else:
+            log.info("Using StructuredStepDetector")
+            detector = StructuredStepDetector(
+                step_patterns=config.strategy.get(
+                    "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+                ),
+                answer_patterns=config.strategy.get(
+                    "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+                ),
+                max_tokens_per_step=config.generation.max_new_tokens,
+            )
         step_generator = StepCandidateGeneratorThroughHuggingface(
             model=model,
             detector=detector,
@@ -356,8 +440,6 @@ def create_model(config):
         log.info(f"Using OpenAI API model: {model_path}")
 
         # Check provider for API key and base URL (applies to all strategies)
-        import os
-
         if config.model.get("provider") == "openrouter":
             api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
             base_url = "https://openrouter.ai/api/v1"
@@ -379,7 +461,7 @@ def create_model(config):
             # Other strategies use boundary detection via early stopping
             from llm_tts.early_stopping import BoundaryEarlyStopping
 
-            detector = StepBoundaryDetector(
+            detector = StructuredStepDetector(
                 step_patterns=[
                     "- Step",
                     "<Answer>:",
@@ -420,13 +502,51 @@ def create_model(config):
     return model, step_generator
 
 
-def create_tts_strategy(config, model, step_generator, scorer):
+def create_tts_strategy(config, model, step_generator, scorer, output_dir=None):
     if config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
+            output_dir=output_dir,
+        )
+    elif config.strategy.type == "offline_best_of_n":
+        # Offline Best-of-N requires vLLM model directly (not step_generator)
+        # It generates N complete trajectories and selects the best
+        from vllm import LLM
+
+        # Get the underlying vLLM LLM object (may be wrapped in WhiteboxModelvLLM)
+        vllm_model = getattr(model, "vllm_engine", model)
+        if not isinstance(vllm_model, LLM):
+            raise ValueError(
+                f"Offline Best-of-N requires vLLM LLM model, got {type(model).__name__}"
+            )
+
+        strategy = StrategyOfflineBestOfN(
+            model=vllm_model,
+            scorer=scorer,
+            num_trajectories=config.strategy.get("num_trajectories", 4),
+            max_thinking_tokens=config.strategy.get("max_thinking_tokens", 4096),
+            max_response_tokens=config.strategy.get("max_response_tokens", 1024),
+            temperature=config.generation.get("temperature", 0.6),
+            top_p=config.generation.get("top_p", 0.95),
+            top_k=config.generation.get("top_k", 20),
+            answer_patterns=config.strategy.get(
+                "detector_answer_patterns", ["<end of response>"]
+            ),
+            disable_thinking_mode=config.model.get("disable_thinking_mode", False),
+            output_dir=output_dir,
+            # Step boundary detector settings (same as online mode)
+            min_step_chars=config.strategy.get("min_step_chars", 200),
+            max_step_chars=config.strategy.get("max_step_chars", 1200),
+            use_sequence=config.strategy.get("use_sequence", True),
+            use_conclusion=config.strategy.get("use_conclusion", True),
+            use_thinking=config.strategy.get("use_thinking", True),
+            use_verification=config.strategy.get("use_verification", True),
+            use_reasoning=config.strategy.get("use_reasoning", False),
+            use_correction=config.strategy.get("use_correction", False),
+            use_structure=config.strategy.get("use_structure", False),
         )
     elif config.strategy.type == "adaptive":
         strategy = AdaptiveScalingBestOfN(
@@ -616,7 +736,7 @@ def generate_trajectories(
             },
         ]
 
-        result = strategy.generate_trajectory(request)
+        result = strategy.generate_trajectory(request, sample_idx=i)
 
         # Extract generated answer (but don't check correctness yet)
         # Use extracted_answer if available (e.g., from DeepConf's \boxed{} extraction)
@@ -632,7 +752,7 @@ def generate_trajectories(
 
         # Log detailed traces
         log.info("\n" + "-" * 60)
-        log.info("GENERATED TRACES:")
+        log.info("GENERATED STEPS:")
         log.info("-" * 60)
 
         # For DeepConf, steps contain the individual traces
@@ -650,8 +770,10 @@ def generate_trajectories(
                     if isinstance(validity, (int, float))
                     else validity
                 )
-                log.info(f"\nTrace {step_idx + 1} (confidence: {confidence_str}):")
-                log.info(step)
+                log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
+                # Log full step text, not truncated repr
+                step_text = step.text if hasattr(step, "text") else str(step)
+                log.info(step_text)
         else:
             # Fallback: show full trajectory
             log.info(f"\nFull trajectory:\n{result['trajectory']}")
@@ -663,7 +785,7 @@ def generate_trajectories(
         is_correct = grade_answer(str(generated_text), str(gold_answer_num))
         log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
         log.info("-" * 60)
-        log.info(f"Num traces: {len(result['steps'])}")
+        log.info(f"Num steps: {len(result['steps'])}")
         if "validity_scores" in result and result["validity_scores"]:
             scores = result["validity_scores"]
             log.info(
@@ -1120,7 +1242,11 @@ def main(config):
 
     # Create tts strategy
     generator = create_tts_strategy(
-        config=config, model=model, step_generator=step_generator, scorer=scorer
+        config=config,
+        model=model,
+        step_generator=step_generator,
+        scorer=scorer,
+        output_dir=output_dir,
     )
 
     # Load existing results if available (for resuming interrupted runs)

@@ -9,6 +9,7 @@ This document defines the evaluation protocol for comparing test-time compute sc
 - [Metrics](metrics.md) - Accuracy, tokens, FLOPs calculation
 - [WandB](wandb.md) - Logging conventions and upload workflow
 - [Results](results/) - Experiment results by dataset
+- [Architecture](../architecture.md) - Inference pipeline architecture
 
 ---
 
@@ -18,35 +19,35 @@ Follow these steps to run a reproducible evaluation:
 
 ### Step 1: Configure Reproducibility
 
-Set `seed=42` for all experiments. The seed must be propagated to all components.
+Set `seed=42` and consistent `torch_dtype` for all experiments. These must be propagated to all components.
 
 ```yaml
 # config/system/default.yaml
 system:
-  seed: 42  # REQUIRED for reproducibility
+  seed: 42                # REQUIRED for reproducibility
+  torch_dtype: "bfloat16" # Options: float16, bfloat16, float32, auto
 ```
 
-**Seed propagation checklist:**
+**Reproducibility checklist:**
 
 | Component | Setting | Verified |
 |-----------|---------|----------|
 | System config | `system.seed: 42` | [ ] |
+| System config | `system.torch_dtype: bfloat16` | [ ] |
 | vLLM SamplingParams | `seed=config.system.seed` | [ ] |
 | Strategy (DeepConf/Self-Consistency) | `seed=config.system.seed` | [ ] |
 
 ### Step 2: Configure Model and Thinking Mode
 
-For models with thinking mode (e.g., Qwen3), disable it for fair comparison:
+For models with thinking mode (e.g., Qwen3), set `disable_thinking_mode` based on your experiment:
 
 ```yaml
 # config/model/vllm_qwen3.yaml
 model:
   type: vllm
   model_path: "Qwen/Qwen3-8B"
-  disable_thinking_mode: true  # REQUIRED for non-thinking evaluation
+  disable_thinking_mode: true  # Set to false for thinking mode experiments
 ```
-
-**Why disable thinking mode?** Thinking mode uses internal reasoning tokens that inflate compute costs. For fair comparison with other models, use non-thinking mode.
 
 ### Step 3: Configure Generation Parameters
 
@@ -121,8 +122,9 @@ Before running any experiment, verify:
 | Setting | Value | Why |
 |---------|-------|-----|
 | `system.seed` | `42` | Reproducibility |
-| `model.disable_thinking_mode` | `true` | Fair comparison (for Qwen3) |
-| `generation.temperature` | `0.7` | Non-greedy sampling |
+| `system.torch_dtype` | `bfloat16` | Consistent precision |
+| `model.disable_thinking_mode` | `true/false` | Depends on experiment type |
+| `generation.temperature` | `0.7` / `0.6` | Non-thinking / Thinking mode |
 | `generation.top_p` | `0.8` | Qwen3 recommended |
 | `generation.top_k` | `20` | Qwen3 recommended |
 | `strategy.temperature` | Same as generation | Consistency |
@@ -132,9 +134,9 @@ Before running any experiment, verify:
 
 ## Inference Backends
 
-### vLLM (Recommended)
+### vLLM
 
-Use vLLM for all local model evaluations:
+High-performance inference engine optimized for throughput.
 
 ```yaml
 model:
@@ -146,10 +148,134 @@ model:
   max_model_len: 32768
 ```
 
-**Why vLLM?**
-- PagedAttention prevents OOM on long sequences
-- Native batched generation for multiple traces
-- Higher throughput than HuggingFace
+| Pros | Cons |
+|------|------|
+| PagedAttention prevents OOM on long sequences | No custom stopping criteria callbacks |
+| Native batched generation for multiple traces | Stop tokens require post-validation |
+| Higher throughput than HuggingFace | May stop at false boundaries |
+| Prefix caching for repeated prompts | |
+| Thinking mode step detection via stop tokens | |
+
+### HuggingFace
+
+Standard inference with full control over generation process.
+
+```yaml
+model:
+  type: huggingface
+  model_path: "Qwen/Qwen3-8B"
+  device_map: auto
+  torch_dtype: bfloat16
+```
+
+| Pros | Cons |
+|------|------|
+| Full `StoppingCriteria` callback support | Lower throughput than vLLM |
+| Custom step boundary detection during generation | Higher memory usage |
+| Works with thinking mode semantic markers | May OOM on very long sequences |
+| Fine-grained control over generation | |
+
+### Framework Selection Guide
+
+| Use Case | Framework | Why |
+|----------|-----------|-----|
+| Self-Consistency / DeepConf | vLLM | Full trace generation, high throughput |
+| CoT (single trace) | vLLM | No step detection needed |
+| Online Best-of-N (non-thinking) | vLLM or HF | Explicit markers work with stop tokens |
+| Online Best-of-N (thinking mode) | vLLM or HF | Set `model.type: vllm` or `model.type: local` |
+| Offline Best-of-N (thinking mode) | vLLM | Generate full trajectories, split post-hoc |
+| Beam Search (thinking mode) | HuggingFace | Requires semantic step detection |
+| Phi Decoding (thinking mode) | HuggingFace | Requires semantic step detection |
+
+**Choosing between vLLM and HuggingFace:**
+
+The framework is selected via `model.type` in your config:
+
+```yaml
+# Use vLLM (stop tokens + post-validation)
+model:
+  type: vllm
+  model_path: "Qwen/Qwen3-8B"
+
+# Use HuggingFace (StoppingCriteria callbacks)
+model:
+  type: local
+  model_path: "Qwen/Qwen3-8B"
+```
+
+> **Note**: vLLM now supports thinking mode step detection using stop tokens derived from semantic markers (e.g., "wait", "so", "let me"). After each stop, the detector validates if it's a real step boundary based on `min_step_chars` and `max_step_chars` constraints. This is less precise than HuggingFace's `StoppingCriteria` but offers higher throughput.
+
+**Why HuggingFace for step detection?**
+
+HuggingFace's `StoppingCriteria` is more universal for step detection - it allows passing any custom detector that can inspect generated tokens and apply arbitrary logic (regex patterns, minimum character thresholds, lookbehind assertions, etc.):
+
+```python
+from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
+from llm_tts.generators.huggingface import ThinkingStepStoppingCriteria
+
+# Create detector with semantic markers
+detector = ThinkingMarkerDetector(min_step_chars=100)
+
+# Pass detector to stopping criteria - inspects tokens during generation
+stopping_criteria = ThinkingStepStoppingCriteria(
+    tokenizer=tokenizer,
+    detector=detector,  # ✅ Custom logic possible
+    start_length=input_length,
+    batch_size=batch_size,
+)
+
+# Generate with custom stopping
+outputs = model.generate(
+    input_ids,
+    stopping_criteria=[stopping_criteria],  # ✅ Works
+)
+```
+
+**vLLM Thinking Mode Step Detection**
+
+vLLM now supports thinking mode step detection using a stop-and-validate approach:
+
+```python
+from llm_tts.generators.vllm import StepCandidateGeneratorThroughVLLM
+from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens_compact
+
+# Generate stop tokens from semantic markers
+stop_tokens = get_stop_tokens_compact(
+    use_sequence=True,      # "first", "next", "then"
+    use_conclusion=True,    # "so", "therefore", "thus"
+    use_thinking=True,      # "let me", "wait", "hmm"
+    use_verification=True,  # "to verify", "let's check"
+)
+
+# Create generator with post-validation
+generator = StepCandidateGeneratorThroughVLLM(
+    model=vllm_model,
+    stop_tokens=stop_tokens,
+    min_step_chars=150,     # Minimum chars before accepting boundary
+    max_step_chars=600,     # Force split after this many chars
+)
+```
+
+**How it works:**
+1. Generate with stop tokens derived from semantic markers
+2. When generation stops, validate if it's a real step boundary
+3. If `len(text) < min_step_chars`, continue generating (false boundary)
+4. If `len(text) > max_step_chars`, force accept as step boundary
+5. Include stop string in output with `include_stop_str_in_output=True`
+
+This approach is less precise than HuggingFace but works well for thinking mode and offers higher throughput.
+
+**Legacy vLLM (exact string matching only):**
+
+```python
+from vllm import SamplingParams
+
+params = SamplingParams(
+    stop=["- Step"],     # ✅ Exact strings only
+    stop_token_ids=[],   # ✅ Token IDs only
+    # stopping_criteria=  # ❌ Not supported
+)
+```
 
 ### API-Based Models
 
@@ -172,6 +298,10 @@ model:
 | DeepConf | Confidence-filtered voting | [Yao et al., 2025](https://arxiv.org/abs/2508.15260) |
 | Tree of Thoughts | Branching search with backtracking | [Yao et al., 2023](https://arxiv.org/abs/2305.10601) |
 | CoT | Single chain-of-thought | [Wei et al., 2022](https://arxiv.org/abs/2201.11903) |
+| Online Best-of-N | Step-by-step candidate selection | - |
+| Offline Best-of-N | Generate N trajectories, select best | - |
+| Beam Search | Beam search over reasoning steps | - |
+| Phi Decoding | Phi-based step selection | [φ-Decoding](https://arxiv.org/abs/2503.13288) |
 
 ---
 
@@ -187,6 +317,17 @@ python scripts/run_tts_eval.py \
 # Self-Consistency on AIME 2025
 python scripts/run_tts_eval.py \
     --config-name=experiments/self_consistency/sc_vllm_qwen3_aime2025
+
+# Online Best-of-N with vLLM thinking mode
+python scripts/run_tts_eval.py \
+    --config-path ../config/experiments/thinking_mode \
+    --config-name online_bon_vllm_thinking_aime2025 \
+    strategy.min_step_chars=150 strategy.max_step_chars=600
+
+# Offline Best-of-N with vLLM thinking mode
+python scripts/run_tts_eval.py \
+    --config-path ../config/experiments/thinking_mode \
+    --config-name offline_bon_thinking_aime2025
 
 # Split dataset across GPUs (for parallel runs)
 # GPU 0: first 15 samples

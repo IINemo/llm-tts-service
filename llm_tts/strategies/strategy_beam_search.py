@@ -6,7 +6,7 @@ import numpy as np
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
-    covert_trajectory_to_string,
+    convert_trajectory_to_string,
 )
 
 from .strategy_base import StrategyBase
@@ -130,7 +130,7 @@ class StrategyBeamSearch(StrategyBase):
         best_beam = self._select_best_beam(completed_beams or beams)
 
         return {
-            "trajectory": covert_trajectory_to_string(best_beam["steps"]),
+            "trajectory": convert_trajectory_to_string(best_beam["steps"]),
             "steps": best_beam["steps"],
             "validity_scores": best_beam["scores"],
             "completed": len(completed_beams) > 0,

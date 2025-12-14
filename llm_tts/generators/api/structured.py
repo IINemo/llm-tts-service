@@ -12,9 +12,9 @@ from lm_polygraph import BlackboxModel
 from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
-    covert_trajectory_to_string,
+    convert_trajectory_to_string,
 )
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StructuredStepDetector
 
 log = logging.getLogger(__name__)
 
@@ -25,13 +25,13 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
     def __init__(
         self,
         model: BlackboxModel,
-        detector: StepBoundaryDetector,
+        detector: StructuredStepDetector,
         prefill_mode: bool,
     ):
         super().__init__(1)  # TODO:
 
         self.model = model
-        self.detector = detector or StepBoundaryDetector()
+        self.detector = detector or StructuredStepDetector()
         self.prefill_mode = prefill_mode
 
     def generate_candidates(
@@ -137,7 +137,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 request_with_trajectory.append(
                     {
                         "role": "assistant",
-                        "content": covert_trajectory_to_string(trajectory),
+                        "content": convert_trajectory_to_string(trajectory),
                         "prefix": True,
                     }
                 )
@@ -148,7 +148,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
     ):
         continuation_request = request
-        prefix = covert_trajectory_to_string(trajectory)
+        prefix = convert_trajectory_to_string(trajectory)
         continuation_promt = (
             "Continue the assistant message from the EXACT prefix below. "
             "Begin immediately after the last character of the prefix. "

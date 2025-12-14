@@ -5,7 +5,7 @@ from lm_polygraph.utils.generation_parameters import GenerationParameters
 
 from llm_tts.generators import StepCandidateGeneratorThroughHuggingface
 from llm_tts.scorers.step_scorer_uncertainty import StepScorerUncertainty
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StructuredStepDetector
 from llm_tts.strategies import PhiDecoding
 
 sys.path.insert(0, ".")
@@ -60,7 +60,7 @@ def test_phi_decoding():
     polygraph_model = create_uncertainty_model(omega_config)
     polygraph_model.generation_parameters = GenerationParameters()
 
-    step_boundary_detector = StepBoundaryDetector(
+    step_boundary_detector = StructuredStepDetector(
         step_patterns=step_patterns,
         answer_patterns=answer_patterns,
         max_tokens_per_step=max_new_tokens,
