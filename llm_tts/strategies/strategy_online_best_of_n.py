@@ -91,7 +91,9 @@ class StrategyOnlineBestOfN(StrategyBase):
             best_idx, selected_candidate = self._select_best_candidate(
                 candidates, candidate_validity_scores
             )
-            log.info(f"\nSelected candidate {best_idx}\nText:\n{selected_candidate.text}")
+            log.info(
+                f"\nSelected candidate {best_idx}\nText:\n{selected_candidate.text}"
+            )
 
             # Update trajectory
             trajectory.append(selected_candidate)

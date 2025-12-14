@@ -397,7 +397,9 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             "eos_token_id": self.model.tokenizer.eos_token_id,
         }
 
-        log.info(f"Generating {candidates_per_step} answer candidates (no step stopping)")
+        log.info(
+            f"Generating {candidates_per_step} answer candidates (no step stopping)"
+        )
 
         # Override model's generation parameters
         old_do_sample = self.model.generation_parameters.do_sample

@@ -82,7 +82,9 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
 
         # Answer patterns for response phase (default: <end of response>)
         # Convert to regular list in case it's OmegaConf ListConfig
-        self.answer_patterns = list(answer_patterns) if answer_patterns else ["<end of response>"]
+        self.answer_patterns = (
+            list(answer_patterns) if answer_patterns else ["<end of response>"]
+        )
 
         # Build stop tokens for THINKING phase (step boundaries + </think>)
         self.thinking_stop_tokens = get_stop_tokens_compact(
@@ -213,6 +215,7 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
 
         # Calculate base prompt tokens (without trajectory)
         import inspect
+
         tokenizer_signature = inspect.signature(self.tokenizer.apply_chat_template)
         has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
 

@@ -126,7 +126,9 @@ class StrategyOfflineBestOfN(StrategyBase):
         """
         # Extract raw content for comparison
         think_match = re.search(r"<think>(.*?)</think>", thinking_text, re.DOTALL)
-        raw_content = think_match.group(1).strip() if think_match else thinking_text.strip()
+        raw_content = (
+            think_match.group(1).strip() if think_match else thinking_text.strip()
+        )
 
         steps = self.detector.detect_steps(thinking_text)
         if not steps:
@@ -414,7 +416,9 @@ class StrategyOfflineBestOfN(StrategyBase):
             log.info(f"[Trajectory {i+1}] Score: {score:.4f}")
 
         # Select best trajectory
-        best_idx = int(np.argmax(all_scores))  # Convert to Python int for JSON serialization
+        best_idx = int(
+            np.argmax(all_scores)
+        )  # Convert to Python int for JSON serialization
         best_trajectory = all_trajectories[best_idx]
         best_score = float(all_scores[best_idx])  # Convert to Python float
 
@@ -501,7 +505,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "score": scores[i],
                     "text": traj,
                     "is_best": i == best_idx,
-                    "num_steps": len(all_thinking_steps[i]) if all_thinking_steps else 1,
+                    "num_steps": (
+                        len(all_thinking_steps[i]) if all_thinking_steps else 1
+                    ),
                     "steps": all_thinking_steps[i] if all_thinking_steps else [traj],
                 }
                 for i, traj in enumerate(trajectories)

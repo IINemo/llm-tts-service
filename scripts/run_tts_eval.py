@@ -217,6 +217,7 @@ def create_scorer(config):
     elif config.scorer.type == "generation":
         # Use pre-computed generation scores (for vLLM)
         from llm_tts.scorers import StepScorerGeneration
+
         score_type = config.scorer.get("score_type", "mean_entropy")
         scorer = StepScorerGeneration(score_type=score_type)
     else:
@@ -300,10 +301,13 @@ def create_model(config):
                     use_structure=config.strategy.get("use_structure", False),
                     custom_words=config.strategy.get("custom_words", None),
                     answer_patterns=config.strategy.get(
-                        "detector_answer_patterns", ["</think>", "<Answer>:", "\\boxed{"]
+                        "detector_answer_patterns",
+                        ["</think>", "<Answer>:", "\\boxed{"],
                     ),
                     # Thinking mode control (from model config)
-                    disable_thinking_mode=config.model.get("disable_thinking_mode", False),
+                    disable_thinking_mode=config.model.get(
+                        "disable_thinking_mode", False
+                    ),
                     # Context length limit for trajectory truncation
                     max_model_len=config.model.get("max_model_len", 32768),
                 )
@@ -371,9 +375,8 @@ def create_model(config):
 
         # Choose detector based on thinking mode
         detector_type = config.strategy.get("detector_type", "structured")
-        use_thinking_detector = (
-            detector_type == "thinking_marker"
-            or (not config.model.disable_thinking_mode and detector_type == "auto")
+        use_thinking_detector = detector_type == "thinking_marker" or (
+            not config.model.disable_thinking_mode and detector_type == "auto"
         )
 
         if use_thinking_detector:
@@ -387,14 +390,20 @@ def create_model(config):
                 use_thinking=config.strategy.get("use_thinking", True),
                 use_verification=config.strategy.get("use_verification", True),
                 use_structure=config.strategy.get("use_structure", False),
-                use_reasoning=config.strategy.get("use_reasoning", False),  # Default False to avoid over-splitting
+                use_reasoning=config.strategy.get(
+                    "use_reasoning", False
+                ),  # Default False to avoid over-splitting
                 use_sentence_start=config.strategy.get("use_sentence_start", False),
                 use_correction=config.strategy.get("use_correction", False),
-                custom_markers=config.strategy.get("custom_markers"),  # marker_semantic_v2 additions
+                custom_markers=config.strategy.get(
+                    "custom_markers"
+                ),  # marker_semantic_v2 additions
             )
             # Set answer patterns if provided
             if config.strategy.get("detector_answer_patterns"):
-                detector.answer_patterns = config.strategy.get("detector_answer_patterns")
+                detector.answer_patterns = config.strategy.get(
+                    "detector_answer_patterns"
+                )
         else:
             log.info("Using StructuredStepDetector")
             detector = StructuredStepDetector(
@@ -756,7 +765,7 @@ def generate_trajectories(
                 )
                 log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
                 # Log full step text, not truncated repr
-                step_text = step.text if hasattr(step, 'text') else str(step)
+                step_text = step.text if hasattr(step, "text") else str(step)
                 log.info(step_text)
         else:
             # Fallback: show full trajectory

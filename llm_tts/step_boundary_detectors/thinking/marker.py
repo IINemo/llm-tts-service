@@ -382,7 +382,7 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         text = self._extract_thinking_content(generated_text)
 
         # Content since last step completed
-        new_content = text[self._last_step_end_pos:]
+        new_content = text[self._last_step_end_pos :]
         new_content_len = len(new_content.strip())
 
         # Not enough content yet
@@ -401,7 +401,10 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
                 # Must have >= min_step_chars before marker
                 if len(content_before_marker) >= self.min_step_chars:
                     # Only split at sentence boundaries to avoid mid-sentence cuts
-                    if content_before_marker and content_before_marker[-1] in sentence_endings:
+                    if (
+                        content_before_marker
+                        and content_before_marker[-1] in sentence_endings
+                    ):
                         self._step_boundary_pos = self._last_step_end_pos + pos
                         return True
 
@@ -472,7 +475,11 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
 
         # Extract text from last step end to boundary (or end of text)
         start = self._last_step_end_pos
-        end = self._step_boundary_pos if self._step_boundary_pos is not None else len(text)
+        end = (
+            self._step_boundary_pos
+            if self._step_boundary_pos is not None
+            else len(text)
+        )
 
         return text[start:end].strip()
 

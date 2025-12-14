@@ -34,26 +34,26 @@ def expand_word_boundary(word: str, include_lowercase: bool = True) -> List[str]
 
     # Common prefixes (what comes before word boundary)
     prefixes = [
-        " ",      # space
-        "\n",     # newline
-        ". ",     # after period
-        ".\n",    # after period + newline
-        ", ",     # after comma
-        "! ",     # after exclamation
-        "? ",     # after question
-        ": ",     # after colon
-        "; ",     # after semicolon
-        ")\n",    # after closing paren + newline
-        ") ",     # after closing paren
+        " ",  # space
+        "\n",  # newline
+        ". ",  # after period
+        ".\n",  # after period + newline
+        ", ",  # after comma
+        "! ",  # after exclamation
+        "? ",  # after question
+        ": ",  # after colon
+        "; ",  # after semicolon
+        ")\n",  # after closing paren + newline
+        ") ",  # after closing paren
     ]
 
     # Common suffixes (what comes after word boundary)
     suffixes = [
-        " ",      # space
-        ",",      # comma
-        ".",      # period
-        ":",      # colon
-        "\n",     # newline
+        " ",  # space
+        ",",  # comma
+        ".",  # period
+        ":",  # colon
+        "\n",  # newline
     ]
 
     # Generate combinations
@@ -171,10 +171,10 @@ CORRECTION_WORDS = [
 
 # Structure markers (already literal, not word-boundary based)
 STRUCTURE_TOKENS = [
-    "\n\n",      # Paragraph break
-    "\n- ",      # Bullet point
-    "\n* ",      # Asterisk bullet
-    "\n1. ",     # Numbered list
+    "\n\n",  # Paragraph break
+    "\n- ",  # Bullet point
+    "\n* ",  # Asterisk bullet
+    "\n1. ",  # Numbered list
     "\n2. ",
     "\n3. ",
     "\n4. ",
@@ -336,7 +336,7 @@ if __name__ == "__main__":
     for t in expand_word_boundary("so")[:10]:
         print(f"  {repr(t)}")
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
 
     # Test full token list (compact)
     tokens = get_stop_tokens_compact(
@@ -350,7 +350,7 @@ if __name__ == "__main__":
         print(f"  {repr(t)}")
     print("  ...")
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
 
     # Test full token list
     tokens_full = get_stop_tokens(
