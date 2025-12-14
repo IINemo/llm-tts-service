@@ -440,7 +440,11 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
             is_complete=True,
             is_trajectory_complete=thinking_complete,  # True when </think> reached
             generation_scores=generation_scores,
-            other_data={"uncertainty_score": generation_scores.get("mean_entropy", 0)},
+            # Convert entropy to validity: lower entropy = higher validity
+            other_data={
+                "uncertainty_score": 1.0
+                / (1.0 + generation_scores.get("mean_entropy", 0))
+            },
             raw_text=accumulated_text,
         )
 
@@ -497,8 +501,10 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
                 is_complete=True,
                 is_trajectory_complete=True,  # Response phase always completes trajectory
                 generation_scores=generation_scores,
+                # Convert entropy to validity: lower entropy = higher validity
                 other_data={
-                    "uncertainty_score": generation_scores.get("mean_entropy", 0)
+                    "uncertainty_score": 1.0
+                    / (1.0 + generation_scores.get("mean_entropy", 0))
                 },
                 raw_text=output.text,
             )
