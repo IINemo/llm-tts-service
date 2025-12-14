@@ -23,10 +23,7 @@ from llm_tts.generators.base import (
     convert_trajectory_to_string,
 )
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
-from llm_tts.step_boundary_detectors.thinking.vllm import (
-    ANSWER_TOKENS,
-    get_stop_tokens_compact,
-)
+from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens_compact
 
 log = logging.getLogger(__name__)
 
@@ -260,7 +257,7 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         truncated_tokens = list(step_tokens)
 
         while sum(truncated_tokens) > available_tokens and truncated:
-            removed_step = truncated.pop(0)
+            truncated.pop(0)
             removed_tokens = truncated_tokens.pop(0)
             log.info(
                 f"Truncating trajectory: removed step with {removed_tokens} tokens "

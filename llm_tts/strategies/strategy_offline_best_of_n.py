@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 import numpy as np
 from vllm import LLM, SamplingParams
 
-from llm_tts.generators import StepCandidate, convert_trajectory_to_string
+from llm_tts.generators import StepCandidate
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
 from llm_tts.strategies.deepconf.utils import extract_answer
 
