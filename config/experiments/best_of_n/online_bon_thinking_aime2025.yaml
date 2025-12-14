@@ -8,6 +8,7 @@ defaults:
   - /model/hf_qwen3
   - /generation/default
   - /system/default
+  - /scorer/entropy
   - _self_
 
 # Run naming
@@ -38,11 +39,6 @@ generation:
   top_k: 20
   batch_size: 1
   max_length: 8192
-
-# Scorer - entropy-based uncertainty for step selection
-scorer:
-  type: uncertainty
-  uncertainty_model_creator: config.scorer.uncertainty_entropy
 
 # Strategy - Online Best-of-N with thinking marker detector
 strategy:
