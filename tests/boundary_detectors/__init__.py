@@ -1,1 +1,0 @@
-# Step boundary detector tests
