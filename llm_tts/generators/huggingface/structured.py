@@ -317,10 +317,9 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 is_trajectory_complete=is_trajectory_complete,
                 generation_scores=gen_scores,
                 raw_text=raw_generated_text,
+                # Convert entropy to validity: lower entropy = higher validity
                 other_data=(
-                    {
-                        "uncertainty_score": outputs.uncertainty_score[i]
-                    }  # TODO: check if it is correct
+                    {"uncertainty_score": 1.0 / (1.0 + outputs.uncertainty_score[i])}
                     if hasattr(outputs, "uncertainty_score")
                     else None
                 ),
@@ -452,8 +451,9 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 is_trajectory_complete=True,
                 generation_scores=gen_scores,
                 raw_text=raw_generated_text,
+                # Convert entropy to validity: lower entropy = higher validity
                 other_data=(
-                    {"uncertainty_score": outputs.uncertainty_score[i]}
+                    {"uncertainty_score": 1.0 / (1.0 + outputs.uncertainty_score[i])}
                     if hasattr(outputs, "uncertainty_score")
                     else None
                 ),
