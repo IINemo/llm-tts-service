@@ -55,9 +55,13 @@ class StrategyOnlineBestOfN(StrategyBase):
                 - trajectory: Final generated trajectory
                 - steps: List of selected steps
                 - completed: Whether trajectory reached completion
+                - token_stats: Token and TFLOP statistics from generation
         """
         self._current_sample_idx = sample_idx
         self._steps_log = []
+
+        # Reset token tracking for this sample
+        self.step_generator.reset_sample_stats()
 
         trajectory = []
         selected_steps = []
@@ -80,12 +84,21 @@ class StrategyOnlineBestOfN(StrategyBase):
                 request, candidates
             )
 
-            # Log all candidates
+            # Log all candidates with token stats
             log.info(f"\nGenerated {len(candidates)} candidates:")
             for i, (candidate, val_score) in enumerate(
                 zip(candidates, candidate_validity_scores)
             ):
-                log.info(f"\n[{i}] Validity: {val_score:.3f}\nText:\n{candidate.text}")
+                num_tokens = len(candidate.token_ids) if candidate.token_ids else 0
+                tflops = (
+                    self.step_generator.flop_calculator.compute_tflops(num_tokens)
+                    if self.step_generator.flop_calculator
+                    else 0
+                )
+                log.info(
+                    f"\n[{i}] Validity: {val_score:.3f} | Tokens: {num_tokens} | "
+                    f"TFLOPs: {tflops:.3f}\nText:\n{candidate.text}"
+                )
 
             # Select best candidate
             best_idx, selected_candidate = self._select_best_candidate(
@@ -154,12 +167,24 @@ class StrategyOnlineBestOfN(StrategyBase):
         # Extract answer from trajectory (e.g., content between <Answer>: and <end of response>)
         extracted = extract_answer(final_trajectory)
 
+        # Finalize and get token statistics
+        self.step_generator.finalize_sample_stats()
+        token_stats = self.step_generator.get_sample_stats()
+
+        log.info(
+            f"Sample token stats: {token_stats['tokens']} total tokens "
+            f"(input: {token_stats.get('input_tokens', 0)}, output: {token_stats.get('output_tokens', 0)}), "
+            f"{token_stats['generation_count']} generations"
+            + (f", {token_stats['tflops']:.3f} TFLOPs" if token_stats["tflops"] else "")
+        )
+
         return {
             "trajectory": final_trajectory,
             "extracted_answer": extracted,
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,
+            "token_stats": token_stats,
         }
 
     def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
@@ -174,7 +199,7 @@ class StrategyOnlineBestOfN(StrategyBase):
     ) -> tuple:
         """Generate and select best final answer based on criterion"""
 
-        # Generate answer candidates in batches if needed
+        # Generate answer candidates (token recording handled by generator)
         answer_candidates = self.step_generator.generate_answer_candidates(
             chat, trajectory=trajectory, candidates_per_step=self.candidates_per_step
         )
@@ -210,21 +235,39 @@ class StrategyOnlineBestOfN(StrategyBase):
         trajectory_so_far: str,
     ):
         """Log step information for JSON output."""
-        step_data = {
-            "step_num": step_num,
-            "candidates": [
+        # Build candidate data with token stats
+        candidates_data = []
+        for i, c in enumerate(candidates):
+            num_tokens = len(c.token_ids) if c.token_ids else 0
+            tflops = (
+                self.step_generator.flop_calculator.compute_tflops(num_tokens)
+                if self.step_generator.flop_calculator
+                else None
+            )
+            candidates_data.append(
                 {
                     "idx": i,
                     "text": c.text,
-                    "validity_score": float(scores[i]),  # Convert to Python float
+                    "validity_score": float(scores[i]),
+                    "num_tokens": num_tokens,
+                    "tflops": tflops,
                     "is_complete": c.is_complete,
                     "is_trajectory_complete": c.is_trajectory_complete,
                 }
-                for i, c in enumerate(candidates)
-            ],
+            )
+
+        # Get selected candidate's token stats
+        selected_tokens = candidates_data[selected_idx]["num_tokens"]
+        selected_tflops = candidates_data[selected_idx]["tflops"]
+
+        step_data = {
+            "step_num": step_num,
+            "candidates": candidates_data,
             "selected_idx": selected_idx,
             "selected_text": candidates[selected_idx].text,
-            "selected_score": float(scores[selected_idx]),  # Convert to Python float
+            "selected_score": float(scores[selected_idx]),
+            "selected_tokens": selected_tokens,
+            "selected_tflops": selected_tflops,
             "trajectory_so_far": trajectory_so_far,
         }
         self._steps_log.append(step_data)

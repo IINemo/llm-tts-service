@@ -1,9 +1,12 @@
 import logging
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import torch
+
+if TYPE_CHECKING:
+    from llm_tts.utils.flops import FLOPCalculator
 
 log = logging.getLogger(__name__)
 
@@ -40,10 +43,118 @@ def convert_trajectory_to_string(trajectory: List[StepCandidate]) -> str:
 
 
 class StepCandidateGeneratorBase:
-    """Base class for step candidate generator"""
+    """Base class for step candidate generator.
 
-    def __init__(self, generation_batch_size: int):
+    Provides token and FLOP tracking for all generator implementations.
+    """
+
+    def __init__(
+        self,
+        generation_batch_size: int,
+        flop_calculator: Optional["FLOPCalculator"] = None,
+    ):
         self.generation_batch_size = generation_batch_size
+        self.flop_calculator = flop_calculator
+
+        # Per-sample statistics (reset at start of each sample)
+        self._sample_input_tokens: int = 0  # Context tokens (prompt + trajectory)
+        self._sample_output_tokens: int = 0  # Generated tokens (all candidates)
+        self._sample_generation_count: int = 0  # Number of generate calls
+
+        # Cumulative statistics (across all samples)
+        self._total_input_tokens: int = 0
+        self._total_output_tokens: int = 0
+        self._total_samples: int = 0
+
+    def reset_sample_stats(self) -> None:
+        """Reset per-sample statistics. Call at start of each new sample."""
+        self._sample_input_tokens = 0
+        self._sample_output_tokens = 0
+        self._sample_generation_count = 0
+
+    def _record_generation(
+        self,
+        candidates: List[StepCandidate],
+        context_tokens: int = 0,
+    ) -> None:
+        """Record token counts from generated candidates.
+
+        Args:
+            candidates: List of generated candidates
+            context_tokens: Number of context tokens (prompt + trajectory).
+                           With prefix caching, this is processed once per step.
+
+        Called automatically after each generation. Subclasses can override
+        to add custom tracking.
+        """
+        if not candidates:
+            return
+
+        output_tokens = sum(len(c.token_ids) for c in candidates)
+        self._sample_input_tokens += context_tokens  # Context processed once per step
+        self._sample_output_tokens += output_tokens
+        self._sample_generation_count += 1
+
+        log.debug(
+            f"Recorded generation: context={context_tokens}, output={output_tokens} "
+            f"from {len(candidates)} candidates "
+            f"(sample total: input={self._sample_input_tokens}, output={self._sample_output_tokens})"
+        )
+
+    def finalize_sample_stats(self) -> None:
+        """Finalize sample statistics. Call at end of each sample."""
+        self._total_input_tokens += self._sample_input_tokens
+        self._total_output_tokens += self._sample_output_tokens
+        self._total_samples += 1
+
+    def get_sample_stats(self) -> Dict[str, any]:
+        """Get statistics for current sample.
+
+        Returns:
+            Dictionary with token counts and FLOP estimates.
+            - input_tokens: Context tokens processed (prompt + trajectory)
+            - output_tokens: Generated tokens (all candidates)
+            - total_tokens: Sum of input and output tokens
+            - tflops: Estimated TFLOPs based on total tokens
+        """
+        total_tokens = self._sample_input_tokens + self._sample_output_tokens
+        stats = {
+            "input_tokens": self._sample_input_tokens,
+            "output_tokens": self._sample_output_tokens,
+            "tokens": total_tokens,  # Keep for backward compatibility
+            "generation_count": self._sample_generation_count,
+        }
+
+        if self.flop_calculator is not None:
+            stats["tflops"] = self.flop_calculator.compute_tflops(total_tokens)
+        else:
+            stats["tflops"] = None
+
+        return stats
+
+    def get_total_stats(self) -> Dict[str, any]:
+        """Get cumulative statistics across all samples.
+
+        Returns:
+            Dictionary with total token counts and FLOP estimates.
+        """
+        total_tokens = self._total_input_tokens + self._total_output_tokens
+        stats = {
+            "total_input_tokens": self._total_input_tokens,
+            "total_output_tokens": self._total_output_tokens,
+            "total_tokens": total_tokens,
+            "total_samples": self._total_samples,
+            "avg_tokens_per_sample": (
+                total_tokens / self._total_samples if self._total_samples > 0 else 0
+            ),
+        }
+
+        if self.flop_calculator is not None:
+            stats["total_tflops"] = self.flop_calculator.compute_tflops(total_tokens)
+        else:
+            stats["total_tflops"] = None
+
+        return stats
 
     @abstractmethod
     def generate_candidates(
@@ -65,8 +176,10 @@ class StepCandidateGeneratorBase:
         trajectory: List[StepCandidate],
         candidates_per_step: int,
     ) -> List[StepCandidate]:
-        """Generate candidates for a given trajectory"""
+        """Generate candidates for a given trajectory.
 
+        Automatically records token statistics after generation.
+        """
         if self.generation_batch_size < candidates_per_step:
             candidates = self._generate_candidates_in_batches(
                 request,
@@ -79,6 +192,8 @@ class StepCandidateGeneratorBase:
                 trajectory=trajectory,
                 candidates_per_step=candidates_per_step,
             )
+            # Record tokens (batch generation records per-batch)
+            self._record_generation(candidates)
 
         return candidates
 
@@ -88,8 +203,10 @@ class StepCandidateGeneratorBase:
         trajectory: List[StepCandidate],
         candidates_per_step: int,
     ) -> List:
-        """Generate candidates in smaller batches to avoid OOM"""
+        """Generate candidates in smaller batches to avoid OOM.
 
+        Records token statistics for each batch.
+        """
         all_candidates = []
 
         # Calculate number of batches needed
@@ -116,6 +233,8 @@ class StepCandidateGeneratorBase:
             )
             if batch_candidates:
                 all_candidates.extend(batch_candidates)
+                # Record tokens for this batch
+                self._record_generation(batch_candidates)
 
             # Clear GPU cache after each batch
             torch.cuda.empty_cache()

@@ -11,7 +11,7 @@ Two-phase generation:
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import numpy as np
 from vllm import LLM, SamplingParams
@@ -24,6 +24,9 @@ from llm_tts.generators.base import (
 )
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
 from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens_compact
+
+if TYPE_CHECKING:
+    from llm_tts.utils.flops import FLOPCalculator
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +68,12 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         disable_thinking_mode: bool = False,
         # Context length limit
         max_model_len: int = 32768,
+        # FLOP calculator for token tracking
+        flop_calculator: Optional["FLOPCalculator"] = None,
     ):
+        # vLLM handles batching internally, so generation_batch_size is large
+        super().__init__(generation_batch_size=1024, flop_calculator=flop_calculator)
+
         self.model = model
         self.tokenizer = model.get_tokenizer()
         self.disable_thinking_mode = disable_thinking_mode
@@ -545,8 +553,39 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         trajectory: List[StepCandidate],
         candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
-        """Alias for generate_response (for strategy compatibility)."""
-        return self.generate_response(request, trajectory, candidates_per_step)
+        """Generate answer candidates with token tracking.
+
+        Unlike generate_response(), this method records token statistics
+        including context length for accurate FLOP calculation.
+        Used by strategies that need to generate final answers.
+
+        If thinking phase is not complete (no </think> in trajectory),
+        this method will add a closing </think> tag before generating response.
+        The </think> step is appended IN-PLACE to the trajectory list.
+        """
+        # Check if thinking phase is complete
+        full_trajectory = convert_trajectory_to_string(trajectory)
+        if "</think>" not in full_trajectory:
+            log.warning(
+                "generate_answer_candidates called without </think> in trajectory. "
+                "Adding </think> to close thinking phase."
+            )
+            # Add a step that closes thinking and starts response IN-PLACE
+            close_thinking_step = StepCandidate(
+                text="\n</think>\n\n<start of response>\nReasoning Steps:\n",
+                token_ids=[],  # Will be empty, but that's OK
+                is_complete=True,
+                is_trajectory_complete=True,
+            )
+            trajectory.append(close_thinking_step)  # Modifies original list!
+
+        # Calculate context tokens (prompt + trajectory)
+        prompt = self._build_prompt(request, trajectory)
+        context_tokens = len(self.tokenizer.encode(prompt))
+
+        candidates = self.generate_response(request, trajectory, candidates_per_step)
+        self._record_generation(candidates, context_tokens=context_tokens)
+        return candidates
 
     def __call__(
         self,
@@ -554,8 +593,21 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         trajectory: Optional[List[StepCandidate]] = None,
         candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
-        """Callable interface for step generation."""
-        return self.generate_candidates(request, trajectory, candidates_per_step)
+        """Callable interface for step generation.
+
+        Records token statistics after generation, including context length
+        for accurate FLOP calculation.
+        """
+        trajectory = trajectory or []
+
+        # Calculate context tokens (prompt + trajectory)
+        # With prefix caching, this context is processed once per step
+        prompt = self._build_prompt(request, trajectory)
+        context_tokens = len(self.tokenizer.encode(prompt))
+
+        candidates = self.generate_candidates(request, trajectory, candidates_per_step)
+        self._record_generation(candidates, context_tokens=context_tokens)
+        return candidates
 
 
 if __name__ == "__main__":
