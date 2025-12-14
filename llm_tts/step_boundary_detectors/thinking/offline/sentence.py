@@ -7,7 +7,7 @@ Splits thinking content by sentences or paragraphs.
 import re
 from typing import List
 
-from ..base import StepBoundaryDetectorBase
+from ...base import StepBoundaryDetectorBase
 
 
 class ThinkingSentenceDetector(StepBoundaryDetectorBase):
