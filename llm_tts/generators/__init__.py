@@ -14,8 +14,8 @@ Each backend has:
 - thinking.py: Generators for thinking mode (<think> tags)
 """
 
-# Backend submodules
-from llm_tts.generators import api, huggingface, vllm
+# Backend submodules (vllm is optional)
+from llm_tts.generators import api, huggingface
 
 # Re-export commonly used classes for backward compatibility
 from llm_tts.generators.api import StepCandidateGeneratorThroughAPI
@@ -32,9 +32,14 @@ from llm_tts.generators.huggingface import (
 
 # vLLM generators (optional - requires vllm package)
 try:
+    from llm_tts.generators import vllm
     from llm_tts.generators.vllm import StepCandidateGeneratorThroughVLLM
+
+    VLLM_AVAILABLE = True
 except ImportError:
+    vllm = None
     StepCandidateGeneratorThroughVLLM = None
+    VLLM_AVAILABLE = False
 
 __all__ = [
     # Base classes
@@ -45,6 +50,7 @@ __all__ = [
     "api",
     "huggingface",
     "vllm",
+    "VLLM_AVAILABLE",
     # Backward-compatible exports
     "StepCandidateGeneratorThroughAPI",
     "StepCandidateGeneratorThroughHuggingface",
