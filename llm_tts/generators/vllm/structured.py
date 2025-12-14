@@ -1,4 +1,4 @@
-from typing import List
+from typing import TYPE_CHECKING, List, Optional
 
 import numpy as np
 from vllm import LLM, SamplingParams
@@ -9,6 +9,9 @@ from llm_tts.generators.base import (
     StepCandidateGeneratorBase,
 )
 from llm_tts.step_boundary_detectors import StructuredStepDetector
+
+if TYPE_CHECKING:
+    from llm_tts.utils.flops import FLOPCalculator
 
 # log = logging.getLogger(__name__)
 
@@ -21,7 +24,11 @@ class StepCandidateGeneratorThroughVLLM(StepCandidateGeneratorBase):
         model: LLM,
         detector: StructuredStepDetector,
         sampling_params: SamplingParams,
+        flop_calculator: Optional["FLOPCalculator"] = None,
     ):
+        # vLLM handles batching internally, so generation_batch_size is large
+        super().__init__(generation_batch_size=1024, flop_calculator=flop_calculator)
+
         self.model = model
         self.detector = detector or StructuredStepDetector()
         self.sampling_params = sampling_params

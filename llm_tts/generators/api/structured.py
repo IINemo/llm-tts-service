@@ -5,7 +5,7 @@ Candidate step generation system for online best-of-n using API models
 import copy
 import logging
 import time
-from typing import Dict, List
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from lm_polygraph import BlackboxModel
 
@@ -16,19 +16,28 @@ from llm_tts.generators.base import (
 )
 from llm_tts.step_boundary_detectors import StructuredStepDetector
 
+if TYPE_CHECKING:
+    from llm_tts.utils.flops import FLOPCalculator
+
 log = logging.getLogger(__name__)
 
 
 class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
-    """Generates N candidate next steps for online best-of-n using API models"""
+    """Generates N candidate next steps for online best-of-n using API models.
+
+    Note: Token tracking is limited for API models since they don't provide
+    token IDs. FLOP calculations will be based on text length estimation.
+    """
 
     def __init__(
         self,
         model: BlackboxModel,
         detector: StructuredStepDetector,
         prefill_mode: bool,
+        flop_calculator: Optional["FLOPCalculator"] = None,
     ):
-        super().__init__(1)  # TODO:
+        # API calls are sequential, batch size = 1
+        super().__init__(generation_batch_size=1, flop_calculator=flop_calculator)
 
         self.model = model
         self.detector = detector or StructuredStepDetector()

@@ -5,9 +5,12 @@ Candidate step generation system for online best-of-n
 import inspect
 import logging
 import time
-from typing import Dict, List
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import torch
+
+if TYPE_CHECKING:
+    from llm_tts.utils.flops import FLOPCalculator
 from lm_polygraph import WhiteboxModel
 from transformers import StoppingCriteria, StoppingCriteriaList
 
@@ -148,8 +151,9 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         disable_thinking_mode: bool,
         generation_batch_size: int,
         return_generation_scores: bool = False,
+        flop_calculator: Optional["FLOPCalculator"] = None,
     ):
-        super().__init__(generation_batch_size)
+        super().__init__(generation_batch_size, flop_calculator=flop_calculator)
 
         self.model = model
         self.detector = detector or StructuredStepDetector()

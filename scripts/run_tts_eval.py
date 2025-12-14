@@ -807,6 +807,10 @@ def generate_trajectories(
         if "metadata" in result:
             result_dict["metadata"] = result["metadata"]
 
+        # Include token_stats if present (online BON with step generator tracking)
+        if "token_stats" in result:
+            result_dict["token_stats"] = result["token_stats"]
+
         results.append(result_dict)
 
         # Save after each sample (enables resuming with minimal data loss)
@@ -818,10 +822,16 @@ def generate_trajectories(
             import wandb
 
             if wandb.run is not None:
-                # Extract token count from metadata if available (DeepConf, self-consistency)
-                # Each trace in all_traces has "num_tokens" field
+                # Extract token count - prefer token_stats from step generator
                 sample_tokens = 0
-                if "all_traces" in result:
+                sample_tflops = 0
+
+                if "token_stats" in result and result["token_stats"]:
+                    # Online BON: use token_stats from step generator
+                    token_stats = result["token_stats"]
+                    sample_tokens = token_stats.get("tokens", 0)
+                    sample_tflops = token_stats.get("tflops") or 0
+                elif "all_traces" in result:
                     # DeepConf: sum tokens from all traces
                     sample_tokens = sum(
                         t.get("num_tokens", 0) for t in result["all_traces"]
@@ -842,7 +852,9 @@ def generate_trajectories(
                 all_sample_tokens = []
                 for r in results:
                     tokens = 0
-                    if "all_traces" in r:
+                    if "token_stats" in r and r["token_stats"]:
+                        tokens = r["token_stats"].get("tokens", 0)
+                    elif "all_traces" in r:
                         tokens = sum(t.get("num_tokens", 0) for t in r["all_traces"])
                     elif "metadata" in r:
                         meta = r["metadata"]
@@ -859,11 +871,11 @@ def generate_trajectories(
                     sample_tokens / num_traces if num_traces > 0 else 0
                 )
 
-                # Calculate FLOPs if calculator is available
-                sample_tflops = 0
+                # Calculate FLOPs if not already computed and calculator is available
                 running_total_tflops = 0
-                if flop_calculator and sample_tokens > 0:
+                if sample_tflops == 0 and flop_calculator and sample_tokens > 0:
                     sample_tflops = flop_calculator.compute_tflops(sample_tokens)
+                if flop_calculator and sum(all_sample_tokens) > 0:
                     running_total_tflops = flop_calculator.compute_tflops(
                         sum(all_sample_tokens)
                     )
@@ -1230,6 +1242,11 @@ def main(config):
             )
         except Exception as e:
             log.warning(f"Failed to initialize FLOP calculator: {e}")
+
+    # Set FLOP calculator on step generator for token/FLOP tracking
+    if step_generator is not None and flop_calculator is not None:
+        step_generator.flop_calculator = flop_calculator
+        log.info("FLOP calculator attached to step generator for token tracking")
 
     # Create scorer (skip for DeepConf)
     scorer = create_scorer(config)
