@@ -8,6 +8,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /scorer/entropy
   - _self_
 
 # Run naming
@@ -42,11 +43,6 @@ generation:
   top_k: 20
   batch_size: 1
   max_length: 32768
-
-# Scorer - use generation scores from vLLM (similar to online vLLM experiment)
-scorer:
-  type: generation
-  score_type: mean_entropy
 
 # Strategy - Offline Best-of-N
 strategy:

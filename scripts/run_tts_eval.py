@@ -217,12 +217,6 @@ def create_scorer(config):
         scorer = StepScorerUncertainty()
     elif config.scorer.type == "perplexity" or config.scorer.type == "entropy":
         scorer = StepScorerConfidence()
-    elif config.scorer.type == "generation":
-        # Use pre-computed generation scores (for vLLM)
-        from llm_tts.scorers import StepScorerGeneration
-
-        score_type = config.scorer.get("score_type", "mean_entropy")
-        scorer = StepScorerGeneration(score_type=score_type)
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
 
