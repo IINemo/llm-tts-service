@@ -259,7 +259,12 @@ def create_model(config):
 
             # Get estimator and stat_calculators based on scorer type
             from lm_polygraph.estimators import MeanTokenEntropy, Perplexity
-            from lm_polygraph.stat_calculators import EntropyCalculator, VLLMLogprobsCalculator
+            from lm_polygraph.stat_calculators import (
+                EntropyCalculator,
+                VLLMLogprobsCalculator,
+            )
+
+            from llm_tts.scorers.estimator_uncertainty_pd import PDGap
 
             if scorer_type == "entropy":
                 # Use MeanTokenEntropy for entropy-based scoring
@@ -267,8 +272,16 @@ def create_model(config):
                 log.info("Using MeanTokenEntropy estimator with EntropyCalculator")
                 stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                 estimator = MeanTokenEntropy()
+            elif scorer_type == "uncertainty_pd":
+                # Use PDGap (probability differential) for uncertainty scoring
+                # Note: PDGap needs full vocab logprobs for accurate results
+                # Set top_logprobs=vocab_size in config for exact calculation
+                log.info("Using PDGap estimator (probability differential)")
+                stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
+                estimator = PDGap()
             else:
                 # Default: Perplexity (only needs log-likelihood of chosen token)
+                # Covers "uncertainty" and "perplexity" scorer types
                 log.info("Using Perplexity estimator")
                 stat_calculators = [VLLMLogprobsCalculator()]
                 estimator = Perplexity()

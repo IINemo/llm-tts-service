@@ -169,7 +169,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 result.append(-100.0)
         return result
 
-    def _get_uncertainty_from_output(self, request_output, output_idx: int = 0) -> float:
+    def _get_uncertainty_from_output(
+        self, request_output, output_idx: int = 0
+    ) -> float:
         """
         Extract uncertainty score from wrapper output (if available).
 
