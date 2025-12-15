@@ -279,12 +279,8 @@ def create_model(config):
                 # Use VLLMStepGenerator in thinking mode
                 log.info("Creating VLLMStepGenerator for thinking mode")
 
-                # Import stop token generator
-                from llm_tts.step_boundary_detectors.thinking.vllm import (
-                    get_stop_tokens,
-                )
-
                 # Create ThinkingMarkerDetector with config settings
+                # Stop tokens are automatically derived from detector
                 detector = ThinkingMarkerDetector(
                     min_step_chars=config.strategy.get("min_step_chars", 200),
                     max_step_chars=config.strategy.get("max_step_chars", 1200),
@@ -295,25 +291,14 @@ def create_model(config):
                     use_reasoning=config.strategy.get("use_reasoning", False),
                     use_correction=config.strategy.get("use_correction", False),
                     use_structure=config.strategy.get("use_structure", False),
-                )
-
-                # Get stop tokens matching detector config
-                thinking_stop_tokens = get_stop_tokens(
-                    use_sequence=config.strategy.get("use_sequence", True),
-                    use_conclusion=config.strategy.get("use_conclusion", True),
-                    use_thinking=config.strategy.get("use_thinking", True),
-                    use_verification=config.strategy.get("use_verification", True),
-                    use_reasoning=config.strategy.get("use_reasoning", False),
-                    use_correction=config.strategy.get("use_correction", False),
-                    use_structure=config.strategy.get("use_structure", False),
-                    custom_words=config.strategy.get("custom_words", None),
+                    custom_markers=config.strategy.get("custom_words", None),
                 )
 
                 step_generator = VLLMStepGenerator(
                     model=llm,
                     thinking_mode=True,
                     detector=detector,
-                    thinking_stop_tokens=thinking_stop_tokens,
+                    # thinking_stop_tokens derived automatically from detector
                     max_new_tokens=config.generation.max_new_tokens,
                     temperature=config.generation.temperature,
                     top_p=config.generation.top_p,
