@@ -23,7 +23,7 @@ from llm_tts.generators.base import (
     convert_trajectory_to_string,
 )
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
-from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens_compact
+from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens
 
 if TYPE_CHECKING:
     from llm_tts.utils.flops import FLOPCalculator
@@ -92,7 +92,7 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         )
 
         # Build stop tokens for THINKING phase (step boundaries + </think>)
-        self.thinking_stop_tokens = get_stop_tokens_compact(
+        self.thinking_stop_tokens = get_stop_tokens(
             use_sequence=use_sequence,
             use_conclusion=use_conclusion,
             use_thinking=use_thinking,

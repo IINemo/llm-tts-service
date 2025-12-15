@@ -12,10 +12,50 @@ log = logging.getLogger(__name__)
 
 
 def count_response_steps(text: str) -> int:
-    """Count structured steps in response text (e.g., '- Step 1:', '- Step 2:')."""
-    pattern = r"- Step \d+:"
-    matches = re.findall(pattern, text)
-    return len(matches)
+    """Count structured steps in response text.
+
+    Handles multiple formats:
+    - '- Step 1:' (bullet format)
+    - '### Step 1:' (markdown format)
+    - 'Step 1:' (plain format)
+    """
+    # Try multiple patterns
+    patterns = [
+        r"- Step \d+:",      # Bullet format: - Step 1:
+        r"#{1,3} Step \d+:",  # Markdown format: ### Step 1:
+        r"(?:^|\n)Step \d+:", # Plain format at line start
+    ]
+
+    max_matches = 0
+    for pattern in patterns:
+        matches = re.findall(pattern, text)
+        max_matches = max(max_matches, len(matches))
+
+    return max_matches
+
+
+def is_response_step(text: str) -> bool:
+    """Check if text is a response step (not thinking).
+
+    Response steps typically:
+    - Contain <start of response> or <end of response> tags
+    - Contain <Answer>: tag
+    - Don't start with <think> tag
+    - Contain "Reasoning Steps:" header
+    """
+    # Explicit response markers
+    if "<start of response>" in text or "<end of response>" in text:
+        return True
+    if "<Answer>:" in text:
+        return True
+    if "Reasoning Steps:" in text:
+        return True
+
+    # If it starts with <think>, it's definitely thinking
+    if text.strip().startswith("<think>"):
+        return False
+
+    return False
 
 
 def count_thinking_and_response_steps(steps: list) -> Tuple[int, int]:
@@ -35,19 +75,28 @@ def count_thinking_and_response_steps(steps: list) -> Tuple[int, int]:
         # Get text from step (could be StepCandidate or dict)
         if hasattr(step, "text"):
             text = step.text
+            # Also check other_data for phase hint
+            other_data = getattr(step, "other_data", {}) or {}
+            phase = other_data.get("phase", "")
         elif isinstance(step, dict):
             text = step.get("text", "")
+            other_data = step.get("other_data", {}) or {}
+            phase = other_data.get("phase", "")
         else:
             text = str(step)
+            phase = ""
 
-        # Check if this is a response step (contains <start of response> or <end of response>)
-        if "<start of response>" in text or "<end of response>" in text:
-            # Count structured steps within response
-            response_steps += count_response_steps(text)
-            if response_steps == 0:
-                response_steps = 1  # At least 1 response step
+        # Check phase hint first (set by offline BON)
+        if phase == "response":
+            step_count = count_response_steps(text)
+            response_steps += step_count if step_count > 0 else 1
+        elif phase == "thinking":
+            thinking_steps += 1
+        # Otherwise use heuristics
+        elif is_response_step(text):
+            step_count = count_response_steps(text)
+            response_steps += step_count if step_count > 0 else 1
         else:
-            # It's a thinking step
             thinking_steps += 1
 
     return thinking_steps, response_steps
