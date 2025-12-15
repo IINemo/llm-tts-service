@@ -257,23 +257,25 @@ def create_model(config):
             # Wrap with VLLMWithUncertainty (similar to CausalLMWithUncertainty for HF)
             log.info(f"Wrapping vLLM with VLLMWithUncertainty (scorer: {scorer_type})")
 
-            # Get estimator based on scorer type
+            # Get estimator and stat_calculators based on scorer type
             from lm_polygraph.estimators import MeanTokenEntropy, Perplexity
+            from lm_polygraph.stat_calculators import EntropyCalculator, VLLMLogprobsCalculator
 
             if scorer_type == "entropy":
                 # Use MeanTokenEntropy for entropy-based scoring
-                # Note: For accurate entropy, set logprobs >= vocab_size in config
-                # With top-k logprobs, entropy will be an approximation
-                log.info("Using MeanTokenEntropy estimator for entropy scoring")
+                # VLLMLogprobsCalculator extracts logprobs, EntropyCalculator computes entropy
+                log.info("Using MeanTokenEntropy estimator with EntropyCalculator")
+                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                 estimator = MeanTokenEntropy()
             else:
                 # Default: Perplexity (only needs log-likelihood of chosen token)
                 log.info("Using Perplexity estimator")
+                stat_calculators = [VLLMLogprobsCalculator()]
                 estimator = Perplexity()
 
             llm_with_uncertainty = VLLMWithUncertainty(
                 llm=llm,
-                sampling_params=sampling_params,
+                stat_calculators=stat_calculators,
                 estimator=estimator,
             )
 
@@ -286,7 +288,6 @@ def create_model(config):
 
             # Store the uncertainty wrapper for use by step generator
             model.llm_with_uncertainty = llm_with_uncertainty
-            model.estimator = estimator
         else:
             # Wrap with lm-polygraph adapter (no uncertainty)
             model = WhiteboxModelvLLM(
@@ -332,8 +333,11 @@ def create_model(config):
                     custom_markers=config.strategy.get("custom_words", None),
                 )
 
+                # Use wrapped model for uncertainty scoring if available
+                vllm_model = getattr(model, "llm_with_uncertainty", llm)
+
                 step_generator = VLLMStepGenerator(
-                    model=llm,
+                    model=vllm_model,
                     thinking_mode=True,
                     detector=detector,
                     # thinking_stop_tokens derived automatically from detector
@@ -347,8 +351,6 @@ def create_model(config):
                     ),
                     # Context length limit for trajectory truncation
                     max_model_len=config.model.get("max_model_len", 32768),
-                    # Pass estimator for uncertainty scoring (if configured)
-                    estimator=getattr(model, "estimator", None),
                 )
             else:
                 # Use VLLMStepGenerator in structured mode
@@ -371,13 +373,14 @@ def create_model(config):
                     stop=detector.step_patterns,
                 )
 
+                # Use wrapped model for uncertainty scoring if available
+                vllm_model = getattr(model, "llm_with_uncertainty", llm)
+
                 step_generator = VLLMStepGenerator(
-                    model=llm,
+                    model=vllm_model,
                     thinking_mode=False,
                     detector=detector,
                     sampling_params=step_sampling_params,
-                    # Pass estimator for uncertainty scoring (if configured)
-                    estimator=getattr(model, "estimator", None),
                 )
 
             log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
