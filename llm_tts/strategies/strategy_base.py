@@ -1,6 +1,7 @@
 import logging
+import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, Dict, List
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple
 
 from llm_tts.utils.parallel import parallel_execute
 
@@ -8,6 +9,48 @@ if TYPE_CHECKING:
     from llm_tts.generators import StepCandidate
 
 log = logging.getLogger(__name__)
+
+
+def count_response_steps(text: str) -> int:
+    """Count structured steps in response text (e.g., '- Step 1:', '- Step 2:')."""
+    pattern = r"- Step \d+:"
+    matches = re.findall(pattern, text)
+    return len(matches)
+
+
+def count_thinking_and_response_steps(steps: list) -> Tuple[int, int]:
+    """
+    Count thinking steps and response steps separately.
+
+    Args:
+        steps: List of step candidates/dicts from trajectory
+
+    Returns:
+        (thinking_num_steps, response_num_steps)
+    """
+    thinking_steps = 0
+    response_steps = 0
+
+    for step in steps:
+        # Get text from step (could be StepCandidate or dict)
+        if hasattr(step, "text"):
+            text = step.text
+        elif isinstance(step, dict):
+            text = step.get("text", "")
+        else:
+            text = str(step)
+
+        # Check if this is a response step (contains <start of response> or <end of response>)
+        if "<start of response>" in text or "<end of response>" in text:
+            # Count structured steps within response
+            response_steps += count_response_steps(text)
+            if response_steps == 0:
+                response_steps = 1  # At least 1 response step
+        else:
+            # It's a thinking step
+            thinking_steps += 1
+
+    return thinking_steps, response_steps
 
 
 class StrategyBase(ABC):
