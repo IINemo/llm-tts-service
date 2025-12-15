@@ -10,7 +10,7 @@ from llm_tts.generators import (
 
 # Check if vllm is available
 try:
-    from llm_tts.generators import StepCandidateGeneratorThroughVLLM
+    from llm_tts.generators.vllm import VLLMStepGenerator
 
     VLLM_AVAILABLE = True
 except ImportError:

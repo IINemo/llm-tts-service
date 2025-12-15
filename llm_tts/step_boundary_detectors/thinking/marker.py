@@ -145,8 +145,8 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         use_sentence_start: bool = True,
         use_correction: bool = True,
         custom_markers: Optional[List[str]] = None,
-        min_step_chars: int = 50,
-        max_step_chars: int = 800,
+        min_step_tokens: int = 50,
+        max_step_tokens: int = 300,
         case_sensitive: bool = False,
     ):
         """
@@ -160,13 +160,27 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
             use_sentence_start: Include sentence-start markers (but, however, since... only after .!?\\n)
             use_correction: Include self-correction markers (mistake, error, wrong)
             custom_markers: Additional custom marker patterns
-            min_step_chars: Minimum characters per step
-            max_step_chars: Maximum characters per step
+            min_step_tokens: Minimum tokens per step
+            max_step_tokens: Maximum tokens per step
             case_sensitive: Whether marker matching is case sensitive
         """
-        self.min_step_chars = min_step_chars
-        self.max_step_chars = max_step_chars
+        self.min_step_tokens = min_step_tokens
+        self.max_step_tokens = max_step_tokens
+        # Approximate char limits for text-based detection (~4 chars per token)
+        self.min_step_chars = min_step_tokens * 4
+        self.max_step_chars = max_step_tokens * 4
         self.case_sensitive = case_sensitive
+
+        # Store flags for later use (e.g., deriving vLLM stop tokens)
+        self.use_sequence = use_sequence
+        self.use_conclusion = use_conclusion
+        self.use_thinking = use_thinking
+        self.use_verification = use_verification
+        self.use_structure = use_structure
+        self.use_reasoning = use_reasoning
+        self.use_sentence_start = use_sentence_start
+        self.use_correction = use_correction
+        self.custom_markers = custom_markers
 
         # Build marker list
         self.markers = []
@@ -537,3 +551,28 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
             )
 
         return stats
+
+    def get_vllm_stop_tokens(self, include_answer_tokens: bool = False) -> List[str]:
+        """
+        Get vLLM stop tokens derived from this detector's configuration.
+
+        Args:
+            include_answer_tokens: If True, include answer patterns like </think>.
+                                  Default False - generator adds </think> separately.
+
+        Returns:
+            List of stop token strings for vLLM SamplingParams.stop
+        """
+        from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens
+
+        return get_stop_tokens(
+            use_sequence=self.use_sequence,
+            use_conclusion=self.use_conclusion,
+            use_thinking=self.use_thinking,
+            use_verification=self.use_verification,
+            use_reasoning=self.use_reasoning,
+            use_correction=self.use_correction,
+            use_structure=self.use_structure,
+            custom_words=self.custom_markers,
+            include_answer_tokens=include_answer_tokens,
+        )

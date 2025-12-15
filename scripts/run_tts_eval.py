@@ -66,10 +66,9 @@ from llm_tts.step_boundary_detectors import (
     ThinkingMarkerDetector,
 )
 
-# vLLM step generators (optional)
+# vLLM step generator (optional)
 try:
-    from llm_tts.generators import StepCandidateGeneratorThroughVLLM
-    from llm_tts.generators.vllm import ThinkingStepGeneratorVLLM
+    from llm_tts.generators.vllm import VLLMStepGenerator
 
     VLLM_GENERATOR_AVAILABLE = True
 except ImportError:
@@ -277,18 +276,14 @@ def create_model(config):
             detector_type = config.strategy.get("detector_type", "structured")
 
             if detector_type == "thinking_marker":
-                # Use ThinkingStepGeneratorVLLM for thinking mode
-                log.info("Creating ThinkingStepGeneratorVLLM for thinking mode")
+                # Use VLLMStepGenerator in thinking mode
+                log.info("Creating VLLMStepGenerator for thinking mode")
 
-                step_generator = ThinkingStepGeneratorVLLM(
-                    model=llm,
-                    min_step_chars=config.strategy.get("min_step_chars", 200),
-                    max_step_chars=config.strategy.get("max_step_chars", 1200),
-                    max_new_tokens=config.generation.max_new_tokens,
-                    temperature=config.generation.temperature,
-                    top_p=config.generation.top_p,
-                    top_k=config.generation.get("top_k", 20),
-                    # Stop token configuration (matches ThinkingMarkerDetector)
+                # Create ThinkingMarkerDetector with config settings
+                # Stop tokens are automatically derived from detector
+                detector = ThinkingMarkerDetector(
+                    min_step_tokens=config.strategy.min_step_tokens,
+                    max_step_tokens=config.strategy.max_step_tokens,
                     use_sequence=config.strategy.get("use_sequence", True),
                     use_conclusion=config.strategy.get("use_conclusion", True),
                     use_thinking=config.strategy.get("use_thinking", True),
@@ -296,20 +291,27 @@ def create_model(config):
                     use_reasoning=config.strategy.get("use_reasoning", False),
                     use_correction=config.strategy.get("use_correction", False),
                     use_structure=config.strategy.get("use_structure", False),
-                    custom_words=config.strategy.get("custom_words", None),
+                    custom_markers=config.strategy.get("custom_words", None),
+                )
+
+                step_generator = VLLMStepGenerator(
+                    model=llm,
+                    thinking_mode=True,
+                    detector=detector,
+                    # thinking_stop_tokens derived automatically from detector
+                    max_new_tokens=config.generation.max_new_tokens,
+                    temperature=config.generation.temperature,
+                    top_p=config.generation.top_p,
+                    top_k=config.generation.get("top_k", 20),
                     answer_patterns=config.strategy.get(
                         "detector_answer_patterns",
                         ["</think>", "<Answer>:", "\\boxed{"],
-                    ),
-                    # Thinking mode control (from model config)
-                    disable_thinking_mode=config.model.get(
-                        "disable_thinking_mode", False
                     ),
                     # Context length limit for trajectory truncation
                     max_model_len=config.model.get("max_model_len", 32768),
                 )
             else:
-                # Use StructuredStepDetector for structured mode
+                # Use VLLMStepGenerator in structured mode
                 detector = StructuredStepDetector(
                     step_patterns=config.strategy.get(
                         "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
@@ -329,8 +331,9 @@ def create_model(config):
                     stop=detector.step_patterns,
                 )
 
-                step_generator = StepCandidateGeneratorThroughVLLM(
+                step_generator = VLLMStepGenerator(
                     model=llm,
+                    thinking_mode=False,
                     detector=detector,
                     sampling_params=step_sampling_params,
                 )
@@ -384,8 +387,8 @@ def create_model(config):
             log.info("Using ThinkingMarkerDetector for thinking mode")
             # marker_semantic_v2 settings (see tests/boundary_detectors/)
             detector = ThinkingMarkerDetector(
-                min_step_chars=config.strategy.get("min_step_chars", 200),
-                max_step_chars=config.strategy.get("max_step_chars", 1200),
+                min_step_tokens=config.strategy.min_step_tokens,
+                max_step_tokens=config.strategy.max_step_tokens,
                 use_sequence=config.strategy.get("use_sequence", True),
                 use_conclusion=config.strategy.get("use_conclusion", True),
                 use_thinking=config.strategy.get("use_thinking", True),
@@ -534,8 +537,8 @@ def create_tts_strategy(
             disable_thinking_mode=config.model.get("disable_thinking_mode", False),
             output_dir=output_dir,
             # Step boundary detector settings (same as online mode)
-            min_step_chars=config.strategy.get("min_step_chars", 200),
-            max_step_chars=config.strategy.get("max_step_chars", 1200),
+            min_step_tokens=config.strategy.min_step_tokens,
+            max_step_tokens=config.strategy.max_step_tokens,
             use_sequence=config.strategy.get("use_sequence", True),
             use_conclusion=config.strategy.get("use_conclusion", True),
             use_thinking=config.strategy.get("use_thinking", True),

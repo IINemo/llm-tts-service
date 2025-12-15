@@ -9,7 +9,7 @@ Each trajectory includes:
 Unlike online best-of-n which selects at each step, this generates full
 trajectories first, then picks the best complete solution.
 
-Uses ThinkingStepGeneratorVLLM with no intermediate stop tokens for unified
+Uses VLLMStepGenerator with no intermediate stop tokens for unified
 token tracking and FLOP calculation.
 """
 
@@ -23,7 +23,7 @@ import numpy as np
 from vllm import LLM
 
 from llm_tts.generators import StepCandidate
-from llm_tts.generators.vllm.thinking import ThinkingStepGeneratorVLLM
+from llm_tts.generators.vllm import VLLMStepGenerator
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
 from llm_tts.strategies.deepconf.utils import extract_answer
 
@@ -57,8 +57,8 @@ class StrategyOfflineBestOfN(StrategyBase):
         disable_thinking_mode: bool = False,
         output_dir: Optional[str] = None,
         # Step boundary detector settings (same as online mode)
-        min_step_chars: int = 200,
-        max_step_chars: int = 1200,
+        min_step_tokens: int = 50,
+        max_step_tokens: int = 300,
         use_sequence: bool = True,
         use_conclusion: bool = True,
         use_thinking: bool = True,
@@ -84,8 +84,8 @@ class StrategyOfflineBestOfN(StrategyBase):
             answer_patterns: Patterns that mark end of response (default: ["<end of response>"])
             disable_thinking_mode: If True, skip thinking phase
             output_dir: Directory for saving logs
-            min_step_chars: Minimum characters per step (for detector)
-            max_step_chars: Maximum characters per step (for detector)
+            min_step_tokens: Minimum tokens per step (for detector)
+            max_step_tokens: Maximum tokens per step (for detector)
             use_*: Marker categories for step boundary detection
             flop_calculator: Optional FLOP calculator for token tracking
         """
@@ -105,34 +105,10 @@ class StrategyOfflineBestOfN(StrategyBase):
         self.output_dir = output_dir
         self._current_sample_idx = 0
 
-        # Create step generator with NO intermediate stop tokens
-        # This generates full thinking in one shot (stops only at </think>)
-        self.generator = ThinkingStepGeneratorVLLM(
-            model=model,
-            min_step_chars=1,  # No min - generate full thinking
-            max_step_chars=999999,  # No max - generate full thinking
-            max_new_tokens=max_thinking_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            # Disable ALL intermediate stop tokens for full generation
-            use_sequence=False,
-            use_conclusion=False,
-            use_thinking=False,
-            use_verification=False,
-            use_reasoning=False,
-            use_correction=False,
-            use_structure=False,
-            custom_words=[],
-            answer_patterns=self.answer_patterns,
-            disable_thinking_mode=disable_thinking_mode,
-            flop_calculator=flop_calculator,
-        )
-
-        # Create step boundary detector for splitting thinking into steps (post-hoc)
+        # Create detector for post-hoc splitting of thinking into steps
         self.detector = ThinkingMarkerDetector(
-            min_step_chars=min_step_chars,
-            max_step_chars=max_step_chars,
+            min_step_tokens=min_step_tokens,
+            max_step_tokens=max_step_tokens,
             use_sequence=use_sequence,
             use_conclusion=use_conclusion,
             use_thinking=use_thinking,
@@ -140,6 +116,34 @@ class StrategyOfflineBestOfN(StrategyBase):
             use_reasoning=use_reasoning,
             use_correction=use_correction,
             use_structure=use_structure,
+        )
+
+        # Create detector for generator with no intermediate stop tokens
+        # All use_* flags disabled so only </think> stops generation
+        generator_detector = ThinkingMarkerDetector(
+            min_step_tokens=1,  # No min - generate full thinking
+            max_step_tokens=max_thinking_tokens,  # Limited by config
+            use_sequence=False,
+            use_conclusion=False,
+            use_thinking=False,
+            use_verification=False,
+            use_reasoning=False,
+            use_correction=False,
+            use_structure=False,
+        )
+
+        # Create step generator with NO intermediate stop tokens
+        # This generates full thinking in one shot (stops only at </think>)
+        self.generator = VLLMStepGenerator(
+            model=model,
+            thinking_mode=True,
+            detector=generator_detector,
+            max_new_tokens=max_thinking_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            answer_patterns=self.answer_patterns,
+            flop_calculator=flop_calculator,
         )
 
         log.info(
