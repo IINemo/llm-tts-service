@@ -30,7 +30,6 @@ def expand_word_boundary(word: str, include_lowercase: bool = True) -> List[str]
 
     # Capitalize first letter for sentence-start variants
     word_cap = word.capitalize()
-    word_lower = word.lower()
 
     # Common prefixes (what comes before word boundary)
     # Note: Only space/newline to avoid capturing punctuation in step text

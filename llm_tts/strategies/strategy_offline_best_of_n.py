@@ -518,9 +518,6 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         step_candidates = [thinking_candidate, response_candidate]
 
-        # Also keep split steps for logging (text only)
-        best_thinking_steps = all_thinking_steps[best_idx]
-
         # Log steps from best trajectory
         log.info(f"\n--- Best trajectory steps ({len(step_candidates)}) ---")
         for i, step in enumerate(step_candidates):
