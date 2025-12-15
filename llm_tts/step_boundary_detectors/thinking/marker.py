@@ -549,9 +549,13 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
 
         return stats
 
-    def get_vllm_stop_tokens(self) -> List[str]:
+    def get_vllm_stop_tokens(self, include_answer_tokens: bool = False) -> List[str]:
         """
         Get vLLM stop tokens derived from this detector's configuration.
+
+        Args:
+            include_answer_tokens: If True, include answer patterns like </think>.
+                                  Default False - generator adds </think> separately.
 
         Returns:
             List of stop token strings for vLLM SamplingParams.stop
@@ -567,4 +571,5 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
             use_correction=self.use_correction,
             use_structure=self.use_structure,
             custom_words=self.custom_markers,
+            include_answer_tokens=include_answer_tokens,
         )
