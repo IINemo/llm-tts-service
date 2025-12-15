@@ -173,12 +173,47 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 result.append(-100.0)
         return result
 
+    def _compute_entropy_from_logprobs(self, logprobs: List[Dict]) -> List[float]:
+        """
+        Compute entropy at each position from logprobs.
+
+        Entropy = -sum(p * log(p)) for all tokens in the distribution.
+
+        Note: This requires full logprobs (logprobs >= vocab_size in SamplingParams).
+        With top-k logprobs, this will be an approximation.
+
+        Args:
+            logprobs: List of logprob dictionaries from vLLM
+
+        Returns:
+            List of entropy values, one per position
+        """
+        import math
+
+        if not logprobs:
+            return []
+
+        entropy_list = []
+        for logprob_dict in logprobs:
+            entropy = 0.0
+            for logprob_info in logprob_dict.values():
+                # p * log(p) where log(p) = logprob
+                prob = math.exp(logprob_info.logprob)
+                entropy -= prob * logprob_info.logprob
+            entropy_list.append(entropy)
+
+        return entropy_list
+
     def _compute_uncertainty(self, token_ids: List[int], logprobs: List[Dict]) -> float:
         """
         Compute uncertainty score using the lm-polygraph estimator.
 
-        This method extracts log-likelihoods from vLLM logprobs and calls
-        the configured estimator (default: Perplexity) to compute uncertainty.
+        This method extracts statistics from vLLM logprobs and calls
+        the configured estimator. Supports both Perplexity (uses log-likelihoods)
+        and MeanTokenEntropy (uses entropy).
+
+        For MeanTokenEntropy to work accurately, set logprobs >= vocab_size
+        in SamplingParams to get full probability distribution.
 
         Args:
             token_ids: List of generated token IDs
@@ -187,15 +222,18 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         Returns:
             Uncertainty score (higher = more uncertain)
         """
-        log_likelihoods = self._extract_logprobs(token_ids, logprobs)
-
-        if not log_likelihoods:
+        if not logprobs or not token_ids:
             return 0.0
 
-        # Build stats dict in lm-polygraph format
-        stats = {"greedy_log_likelihoods": [log_likelihoods]}
+        # Build stats dict with all available statistics
+        stats = {
+            # For Perplexity estimator
+            "greedy_log_likelihoods": [self._extract_logprobs(token_ids, logprobs)],
+            # For MeanTokenEntropy estimator
+            "entropy": [self._compute_entropy_from_logprobs(logprobs)],
+        }
 
-        # Call estimator
+        # Call estimator (it will use whichever stats it needs)
         uncertainty = self.estimator(stats)
         return float(uncertainty[0])
 
