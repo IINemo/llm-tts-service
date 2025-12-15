@@ -113,9 +113,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.detector = detector
         self.detector.answer_patterns = self.answer_patterns
 
-        # Get min/max step chars from detector
-        self.min_step_chars = getattr(detector, "min_step_chars", 200)
-        self.max_step_chars = getattr(detector, "max_step_chars", 1200)
+        # Get min/max step tokens from detector (required)
+        self.min_step_tokens = detector.min_step_tokens
+        self.max_step_tokens = detector.max_step_tokens
 
         # Derive stop tokens from detector's configuration
         self.thinking_stop_tokens = detector.get_vllm_stop_tokens()
@@ -215,13 +215,12 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     # Thinking mode methods
     # =========================================================================
 
-    def _is_valid_step_boundary(self, text: str) -> bool:
+    def _is_valid_step_boundary(self, text: str, num_tokens: int) -> bool:
         """Check if text represents a valid step boundary (thinking mode)."""
-        text = text.strip()
-
-        if len(text) < self.min_step_chars:
+        if num_tokens < self.min_step_tokens:
             return False
 
+        text = text.strip()
         if text and text[-1] in ".!?\n":
             return True
 
@@ -353,8 +352,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         accumulated_logprobs = []
         max_continuation_attempts = 5
 
-        min_tokens = max(1, self.min_step_chars // 4)
-
         for attempt in range(max_continuation_attempts):
             remaining_tokens = self.max_new_tokens - len(accumulated_tokens)
             if remaining_tokens <= 0:
@@ -364,7 +361,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 stop_tokens=self.thinking_stop_tokens,
                 n=1,
                 max_tokens=remaining_tokens,
-                min_tokens=min_tokens if attempt == 0 else 0,
+                min_tokens=self.min_step_tokens if attempt == 0 else 0,
             )
 
             current_prompt = prompt + accumulated_text
@@ -382,17 +379,17 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 accumulated_text = accumulated_text[: think_pos + len("</think>")]
                 break
 
-            if self._is_valid_step_boundary(accumulated_text):
+            if self._is_valid_step_boundary(accumulated_text, len(accumulated_tokens)):
                 log.debug(f"Valid thinking step boundary after {attempt + 1} attempts")
                 break
 
-            if len(accumulated_text.strip()) >= self.max_step_chars:
-                log.debug(f"Max step chars reached after {attempt + 1} attempts")
+            if len(accumulated_tokens) >= self.max_step_tokens:
+                log.debug(f"Max step tokens reached after {attempt + 1} attempts")
                 break
 
             log.debug(
                 f"Attempt {attempt + 1}: Invalid boundary "
-                f"(len={len(accumulated_text)}, min={self.min_step_chars}), continuing..."
+                f"(tokens={len(accumulated_tokens)}, min={self.min_step_tokens}), continuing..."
             )
 
         thinking_complete = self._is_thinking_complete(accumulated_text)

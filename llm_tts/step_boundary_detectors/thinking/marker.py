@@ -145,8 +145,8 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         use_sentence_start: bool = True,
         use_correction: bool = True,
         custom_markers: Optional[List[str]] = None,
-        min_step_chars: int = 50,
-        max_step_chars: int = 800,
+        min_step_tokens: int = 50,
+        max_step_tokens: int = 300,
         case_sensitive: bool = False,
     ):
         """
@@ -160,12 +160,15 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
             use_sentence_start: Include sentence-start markers (but, however, since... only after .!?\\n)
             use_correction: Include self-correction markers (mistake, error, wrong)
             custom_markers: Additional custom marker patterns
-            min_step_chars: Minimum characters per step
-            max_step_chars: Maximum characters per step
+            min_step_tokens: Minimum tokens per step
+            max_step_tokens: Maximum tokens per step
             case_sensitive: Whether marker matching is case sensitive
         """
-        self.min_step_chars = min_step_chars
-        self.max_step_chars = max_step_chars
+        self.min_step_tokens = min_step_tokens
+        self.max_step_tokens = max_step_tokens
+        # Approximate char limits for text-based detection (~4 chars per token)
+        self.min_step_chars = min_step_tokens * 4
+        self.max_step_chars = max_step_tokens * 4
         self.case_sensitive = case_sensitive
 
         # Store flags for later use (e.g., deriving vLLM stop tokens)

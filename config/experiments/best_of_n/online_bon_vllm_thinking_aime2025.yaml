@@ -51,9 +51,9 @@ strategy:
   max_steps: 250
   # Use VLLMStepGenerator in thinking mode
   detector_type: thinking_marker
-  # Same settings as HuggingFace experiment
-  min_step_chars: 200
-  max_step_chars: 1200
+  # Step boundary token limits
+  min_step_tokens: 50
+  max_step_tokens: 300
   # Marker categories (for vLLM stop token generation)
   use_sequence: true
   use_conclusion: true
