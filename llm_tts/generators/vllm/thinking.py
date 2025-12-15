@@ -23,7 +23,7 @@ from llm_tts.generators.base import (
     convert_trajectory_to_string,
 )
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
-from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens_compact
+from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens
 
 if TYPE_CHECKING:
     from llm_tts.utils.flops import FLOPCalculator
@@ -92,7 +92,7 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         )
 
         # Build stop tokens for THINKING phase (step boundaries + </think>)
-        self.thinking_stop_tokens = get_stop_tokens_compact(
+        self.thinking_stop_tokens = get_stop_tokens(
             use_sequence=use_sequence,
             use_conclusion=use_conclusion,
             use_thinking=use_thinking,
@@ -171,6 +171,30 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
                 total += v.logprob * prob
 
         return -1.0 * total / max(len(candidate.logprobs), 1)
+
+    def _extract_logprobs(
+        self, token_ids: List[int], logprobs: List[Dict]
+    ) -> List[float]:
+        """Extract logprobs for the generated tokens as a flat list.
+
+        Args:
+            token_ids: List of generated token IDs
+            logprobs: List of logprob dictionaries from vLLM
+
+        Returns:
+            List of logprob values (floats) for each generated token
+        """
+        if not logprobs or not token_ids:
+            return []
+
+        result = []
+        for token_id, logprob_dict in zip(token_ids, logprobs):
+            if token_id in logprob_dict:
+                result.append(logprob_dict[token_id].logprob)
+            else:
+                # Token not in top-k, use a default low value
+                result.append(-100.0)
+        return result
 
     def _is_valid_step_boundary(self, text: str) -> bool:
         """
@@ -451,7 +475,10 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
             # Convert entropy to validity: lower entropy = higher validity
             other_data={
                 "uncertainty_score": 1.0
-                / (1.0 + generation_scores.get("mean_entropy", 0))
+                / (1.0 + generation_scores.get("mean_entropy", 0)),
+                "logprobs": self._extract_logprobs(
+                    accumulated_tokens, accumulated_logprobs
+                ),
             },
             raw_text=accumulated_text,
         )
@@ -512,7 +539,77 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
                 # Convert entropy to validity: lower entropy = higher validity
                 other_data={
                     "uncertainty_score": 1.0
-                    / (1.0 + generation_scores.get("mean_entropy", 0))
+                    / (1.0 + generation_scores.get("mean_entropy", 0)),
+                    "logprobs": self._extract_logprobs(
+                        output.token_ids, output.logprobs
+                    ),
+                },
+                raw_text=output.text,
+            )
+            candidates.append(candidate)
+
+        return candidates
+
+    def generate_full_thinking(
+        self,
+        request: List[Dict[str, str]],
+        num_candidates: int = 1,
+        max_tokens: Optional[int] = None,
+    ) -> List[StepCandidate]:
+        """
+        Generate N complete thinking phases in batch (no step boundaries).
+
+        Uses vLLM's native n parameter for efficient parallel generation.
+        Stops only at </think> token, not at intermediate boundaries.
+
+        This is used by offline Best-of-N which generates full trajectories.
+
+        Args:
+            request: Original user request
+            num_candidates: Number of full thinking phases to generate
+            max_tokens: Max tokens for thinking (defaults to self.max_new_tokens)
+
+        Returns:
+            List of StepCandidate with full thinking (up to </think>)
+        """
+        prompt = self._build_prompt(request, [])
+        max_tokens = max_tokens or self.max_new_tokens
+
+        # Only stop at </think>, no intermediate boundaries
+        sampling_params = self._create_sampling_params(
+            stop_tokens=["</think>"],
+            n=num_candidates,
+            max_tokens=max_tokens,
+            min_tokens=0,
+        )
+
+        outputs = self.model.generate([prompt], sampling_params)
+        candidates = []
+
+        for output in outputs[0].outputs:
+            text = output.text
+
+            # Ensure </think> is included
+            if "</think>" not in text:
+                text = text + "</think>"
+
+            generation_scores = {
+                "perplexity": self._calculate_perplexity(output),
+                "mean_entropy": self._calculate_mean_entropy(output),
+            }
+
+            candidate = StepCandidate(
+                text=text.strip(),
+                token_ids=output.token_ids,
+                is_complete=True,
+                is_trajectory_complete=True,  # Full thinking is complete
+                generation_scores=generation_scores,
+                other_data={
+                    "uncertainty_score": 1.0
+                    / (1.0 + generation_scores.get("mean_entropy", 0)),
+                    "logprobs": self._extract_logprobs(
+                        output.token_ids, output.logprobs
+                    ),
                 },
                 raw_text=output.text,
             )

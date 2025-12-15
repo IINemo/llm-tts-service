@@ -30,21 +30,12 @@ def expand_word_boundary(word: str, include_lowercase: bool = True) -> List[str]
 
     # Capitalize first letter for sentence-start variants
     word_cap = word.capitalize()
-    word_lower = word.lower()
 
     # Common prefixes (what comes before word boundary)
+    # Note: Only space/newline to avoid capturing punctuation in step text
     prefixes = [
         " ",  # space
         "\n",  # newline
-        ". ",  # after period
-        ".\n",  # after period + newline
-        ", ",  # after comma
-        "! ",  # after exclamation
-        "? ",  # after question
-        ": ",  # after colon
-        "; ",  # after semicolon
-        ")\n",  # after closing paren + newline
-        ") ",  # after closing paren
     ]
 
     # Common suffixes (what comes after word boundary)
@@ -56,15 +47,11 @@ def expand_word_boundary(word: str, include_lowercase: bool = True) -> List[str]
         "\n",  # newline
     ]
 
-    # Generate combinations
+    # Generate combinations - only capitalized to avoid mid-sentence matches
     for prefix in prefixes:
         for suffix in suffixes:
-            # Capitalized version (common at sentence start)
+            # Only capitalized version (sentence start)
             tokens.add(f"{prefix}{word_cap}{suffix}")
-
-            # Lowercase version
-            if include_lowercase:
-                tokens.add(f"{prefix}{word_lower}{suffix}")
 
     return sorted(tokens)
 
@@ -133,8 +120,18 @@ THINKING_WORDS = [
     "wait no",
     "wait maybe",
     "wait perhaps",
+    "wait, but",
     "so maybe",
     "so perhaps",
+    "so,",
+    "but since",
+    "but maybe",
+    "but the",
+    "but before",
+    "but wait",
+    "but how",
+    "to find",
+    "now,",
 ]
 
 VERIFICATION_WORDS = [
