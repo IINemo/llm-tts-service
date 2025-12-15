@@ -33,10 +33,8 @@ from llm_tts.generators.huggingface import (
 # vLLM generators (optional - requires vllm package)
 try:
     from llm_tts.generators import vllm
-    from llm_tts.generators.vllm import (
-        StepCandidateGeneratorThroughVLLM,
-        VLLMStepGenerator,
-    )
+    from llm_tts.generators.vllm import StepCandidateGeneratorThroughVLLM
+    from llm_tts.generators.vllm_generator import VLLMStepGenerator
 
     VLLM_AVAILABLE = True
 except ImportError:
