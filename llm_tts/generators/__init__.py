@@ -7,17 +7,15 @@ for various reasoning strategies (beam search, best-of-n, etc.).
 Structure:
 - api/: API-based generators (OpenAI-compatible)
 - huggingface/: HuggingFace transformers generators
-- vllm/: vLLM generators for fast batched inference
+- vllm.py: Unified vLLM generator with thinking_mode parameter
 
-Each backend has:
-- structured.py: Generators for structured step patterns (- Step 1, etc.)
-- thinking.py: Generators for thinking mode (<think> tags)
+Each backend has generators for different step patterns.
 """
 
 # Backend submodules (vllm is optional)
 from llm_tts.generators import api, huggingface
 
-# Re-export commonly used classes for backward compatibility
+# Re-export commonly used classes
 from llm_tts.generators.api import StepCandidateGeneratorThroughAPI
 from llm_tts.generators.base import (
     StepCandidate,
@@ -30,16 +28,12 @@ from llm_tts.generators.huggingface import (
     ThinkingStepStoppingCriteria,
 )
 
-# vLLM generators (optional - requires vllm package)
+# vLLM generator (optional - requires vllm package)
 try:
-    from llm_tts.generators import vllm
-    from llm_tts.generators.vllm import StepCandidateGeneratorThroughVLLM
-    from llm_tts.generators.vllm_generator import VLLMStepGenerator
+    from llm_tts.generators.vllm import VLLMStepGenerator
 
     VLLM_AVAILABLE = True
 except ImportError:
-    vllm = None
-    StepCandidateGeneratorThroughVLLM = None
     VLLMStepGenerator = None
     VLLM_AVAILABLE = False
 
@@ -51,12 +45,10 @@ __all__ = [
     # Submodules
     "api",
     "huggingface",
-    "vllm",
     "VLLM_AVAILABLE",
-    # Backward-compatible exports
+    # Exports
     "StepCandidateGeneratorThroughAPI",
     "StepCandidateGeneratorThroughHuggingface",
-    "StepCandidateGeneratorThroughVLLM",
     "VLLMStepGenerator",
     "BatchStepStoppingCriteria",
     "ThinkingStepStoppingCriteria",

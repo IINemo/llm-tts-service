@@ -66,10 +66,9 @@ from llm_tts.step_boundary_detectors import (
     ThinkingMarkerDetector,
 )
 
-# vLLM step generators (optional)
+# vLLM step generator (optional)
 try:
-    from llm_tts.generators import StepCandidateGeneratorThroughVLLM
-    from llm_tts.generators.vllm import ThinkingStepGeneratorVLLM
+    from llm_tts.generators.vllm import VLLMStepGenerator
 
     VLLM_GENERATOR_AVAILABLE = True
 except ImportError:
@@ -277,11 +276,12 @@ def create_model(config):
             detector_type = config.strategy.get("detector_type", "structured")
 
             if detector_type == "thinking_marker":
-                # Use ThinkingStepGeneratorVLLM for thinking mode
-                log.info("Creating ThinkingStepGeneratorVLLM for thinking mode")
+                # Use VLLMStepGenerator in thinking mode
+                log.info("Creating VLLMStepGenerator for thinking mode")
 
-                step_generator = ThinkingStepGeneratorVLLM(
+                step_generator = VLLMStepGenerator(
                     model=llm,
+                    thinking_mode=True,
                     min_step_chars=config.strategy.get("min_step_chars", 200),
                     max_step_chars=config.strategy.get("max_step_chars", 1200),
                     max_new_tokens=config.generation.max_new_tokens,
@@ -309,7 +309,7 @@ def create_model(config):
                     max_model_len=config.model.get("max_model_len", 32768),
                 )
             else:
-                # Use StructuredStepDetector for structured mode
+                # Use VLLMStepGenerator in structured mode
                 detector = StructuredStepDetector(
                     step_patterns=config.strategy.get(
                         "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
@@ -329,8 +329,9 @@ def create_model(config):
                     stop=detector.step_patterns,
                 )
 
-                step_generator = StepCandidateGeneratorThroughVLLM(
+                step_generator = VLLMStepGenerator(
                     model=llm,
+                    thinking_mode=False,
                     detector=detector,
                     sampling_params=step_sampling_params,
                 )
