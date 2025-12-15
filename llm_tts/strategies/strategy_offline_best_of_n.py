@@ -9,7 +9,7 @@ Each trajectory includes:
 Unlike online best-of-n which selects at each step, this generates full
 trajectories first, then picks the best complete solution.
 
-Uses ThinkingStepGeneratorVLLM with no intermediate stop tokens for unified
+Uses VLLMStepGenerator with no intermediate stop tokens for unified
 token tracking and FLOP calculation.
 """
 
@@ -23,7 +23,7 @@ import numpy as np
 from vllm import LLM
 
 from llm_tts.generators import StepCandidate
-from llm_tts.generators.vllm.thinking import ThinkingStepGeneratorVLLM
+from llm_tts.generators.vllm import VLLMStepGenerator
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
 from llm_tts.strategies.deepconf.utils import extract_answer
 
@@ -107,8 +107,9 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         # Create step generator with NO intermediate stop tokens
         # This generates full thinking in one shot (stops only at </think>)
-        self.generator = ThinkingStepGeneratorVLLM(
+        self.generator = VLLMStepGenerator(
             model=model,
+            thinking_mode=True,
             min_step_chars=1,  # No min - generate full thinking
             max_step_chars=999999,  # No max - generate full thinking
             max_new_tokens=max_thinking_tokens,

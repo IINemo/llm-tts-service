@@ -9,7 +9,7 @@ from llm_tts.generators import (
 )
 
 if TYPE_CHECKING:
-    from llm_tts.generators import StepCandidateGeneratorThroughVLLM
+    from llm_tts.generators import VLLMStepGenerator
 from llm_tts.scale_discriminator import ScaleDiscriminator
 
 from .strategy_base import StrategyBase
@@ -30,7 +30,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         step_generator: Union[
             StepCandidateGeneratorThroughAPI,
             StepCandidateGeneratorThroughHuggingface,
-            "StepCandidateGeneratorThroughVLLM",
+            "VLLMStepGenerator",
         ],
         scaling_rate: float = 0.9,
         momentum_rate: float = 0.9,

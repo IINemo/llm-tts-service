@@ -49,7 +49,7 @@ strategy:
   type: online_best_of_n
   candidates_per_step: 4
   max_steps: 250
-  # Use ThinkingStepGeneratorVLLM
+  # Use VLLMStepGenerator in thinking mode
   detector_type: thinking_marker
   # Same settings as HuggingFace experiment
   min_step_chars: 200
