@@ -261,7 +261,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                     "is_complete": c.is_complete,
                     "is_trajectory_complete": c.is_trajectory_complete,
                     "token_ids": list(c.token_ids) if c.token_ids else [],
-                    "logprobs": c.other_data.get("logprobs", []) if c.other_data else [],
+                    "logprobs": (
+                        c.other_data.get("logprobs", []) if c.other_data else []
+                    ),
                 }
             )
 

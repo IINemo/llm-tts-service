@@ -895,7 +895,9 @@ def generate_trajectories(
                 sample_metrics = {
                     "sample_index": i,
                     "is_correct": is_correct,
-                    "thinking_num_steps": result.get("thinking_num_steps", len(result["steps"])),
+                    "thinking_num_steps": result.get(
+                        "thinking_num_steps", len(result["steps"])
+                    ),
                     "response_num_steps": result.get("response_num_steps", 0),
                     "num_traces": num_traces,
                     "running_correct": running_correct,  # Number of correct samples so far
@@ -1137,9 +1139,13 @@ def evaluate_results(
 
             # Add step statistics
             if all_thinking_steps:
-                metrics["avg_thinking_steps_per_trajectory"] = np.mean(all_thinking_steps)
+                metrics["avg_thinking_steps_per_trajectory"] = np.mean(
+                    all_thinking_steps
+                )
             if all_response_steps:
-                metrics["avg_response_steps_per_trajectory"] = np.mean(all_response_steps)
+                metrics["avg_response_steps_per_trajectory"] = np.mean(
+                    all_response_steps
+                )
             if all_validities:
                 metrics["avg_validity_score"] = np.mean(all_validities)
 

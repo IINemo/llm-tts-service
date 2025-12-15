@@ -476,7 +476,9 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
             other_data={
                 "uncertainty_score": 1.0
                 / (1.0 + generation_scores.get("mean_entropy", 0)),
-                "logprobs": self._extract_logprobs(accumulated_tokens, accumulated_logprobs),
+                "logprobs": self._extract_logprobs(
+                    accumulated_tokens, accumulated_logprobs
+                ),
             },
             raw_text=accumulated_text,
         )
@@ -538,7 +540,9 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
                 other_data={
                     "uncertainty_score": 1.0
                     / (1.0 + generation_scores.get("mean_entropy", 0)),
-                    "logprobs": self._extract_logprobs(output.token_ids, output.logprobs),
+                    "logprobs": self._extract_logprobs(
+                        output.token_ids, output.logprobs
+                    ),
                 },
                 raw_text=output.text,
             )
@@ -603,7 +607,9 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
                 other_data={
                     "uncertainty_score": 1.0
                     / (1.0 + generation_scores.get("mean_entropy", 0)),
-                    "logprobs": self._extract_logprobs(output.token_ids, output.logprobs),
+                    "logprobs": self._extract_logprobs(
+                        output.token_ids, output.logprobs
+                    ),
                 },
                 raw_text=output.text,
             )

@@ -21,9 +21,9 @@ def count_response_steps(text: str) -> int:
     """
     # Try multiple patterns
     patterns = [
-        r"- Step \d+:",      # Bullet format: - Step 1:
+        r"- Step \d+:",  # Bullet format: - Step 1:
         r"#{1,3} Step \d+:",  # Markdown format: ### Step 1:
-        r"(?:^|\n)Step \d+:", # Plain format at line start
+        r"(?:^|\n)Step \d+:",  # Plain format at line start
     ]
 
     max_matches = 0
