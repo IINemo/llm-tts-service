@@ -36,6 +36,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # vLLM imports (optional, only if vLLM is installed)
 try:
     from lm_polygraph.model_adapters import WhiteboxModelvLLM
+    from lm_polygraph.utils import VLLMWithUncertainty
     from vllm import LLM, SamplingParams
 
     VLLM_AVAILABLE = True
@@ -250,12 +251,49 @@ def create_model(config):
             seed=config.system.seed,  # Reproducibility
         )
 
-        # Wrap with lm-polygraph adapter
-        model = WhiteboxModelvLLM(
-            model=llm,
-            sampling_params=sampling_params,
-            device=config.model.get("device", "cuda"),
-        )
+        # Check if uncertainty scoring is needed
+        scorer_type = config.scorer.type if config.scorer else None
+        if scorer_type in ["uncertainty", "uncertainty_pd", "entropy", "perplexity"]:
+            # Wrap with VLLMWithUncertainty (similar to CausalLMWithUncertainty for HF)
+            log.info(f"Wrapping vLLM with VLLMWithUncertainty (scorer: {scorer_type})")
+
+            # Get estimator from config or use default Perplexity
+            from lm_polygraph.estimators import MeanTokenEntropy, Perplexity
+
+            if scorer_type == "entropy":
+                # Note: MeanTokenEntropy requires full distribution, which vLLM doesn't provide
+                # Using Perplexity as fallback (uses only log-likelihood of chosen tokens)
+                log.warning(
+                    "MeanTokenEntropy requires full probability distribution. "
+                    "vLLM only provides top-k logprobs. Using Perplexity estimator instead."
+                )
+                estimator = Perplexity()
+            else:
+                estimator = Perplexity()
+
+            llm_with_uncertainty = VLLMWithUncertainty(
+                llm=llm,
+                sampling_params=sampling_params,
+                estimator=estimator,
+            )
+
+            # Wrap with lm-polygraph adapter for compatibility
+            model = WhiteboxModelvLLM(
+                model=llm,
+                sampling_params=sampling_params,
+                device=config.model.get("device", "cuda"),
+            )
+
+            # Store the uncertainty wrapper for use by step generator
+            model.llm_with_uncertainty = llm_with_uncertainty
+            model.estimator = estimator
+        else:
+            # Wrap with lm-polygraph adapter (no uncertainty)
+            model = WhiteboxModelvLLM(
+                model=llm,
+                sampling_params=sampling_params,
+                device=config.model.get("device", "cuda"),
+            )
 
         # Mark as vLLM model for strategy detection
         model.is_vllm = True
@@ -309,6 +347,8 @@ def create_model(config):
                     ),
                     # Context length limit for trajectory truncation
                     max_model_len=config.model.get("max_model_len", 32768),
+                    # Pass estimator for uncertainty scoring (if configured)
+                    estimator=getattr(model, "estimator", None),
                 )
             else:
                 # Use VLLMStepGenerator in structured mode
@@ -336,6 +376,8 @@ def create_model(config):
                     thinking_mode=False,
                     detector=detector,
                     sampling_params=step_sampling_params,
+                    # Pass estimator for uncertainty scoring (if configured)
+                    estimator=getattr(model, "estimator", None),
                 )
 
             log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
