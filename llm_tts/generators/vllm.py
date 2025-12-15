@@ -14,7 +14,7 @@ Two modes:
 
 import inspect
 import logging
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import numpy as np
 from vllm import LLM, SamplingParams
@@ -27,7 +27,6 @@ from llm_tts.generators.base import (
 )
 from llm_tts.step_boundary_detectors import StructuredStepDetector
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
-from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens
 
 if TYPE_CHECKING:
     from llm_tts.utils.flops import FLOPCalculator
@@ -43,47 +42,37 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         model: vLLM model instance
         thinking_mode: If True, use two-phase thinking generation (default).
                       If False, use simple structured generation.
-
-    Structured mode parameters (thinking_mode=False):
-        detector: StructuredStepDetector instance (optional, creates default if None)
-        sampling_params: SamplingParams for generation (optional)
-
-    Thinking mode parameters (thinking_mode=True):
-        min_step_chars: Minimum characters per thinking step
-        max_step_chars: Maximum characters per thinking step
+        detector: Step boundary detector (StructuredStepDetector or ThinkingMarkerDetector).
+                 If None, creates default based on thinking_mode.
+        sampling_params: SamplingParams for generation (structured mode only)
+        thinking_stop_tokens: Stop tokens for thinking phase (thinking mode only).
+                             If None with ThinkingMarkerDetector, derives from detector.
+        answer_patterns: Patterns marking end of response
         max_new_tokens: Maximum tokens per generation
         temperature, top_p, top_k: Sampling parameters
-        use_sequence, use_conclusion, etc.: Stop token config for ThinkingMarkerDetector
-        answer_patterns: Patterns marking end of response
         disable_thinking_mode: If True, skip <think> block
         max_model_len: Maximum context length for truncation
+        flop_calculator: Optional FLOP calculator for token tracking
     """
 
     def __init__(
         self,
         model: LLM,
         thinking_mode: bool = True,
-        # Non-thinking mode parameters
-        detector: Optional[StructuredStepDetector] = None,
+        # Detector (works for both modes)
+        detector: Optional[
+            Union[StructuredStepDetector, ThinkingMarkerDetector]
+        ] = None,
+        # Structured mode parameters
         sampling_params: Optional[SamplingParams] = None,
         # Thinking mode parameters
-        min_step_chars: int = 200,
-        max_step_chars: int = 1200,
+        thinking_stop_tokens: Optional[List[str]] = None,
+        answer_patterns: Optional[List[str]] = None,
+        # Common generation parameters
         max_new_tokens: int = 4096,
         temperature: float = 0.6,
         top_p: float = 0.95,
         top_k: int = 20,
-        # Stop token configuration (for thinking mode)
-        use_sequence: bool = True,
-        use_conclusion: bool = True,
-        use_thinking: bool = True,
-        use_verification: bool = True,
-        use_reasoning: bool = False,
-        use_correction: bool = False,
-        use_structure: bool = False,
-        custom_words: Optional[List[str]] = None,
-        # Answer patterns for response completion
-        answer_patterns: Optional[List[str]] = None,
         # Thinking mode control
         disable_thinking_mode: bool = False,
         # Context length limit
@@ -98,10 +87,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.thinking_mode = thinking_mode
         self.tokenizer = model.get_tokenizer()
 
-        # Store parameters for both modes
+        # Store common parameters
         self.disable_thinking_mode = disable_thinking_mode
-        self.min_step_chars = min_step_chars
-        self.max_step_chars = max_step_chars
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.top_p = top_p
@@ -114,16 +101,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         )
 
         if thinking_mode:
-            self._init_thinking_mode(
-                use_sequence=use_sequence,
-                use_conclusion=use_conclusion,
-                use_thinking=use_thinking,
-                use_verification=use_verification,
-                use_reasoning=use_reasoning,
-                use_correction=use_correction,
-                use_structure=use_structure,
-                custom_words=custom_words,
-            )
+            self._init_thinking_mode(detector, thinking_stop_tokens)
         else:
             self._init_structured_mode(detector, sampling_params)
 
@@ -132,47 +110,36 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
     def _init_thinking_mode(
         self,
-        use_sequence: bool,
-        use_conclusion: bool,
-        use_thinking: bool,
-        use_verification: bool,
-        use_reasoning: bool,
-        use_correction: bool,
-        use_structure: bool,
-        custom_words: Optional[List[str]],
+        detector: Optional[ThinkingMarkerDetector],
+        thinking_stop_tokens: Optional[List[str]],
     ):
         """Initialize thinking mode specific components."""
-        # Build stop tokens for THINKING phase (step boundaries + </think>)
-        self.thinking_stop_tokens = get_stop_tokens(
-            use_sequence=use_sequence,
-            use_conclusion=use_conclusion,
-            use_thinking=use_thinking,
-            use_verification=use_verification,
-            use_reasoning=use_reasoning,
-            use_correction=use_correction,
-            use_structure=use_structure,
-            custom_words=custom_words,
-        )
+        # Create default detector if not provided
+        if detector is None:
+            detector = ThinkingMarkerDetector()
+
+        self.detector = detector
+        self.detector.answer_patterns = self.answer_patterns
+
+        # Get min/max step chars from detector
+        self.min_step_chars = getattr(detector, "min_step_chars", 200)
+        self.max_step_chars = getattr(detector, "max_step_chars", 1200)
+
+        # Build stop tokens for THINKING phase
+        if thinking_stop_tokens is not None:
+            self.thinking_stop_tokens = list(thinking_stop_tokens)
+        else:
+            # Derive from detector's marker patterns
+            from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens
+
+            self.thinking_stop_tokens = get_stop_tokens()  # Use defaults
+
         # Add </think> to stop thinking phase
-        self.thinking_stop_tokens = list(set(self.thinking_stop_tokens + ["</think>"]))
+        if "</think>" not in self.thinking_stop_tokens:
+            self.thinking_stop_tokens.append("</think>")
 
         # Stop tokens for RESPONSE phase (answer patterns only)
         self.response_stop_tokens = self.answer_patterns.copy()
-
-        # Create ThinkingMarkerDetector for step boundary validation
-        # (in structured mode, self.detector is StructuredStepDetector instead)
-        self.detector = ThinkingMarkerDetector(
-            min_step_chars=self.min_step_chars,
-            max_step_chars=self.max_step_chars,
-            use_sequence=use_sequence,
-            use_conclusion=use_conclusion,
-            use_thinking=use_thinking,
-            use_verification=use_verification,
-            use_reasoning=use_reasoning,
-            use_correction=use_correction,
-            use_structure=use_structure,
-        )
-        self.detector.answer_patterns = self.answer_patterns
 
         log.info(
             f"Thinking mode: {len(self.thinking_stop_tokens)} thinking stops, "

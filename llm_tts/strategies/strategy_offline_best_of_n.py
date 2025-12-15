@@ -105,32 +105,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         self.output_dir = output_dir
         self._current_sample_idx = 0
 
-        # Create step generator with NO intermediate stop tokens
-        # This generates full thinking in one shot (stops only at </think>)
-        self.generator = VLLMStepGenerator(
-            model=model,
-            thinking_mode=True,
-            min_step_chars=1,  # No min - generate full thinking
-            max_step_chars=999999,  # No max - generate full thinking
-            max_new_tokens=max_thinking_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            # Disable ALL intermediate stop tokens for full generation
-            use_sequence=False,
-            use_conclusion=False,
-            use_thinking=False,
-            use_verification=False,
-            use_reasoning=False,
-            use_correction=False,
-            use_structure=False,
-            custom_words=[],
-            answer_patterns=self.answer_patterns,
-            disable_thinking_mode=disable_thinking_mode,
-            flop_calculator=flop_calculator,
-        )
-
-        # Create step boundary detector for splitting thinking into steps (post-hoc)
+        # Create detector for post-hoc splitting of thinking into steps
         self.detector = ThinkingMarkerDetector(
             min_step_chars=min_step_chars,
             max_step_chars=max_step_chars,
@@ -141,6 +116,28 @@ class StrategyOfflineBestOfN(StrategyBase):
             use_reasoning=use_reasoning,
             use_correction=use_correction,
             use_structure=use_structure,
+        )
+
+        # Create detector for generator with no min/max limits (full generation)
+        generator_detector = ThinkingMarkerDetector(
+            min_step_chars=1,  # No min - generate full thinking
+            max_step_chars=999999,  # No max - generate full thinking
+        )
+
+        # Create step generator with NO intermediate stop tokens
+        # This generates full thinking in one shot (stops only at </think>)
+        self.generator = VLLMStepGenerator(
+            model=model,
+            thinking_mode=True,
+            detector=generator_detector,
+            thinking_stop_tokens=["</think>"],  # Only stop at end of thinking
+            max_new_tokens=max_thinking_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            answer_patterns=self.answer_patterns,
+            disable_thinking_mode=disable_thinking_mode,
+            flop_calculator=flop_calculator,
         )
 
         log.info(
