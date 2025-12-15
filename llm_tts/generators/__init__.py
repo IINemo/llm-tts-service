@@ -5,11 +5,9 @@ This module provides generators that produce candidate next steps
 for various reasoning strategies (beam search, best-of-n, etc.).
 
 Structure:
-- api/: API-based generators (OpenAI-compatible)
-- huggingface/: HuggingFace transformers generators
+- api.py: API-based generators (OpenAI-compatible)
+- huggingface.py: HuggingFace transformers generators
 - vllm.py: Unified vLLM generator with thinking_mode parameter
-
-Each backend has generators for different step patterns.
 """
 
 # Backend submodules (vllm is optional)
