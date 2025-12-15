@@ -287,10 +287,12 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         # Truncate from the beginning (keep recent steps)
         truncated = list(trajectory)
         truncated_tokens = list(step_tokens)
+        truncation_occurred = False
 
         while sum(truncated_tokens) > available_tokens and truncated:
             truncated.pop(0)
             removed_tokens = truncated_tokens.pop(0)
+            truncation_occurred = True
             log.info(
                 f"Truncating trajectory: removed step with {removed_tokens} tokens "
                 f"(remaining: {len(truncated)} steps, {sum(truncated_tokens)} tokens)"
@@ -298,6 +300,25 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
 
         if not truncated:
             log.warning("All trajectory steps truncated due to context length limit")
+
+        # If truncation occurred, force thinking to complete by adding </think>
+        # This prevents infinite loops where trajectory keeps growing and truncating
+        if truncation_occurred and truncated:
+            # Check if last step already has </think>
+            last_text = truncated[-1].text if truncated else ""
+            if "</think>" not in last_text:
+                log.warning(
+                    "Context limit reached - forcing thinking phase completion with </think>"
+                )
+                # Add a closing step to end thinking phase
+                close_step = StepCandidate(
+                    text="\n</think>",
+                    token_ids=[],
+                    is_complete=True,
+                    is_trajectory_complete=True,  # Signal to stop generating
+                    other_data={"phase": "thinking", "forced_completion": True},
+                )
+                truncated.append(close_step)
 
         return truncated
 
@@ -375,6 +396,17 @@ class ThinkingStepGeneratorVLLM(StepCandidateGeneratorBase):
         trajectory = self._truncate_trajectory(
             request, trajectory, reserved_tokens=self.max_new_tokens
         )
+
+        # Check if truncation forced completion (added </think> step)
+        # If so, return the forced completion step instead of generating new ones
+        if trajectory and trajectory[-1].is_trajectory_complete:
+            forced_step = trajectory[-1]
+            if forced_step.other_data and forced_step.other_data.get(
+                "forced_completion"
+            ):
+                log.info("Returning forced completion step due to context length limit")
+                # Return the forced step as all candidates
+                return [forced_step] * candidates_per_step
 
         candidates = []
 
