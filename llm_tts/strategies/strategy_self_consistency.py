@@ -9,10 +9,13 @@ Supports multiple backends:
 - API-based models (OpenAI, OpenRouter) via BlackboxModelWithStreaming
 - Local HuggingFace models via WhiteboxModel
 - vLLM for efficient batched generation (recommended for local models)
+
+Uses ThinkingStepGeneratorVLLM for vLLM backend to enable unified token tracking
+and FLOP calculation.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -22,6 +25,9 @@ from llm_tts.scorers.majority_voting import ChainMajorityVotingScorer
 
 from .metadata_builder import StrategyMetadataBuilder
 from .strategy_base import StrategyBase
+
+if TYPE_CHECKING:
+    from llm_tts.utils.flops import FLOPCalculator
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +49,9 @@ class StrategySelfConsistency(StrategyBase):
         n_threads: int = None,
         disable_thinking_mode: bool = True,
         seed: int = 42,
+        top_p: float = 0.95,
+        top_k: int = 20,
+        flop_calculator: Optional["FLOPCalculator"] = None,
     ):
         """
         Initialize self-consistency strategy.
@@ -57,6 +66,9 @@ class StrategySelfConsistency(StrategyBase):
             n_threads: Number of parallel threads for API calls (None = defaults to 4)
             disable_thinking_mode: Disable Qwen3 thinking mode (default True)
             seed: Random seed for reproducibility (default 42)
+            top_p: Top-p sampling
+            top_k: Top-k sampling
+            flop_calculator: Optional FLOP calculator for token tracking
         """
         self.model = model
         self.num_paths = num_paths
@@ -67,11 +79,44 @@ class StrategySelfConsistency(StrategyBase):
         self.n_threads = n_threads if n_threads is not None else 4
         self.disable_thinking_mode = disable_thinking_mode
         self.seed = seed
+        self.top_p = top_p
+        self.top_k = top_k
+        self.flop_calculator = flop_calculator
 
         # Use majority voting scorer by default
         self.scorer = scorer or ChainMajorityVotingScorer()
         if hasattr(self.scorer, "prepare_model"):
             self.scorer.prepare_model()
+
+        # Create step generator for vLLM mode (for unified token tracking)
+        self.generator = None
+        if hasattr(self.model, "is_vllm") and self.model.is_vllm:
+            from llm_tts.generators.vllm.thinking import ThinkingStepGeneratorVLLM
+
+            self.generator = ThinkingStepGeneratorVLLM(
+                model=self.model.vllm_engine,
+                min_step_chars=1,  # No min - generate full trajectory
+                max_step_chars=999999,  # No max - generate full trajectory
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                # Disable ALL intermediate stop tokens for full generation
+                use_sequence=False,
+                use_conclusion=False,
+                use_thinking=False,
+                use_verification=False,
+                use_reasoning=False,
+                use_correction=False,
+                use_structure=False,
+                custom_words=[],
+                answer_patterns=["<end of response>"],
+                disable_thinking_mode=disable_thinking_mode,
+                flop_calculator=flop_calculator,
+            )
+            log.info(
+                "StrategySelfConsistency: Using ThinkingStepGeneratorVLLM for token tracking"
+            )
 
     def _generate_single_path(self, args) -> Optional[str]:
         """
@@ -166,11 +211,13 @@ class StrategySelfConsistency(StrategyBase):
         - Continuous batching for high throughput
         - Prefix caching for shared prompts
 
+        Uses ThinkingStepGeneratorVLLM for unified token tracking and FLOP calculation.
+
         Args:
             prompt: Input prompt (string or list of messages)
 
         Returns:
-            List of generated reasoning path texts
+            List of generated reasoning path texts (dicts with text, num_tokens)
         """
         from vllm import SamplingParams
 
@@ -195,15 +242,20 @@ class StrategySelfConsistency(StrategyBase):
             enable_thinking=not self.disable_thinking_mode,
         )
 
+        # Calculate context tokens for FLOP tracking
+        context_tokens = len(tokenizer.encode(formatted_prompt))
+
         # Create sampling params for batch generation
         sampling_params = SamplingParams(
             n=self.num_paths,  # Generate all paths in ONE call
             temperature=self.temperature,
-            top_p=0.95,
+            top_p=self.top_p,
+            top_k=self.top_k,
             max_tokens=self.max_new_tokens,
             stop=["<end of response>", "</end of response>"],  # Early stopping
             include_stop_str_in_output=True,
             seed=self.seed,  # Reproducibility
+            logprobs=1,  # Get logprobs for analysis
         )
 
         log.info(
@@ -215,17 +267,26 @@ class StrategySelfConsistency(StrategyBase):
         outputs = llm.generate([formatted_prompt], sampling_params)
 
         # Import answer extraction for logging
+        from llm_tts.generators import StepCandidate
         from llm_tts.utils import extract_answer
 
         # Extract generated texts with token counts
         paths = []
-        total_tokens = 0
+        total_output_tokens = 0
+        candidates_for_tracking = []
+
         for i, output in enumerate(outputs[0].outputs):
             text = output.text
             if text:
                 num_tokens = len(output.token_ids)
-                total_tokens += num_tokens
-                paths.append({"text": text, "num_tokens": num_tokens})
+                total_output_tokens += num_tokens
+                paths.append(
+                    {
+                        "text": text,
+                        "num_tokens": num_tokens,
+                        "token_ids": list(output.token_ids),
+                    }
+                )
                 # Extract answer for logging (like DeepConf)
                 answer = extract_answer(text, answer_format="auto") or "no_answer"
                 log.info(
@@ -234,12 +295,31 @@ class StrategySelfConsistency(StrategyBase):
                 )
                 # Log full trace text (like DeepConf)
                 log.info(f"{text}")
+
+                # Create StepCandidate for token tracking
+                candidates_for_tracking.append(
+                    StepCandidate(
+                        text=text,
+                        token_ids=list(output.token_ids),
+                        is_complete=True,
+                        is_trajectory_complete=True,
+                    )
+                )
             else:
                 log.warning(f"  Empty generation for path {i+1}/{self.num_paths}")
 
+        # Record tokens for FLOP tracking using generator
+        if self.generator is not None and candidates_for_tracking:
+            self.generator._record_generation(
+                candidates_for_tracking,
+                context_tokens=context_tokens,
+            )
+
         log.info(f"✅ vLLM generated {len(paths)}/{self.num_paths} paths successfully")
         log.info(
-            f"  Total tokens: {total_tokens}, Average: {total_tokens/len(paths):.0f} tokens/path"
+            f"  Total output tokens: {total_output_tokens}, "
+            f"Context tokens: {context_tokens}, "
+            f"Average: {total_output_tokens/len(paths):.0f} tokens/path"
         )
         return paths
 
@@ -482,6 +562,10 @@ class StrategySelfConsistency(StrategyBase):
 
         log.info(f"Starting self-consistency reasoning for prompt: {prompt[:100]}...")
 
+        # Reset sample stats for token tracking (if using vLLM)
+        if self.generator is not None:
+            self.generator.reset_sample_stats()
+
         # Generate multiple reasoning paths
         reasoning_paths = self.generate_reasoning_paths(prompt)
 
@@ -538,6 +622,22 @@ class StrategySelfConsistency(StrategyBase):
         # Log summary to console
         builder.log_summary(log)
 
+        # Finalize and get token statistics (if using vLLM)
+        token_stats = {}
+        if self.generator is not None:
+            self.generator.finalize_sample_stats()
+            token_stats = self.generator.get_sample_stats()
+            log.info(
+                f"Sample token stats: {token_stats.get('tokens', 0)} total tokens "
+                f"(input: {token_stats.get('input_tokens', 0)}, "
+                f"output: {token_stats.get('output_tokens', 0)})"
+                + (
+                    f", {token_stats['tflops']:.3f} TFLOPs"
+                    if token_stats.get("tflops")
+                    else ""
+                )
+            )
+
         # Format output to match expected interface
         return {
             "trajectory": result["best_path"],
@@ -551,7 +651,18 @@ class StrategySelfConsistency(StrategyBase):
             "metadata": builder.build(),
             "all_traces": result.get("all_traces", []),  # Token info per path
             "total_tokens": result.get("total_tokens", 0),  # Total tokens for sample
+            "token_stats": token_stats,  # Unified token stats with TFLOPs
         }
+
+    def get_token_stats(self) -> Dict[str, any]:
+        """Get token statistics from the generator.
+
+        Returns:
+            Dictionary with token counts and FLOP estimates.
+        """
+        if self.generator is not None:
+            return self.generator.get_sample_stats()
+        return {}
 
     def cleanup(self):
         """Clean up resources"""
