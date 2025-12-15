@@ -168,6 +168,17 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         self.max_step_chars = max_step_chars
         self.case_sensitive = case_sensitive
 
+        # Store flags for later use (e.g., deriving vLLM stop tokens)
+        self.use_sequence = use_sequence
+        self.use_conclusion = use_conclusion
+        self.use_thinking = use_thinking
+        self.use_verification = use_verification
+        self.use_structure = use_structure
+        self.use_reasoning = use_reasoning
+        self.use_sentence_start = use_sentence_start
+        self.use_correction = use_correction
+        self.custom_markers = custom_markers
+
         # Build marker list
         self.markers = []
         if use_sequence:
@@ -537,3 +548,23 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
             )
 
         return stats
+
+    def get_vllm_stop_tokens(self) -> List[str]:
+        """
+        Get vLLM stop tokens derived from this detector's configuration.
+
+        Returns:
+            List of stop token strings for vLLM SamplingParams.stop
+        """
+        from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens
+
+        return get_stop_tokens(
+            use_sequence=self.use_sequence,
+            use_conclusion=self.use_conclusion,
+            use_thinking=self.use_thinking,
+            use_verification=self.use_verification,
+            use_reasoning=self.use_reasoning,
+            use_correction=self.use_correction,
+            use_structure=self.use_structure,
+            custom_words=self.custom_markers,
+        )

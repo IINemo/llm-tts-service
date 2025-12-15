@@ -46,7 +46,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                  If None, creates default based on thinking_mode.
         sampling_params: SamplingParams for generation (structured mode only)
         thinking_stop_tokens: Stop tokens for thinking phase (thinking mode only).
-                             If None with ThinkingMarkerDetector, derives from detector.
+                             If None, automatically derived from detector.get_vllm_stop_tokens().
         answer_patterns: Patterns marking end of response
         max_new_tokens: Maximum tokens per generation
         temperature, top_p, top_k: Sampling parameters
@@ -129,10 +129,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         if thinking_stop_tokens is not None:
             self.thinking_stop_tokens = list(thinking_stop_tokens)
         else:
-            # Derive from detector's marker patterns
-            from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens
-
-            self.thinking_stop_tokens = get_stop_tokens()  # Use defaults
+            # Derive from detector's configuration
+            self.thinking_stop_tokens = detector.get_vllm_stop_tokens()
 
         # Add </think> to stop thinking phase
         if "</think>" not in self.thinking_stop_tokens:
