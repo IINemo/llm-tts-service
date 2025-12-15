@@ -12,7 +12,7 @@ from llm_tts.generators import (
 )
 from llm_tts.strategies.deepconf.utils import extract_answer
 
-from .strategy_base import StrategyBase
+from .strategy_base import StrategyBase, count_thinking_and_response_steps
 
 log = logging.getLogger(__name__)
 
@@ -178,10 +178,17 @@ class StrategyOnlineBestOfN(StrategyBase):
             + (f", {token_stats['tflops']:.3f} TFLOPs" if token_stats["tflops"] else "")
         )
 
+        # Count thinking and response steps separately
+        thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
+            selected_steps
+        )
+
         return {
             "trajectory": final_trajectory,
             "extracted_answer": extracted,
             "steps": selected_steps,
+            "thinking_num_steps": thinking_num_steps,
+            "response_num_steps": response_num_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,
             "token_stats": token_stats,

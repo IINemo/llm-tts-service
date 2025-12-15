@@ -27,7 +27,7 @@ from llm_tts.generators.vllm.thinking import ThinkingStepGeneratorVLLM
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
 from llm_tts.strategies.deepconf.utils import extract_answer
 
-from .strategy_base import StrategyBase
+from .strategy_base import StrategyBase, count_thinking_and_response_steps
 
 if TYPE_CHECKING:
     from llm_tts.utils.flops import FLOPCalculator
@@ -546,10 +546,17 @@ class StrategyOfflineBestOfN(StrategyBase):
                 all_trajectories, all_scores, best_idx, all_thinking_steps
             )
 
+        # Count thinking and response steps separately
+        thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
+            step_candidates
+        )
+
         return {
             "trajectory": best_trajectory,
             "extracted_answer": extracted,
             "steps": step_candidates,
+            "thinking_num_steps": thinking_num_steps,
+            "response_num_steps": response_num_steps,
             "validity_scores": [best_score] * len(step_candidates),
             "all_trajectories": all_trajectories,
             "all_scores": all_scores,
@@ -586,7 +593,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "score": scores[i],
                     "text": traj,
                     "is_best": i == best_idx,
-                    "num_steps": (
+                    "thinking_num_steps": (
                         len(all_thinking_steps[i]) if all_thinking_steps else 1
                     ),
                     "steps": all_thinking_steps[i] if all_thinking_steps else [traj],

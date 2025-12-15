@@ -895,7 +895,8 @@ def generate_trajectories(
                 sample_metrics = {
                     "sample_index": i,
                     "is_correct": is_correct,
-                    "num_steps": len(result["steps"]),
+                    "thinking_num_steps": result.get("thinking_num_steps", len(result["steps"])),
+                    "response_num_steps": result.get("response_num_steps", 0),
                     "num_traces": num_traces,
                     "running_correct": running_correct,  # Number of correct samples so far
                     "running_accuracy": running_correct / len(results),
@@ -1098,14 +1099,17 @@ def evaluate_results(
 
     # Average statistics
     all_validities = []
-    all_steps = []
+    all_thinking_steps = []
+    all_response_steps = []
     for r in results:
         if "validity_scores" in r and r["validity_scores"]:
             all_validities.extend(r["validity_scores"])
-            all_steps.append(len(r["steps"]))
+            all_thinking_steps.append(r.get("thinking_num_steps", len(r["steps"])))
+            all_response_steps.append(r.get("response_num_steps", 0))
 
     log.info("Step Statistics:")
-    log.info(f"Avg steps per trajectory: {np.mean(all_steps):.1f}")
+    log.info(f"Avg thinking steps per trajectory: {np.mean(all_thinking_steps):.1f}")
+    log.info(f"Avg response steps per trajectory: {np.mean(all_response_steps):.1f}")
     log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
 
     # Log key metrics to wandb if enabled
@@ -1132,8 +1136,10 @@ def evaluate_results(
                 metrics[f"{name}/accuracy"] = correct / len(results)
 
             # Add step statistics
-            if all_steps:
-                metrics["avg_steps_per_trajectory"] = np.mean(all_steps)
+            if all_thinking_steps:
+                metrics["avg_thinking_steps_per_trajectory"] = np.mean(all_thinking_steps)
+            if all_response_steps:
+                metrics["avg_response_steps_per_trajectory"] = np.mean(all_response_steps)
             if all_validities:
                 metrics["avg_validity_score"] = np.mean(all_validities)
 
