@@ -52,15 +52,17 @@ strategy:
   max_response_tokens: 1024   # Max tokens for response phase
   detector_answer_patterns:
     - "<end of response>"
-  # Step boundary detector settings (larger steps for offline mode)
+  # Step boundary detector settings - ONLY used for post-hoc step splitting (logging/analysis)
+  # Generation uses NO stop tokens (full thinking in one shot)
   min_step_chars: 500
   max_step_chars: 2000
+  # These flags control how thinking is SPLIT into steps after generation (not during)
   use_sequence: true
   use_conclusion: true
   use_thinking: true
   use_verification: true
   use_structure: false
-  use_reasoning: false
+  use_reasoning: true   # Include "Alternatively" etc in step splitting
   use_correction: false
 
 # Dataset configuration

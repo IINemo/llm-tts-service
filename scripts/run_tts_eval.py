@@ -496,7 +496,9 @@ def create_model(config):
     return model, step_generator
 
 
-def create_tts_strategy(config, model, step_generator, scorer, output_dir=None):
+def create_tts_strategy(
+    config, model, step_generator, scorer, output_dir=None, flop_calculator=None
+):
     if config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
@@ -541,6 +543,7 @@ def create_tts_strategy(config, model, step_generator, scorer, output_dir=None):
             use_reasoning=config.strategy.get("use_reasoning", False),
             use_correction=config.strategy.get("use_correction", False),
             use_structure=config.strategy.get("use_structure", False),
+            flop_calculator=flop_calculator,
         )
     elif config.strategy.type == "adaptive":
         strategy = AdaptiveScalingBestOfN(
@@ -1258,6 +1261,7 @@ def main(config):
         step_generator=step_generator,
         scorer=scorer,
         output_dir=output_dir,
+        flop_calculator=flop_calculator,
     )
 
     # Load existing results if available (for resuming interrupted runs)
