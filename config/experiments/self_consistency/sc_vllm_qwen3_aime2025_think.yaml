@@ -1,0 +1,74 @@
+# @package _global_
+# Self-Consistency: Qwen3-8B via vLLM on AIME 2025 (THINKING MODE)
+# Fast inference with PagedAttention - no OOM on long sequences
+#
+# Thinking mode enables extended reasoning inside <think>...</think> blocks
+# Uses recommended Qwen3 thinking mode params: temp=0.6, top_p=0.95, top_k=20
+# See: https://huggingface.co/Qwen/Qwen3-8B
+
+defaults:
+  - /config
+  - /dataset/aime_2025
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - _self_
+
+# Run naming
+run_name: "aime2025_sc_think_vllm_n${strategy.num_paths}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: null  # Set to "wandb" for experiment tracking
+
+# Model configuration (vLLM backend with thinking mode ENABLED)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
+  disable_thinking_mode: false  # ENABLE Qwen3 thinking mode
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (THINKING MODE: temp=0.6, top_p=0.95, top_k=20)
+# See: https://huggingface.co/Qwen/Qwen3-8B
+generation:
+  max_new_tokens: 32768  # AIME + thinking requires more tokens
+  temperature: 0.6       # Thinking mode temperature
+  top_p: 0.95            # Thinking mode top_p
+  top_k: 20              # Thinking mode top_k
+  batch_size: 1
+  max_length: 8192
+
+# No scorer needed (self-consistency has built-in majority voting)
+scorer: null
+
+# Self-consistency strategy with thinking mode
+strategy:
+  type: self_consistency
+  num_paths: 16          # Number of reasoning paths (all in ONE vLLM call!)
+  max_new_tokens: 32768  # vLLM handles long sequences efficiently
+  temperature: 0.6       # Thinking mode temperature (must match generation)
+  top_p: 0.95            # Thinking mode top_p
+  top_k: 20              # Thinking mode top_k
+  generation_batch_size: null  # Not used for vLLM
+  n_threads: 1           # Not used for vLLM (single batched call)
+  disable_thinking_mode: false  # ENABLE thinking mode
+
+# Dataset configuration
+dataset:
+  subset: 30   # All AIME 2025 problems
+  offset: 0    # Start from beginning
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default.txt"
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match

@@ -202,44 +202,141 @@ class StrategySelfConsistency(StrategyBase):
             log.error(f"  Error generating path {i+1}/{total}: {e}")
             return None
 
-    def _generate_paths_vllm(self, prompt: str) -> List[str]:
+    def _generate_paths_vllm_thinking(self, messages: List[Dict[str, str]]) -> List[Dict]:
         """
-        Generate multiple reasoning paths using vLLM batched generation.
+        Generate multiple reasoning paths using generator in THINKING mode.
 
-        vLLM generates all paths in a single batched call with:
-        - PagedAttention for memory efficiency (no OOM on long sequences)
-        - Continuous batching for high throughput
-        - Prefix caching for shared prompts
-
-        Uses ThinkingStepGeneratorVLLM for unified token tracking and FLOP calculation.
+        Uses two-phase generation like offline Best-of-N:
+        1. generate_full_thinking() - generates <think>...</think>
+        2. generate_response() - generates response for each thinking
 
         Args:
-            prompt: Input prompt (string or list of messages)
+            messages: Chat messages (list of dicts with role/content)
 
         Returns:
-            List of generated reasoning path texts (dicts with text, num_tokens)
+            List of dicts with text, num_tokens, token_ids for each path
+        """
+        from llm_tts.generators import StepCandidate
+        from llm_tts.utils import extract_answer
+
+        log.info(f"🚀 vLLM thinking mode: {self.num_paths} paths (two-phase)...")
+
+        # Phase 1: Generate all thinking phases in batch
+        log.info(f"  Phase 1: Generating {self.num_paths} thinking phases...")
+        thinking_candidates = self.generator.generate_full_thinking(
+            request=messages,
+            num_candidates=self.num_paths,
+            max_tokens=self.max_new_tokens,
+        )
+
+        # Calculate context tokens for FLOP tracking
+        prompt = self.generator._build_prompt(messages, [])
+        context_tokens = len(self.generator.tokenizer.encode(prompt))
+
+        # Record thinking generation for FLOP tracking
+        self.generator._record_generation(thinking_candidates, context_tokens=context_tokens)
+
+        log.info(f"  Generated {len(thinking_candidates)} thinking phases")
+
+        # Phase 2: Generate response for each thinking
+        log.info(f"  Phase 2: Generating responses...")
+        paths = []
+        total_output_tokens = 0
+
+        for i, thinking_candidate in enumerate(thinking_candidates):
+            thinking_text = thinking_candidate.text
+            thinking_tokens = len(thinking_candidate.token_ids) if thinking_candidate.token_ids else 0
+
+            # Ensure thinking has </think>
+            if "</think>" not in thinking_text:
+                thinking_text = thinking_text + "</think>"
+
+            # Create trajectory with thinking step
+            trajectory = [
+                StepCandidate(
+                    text=thinking_text,
+                    token_ids=thinking_candidate.token_ids or [],
+                    is_complete=True,
+                    is_trajectory_complete=True,
+                )
+            ]
+
+            # Generate response for this thinking
+            response_candidates = self.generator.generate_response(
+                request=messages,
+                trajectory=trajectory,
+                candidates_per_step=1,
+            )
+
+            if response_candidates:
+                response = response_candidates[0]
+                response_text = response.text
+                response_tokens = len(response.token_ids) if response.token_ids else 0
+
+                # Record response generation
+                response_context = context_tokens + thinking_tokens
+                self.generator._record_generation([response], context_tokens=response_context)
+
+                # Combine thinking + response
+                full_text = thinking_text + "\n\n" + response_text
+                full_tokens = thinking_tokens + response_tokens
+                total_output_tokens += full_tokens
+
+                # Extract answer for logging
+                answer = extract_answer(full_text, answer_format="auto") or "no_answer"
+                log.info(
+                    f"  Path {i+1}/{self.num_paths}: "
+                    f"tokens={full_tokens} (think={thinking_tokens}, resp={response_tokens}), "
+                    f"answer={answer}"
+                )
+                log.info(f"{full_text}")
+
+                paths.append({
+                    "text": full_text,
+                    "num_tokens": full_tokens,
+                    "token_ids": (thinking_candidate.token_ids or []) + (response.token_ids or []),
+                })
+            else:
+                log.warning(f"  Empty response for path {i+1}/{self.num_paths}")
+
+        log.info(f"✅ vLLM thinking mode: {len(paths)}/{self.num_paths} paths generated")
+        log.info(
+            f"  Total output tokens: {total_output_tokens}, "
+            f"Context tokens: {context_tokens}, "
+            f"Average: {total_output_tokens/max(len(paths), 1):.0f} tokens/path"
+        )
+        return paths
+
+    def _generate_paths_vllm_nothink(self, messages: List[Dict[str, str]]) -> List[Dict]:
+        """
+        Generate multiple reasoning paths using raw vLLM in NON-THINKING mode.
+
+        Single-phase generation - model generates response directly without
+        <think>...</think> blocks.
+
+        Args:
+            messages: Chat messages (list of dicts with role/content)
+
+        Returns:
+            List of dicts with text, num_tokens, token_ids for each path
         """
         from vllm import SamplingParams
 
-        log.info(f"🚀 vLLM batch generation: {self.num_paths} paths...")
+        from llm_tts.generators import StepCandidate
+        from llm_tts.utils import extract_answer
+
+        log.info(f"🚀 vLLM non-thinking mode: {self.num_paths} paths...")
 
         # Get the vLLM engine
         llm = self.model.vllm_engine
         tokenizer = llm.get_tokenizer()
 
-        # Prepare the prompt with chat template
-        if isinstance(prompt, list):
-            # Already in message format
-            messages = prompt
-        else:
-            messages = [{"role": "user", "content": prompt}]
-
-        # Apply chat template with enable_thinking parameter for Qwen3 models
+        # Apply chat template (non-thinking mode)
         formatted_prompt = tokenizer.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True,
-            enable_thinking=not self.disable_thinking_mode,
+            enable_thinking=False,
         )
 
         # Calculate context tokens for FLOP tracking
@@ -252,10 +349,10 @@ class StrategySelfConsistency(StrategyBase):
             top_p=self.top_p,
             top_k=self.top_k,
             max_tokens=self.max_new_tokens,
-            stop=["<end of response>", "</end of response>"],  # Early stopping
+            stop=["<end of response>", "</end of response>"],
             include_stop_str_in_output=True,
-            seed=self.seed,  # Reproducibility
-            logprobs=1,  # Get logprobs for analysis
+            seed=self.seed,
+            logprobs=1,
         )
 
         log.info(
@@ -265,10 +362,6 @@ class StrategySelfConsistency(StrategyBase):
 
         # Single call generates all paths in parallel
         outputs = llm.generate([formatted_prompt], sampling_params)
-
-        # Import answer extraction for logging
-        from llm_tts.generators import StepCandidate
-        from llm_tts.utils import extract_answer
 
         # Extract generated texts with token counts
         paths = []
@@ -280,20 +373,18 @@ class StrategySelfConsistency(StrategyBase):
             if text:
                 num_tokens = len(output.token_ids)
                 total_output_tokens += num_tokens
-                paths.append(
-                    {
-                        "text": text,
-                        "num_tokens": num_tokens,
-                        "token_ids": list(output.token_ids),
-                    }
-                )
-                # Extract answer for logging (like DeepConf)
+                paths.append({
+                    "text": text,
+                    "num_tokens": num_tokens,
+                    "token_ids": list(output.token_ids),
+                })
+
+                # Extract answer for logging
                 answer = extract_answer(text, answer_format="auto") or "no_answer"
                 log.info(
                     f"  Path {i+1}/{self.num_paths}: "
                     f"tokens={num_tokens}, answer={answer}"
                 )
-                # Log full trace text (like DeepConf)
                 log.info(f"{text}")
 
                 # Create StepCandidate for token tracking
@@ -315,13 +406,39 @@ class StrategySelfConsistency(StrategyBase):
                 context_tokens=context_tokens,
             )
 
-        log.info(f"✅ vLLM generated {len(paths)}/{self.num_paths} paths successfully")
+        log.info(f"✅ vLLM non-thinking: {len(paths)}/{self.num_paths} paths generated")
         log.info(
             f"  Total output tokens: {total_output_tokens}, "
             f"Context tokens: {context_tokens}, "
-            f"Average: {total_output_tokens/len(paths):.0f} tokens/path"
+            f"Average: {total_output_tokens/max(len(paths), 1):.0f} tokens/path"
         )
         return paths
+
+    def _generate_paths_vllm(self, prompt) -> List[Dict]:
+        """
+        Generate multiple reasoning paths using vLLM.
+
+        Routes to appropriate method based on thinking mode:
+        - Thinking mode: Two-phase generation (thinking + response)
+        - Non-thinking mode: Single-phase generation
+
+        Args:
+            prompt: Input prompt (string or list of messages)
+
+        Returns:
+            List of dicts with text, num_tokens, token_ids for each path
+        """
+        # Prepare messages
+        if isinstance(prompt, list):
+            messages = prompt
+        else:
+            messages = [{"role": "user", "content": prompt}]
+
+        # Route based on thinking mode
+        if self.disable_thinking_mode:
+            return self._generate_paths_vllm_nothink(messages)
+        else:
+            return self._generate_paths_vllm_thinking(messages)
 
     def generate_reasoning_paths(self, prompt: str) -> List[str]:
         """
@@ -549,12 +666,15 @@ class StrategySelfConsistency(StrategyBase):
             "total_tokens": total_tokens,
         }
 
-    def generate_trajectory(self, prompt: str) -> Dict[str, Any]:
+    def generate_trajectory(
+        self, prompt: str, sample_idx: int = 0
+    ) -> Dict[str, Any]:
         """
         Main entry point for self-consistency reasoning.
 
         Args:
             prompt: Input prompt/question
+            sample_idx: Index of current sample (for logging)
 
         Returns:
             Dictionary with trajectory information compatible with evaluation framework
