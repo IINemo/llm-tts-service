@@ -43,17 +43,19 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         model: vLLM model instance
         thinking_mode: If True, use two-phase thinking generation (default).
                       If False, use simple structured generation.
-        detector: StructuredStepDetector for non-thinking mode (optional)
-        sampling_params: SamplingParams for non-thinking mode (optional)
 
-    Thinking mode parameters:
+    Structured mode parameters (thinking_mode=False):
+        detector: StructuredStepDetector instance (optional, creates default if None)
+        sampling_params: SamplingParams for generation (optional)
+
+    Thinking mode parameters (thinking_mode=True):
         min_step_chars: Minimum characters per thinking step
         max_step_chars: Maximum characters per thinking step
         max_new_tokens: Maximum tokens per generation
         temperature, top_p, top_k: Sampling parameters
-        use_sequence, use_conclusion, etc.: Stop token configuration
+        use_sequence, use_conclusion, etc.: Stop token config for ThinkingMarkerDetector
         answer_patterns: Patterns marking end of response
-        disable_thinking_mode: If True, skip <think> block even in thinking mode
+        disable_thinking_mode: If True, skip <think> block
         max_model_len: Maximum context length for truncation
     """
 
@@ -157,7 +159,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         # Stop tokens for RESPONSE phase (answer patterns only)
         self.response_stop_tokens = self.answer_patterns.copy()
 
-        # Create detector for validation logic
+        # Create ThinkingMarkerDetector for step boundary validation
+        # (in structured mode, self.detector is StructuredStepDetector instead)
         self.detector = ThinkingMarkerDetector(
             min_step_chars=self.min_step_chars,
             max_step_chars=self.max_step_chars,
