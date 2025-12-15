@@ -257,18 +257,18 @@ def create_model(config):
             # Wrap with VLLMWithUncertainty (similar to CausalLMWithUncertainty for HF)
             log.info(f"Wrapping vLLM with VLLMWithUncertainty (scorer: {scorer_type})")
 
-            # Get estimator from config or use default Perplexity
+            # Get estimator based on scorer type
             from lm_polygraph.estimators import MeanTokenEntropy, Perplexity
 
             if scorer_type == "entropy":
-                # Note: MeanTokenEntropy requires full distribution, which vLLM doesn't provide
-                # Using Perplexity as fallback (uses only log-likelihood of chosen tokens)
-                log.warning(
-                    "MeanTokenEntropy requires full probability distribution. "
-                    "vLLM only provides top-k logprobs. Using Perplexity estimator instead."
-                )
-                estimator = Perplexity()
+                # Use MeanTokenEntropy for entropy-based scoring
+                # Note: For accurate entropy, set logprobs >= vocab_size in config
+                # With top-k logprobs, entropy will be an approximation
+                log.info("Using MeanTokenEntropy estimator for entropy scoring")
+                estimator = MeanTokenEntropy()
             else:
+                # Default: Perplexity (only needs log-likelihood of chosen token)
+                log.info("Using Perplexity estimator")
                 estimator = Perplexity()
 
             llm_with_uncertainty = VLLMWithUncertainty(
