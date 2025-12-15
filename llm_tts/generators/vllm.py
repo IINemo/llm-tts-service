@@ -45,12 +45,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         detector: Step boundary detector (StructuredStepDetector or ThinkingMarkerDetector).
                  If None, creates default based on thinking_mode.
         sampling_params: SamplingParams for generation (structured mode only)
-        thinking_stop_tokens: Stop tokens for thinking phase (thinking mode only).
-                             If None, automatically derived from detector.get_vllm_stop_tokens().
         answer_patterns: Patterns marking end of response
         max_new_tokens: Maximum tokens per generation
         temperature, top_p, top_k: Sampling parameters
-        disable_thinking_mode: If True, skip <think> block
         max_model_len: Maximum context length for truncation
         flop_calculator: Optional FLOP calculator for token tracking
     """
@@ -65,16 +62,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         ] = None,
         # Structured mode parameters
         sampling_params: Optional[SamplingParams] = None,
-        # Thinking mode parameters
-        thinking_stop_tokens: Optional[List[str]] = None,
+        # Common parameters
         answer_patterns: Optional[List[str]] = None,
         # Common generation parameters
         max_new_tokens: int = 4096,
         temperature: float = 0.6,
         top_p: float = 0.95,
         top_k: int = 20,
-        # Thinking mode control
-        disable_thinking_mode: bool = False,
         # Context length limit
         max_model_len: int = 32768,
         # FLOP calculator for token tracking
@@ -88,7 +82,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.tokenizer = model.get_tokenizer()
 
         # Store common parameters
-        self.disable_thinking_mode = disable_thinking_mode
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.top_p = top_p
@@ -101,7 +94,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         )
 
         if thinking_mode:
-            self._init_thinking_mode(detector, thinking_stop_tokens)
+            self._init_thinking_mode(detector)
         else:
             self._init_structured_mode(detector, sampling_params)
 
@@ -111,7 +104,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     def _init_thinking_mode(
         self,
         detector: Optional[ThinkingMarkerDetector],
-        thinking_stop_tokens: Optional[List[str]],
     ):
         """Initialize thinking mode specific components."""
         # Create default detector if not provided
@@ -125,12 +117,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.min_step_chars = getattr(detector, "min_step_chars", 200)
         self.max_step_chars = getattr(detector, "max_step_chars", 1200)
 
-        # Build stop tokens for THINKING phase
-        if thinking_stop_tokens is not None:
-            self.thinking_stop_tokens = list(thinking_stop_tokens)
-        else:
-            # Derive from detector's configuration
-            self.thinking_stop_tokens = detector.get_vllm_stop_tokens()
+        # Derive stop tokens from detector's configuration
+        self.thinking_stop_tokens = detector.get_vllm_stop_tokens()
 
         # Add </think> to stop thinking phase
         if "</think>" not in self.thinking_stop_tokens:
@@ -262,7 +250,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 request,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=(not self.disable_thinking_mode),
+                enable_thinking=True,
             )
         else:
             base_prompt = self.tokenizer.apply_chat_template(
@@ -325,7 +313,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     request,
                     tokenize=False,
                     add_generation_prompt=True,
-                    enable_thinking=(not self.disable_thinking_mode),
+                    enable_thinking=True,
                 )
             else:
                 prompt = self.tokenizer.apply_chat_template(
@@ -333,8 +321,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     tokenize=False,
                     add_generation_prompt=True,
                 )
-                if self.disable_thinking_mode:
-                    prompt += "<think>\n\n</think>\n\n"
             return prompt
 
         # For CONTINUATION (has trajectory): build base prompt then append trajectory
@@ -343,7 +329,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 request,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=(not self.disable_thinking_mode),
+                enable_thinking=True,
             )
         else:
             base_prompt = self.tokenizer.apply_chat_template(
@@ -351,8 +337,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 tokenize=False,
                 add_generation_prompt=True,
             )
-            if self.disable_thinking_mode:
-                base_prompt += "<think>\n\n</think>\n\n"
 
         trajectory_text = convert_trajectory_to_string(trajectory)
         return base_prompt + trajectory_text
