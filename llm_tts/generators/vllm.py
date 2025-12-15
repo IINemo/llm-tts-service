@@ -17,6 +17,7 @@ import logging
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 from lm_polygraph.estimators import Estimator, Perplexity
+from lm_polygraph.stat_calculators import EntropyCalculator
 from vllm import LLM, SamplingParams
 
 from llm_tts.generators.base import (
@@ -173,36 +174,26 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 result.append(-100.0)
         return result
 
-    def _compute_entropy_from_logprobs(self, logprobs: List[Dict]) -> List[float]:
+    def _extract_greedy_log_probs(self, logprobs: List[Dict]) -> List[List[float]]:
         """
-        Compute entropy at each position from logprobs.
-
-        Entropy = -sum(p * log(p)) for all tokens in the distribution.
-
-        Note: This requires full logprobs (logprobs >= vocab_size in SamplingParams).
-        With top-k logprobs, this will be an approximation.
+        Extract greedy_log_probs in lm-polygraph format for EntropyCalculator.
 
         Args:
             logprobs: List of logprob dictionaries from vLLM
 
         Returns:
-            List of entropy values, one per position
+            List of logprob lists per position (for EntropyCalculator)
         """
-        import math
-
         if not logprobs:
             return []
 
-        entropy_list = []
+        result = []
         for logprob_dict in logprobs:
-            entropy = 0.0
-            for logprob_info in logprob_dict.values():
-                # p * log(p) where log(p) = logprob
-                prob = math.exp(logprob_info.logprob)
-                entropy -= prob * logprob_info.logprob
-            entropy_list.append(entropy)
+            # Extract all logprobs at this position
+            position_logprobs = [info.logprob for info in logprob_dict.values()]
+            result.append(position_logprobs)
 
-        return entropy_list
+        return result
 
     def _compute_uncertainty(self, token_ids: List[int], logprobs: List[Dict]) -> float:
         """
@@ -210,7 +201,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         This method extracts statistics from vLLM logprobs and calls
         the configured estimator. Supports both Perplexity (uses log-likelihoods)
-        and MeanTokenEntropy (uses entropy).
+        and MeanTokenEntropy (uses entropy via EntropyCalculator).
 
         For MeanTokenEntropy to work accurately, set logprobs >= vocab_size
         in SamplingParams to get full probability distribution.
@@ -225,12 +216,19 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         if not logprobs or not token_ids:
             return 0.0
 
-        # Build stats dict with all available statistics
+        # Build stats dict with greedy_log_probs for EntropyCalculator
+        greedy_log_probs = [self._extract_greedy_log_probs(logprobs)]
+
+        # Use lm-polygraph's EntropyCalculator to compute entropy
+        entropy_calculator = EntropyCalculator()
+        entropy_stats = entropy_calculator({"greedy_log_probs": greedy_log_probs})
+
+        # Build final stats dict with all available statistics
         stats = {
             # For Perplexity estimator
             "greedy_log_likelihoods": [self._extract_logprobs(token_ids, logprobs)],
-            # For MeanTokenEntropy estimator
-            "entropy": [self._compute_entropy_from_logprobs(logprobs)],
+            # For MeanTokenEntropy estimator (from EntropyCalculator)
+            "entropy": entropy_stats["entropy"],
         }
 
         # Call estimator (it will use whichever stats it needs)
