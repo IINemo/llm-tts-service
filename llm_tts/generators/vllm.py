@@ -16,10 +16,8 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
-import numpy as np
 from lm_polygraph.estimators import Estimator, Perplexity
 from vllm import LLM, SamplingParams
-from vllm.outputs import CompletionOutput
 
 from llm_tts.generators.base import (
     StepCandidate,
@@ -159,31 +157,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     # =========================================================================
     # Common utility methods
     # =========================================================================
-
-    def _calculate_perplexity(self, candidate: CompletionOutput) -> float:
-        """Calculate perplexity of the response."""
-        if not candidate.logprobs or not candidate.token_ids:
-            return 0.0
-
-        total = 0.0
-        for token, logprob_dict in zip(candidate.token_ids, candidate.logprobs):
-            if token in logprob_dict:
-                total += logprob_dict[token].logprob
-
-        return -1.0 * total / max(len(candidate.token_ids), 1)
-
-    def _calculate_mean_entropy(self, candidate: CompletionOutput) -> float:
-        """Calculate mean token entropy of the response."""
-        if not candidate.logprobs:
-            return 0.0
-
-        total = 0.0
-        for logprob_dict in candidate.logprobs:
-            for v in logprob_dict.values():
-                prob = np.exp(v.logprob)
-                total += v.logprob * prob
-
-        return -1.0 * total / max(len(candidate.logprobs), 1)
 
     def _extract_logprobs(
         self, token_ids: List[int], logprobs: List[Dict]
@@ -428,31 +401,14 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         thinking_complete = self._is_thinking_complete(accumulated_text)
 
-        generation_scores = {}
-        uncertainty = 0.0
-        if accumulated_logprobs and accumulated_tokens:
-
-            class MockOutput:
-                def __init__(self, tokens, logprobs):
-                    self.token_ids = tokens
-                    self.logprobs = logprobs
-
-            mock = MockOutput(accumulated_tokens, accumulated_logprobs)
-            generation_scores = {
-                "perplexity": self._calculate_perplexity(mock),
-                "mean_entropy": self._calculate_mean_entropy(mock),
-            }
-            # Compute uncertainty using lm-polygraph estimator
-            uncertainty = self._compute_uncertainty(
-                accumulated_tokens, accumulated_logprobs
-            )
+        # Compute uncertainty using lm-polygraph estimator
+        uncertainty = self._compute_uncertainty(accumulated_tokens, accumulated_logprobs)
 
         return StepCandidate(
             text=accumulated_text.strip(),
             token_ids=accumulated_tokens,
             is_complete=True,
             is_trajectory_complete=thinking_complete,
-            generation_scores=generation_scores,
             other_data={
                 # Convert uncertainty to validity score (lower uncertainty = higher score)
                 "uncertainty_score": 1.0 / (1.0 + uncertainty),
@@ -515,10 +471,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     text = text + pattern
                     break
 
-            generation_scores = {
-                "perplexity": self._calculate_perplexity(output),
-                "mean_entropy": self._calculate_mean_entropy(output),
-            }
             # Compute uncertainty using lm-polygraph estimator
             uncertainty = self._compute_uncertainty(output.token_ids, output.logprobs)
 
@@ -527,7 +479,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 token_ids=output.token_ids,
                 is_complete=True,
                 is_trajectory_complete=True,
-                generation_scores=generation_scores,
                 other_data={
                     # Convert uncertainty to validity score (lower uncertainty = higher score)
                     "uncertainty_score": 1.0 / (1.0 + uncertainty),
@@ -570,10 +521,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             if "</think>" not in text:
                 text = text + "</think>"
 
-            generation_scores = {
-                "perplexity": self._calculate_perplexity(output),
-                "mean_entropy": self._calculate_mean_entropy(output),
-            }
             # Compute uncertainty using lm-polygraph estimator
             uncertainty = self._compute_uncertainty(output.token_ids, output.logprobs)
 
@@ -582,7 +529,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 token_ids=output.token_ids,
                 is_complete=True,
                 is_trajectory_complete=True,
-                generation_scores=generation_scores,
                 other_data={
                     # Convert uncertainty to validity score (lower uncertainty = higher score)
                     "uncertainty_score": 1.0 / (1.0 + uncertainty),
@@ -619,10 +565,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 answers[i].text
             )
             token_ids = answers[i].token_ids
-            generation_scores = {
-                "perplexity": self._calculate_perplexity(answers[i]),
-                "mean_entropy": self._calculate_mean_entropy(answers[i]),
-            }
+
             # Compute uncertainty using lm-polygraph estimator
             uncertainty = self._compute_uncertainty(
                 answers[i].token_ids, answers[i].logprobs
@@ -633,7 +576,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 token_ids=token_ids,
                 is_complete=is_complete,
                 is_trajectory_complete=is_trajectory_complete,
-                generation_scores=generation_scores,
                 other_data={
                     # Convert uncertainty to validity score (lower uncertainty = higher score)
                     "uncertainty_score": 1.0 / (1.0 + uncertainty),
@@ -736,10 +678,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 formated_vllm_output[i].text
             )
             token_ids = formated_vllm_output[i].token_ids
-            generation_scores = {
-                "perplexity": self._calculate_perplexity(formated_vllm_output[i]),
-                "mean_entropy": self._calculate_mean_entropy(formated_vllm_output[i]),
-            }
+
             # Compute uncertainty using lm-polygraph estimator
             uncertainty = self._compute_uncertainty(
                 formated_vllm_output[i].token_ids, formated_vllm_output[i].logprobs
@@ -750,7 +689,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 token_ids=token_ids,
                 is_complete=is_complete,
                 is_trajectory_complete=is_trajectory_complete,
-                generation_scores=generation_scores,
                 other_data={
                     # Convert uncertainty to validity score (lower uncertainty = higher score)
                     "uncertainty_score": 1.0 / (1.0 + uncertainty),
