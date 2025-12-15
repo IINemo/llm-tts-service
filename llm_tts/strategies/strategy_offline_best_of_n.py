@@ -57,8 +57,8 @@ class StrategyOfflineBestOfN(StrategyBase):
         disable_thinking_mode: bool = False,
         output_dir: Optional[str] = None,
         # Step boundary detector settings (same as online mode)
-        min_step_chars: int = 200,
-        max_step_chars: int = 1200,
+        min_step_tokens: int = 50,
+        max_step_tokens: int = 300,
         use_sequence: bool = True,
         use_conclusion: bool = True,
         use_thinking: bool = True,
@@ -84,8 +84,8 @@ class StrategyOfflineBestOfN(StrategyBase):
             answer_patterns: Patterns that mark end of response (default: ["<end of response>"])
             disable_thinking_mode: If True, skip thinking phase
             output_dir: Directory for saving logs
-            min_step_chars: Minimum characters per step (for detector)
-            max_step_chars: Maximum characters per step (for detector)
+            min_step_tokens: Minimum tokens per step (for detector)
+            max_step_tokens: Maximum tokens per step (for detector)
             use_*: Marker categories for step boundary detection
             flop_calculator: Optional FLOP calculator for token tracking
         """
@@ -107,8 +107,8 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         # Create detector for post-hoc splitting of thinking into steps
         self.detector = ThinkingMarkerDetector(
-            min_step_chars=min_step_chars,
-            max_step_chars=max_step_chars,
+            min_step_tokens=min_step_tokens,
+            max_step_tokens=max_step_tokens,
             use_sequence=use_sequence,
             use_conclusion=use_conclusion,
             use_thinking=use_thinking,
@@ -121,8 +121,8 @@ class StrategyOfflineBestOfN(StrategyBase):
         # Create detector for generator with no intermediate stop tokens
         # All use_* flags disabled so only </think> stops generation
         generator_detector = ThinkingMarkerDetector(
-            min_step_chars=1,  # No min - generate full thinking
-            max_step_chars=999999,  # No max - generate full thinking
+            min_step_tokens=1,  # No min - generate full thinking
+            max_step_tokens=max_thinking_tokens,  # Limited by config
             use_sequence=False,
             use_conclusion=False,
             use_thinking=False,

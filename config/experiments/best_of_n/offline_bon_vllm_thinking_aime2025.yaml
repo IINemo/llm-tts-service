@@ -54,8 +54,8 @@ strategy:
     - "<end of response>"
   # Step boundary detector settings - ONLY used for post-hoc step splitting (logging/analysis)
   # Generation uses NO stop tokens (full thinking in one shot)
-  min_step_chars: 500
-  max_step_chars: 2000
+  min_step_tokens: 125
+  max_step_tokens: 500
   # These flags control how thinking is SPLIT into steps after generation (not during)
   use_sequence: true
   use_conclusion: true

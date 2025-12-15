@@ -282,8 +282,8 @@ def create_model(config):
                 # Create ThinkingMarkerDetector with config settings
                 # Stop tokens are automatically derived from detector
                 detector = ThinkingMarkerDetector(
-                    min_step_chars=config.strategy.get("min_step_chars", 200),
-                    max_step_chars=config.strategy.get("max_step_chars", 1200),
+                    min_step_tokens=config.strategy.min_step_tokens,
+                    max_step_tokens=config.strategy.max_step_tokens,
                     use_sequence=config.strategy.get("use_sequence", True),
                     use_conclusion=config.strategy.get("use_conclusion", True),
                     use_thinking=config.strategy.get("use_thinking", True),
@@ -387,8 +387,8 @@ def create_model(config):
             log.info("Using ThinkingMarkerDetector for thinking mode")
             # marker_semantic_v2 settings (see tests/boundary_detectors/)
             detector = ThinkingMarkerDetector(
-                min_step_chars=config.strategy.get("min_step_chars", 200),
-                max_step_chars=config.strategy.get("max_step_chars", 1200),
+                min_step_tokens=config.strategy.min_step_tokens,
+                max_step_tokens=config.strategy.max_step_tokens,
                 use_sequence=config.strategy.get("use_sequence", True),
                 use_conclusion=config.strategy.get("use_conclusion", True),
                 use_thinking=config.strategy.get("use_thinking", True),
@@ -537,8 +537,8 @@ def create_tts_strategy(
             disable_thinking_mode=config.model.get("disable_thinking_mode", False),
             output_dir=output_dir,
             # Step boundary detector settings (same as online mode)
-            min_step_chars=config.strategy.get("min_step_chars", 200),
-            max_step_chars=config.strategy.get("max_step_chars", 1200),
+            min_step_tokens=config.strategy.min_step_tokens,
+            max_step_tokens=config.strategy.max_step_tokens,
             use_sequence=config.strategy.get("use_sequence", True),
             use_conclusion=config.strategy.get("use_conclusion", True),
             use_thinking=config.strategy.get("use_thinking", True),
