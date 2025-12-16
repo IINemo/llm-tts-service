@@ -586,8 +586,15 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 new_tokens, skip_special_tokens=False
             )
 
+            step_text = self.detector.extract_step_text(raw_generated_text)
+
+            # Ensure step text starts with "- Step" marker (remove any continuation text before it)
+            step_marker_pos = step_text.find("- Step")
+            if step_marker_pos > 0:
+                step_text = step_text[step_marker_pos:]
+
             candidate = StepCandidate(
-                text=self.detector.extract_step_text(raw_generated_text),
+                text=step_text,
                 token_ids=new_tokens.tolist(),
                 is_complete=self.detector.is_step_complete(raw_generated_text),
                 is_trajectory_complete=self.detector.is_trajectory_complete(raw_generated_text),
@@ -677,9 +684,13 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             raw_generated_text = self.model.tokenizer.decode(
                 new_tokens, skip_special_tokens=False
             )
+            # Clean text: skip special tokens for display
+            clean_text = self.model.tokenizer.decode(
+                new_tokens, skip_special_tokens=True
+            )
 
             candidate = StepCandidate(
-                text=raw_generated_text.strip(),
+                text=clean_text.strip(),
                 token_ids=new_tokens.tolist(),
                 is_complete=True,
                 is_trajectory_complete=True,
