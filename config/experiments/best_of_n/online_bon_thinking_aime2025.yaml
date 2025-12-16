@@ -47,9 +47,9 @@ strategy:
   max_steps: 250
   # Use ThinkingMarkerDetector with marker_semantic_v2 settings
   detector_type: thinking_marker
-  # marker_semantic_v2 config (see tests/boundary_detectors/)
-  min_step_chars: 200  # Higher for online to avoid micro-steps
-  max_step_chars: 1200  # Allow longer thinking steps
+  # Step boundary token limits (same as vLLM config)
+  min_step_tokens: 50
+  max_step_tokens: 300
   # Marker categories
   use_sequence: true
   use_conclusion: true
@@ -69,7 +69,7 @@ strategy:
 
 # Dataset configuration
 dataset:
-  subset: 5  # Start with 5 samples for testing
+  subset: 30
   offset: 0
   prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
 

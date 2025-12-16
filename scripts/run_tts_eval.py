@@ -101,8 +101,23 @@ def load_tokenizer(model_path: str):
     return tokenizer
 
 
-def load_model(model_path: str, device_map: str, torch_dtype: str):
+def load_model(
+    model_path: str,
+    device_map: str,
+    torch_dtype: str,
+    gpu_memory_utilization: float = None,
+):
     dtype = get_torch_dtype(torch_dtype)
+
+    # Limit GPU memory if gpu_memory_utilization is specified
+    if gpu_memory_utilization is not None and gpu_memory_utilization < 1.0:
+        import torch
+
+        # Set memory fraction for all visible GPUs
+        for i in range(torch.cuda.device_count()):
+            torch.cuda.set_per_process_memory_fraction(gpu_memory_utilization, i)
+        log.info(f"Set GPU memory fraction to {gpu_memory_utilization}")
+
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         device_map=device_map,
@@ -431,6 +446,7 @@ def create_model(config):
                 config.model.model_path,
                 config.system.device,
                 config.system.torch_dtype,
+                gpu_memory_utilization=config.model.get("gpu_memory_utilization"),
             )
             base_model.eval()
             model = WhiteboxModel(base_model, tokenizer)
