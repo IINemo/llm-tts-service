@@ -126,7 +126,7 @@ class ThinkingStepStoppingCriteria(StoppingCriteria):
         if self.finished:
             return True
 
-        generated_ids = input_ids[0][self.start_length:]
+        generated_ids = input_ids[0][self.start_length :]
         num_tokens = len(generated_ids)
 
         # Phase 1: Wait for min_tokens
@@ -286,7 +286,11 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             "top_p": self.top_p,
             "top_k": self.top_k,
             "num_return_sequences": num_return_sequences,
-            "output_scores": output_scores if output_scores is not None else self.return_generation_scores,
+            "output_scores": (
+                output_scores
+                if output_scores is not None
+                else self.return_generation_scores
+            ),
             "return_dict_in_generate": True,
             "pad_token_id": self.model.tokenizer.eos_token_id,
             "eos_token_id": self.model.tokenizer.eos_token_id,
@@ -422,18 +426,22 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
 
         # Extract generated text
         new_tokens = outputs.sequences[0][input_length:]
-        generated_text = self.model.tokenizer.decode(new_tokens, skip_special_tokens=True)
+        generated_text = self.model.tokenizer.decode(
+            new_tokens, skip_special_tokens=True
+        )
 
         # Truncate at stop string if matched (like vLLM - excludes stop string)
         if stopping_criteria.matched_stop_string:
-            truncated_part = generated_text[stopping_criteria.stop_position:]
+            truncated_part = generated_text[stopping_criteria.stop_position :]
             log.debug(
                 f"Step boundary: matched '{stopping_criteria.matched_stop_string}' "
                 f"at pos {stopping_criteria.stop_position}, truncated: '{truncated_part}'"
             )
             generated_text = stopping_criteria.get_truncated_text(generated_text)
             # Re-tokenize truncated text to get correct token count
-            token_ids = self.model.tokenizer.encode(generated_text, add_special_tokens=False)
+            token_ids = self.model.tokenizer.encode(
+                generated_text, add_special_tokens=False
+            )
         else:
             token_ids = new_tokens.tolist()
 
@@ -443,7 +451,9 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             think_pos = generated_text.find("</think>")
             generated_text = generated_text[: think_pos + len("</think>")]
             # Re-tokenize to get correct token_ids after truncation
-            token_ids = self.model.tokenizer.encode(generated_text, add_special_tokens=False)
+            token_ids = self.model.tokenizer.encode(
+                generated_text, add_special_tokens=False
+            )
 
         # Get uncertainty from model output
         other_data = self._get_uncertainty_data(outputs, 0)
@@ -604,7 +614,9 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 text=step_text,
                 token_ids=new_tokens.tolist(),
                 is_complete=self.detector.is_step_complete(raw_generated_text),
-                is_trajectory_complete=self.detector.is_trajectory_complete(raw_generated_text),
+                is_trajectory_complete=self.detector.is_trajectory_complete(
+                    raw_generated_text
+                ),
                 generation_scores=self._get_generation_scores(outputs, i),
                 raw_text=raw_generated_text,
                 other_data=self._get_uncertainty_data(outputs, i),
