@@ -593,6 +593,13 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             if step_marker_pos > 0:
                 step_text = step_text[step_marker_pos:]
 
+            # TODO: Recalculate uncertainty score based on truncated tokens only.
+            # Currently uncertainty is computed on ALL generated tokens (including next step marker
+            # tokens that get truncated). This affects both:
+            # - Structured mode: tokens before "- Step" marker are truncated here
+            # - Thinking mode: tokens after step boundary marker are truncated in detector.extract_step_text()
+            # The uncertainty data from lm-polygraph (greedy_log_probs, greedy_logits, hidden_states)
+            # is available in other_data and could be used to recalculate scores for truncated tokens.
             candidate = StepCandidate(
                 text=step_text,
                 token_ids=new_tokens.tolist(),
