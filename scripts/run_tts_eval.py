@@ -36,6 +36,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # vLLM imports (optional, only if vLLM is installed)
 try:
     from lm_polygraph.model_adapters import WhiteboxModelvLLM
+    from lm_polygraph.utils import VLLMWithUncertainty
     from vllm import LLM, SamplingParams
 
     VLLM_AVAILABLE = True
@@ -250,12 +251,63 @@ def create_model(config):
             seed=config.system.seed,  # Reproducibility
         )
 
-        # Wrap with lm-polygraph adapter
-        model = WhiteboxModelvLLM(
-            model=llm,
-            sampling_params=sampling_params,
-            device=config.model.get("device", "cuda"),
-        )
+        # Check if uncertainty scoring is needed
+        scorer_type = config.scorer.type if config.scorer else None
+        if scorer_type in ["uncertainty", "uncertainty_pd", "entropy", "perplexity"]:
+            # Wrap with VLLMWithUncertainty (similar to CausalLMWithUncertainty for HF)
+            log.info(f"Wrapping vLLM with VLLMWithUncertainty (scorer: {scorer_type})")
+
+            # Get estimator and stat_calculators based on scorer type
+            from lm_polygraph.estimators import MeanTokenEntropy, Perplexity
+            from lm_polygraph.stat_calculators import (
+                EntropyCalculator,
+                VLLMLogprobsCalculator,
+            )
+
+            from llm_tts.scorers.estimator_uncertainty_pd import PDGap
+
+            if scorer_type == "entropy":
+                # Use MeanTokenEntropy for entropy-based scoring
+                # VLLMLogprobsCalculator extracts logprobs, EntropyCalculator computes entropy
+                log.info("Using MeanTokenEntropy estimator with EntropyCalculator")
+                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                estimator = MeanTokenEntropy()
+            elif scorer_type == "uncertainty_pd":
+                # Use PDGap (probability differential) for uncertainty scoring
+                # Note: PDGap needs full vocab logprobs for accurate results
+                # Set top_logprobs=vocab_size in config for exact calculation
+                log.info("Using PDGap estimator (probability differential)")
+                stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
+                estimator = PDGap()
+            else:
+                # Default: Perplexity (only needs log-likelihood of chosen token)
+                # Covers "uncertainty" and "perplexity" scorer types
+                log.info("Using Perplexity estimator")
+                stat_calculators = [VLLMLogprobsCalculator()]
+                estimator = Perplexity()
+
+            llm_with_uncertainty = VLLMWithUncertainty(
+                llm=llm,
+                stat_calculators=stat_calculators,
+                estimator=estimator,
+            )
+
+            # Wrap with lm-polygraph adapter for compatibility
+            model = WhiteboxModelvLLM(
+                model=llm,
+                sampling_params=sampling_params,
+                device=config.model.get("device", "cuda"),
+            )
+
+            # Store the uncertainty wrapper for use by step generator
+            model.llm_with_uncertainty = llm_with_uncertainty
+        else:
+            # Wrap with lm-polygraph adapter (no uncertainty)
+            model = WhiteboxModelvLLM(
+                model=llm,
+                sampling_params=sampling_params,
+                device=config.model.get("device", "cuda"),
+            )
 
         # Mark as vLLM model for strategy detection
         model.is_vllm = True
@@ -294,8 +346,11 @@ def create_model(config):
                     custom_markers=config.strategy.get("custom_words", None),
                 )
 
+                # Use wrapped model for uncertainty scoring if available
+                vllm_model = getattr(model, "llm_with_uncertainty", llm)
+
                 step_generator = VLLMStepGenerator(
-                    model=llm,
+                    model=vllm_model,
                     thinking_mode=True,
                     detector=detector,
                     # thinking_stop_tokens derived automatically from detector
@@ -331,8 +386,11 @@ def create_model(config):
                     stop=detector.step_patterns,
                 )
 
+                # Use wrapped model for uncertainty scoring if available
+                vllm_model = getattr(model, "llm_with_uncertainty", llm)
+
                 step_generator = VLLMStepGenerator(
-                    model=llm,
+                    model=vllm_model,
                     thinking_mode=False,
                     detector=detector,
                     sampling_params=step_sampling_params,
