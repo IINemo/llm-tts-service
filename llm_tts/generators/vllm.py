@@ -16,7 +16,9 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
+import numpy as np
 from vllm import LLM, SamplingParams
+from vllm.outputs import CompletionOutput
 
 from llm_tts.generators.base import (
     StepCandidate,
@@ -36,12 +38,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     """
     Unified vLLM step generator supporting both thinking and structured modes.
 
-    For uncertainty estimation, pass a VLLMWithUncertainty wrapper as model.
-    The generator will read uncertainty_scores from the wrapper output,
-    similar to how HF generator reads from CausalLMWithUncertainty output.
-
     Args:
-        model: vLLM model instance (LLM or VLLMWithUncertainty wrapper)
+        model: vLLM model instance
         thinking_mode: If True, use two-phase thinking generation (default).
                       If False, use simple structured generation.
         detector: Step boundary detector (StructuredStepDetector or ThinkingMarkerDetector).
@@ -154,6 +152,31 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     # Common utility methods
     # =========================================================================
 
+    def _calculate_perplexity(self, candidate: CompletionOutput) -> float:
+        """Calculate perplexity of the response."""
+        if not candidate.logprobs or not candidate.token_ids:
+            return 0.0
+
+        total = 0.0
+        for token, logprob_dict in zip(candidate.token_ids, candidate.logprobs):
+            if token in logprob_dict:
+                total += logprob_dict[token].logprob
+
+        return -1.0 * total / max(len(candidate.token_ids), 1)
+
+    def _calculate_mean_entropy(self, candidate: CompletionOutput) -> float:
+        """Calculate mean token entropy of the response."""
+        if not candidate.logprobs:
+            return 0.0
+
+        total = 0.0
+        for logprob_dict in candidate.logprobs:
+            for v in logprob_dict.values():
+                prob = np.exp(v.logprob)
+                total += v.logprob * prob
+
+        return -1.0 * total / max(len(candidate.logprobs), 1)
+
     def _extract_logprobs(
         self, token_ids: List[int], logprobs: List[Dict]
     ) -> List[float]:
@@ -168,29 +191,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             else:
                 result.append(-100.0)
         return result
-
-    def _get_uncertainty_from_output(
-        self, request_output, output_idx: int = 0
-    ) -> float:
-        """
-        Extract uncertainty score from wrapper output (if available).
-
-        If model is VLLMWithUncertainty wrapper, outputs have uncertainty_scores.
-        Otherwise, returns 0.0 (no uncertainty computed).
-
-        Args:
-            request_output: Output from model.generate()
-            output_idx: Index of the output sequence (for n > 1)
-
-        Returns:
-            Uncertainty score (higher = more uncertain), or 0.0 if not available
-        """
-        if hasattr(request_output, "uncertainty_scores"):
-            # Model is VLLMWithUncertainty wrapper
-            scores = request_output.uncertainty_scores
-            if scores and output_idx < len(scores):
-                return scores[output_idx]
-        return 0.0
 
     def _create_sampling_params(
         self,
@@ -351,7 +351,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         accumulated_tokens = []
         accumulated_logprobs = []
         max_continuation_attempts = 5
-        last_request_output = None  # Track for uncertainty extraction
 
         for attempt in range(max_continuation_attempts):
             remaining_tokens = self.max_new_tokens - len(accumulated_tokens)
@@ -367,8 +366,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
             current_prompt = prompt + accumulated_text
             outputs = self.model.generate([current_prompt], sampling_params)
-            last_request_output = outputs[0]  # Store for uncertainty
-            output = last_request_output.outputs[0]
+            output = outputs[0].outputs[0]
 
             accumulated_text += output.text
             accumulated_tokens.extend(output.token_ids)
@@ -396,17 +394,29 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         thinking_complete = self._is_thinking_complete(accumulated_text)
 
-        # Get uncertainty from wrapper output (if available)
-        uncertainty = self._get_uncertainty_from_output(last_request_output, 0)
+        generation_scores = {}
+        if accumulated_logprobs and accumulated_tokens:
+
+            class MockOutput:
+                def __init__(self, tokens, logprobs):
+                    self.token_ids = tokens
+                    self.logprobs = logprobs
+
+            mock = MockOutput(accumulated_tokens, accumulated_logprobs)
+            generation_scores = {
+                "perplexity": self._calculate_perplexity(mock),
+                "mean_entropy": self._calculate_mean_entropy(mock),
+            }
 
         return StepCandidate(
             text=accumulated_text.strip(),
             token_ids=accumulated_tokens,
             is_complete=True,
             is_trajectory_complete=thinking_complete,
+            generation_scores=generation_scores,
             other_data={
-                # Convert uncertainty to validity score (lower uncertainty = higher score)
-                "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                "uncertainty_score": 1.0
+                / (1.0 + generation_scores.get("mean_entropy", 0)),
                 "logprobs": self._extract_logprobs(
                     accumulated_tokens, accumulated_logprobs
                 ),
@@ -457,9 +467,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         )
 
         outputs = self.model.generate([prompt], sampling_params)
-        request_output = outputs[0]
 
-        for idx, output in enumerate(request_output.outputs):
+        for output in outputs[0].outputs:
             text = output.text
 
             for pattern in self.answer_patterns:
@@ -467,17 +476,20 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     text = text + pattern
                     break
 
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, idx)
+            generation_scores = {
+                "perplexity": self._calculate_perplexity(output),
+                "mean_entropy": self._calculate_mean_entropy(output),
+            }
 
             candidate = StepCandidate(
                 text=text.strip(),
                 token_ids=output.token_ids,
                 is_complete=True,
                 is_trajectory_complete=True,
+                generation_scores=generation_scores,
                 other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                    "uncertainty_score": 1.0
+                    / (1.0 + generation_scores.get("mean_entropy", 0)),
                     "logprobs": self._extract_logprobs(
                         output.token_ids, output.logprobs
                     ),
@@ -509,26 +521,28 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         )
 
         outputs = self.model.generate([prompt], sampling_params)
-        request_output = outputs[0]
         candidates = []
 
-        for idx, output in enumerate(request_output.outputs):
+        for output in outputs[0].outputs:
             text = output.text
 
             if "</think>" not in text:
                 text = text + "</think>"
 
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, idx)
+            generation_scores = {
+                "perplexity": self._calculate_perplexity(output),
+                "mean_entropy": self._calculate_mean_entropy(output),
+            }
 
             candidate = StepCandidate(
                 text=text.strip(),
                 token_ids=output.token_ids,
                 is_complete=True,
                 is_trajectory_complete=True,
+                generation_scores=generation_scores,
                 other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                    "uncertainty_score": 1.0
+                    / (1.0 + generation_scores.get("mean_entropy", 0)),
                     "logprobs": self._extract_logprobs(
                         output.token_ids, output.logprobs
                     ),
@@ -550,9 +564,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         candidates = []
 
         self.sampling_params.n = candidates_per_step
-        outputs = self.model.generate(request, sampling_params=self.sampling_params)
-        request_output = outputs[0]
-        answers = request_output.outputs
+        answers = self.model.generate(request, sampling_params=self.sampling_params)[
+            0
+        ].outputs
 
         for i in range(candidates_per_step):
             step_text = answers[i].text
@@ -562,22 +576,17 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 answers[i].text
             )
             token_ids = answers[i].token_ids
-
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, i)
+            generation_scores = {
+                "perplexity": self._calculate_perplexity(answers[i]),
+                "mean_entropy": self._calculate_mean_entropy(answers[i]),
+            }
 
             candidate = StepCandidate(
                 text=step_text,
                 token_ids=token_ids,
                 is_complete=is_complete,
                 is_trajectory_complete=is_trajectory_complete,
-                other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
-                    "logprobs": self._extract_logprobs(
-                        answers[i].token_ids, answers[i].logprobs
-                    ),
-                },
+                generation_scores=generation_scores,
                 raw_text=answers[i].text,
             )
             candidates.append(candidate)
@@ -661,33 +670,30 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         vllm_outputs = self.model.generate(
             requests, sampling_params=self.sampling_params
         )
+        formated_vllm_output = [
+            vllm_outputs[i].outputs[0] for i in range(len(requests))
+        ]
         result = []
         for i in range(len(requests)):
-            request_output = vllm_outputs[i]
-            output = request_output.outputs[0]
-            step_text = output.text
+            step_text = formated_vllm_output[i].text
             is_complete = True
 
-            is_trajectory_complete = self.detector.is_trajectory_complete(output.text)
-            token_ids = output.token_ids
-
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, 0)
+            is_trajectory_complete = self.detector.is_trajectory_complete(
+                formated_vllm_output[i].text
+            )
+            token_ids = formated_vllm_output[i].token_ids
+            generation_scores = {
+                "perplexity": self._calculate_perplexity(formated_vllm_output[i]),
+                "mean_entropy": self._calculate_mean_entropy(formated_vllm_output[i]),
+            }
 
             candidate = StepCandidate(
                 text=step_text,
                 token_ids=token_ids,
                 is_complete=is_complete,
                 is_trajectory_complete=is_trajectory_complete,
-                other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
-                    "logprobs": self._extract_logprobs(
-                        output.token_ids,
-                        output.logprobs,
-                    ),
-                },
-                raw_text=output.text,
+                generation_scores=generation_scores,
+                raw_text=formated_vllm_output[i].text,
             )
             result.append(candidate)
 
