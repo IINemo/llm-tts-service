@@ -1,10 +1,22 @@
 """
-Candidate step generation system for online best-of-n
+HuggingFace-based candidate step generation for online best-of-n.
+
+This module provides step generation using HuggingFace transformers, with two modes:
+
+1. **Thinking Mode**: For models with <think>...</think> reasoning blocks.
+   Uses semantic step boundary detection via ThinkingMarkerDetector.
+   Matches vLLM generator behavior for consistency.
+
+2. **Structured Mode**: For models with explicit <step N> markers.
+   Uses StructuredStepDetector for boundary detection.
+
+Key classes:
+- ThinkingStepStoppingCriteria: HuggingFace stopping criteria matching vLLM stop_tokens
+- StepCandidateGeneratorThroughHuggingface: Main generator class
 """
 
 import inspect
 import logging
-import time
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 import torch
@@ -20,6 +32,7 @@ from llm_tts.generators.base import (
     convert_trajectory_to_string,
 )
 from llm_tts.step_boundary_detectors import (
+    StepBoundaryDetectorBase,
     StructuredStepDetector,
     ThinkingMarkerDetector,
 )
@@ -65,84 +78,115 @@ class BatchStepStoppingCriteria(StoppingCriteria):
 
 class ThinkingStepStoppingCriteria(StoppingCriteria):
     """
-    Stopping criteria for thinking mode step generation.
+    Stopping criteria for thinking mode that matches vLLM's stop_tokens behavior.
 
-    Uses ThinkingMarkerDetector to detect semantic step boundaries during generation.
-    Stops when a new step boundary is detected (step count increases).
+    This criteria implements the same logic as vLLM's SamplingParams with stop_tokens:
+    - Won't stop until at least `min_tokens` are generated
+    - After min_tokens, stops when any stop_string is NEWLY generated
+    - Stop strings that appeared before min_tokens are ignored
+
+    Example:
+        If text is "<think>\\nOkay, let's solve this. So, first..." and min_tokens=50:
+        - "\\nOkay," at position 7 is ignored (generated before min_tokens)
+        - "\\nSo," at position 35 would trigger stop (generated after min_tokens)
 
     Args:
-        tokenizer: Tokenizer for decoding generated ids
-        start_length: Length of input (to extract only generated tokens)
-        detector: ThinkingMarkerDetector instance for step detection
-        batch_size: Number of sequences in batch
-        min_chars_for_step: Minimum characters before checking for steps
+        tokenizer: HuggingFace tokenizer for decoding generated ids
+        start_length: Input sequence length (to extract only new tokens)
+        stop_strings: List of strings that trigger stopping (from detector.get_vllm_stop_tokens())
+        min_tokens: Minimum tokens before stopping is allowed (matches vLLM min_tokens)
     """
 
     def __init__(
         self,
         tokenizer,
         start_length: int,
-        detector: ThinkingMarkerDetector,
-        batch_size: int,
-        min_chars_for_step: int = 100,
+        stop_strings: List[str],
+        min_tokens: int = 0,
     ):
         self.tokenizer = tokenizer
         self.start_length = start_length
-        self.detector = detector
-        self.batch_size = batch_size
-        self.min_chars_for_step = min_chars_for_step
+        self.stop_strings = stop_strings
+        self.min_tokens = min_tokens
 
-        # Track state per sequence
-        self.finished = [False] * batch_size
-        self.step_counts = [0] * batch_size  # Track detected steps per sequence
-        self.detected_steps = [
-            [] for _ in range(batch_size)
-        ]  # Store steps per sequence
+        # State tracking
+        self.finished = False
+        self.matched_stop_string: Optional[str] = None
+        self.stop_position = -1
+
+        # Track text length at min_tokens threshold
+        # Only stop strings appearing AFTER this position will trigger stopping
+        self.min_tokens_text_len = -1
+
+        # Cache max stop string length to avoid recomputing on every call
+        self._max_stop_len = max(len(s) for s in stop_strings) if stop_strings else 0
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> bool:
-        """Check if new step boundary detected for each sequence in batch."""
+        """Check if generation should stop (called after each token)."""
+        if self.finished:
+            return True
 
-        for i in range(min(input_ids.shape[0], self.batch_size)):
-            if not self.finished[i]:
-                generated_ids = input_ids[i][self.start_length :]
-                generated_text = self.tokenizer.decode(
-                    generated_ids, skip_special_tokens=True
-                )
+        generated_ids = input_ids[0][self.start_length:]
+        num_tokens = len(generated_ids)
 
-                # Skip if text too short
-                if len(generated_text) < self.min_chars_for_step:
-                    continue
+        # Phase 1: Wait for min_tokens
+        if num_tokens < self.min_tokens:
+            return False
 
-                # Detect steps in generated text
-                current_steps = self.detector.detect_steps(generated_text)
+        generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
 
-                # New step boundary detected?
-                if len(current_steps) > self.step_counts[i]:
-                    self.step_counts[i] = len(current_steps)
-                    self.detected_steps[i] = current_steps
-                    self.finished[i] = True
+        # Phase 2: Record baseline text length when min_tokens first reached
+        if self.min_tokens_text_len < 0:
+            self.min_tokens_text_len = len(generated_text)
+            return False  # Don't stop on the exact token that reaches min_tokens
 
-        # Stop when all sequences have hit a step boundary
-        return all(self.finished)
+        # Phase 3: Search for stop strings only in new content
+        # Start search slightly before min_tokens_text_len to catch stop strings
+        # that span the boundary (e.g., "\nSo," where "\n" was before min_tokens)
+        search_start = max(0, self.min_tokens_text_len - self._max_stop_len)
 
-    def get_detected_steps(self, sequence_idx: int = 0) -> list:
-        """Get detected steps for a specific sequence."""
-        return self.detected_steps[sequence_idx]
+        # Find earliest matching stop string
+        earliest_pos = -1
+        earliest_stop = None
+        for stop_str in self.stop_strings:
+            pos = generated_text.find(stop_str, search_start)
+            if pos != -1 and (earliest_pos == -1 or pos < earliest_pos):
+                earliest_pos = pos
+                earliest_stop = stop_str
 
-    def reset(self):
-        """Reset state for new generation."""
-        self.finished = [False] * self.batch_size
-        self.step_counts = [0] * self.batch_size
-        self.detected_steps = [[] for _ in range(self.batch_size)]
+        if earliest_pos != -1:
+            self.finished = True
+            self.matched_stop_string = earliest_stop
+            self.stop_position = earliest_pos
+            return True
+
+        return False
+
+    def get_truncated_text(self, full_text: str) -> str:
+        """
+        Truncate text at stop string position (excluding the stop string).
+
+        This matches vLLM behavior where output.text excludes the matched stop string.
+        """
+        if self.stop_position >= 0:
+            return full_text[: self.stop_position]
+        return full_text
 
 
 class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
-    """Generates N candidate next steps for online best-of-n"""
+    """Generates N candidate next steps for online best-of-n.
+
+    Supports two modes:
+    - Thinking mode (disable_thinking_mode=False): Uses ThinkingMarkerDetector
+      to detect semantic step boundaries based on thinking patterns.
+    - Structured mode (disable_thinking_mode=True): Uses StructuredStepDetector
+      to detect explicit step markers like <step N>.
+    """
 
     def __init__(
         self,
         model: WhiteboxModel,
-        detector: StructuredStepDetector,
+        detector: StepBoundaryDetectorBase,
         temperature: float,
         top_p: float,
         top_k: int,
@@ -153,10 +197,17 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         return_generation_scores: bool = False,
         flop_calculator: Optional["FLOPCalculator"] = None,
     ):
-        super().__init__(generation_batch_size, flop_calculator=flop_calculator)
+        # Check thinking mode first to determine batch size
+        use_thinking_mode = not disable_thinking_mode and isinstance(
+            detector, ThinkingMarkerDetector
+        )
+        # Thinking mode generates sequentially, use large batch size to avoid
+        # going through _generate_candidates_in_batches (matches vLLM behavior)
+        effective_batch_size = 1024 if use_thinking_mode else generation_batch_size
+        super().__init__(effective_batch_size, flop_calculator=flop_calculator)
 
         self.model = model
-        self.detector = detector or StructuredStepDetector()
+        self.detector = detector
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
@@ -165,47 +216,44 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         self.device = model.device()
         self.disable_thinking_mode = disable_thinking_mode
         self.return_generation_scores = return_generation_scores
+        self.use_thinking_mode = use_thinking_mode
 
-    def generate_candidates(
+        # Thinking mode specific settings
+        if self.use_thinking_mode:
+            self.min_step_tokens = getattr(detector, "min_step_tokens", 50)
+            self.max_step_tokens = getattr(detector, "max_step_tokens", 300)
+            self.answer_patterns = getattr(
+                detector, "answer_patterns", ["</think>", "<Answer>:"]
+            )
+            # Get stop tokens from detector (same as vLLM)
+            self.thinking_stop_tokens = detector.get_vllm_stop_tokens()
+            if "</think>" not in self.thinking_stop_tokens:
+                self.thinking_stop_tokens.append("</think>")
+
+    # =========================================================================
+    # Common utilities
+    # =========================================================================
+
+    def _tokenize(
         self,
-        request: List[Dict[str, str]],
-        trajectory: List[StepCandidate],
-        candidates_per_step: int,
-    ) -> List[StepCandidate]:
-        """Generate N candidate next steps from current trajectory"""
+        prompt: str,
+        trajectory: Optional[List[StepCandidate]] = None,
+    ) -> tuple[Dict[str, torch.Tensor], int]:
+        """
+        Tokenize prompt (with optional trajectory) and prepare for generation.
 
-        log.info(f"Generating {candidates_per_step} candidates from trajectory")
+        Args:
+            prompt: Prompt string to tokenize
+            trajectory: Optional trajectory to append before tokenizing
 
-        # Tokenize current trajectory
-        tokenizer_signature = inspect.signature(
-            self.model.tokenizer.apply_chat_template
-        )
-        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
-
-        # Call tokenizer depending on whether it supports `enable_thinking`
-        if has_enable_thinking:
-            inputs = self.model.tokenizer.apply_chat_template(
-                [request],
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=(not self.disable_thinking_mode),
-            )
-        else:
-            inputs = self.model.tokenizer.apply_chat_template(
-                [request], tokenize=False, add_generation_prompt=True
-            )
-
-        # Ensure inputs is a list (some tokenizers return str, some return list)
-        if isinstance(inputs, str):
-            inputs = [inputs]
-
-        if self.disable_thinking_mode and not has_enable_thinking:
-            inputs[0] += "\n<think>\n\n</think>\n\n"
-
-        inputs[0] = inputs[0] + convert_trajectory_to_string(trajectory)
+        Returns:
+            Tuple of (inputs dict, input_length)
+        """
+        if trajectory:
+            prompt = prompt + convert_trajectory_to_string(trajectory)
 
         inputs = self.model.tokenizer(
-            inputs,
+            [prompt],
             return_tensors="pt",
             padding=True,
             truncation=True,
@@ -215,7 +263,304 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         input_length = inputs["input_ids"].shape[1]
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        # Create stopping criteria for batch generation
+        return inputs, input_length
+
+    def _get_base_gen_params(
+        self,
+        max_new_tokens: int,
+        num_return_sequences: int = 1,
+        output_scores: Optional[bool] = None,
+    ) -> Dict:
+        """
+        Get base generation parameters used by all generation methods.
+
+        Args:
+            max_new_tokens: Maximum tokens to generate in this call
+            num_return_sequences: Number of sequences to generate (default: 1)
+            output_scores: Whether to output scores. If None, uses self.return_generation_scores
+        """
+        return {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": True,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "num_return_sequences": num_return_sequences,
+            "output_scores": output_scores if output_scores is not None else self.return_generation_scores,
+            "return_dict_in_generate": True,
+            "pad_token_id": self.model.tokenizer.eos_token_id,
+            "eos_token_id": self.model.tokenizer.eos_token_id,
+        }
+
+    def _apply_chat_template(
+        self,
+        request: List[Dict[str, str]],
+        enable_thinking: bool = True,
+    ) -> str:
+        """
+        Apply chat template to request with enable_thinking support.
+
+        Args:
+            request: Chat messages in OpenAI format
+            enable_thinking: Whether to enable thinking mode (if tokenizer supports it)
+
+        Returns:
+            Formatted prompt string
+        """
+        tokenizer_signature = inspect.signature(
+            self.model.tokenizer.apply_chat_template
+        )
+        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
+
+        if has_enable_thinking:
+            result = self.model.tokenizer.apply_chat_template(
+                request,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=enable_thinking,
+            )
+        else:
+            result = self.model.tokenizer.apply_chat_template(
+                request,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
+        # Some tokenizers return a list, ensure we return a string
+        if isinstance(result, list):
+            result = result[0]
+
+        # Force-close thinking when disabled but tokenizer doesn't support enable_thinking
+        if self.disable_thinking_mode and not has_enable_thinking:
+            result += "<think>\n\n</think>\n\n"
+
+        return result
+
+    def _get_generation_scores(self, outputs, index: int) -> Optional[torch.Tensor]:
+        """Extract generation scores for a sequence from outputs."""
+        if (
+            self.return_generation_scores
+            and hasattr(outputs, "scores")
+            and outputs.scores
+        ):
+            return (
+                torch.stack(outputs.scores, dim=1)[index]
+                if index < len(outputs.scores)
+                else None
+            )
+        return None
+
+    def _get_uncertainty_data(self, outputs, index: int) -> Optional[Dict]:
+        """Extract uncertainty data for a sequence from outputs."""
+        if hasattr(outputs, "uncertainty_score"):
+            return {"uncertainty_score": 1.0 / (1.0 + outputs.uncertainty_score[index])}
+        return None
+
+    # =========================================================================
+    # Thinking mode helper methods
+    # =========================================================================
+
+    def _build_prompt(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+    ) -> str:
+        """Build prompt from request and trajectory for thinking mode."""
+        base_prompt = self._apply_chat_template(request, enable_thinking=True)
+
+        if trajectory:
+            return base_prompt + convert_trajectory_to_string(trajectory)
+
+        return base_prompt
+
+    def _is_thinking_complete(self, text: str) -> bool:
+        """Check if thinking phase is complete (contains </think>)."""
+        return "</think>" in text
+
+    def _is_valid_step_boundary(self, text: str, num_tokens: int) -> bool:
+        """Check if text represents a valid step boundary."""
+        if num_tokens < self.min_step_tokens:
+            return False
+        text = text.strip()
+        return bool(text) and text[-1] in ".!?\n"
+
+    def _generate_single_thinking_step(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+    ) -> StepCandidate:
+        """
+        Generate a single thinking step.
+
+        Generates text until a stop_string is encountered (after min_step_tokens).
+        Returns StepCandidate with truncated text (stop string excluded).
+
+        NOTE: Currently we don't validate that the step ends with proper punctuation
+        (see _is_valid_step_boundary). If needed, a continuation loop could be added
+        to retry generation when boundary is invalid, but this requires deciding how
+        to aggregate uncertainty scores across multiple generation attempts (e.g.,
+        average, last, or max uncertainty).
+        """
+        prompt = self._build_prompt(request, trajectory)
+        inputs, input_length = self._tokenize(prompt)
+
+        # Create stopping criteria
+        stopping_criteria = ThinkingStepStoppingCriteria(
+            tokenizer=self.model.tokenizer,
+            start_length=input_length,
+            stop_strings=self.thinking_stop_tokens,
+            min_tokens=self.min_step_tokens,
+        )
+
+        # Build generation params
+        gen_params = self._get_base_gen_params(self.max_new_tokens)
+        gen_params["stopping_criteria"] = StoppingCriteriaList([stopping_criteria])
+
+        # Generate
+        with torch.no_grad():
+            outputs = self.model.generate(**inputs, **gen_params)
+
+        # Extract generated text
+        new_tokens = outputs.sequences[0][input_length:]
+        generated_text = self.model.tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+        # Truncate at stop string if matched (like vLLM - excludes stop string)
+        if stopping_criteria.matched_stop_string:
+            truncated_part = generated_text[stopping_criteria.stop_position:]
+            log.debug(
+                f"Step boundary: matched '{stopping_criteria.matched_stop_string}' "
+                f"at pos {stopping_criteria.stop_position}, truncated: '{truncated_part}'"
+            )
+            generated_text = stopping_criteria.get_truncated_text(generated_text)
+            # Re-tokenize truncated text to get correct token count
+            token_ids = self.model.tokenizer.encode(generated_text, add_special_tokens=False)
+        else:
+            token_ids = new_tokens.tolist()
+
+        # Check if thinking is complete (</think> found)
+        thinking_complete = self._is_thinking_complete(generated_text)
+        if thinking_complete:
+            think_pos = generated_text.find("</think>")
+            generated_text = generated_text[: think_pos + len("</think>")]
+            # Re-tokenize to get correct token_ids after truncation
+            token_ids = self.model.tokenizer.encode(generated_text, add_special_tokens=False)
+
+        # Get uncertainty from model output
+        other_data = self._get_uncertainty_data(outputs, 0)
+
+        return StepCandidate(
+            text=generated_text.strip(),
+            token_ids=token_ids,
+            is_complete=True,
+            is_trajectory_complete=thinking_complete,
+            generation_scores=None,
+            raw_text=generated_text,
+            other_data=other_data,
+        )
+
+    def _generate_thinking_response(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+    ) -> StepCandidate:
+        """
+        Generate response after thinking phase (after </think>).
+
+        This method generates the final answer after the model has completed
+        its thinking process. It continues generation until EOS or max tokens.
+        """
+        prompt = self._build_prompt(request, trajectory)
+        inputs, input_length = self._tokenize(prompt)
+
+        gen_params = self._get_base_gen_params(self.max_new_tokens)
+
+        with torch.no_grad():
+            outputs = self.model.generate(**inputs, **gen_params)
+
+        # Extract generated text
+        new_tokens = outputs.sequences[0][input_length:]
+        generated_text = self.model.tokenizer.decode(
+            new_tokens, skip_special_tokens=False
+        )
+
+        # Ensure answer pattern is present
+        has_answer_pattern = any(p in generated_text for p in self.answer_patterns)
+        if not has_answer_pattern:
+            generated_text = generated_text + self.answer_patterns[0]
+
+        # Get uncertainty from model output
+        other_data = self._get_uncertainty_data(outputs, 0)
+
+        return StepCandidate(
+            text=generated_text.strip(),
+            token_ids=new_tokens.tolist(),
+            is_complete=True,
+            is_trajectory_complete=True,
+            generation_scores=None,
+            raw_text=generated_text,
+            other_data=other_data,
+        )
+
+    # =========================================================================
+    # Main generation methods
+    # =========================================================================
+
+    def generate_candidates(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
+    ) -> List[StepCandidate]:
+        """Generate N candidate next steps from current trajectory."""
+
+        # Thinking mode: sequential generation like vLLM
+        if self.use_thinking_mode:
+            return self._generate_thinking_candidates(
+                request, trajectory, candidates_per_step
+            )
+        else:
+            # Structured mode: batch generation
+            return self._generate_structured_candidates(
+                request, trajectory, candidates_per_step
+            )
+
+    def _generate_thinking_candidates(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
+    ) -> List[StepCandidate]:
+        """Generate candidates in thinking mode (sequential, like vLLM)."""
+        trajectory = trajectory or []
+        full_trajectory = convert_trajectory_to_string(trajectory)
+        thinking_complete = "</think>" in full_trajectory
+
+        candidates = []
+
+        if thinking_complete:
+            log.info("Thinking complete, generating response")
+            for _ in range(candidates_per_step):
+                candidate = self._generate_thinking_response(request, trajectory)
+                candidates.append(candidate)
+        else:
+            for _ in range(candidates_per_step):
+                candidate = self._generate_single_thinking_step(request, trajectory)
+                candidates.append(candidate)
+
+        return candidates
+
+    def _generate_structured_candidates(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
+    ) -> List[StepCandidate]:
+        """Generate candidates in structured mode (batch generation)."""
+        # Build prompt and tokenize
+        base_prompt = self._apply_chat_template(request, enable_thinking=False)
+        inputs, input_length = self._tokenize(base_prompt, trajectory)
+
+        # Create stopping criteria for structured mode
         stopping_criteria = BatchStepStoppingCriteria(
             tokenizer=self.model.tokenizer,
             start_length=input_length,
@@ -223,110 +568,32 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             batch_size=candidates_per_step,
         )
 
-        start_time = time.time()
-
-        gen_params = {
-            "max_new_tokens": self.max_new_tokens,
-            "do_sample": True,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "top_k": self.top_k,
-            "num_return_sequences": candidates_per_step,
-            "output_scores": True,
-            "return_dict_in_generate": True,
-            "stopping_criteria": StoppingCriteriaList([stopping_criteria]),
-            "pad_token_id": self.model.tokenizer.eos_token_id,
-            "eos_token_id": self.model.tokenizer.eos_token_id,
-        }
-
-        log.info(
-            f"Generation params: do_sample={gen_params['do_sample']}, "
-            f"temp={gen_params['temperature']}, "
-            f"top_p={gen_params['top_p']}, "
-            f"num_return_sequences={gen_params['num_return_sequences']}"
+        # Build generation parameters (structured mode always needs scores)
+        gen_params = self._get_base_gen_params(
+            self.max_new_tokens, candidates_per_step, output_scores=True
         )
-        log.info(
-            f"Model generation_parameters.do_sample: "
-            f"{self.model.generation_parameters.do_sample}"
-        )
-        log.info(
-            f"Model generation_parameters.temperature: "
-            f"{self.model.generation_parameters.temperature}"
-        )
+        gen_params["stopping_criteria"] = StoppingCriteriaList([stopping_criteria])
 
-        # Override model's default generation parameters to ensure sampling
-        old_do_sample = self.model.generation_parameters.do_sample
-        old_temperature = self.model.generation_parameters.temperature
-        old_top_p = self.model.generation_parameters.top_p
-        old_top_k = self.model.generation_parameters.top_k
-
-        self.model.generation_parameters.do_sample = True
-        self.model.generation_parameters.temperature = self.temperature
-        self.model.generation_parameters.top_p = self.top_p
-        self.model.generation_parameters.top_k = self.top_k
-
-        log.info(
-            f"After override - do_sample: "
-            f"{self.model.generation_parameters.do_sample}, "
-            f"temp: {self.model.generation_parameters.temperature}"
-        )
-
+        # Generate
         with torch.no_grad():
             outputs = self.model.generate(**inputs, **gen_params)
-
-        # Restore original parameters
-        self.model.generation_parameters.do_sample = old_do_sample
-        self.model.generation_parameters.temperature = old_temperature
-        self.model.generation_parameters.top_p = old_top_p
-        self.model.generation_parameters.top_k = old_top_k
-
-        generation_time = time.time() - start_time
-
-        log.info(f"Generated candidates in {generation_time:.2f}s")
 
         # Extract step candidates
         candidates = []
         for i, sequence in enumerate(outputs.sequences):
-            # Get newly generated tokens
             new_tokens = sequence[input_length:]
             raw_generated_text = self.model.tokenizer.decode(
                 new_tokens, skip_special_tokens=False
             )
 
-            # Extract step using detector
-            step_text = self.detector.extract_step_text(raw_generated_text)
-            is_complete = self.detector.is_step_complete(raw_generated_text)
-            is_trajectory_complete = self.detector.is_trajectory_complete(
-                # TODO: does not work even if it generates <end of response>
-                raw_generated_text
-            )
-
-            # Get generation scores if available
-            gen_scores = None
-            if (
-                self.return_generation_scores
-                and hasattr(outputs, "scores")
-                and outputs.scores
-            ):
-                gen_scores = (
-                    torch.stack(outputs.scores, dim=1)[i]
-                    if i < len(outputs.scores)
-                    else None
-                )
-
             candidate = StepCandidate(
-                text=step_text,
+                text=self.detector.extract_step_text(raw_generated_text),
                 token_ids=new_tokens.tolist(),
-                is_complete=is_complete,
-                is_trajectory_complete=is_trajectory_complete,
-                generation_scores=gen_scores,
+                is_complete=self.detector.is_step_complete(raw_generated_text),
+                is_trajectory_complete=self.detector.is_trajectory_complete(raw_generated_text),
+                generation_scores=self._get_generation_scores(outputs, i),
                 raw_text=raw_generated_text,
-                # Convert entropy to validity: lower entropy = higher validity
-                other_data=(
-                    {"uncertainty_score": 1.0 / (1.0 + outputs.uncertainty_score[i])}
-                    if hasattr(outputs, "uncertainty_score")
-                    else None
-                ),
+                other_data=self._get_uncertainty_data(outputs, i),
             )
             candidates.append(candidate)
 
@@ -346,86 +613,62 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         - \\boxed{} pattern
         - EOS token or max tokens
         """
-        # Build input same as generate_candidates but without step stopping
-        tokenizer_signature = inspect.signature(
-            self.model.tokenizer.apply_chat_template
-        )
-        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
-
-        if has_enable_thinking:
-            inputs = self.model.tokenizer.apply_chat_template(
-                [request],
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=(not self.disable_thinking_mode),
+        # Thinking mode: sequential generation like vLLM
+        if self.use_thinking_mode:
+            return self._generate_thinking_answer_candidates(
+                request, trajectory, candidates_per_step
             )
         else:
-            inputs = self.model.tokenizer.apply_chat_template(
-                [request], tokenize=False, add_generation_prompt=True
+            # Structured mode: batch generation
+            return self._generate_structured_answer_candidates(
+                request, trajectory, candidates_per_step
             )
 
-        if isinstance(inputs, str):
-            inputs = [inputs]
+    def _generate_thinking_answer_candidates(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
+    ) -> List[StepCandidate]:
+        """Generate answer candidates in thinking mode (sequential, like vLLM)."""
+        # Ensure thinking is complete before generating response
+        full_trajectory = convert_trajectory_to_string(trajectory)
+        if "</think>" not in full_trajectory:
+            log.warning(
+                "generate_answer_candidates called without </think> in trajectory. "
+                "Adding </think> to close thinking phase."
+            )
+            close_thinking_step = StepCandidate(
+                text="</think>\n\n",
+                token_ids=[],
+                is_complete=True,
+                is_trajectory_complete=True,
+            )
+            trajectory = list(trajectory) + [close_thinking_step]
 
-        if self.disable_thinking_mode and not has_enable_thinking:
-            inputs[0] += "\n<think>\n\n</think>\n\n"
+        candidates = []
+        for _ in range(candidates_per_step):
+            candidate = self._generate_thinking_response(request, trajectory)
+            candidates.append(candidate)
+        return candidates
 
-        inputs[0] = inputs[0] + convert_trajectory_to_string(trajectory)
+    def _generate_structured_answer_candidates(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int,
+    ) -> List[StepCandidate]:
+        """Generate answer candidates in structured mode (batch generation)."""
+        base_prompt = self._apply_chat_template(request, enable_thinking=False)
+        inputs, input_length = self._tokenize(base_prompt, trajectory)
 
-        inputs = self.model.tokenizer(
-            inputs,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            add_special_tokens=False,
-            max_length=self.max_length,
+        # Generate WITHOUT step boundary stopping criteria (answer continues to EOS)
+        gen_params = self._get_base_gen_params(
+            self.max_new_tokens, candidates_per_step, output_scores=True
         )
-        input_length = inputs["input_ids"].shape[1]
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-        start_time = time.time()
-
-        # Generate WITHOUT step boundary stopping criteria
-        # Let model generate until EOS or max tokens
-        gen_params = {
-            "max_new_tokens": self.max_new_tokens,
-            "do_sample": True,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "top_k": self.top_k,
-            "num_return_sequences": candidates_per_step,
-            "output_scores": True,
-            "return_dict_in_generate": True,
-            "pad_token_id": self.model.tokenizer.eos_token_id,
-            "eos_token_id": self.model.tokenizer.eos_token_id,
-        }
-
-        log.info(
-            f"Generating {candidates_per_step} answer candidates (no step stopping)"
-        )
-
-        # Override model's generation parameters
-        old_do_sample = self.model.generation_parameters.do_sample
-        old_temperature = self.model.generation_parameters.temperature
-        old_top_p = self.model.generation_parameters.top_p
-        old_top_k = self.model.generation_parameters.top_k
-
-        self.model.generation_parameters.do_sample = True
-        self.model.generation_parameters.temperature = self.temperature
-        self.model.generation_parameters.top_p = self.top_p
-        self.model.generation_parameters.top_k = self.top_k
 
         with torch.no_grad():
             outputs = self.model.generate(**inputs, **gen_params)
-
-        # Restore original parameters
-        self.model.generation_parameters.do_sample = old_do_sample
-        self.model.generation_parameters.temperature = old_temperature
-        self.model.generation_parameters.top_p = old_top_p
-        self.model.generation_parameters.top_k = old_top_k
-
-        generation_time = time.time() - start_time
-        log.info(f"Generated answer candidates in {generation_time:.2f}s")
 
         # Extract answer candidates
         candidates = []
@@ -435,32 +678,14 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 new_tokens, skip_special_tokens=False
             )
 
-            # Get generation scores if available
-            gen_scores = None
-            if (
-                self.return_generation_scores
-                and hasattr(outputs, "scores")
-                and outputs.scores
-            ):
-                gen_scores = (
-                    torch.stack(outputs.scores, dim=1)[i]
-                    if i < len(outputs.scores)
-                    else None
-                )
-
             candidate = StepCandidate(
                 text=raw_generated_text.strip(),
                 token_ids=new_tokens.tolist(),
                 is_complete=True,
                 is_trajectory_complete=True,
-                generation_scores=gen_scores,
+                generation_scores=self._get_generation_scores(outputs, i),
                 raw_text=raw_generated_text,
-                # Convert entropy to validity: lower entropy = higher validity
-                other_data=(
-                    {"uncertainty_score": 1.0 / (1.0 + outputs.uncertainty_score[i])}
-                    if hasattr(outputs, "uncertainty_score")
-                    else None
-                ),
+                other_data=self._get_uncertainty_data(outputs, i),
             )
             candidates.append(candidate)
 
