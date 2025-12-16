@@ -38,6 +38,7 @@ class RequestOutputWithUncertainty:
 
     request_output: RequestOutput
     uncertainty_scores: List[float]  # One score per output sequence
+    deps: Optional[List[Dict]] = None  # Dependencies from stat calculators (if keep_deps=True)
 
     def __getattr__(self, name):
         """Delegate attribute access to the wrapped RequestOutput."""
@@ -54,6 +55,7 @@ class VLLMWithUncertainty:
         llm: vLLM LLM instance
         stat_calculators: List of stat calculators (e.g., [VLLMLogprobsCalculator(), EntropyCalculator()])
         estimator: lm-polygraph Estimator (e.g., Perplexity, MeanTokenEntropy)
+        keep_deps: If True, include computed dependencies (stats) in output for debugging/analysis
     """
 
     def __init__(
@@ -61,11 +63,13 @@ class VLLMWithUncertainty:
         llm: LLM,
         stat_calculators: List,
         estimator: Estimator,
+        keep_deps: bool = False,
     ):
         self.llm = llm
         self.tokenizer = llm.get_tokenizer()
         self.stat_calculators = stat_calculators
         self.estimator = estimator
+        self.keep_deps = keep_deps
 
     def generate(
         self,
@@ -93,6 +97,7 @@ class VLLMWithUncertainty:
         results = []
         for request_output in outputs:
             request_scores = []
+            request_deps = [] if self.keep_deps else None
 
             for output in request_output.outputs:
                 # Build deps dict with vLLM output for stat_calculators
@@ -106,10 +111,16 @@ class VLLMWithUncertainty:
                 uncertainty = self.estimator(deps)
                 request_scores.append(float(uncertainty[0]))
 
+                # Store deps if requested (remove vllm_output to avoid serialization issues)
+                if self.keep_deps:
+                    deps_copy = {k: v for k, v in deps.items() if k != "vllm_output"}
+                    request_deps.append(deps_copy)
+
             results.append(
                 RequestOutputWithUncertainty(
                     request_output=request_output,
                     uncertainty_scores=request_scores,
+                    deps=request_deps,
                 )
             )
 
