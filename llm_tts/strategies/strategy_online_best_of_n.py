@@ -172,10 +172,12 @@ class StrategyOnlineBestOfN(StrategyBase):
         token_stats = self.step_generator.get_sample_stats()
 
         log.info(
-            f"Sample token stats: {token_stats['tokens']} total tokens "
-            f"(input: {token_stats.get('input_tokens', 0)}, output: {token_stats.get('output_tokens', 0)}), "
-            f"{token_stats['generation_count']} generations"
-            + (f", {token_stats['tflops']:.3f} TFLOPs" if token_stats["tflops"] else "")
+            f"Sample token stats: "
+            f"total_tokens={token_stats['total_tokens_this_sample']:,}, "
+            f"input_tokens={token_stats.get('input_tokens', 0):,}, "
+            f"output_tokens={token_stats.get('output_tokens', 0):,}, "
+            f"generations={token_stats['generation_count']}"
+            + (f", tflops={token_stats['tflops']:.3f}" if token_stats["tflops"] else "")
         )
 
         # Count thinking and response steps separately

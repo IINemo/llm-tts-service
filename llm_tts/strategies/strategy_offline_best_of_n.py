@@ -274,6 +274,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "text": candidate.text,
                     "token_ids": candidate.token_ids,
                     "logprobs": candidate.other_data.get("logprobs", []),
+                    "uncertainty_score": candidate.other_data.get(
+                        "uncertainty_score", 1.0
+                    ),
                     "generation_scores": candidate.generation_scores,
                 }
             )
@@ -347,6 +350,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "text": text,
                     "token_ids": candidate.token_ids,
                     "logprobs": candidate.other_data.get("logprobs", []),
+                    "uncertainty_score": candidate.other_data.get(
+                        "uncertainty_score", 1.0
+                    ),
                     "generation_scores": candidate.generation_scores,
                 }
             )
@@ -433,24 +439,12 @@ class StrategyOfflineBestOfN(StrategyBase):
             total_tokens = thinking_tokens + response_tokens
             all_token_counts.append(total_tokens)
 
-            # Use generation_scores from step generator if available
-            thinking_scores = thinking.get("generation_scores", {})
-            response_scores = response.get("generation_scores", {})
-
-            # Average the entropy scores
-            thinking_entropy = thinking_scores.get("mean_entropy", 0)
-            response_entropy = response_scores.get("mean_entropy", 0)
-            avg_entropy = (thinking_entropy + response_entropy) / 2
-
-            # Create combined generation scores
-            generation_scores = {
-                "perplexity": (
-                    thinking_scores.get("perplexity", 0)
-                    + response_scores.get("perplexity", 0)
-                )
-                / 2,
-                "mean_entropy": avg_entropy,
-            }
+            # Use uncertainty_score from step generator output
+            # These are already computed by the wrapper (VLLMWithUncertainty or CausalLMWithUncertainty)
+            thinking_uncertainty = thinking.get("uncertainty_score", 1.0)
+            response_uncertainty = response.get("uncertainty_score", 1.0)
+            # Average uncertainty scores (lower = more confident)
+            avg_uncertainty = (thinking_uncertainty + response_uncertainty) / 2
 
             # Create a StepCandidate for scoring
             candidate = StepCandidate(
@@ -458,9 +452,8 @@ class StrategyOfflineBestOfN(StrategyBase):
                 token_ids=thinking.get("token_ids", []) + response.get("token_ids", []),
                 is_complete=True,
                 is_trajectory_complete=True,
-                generation_scores=generation_scores,
                 other_data={
-                    "uncertainty_score": 1.0 / (1.0 + avg_entropy),
+                    "uncertainty_score": avg_uncertainty,
                 },
             )
 
@@ -499,9 +492,9 @@ class StrategyOfflineBestOfN(StrategyBase):
             token_ids=best_thinking.get("token_ids", []),
             is_complete=True,
             is_trajectory_complete=False,
-            generation_scores=best_thinking.get("generation_scores", {}),
             other_data={
                 "logprobs": best_thinking.get("logprobs", []),
+                "uncertainty_score": best_thinking.get("uncertainty_score", 1.0),
                 "phase": "thinking",
             },
         )
@@ -512,9 +505,9 @@ class StrategyOfflineBestOfN(StrategyBase):
             token_ids=best_response.get("token_ids", []),
             is_complete=True,
             is_trajectory_complete=True,
-            generation_scores=best_response.get("generation_scores", {}),
             other_data={
                 "logprobs": best_response.get("logprobs", []),
+                "uncertainty_score": best_response.get("uncertainty_score", 1.0),
                 "phase": "response",
                 "validity": best_score,
             },

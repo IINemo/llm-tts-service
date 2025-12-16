@@ -23,7 +23,7 @@ wandb_project: llm-tts-eval-aime2025
 model:
   type: "vllm"
   model_path: "Qwen/Qwen3-8B"
-  gpu_memory_utilization: 0.9
+  gpu_memory_utilization: 0.8
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true

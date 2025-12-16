@@ -114,14 +114,15 @@ class StepCandidateGeneratorBase:
             Dictionary with token counts and FLOP estimates.
             - input_tokens: Context tokens processed (prompt + trajectory)
             - output_tokens: Generated tokens (all candidates)
-            - total_tokens: Sum of input and output tokens
+            - total_tokens_this_sample: Sum of input and output tokens
+            - generation_count: Number of generation calls (num_steps * candidates_per_step)
             - tflops: Estimated TFLOPs based on total tokens
         """
         total_tokens = self._sample_input_tokens + self._sample_output_tokens
         stats = {
             "input_tokens": self._sample_input_tokens,
             "output_tokens": self._sample_output_tokens,
-            "tokens": total_tokens,  # Keep for backward compatibility
+            "total_tokens_this_sample": total_tokens,
             "generation_count": self._sample_generation_count,
         }
 
