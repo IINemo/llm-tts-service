@@ -101,13 +101,34 @@ def load_tokenizer(model_path: str):
     return tokenizer
 
 
-def load_model(model_path: str, device_map: str, torch_dtype: str):
+def load_model(
+    model_path: str,
+    device_map: str,
+    torch_dtype: str,
+    gpu_memory_utilization: float = None,
+):
     dtype = get_torch_dtype(torch_dtype)
+
+    # Build max_memory dict if gpu_memory_utilization is specified
+    max_memory = None
+    if gpu_memory_utilization is not None and gpu_memory_utilization < 1.0:
+        import torch
+
+        # Get available GPUs and their memory
+        max_memory = {}
+        for i in range(torch.cuda.device_count()):
+            total_mem = torch.cuda.get_device_properties(i).total_memory
+            # Convert to GiB and apply utilization factor
+            max_mem_gib = int(total_mem * gpu_memory_utilization / (1024**3))
+            max_memory[i] = f"{max_mem_gib}GiB"
+        log.info(f"Setting max_memory: {max_memory}")
+
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         device_map=device_map,
         trust_remote_code=True,
         torch_dtype=dtype,
+        max_memory=max_memory,
     )
     log.info(f"Loaded model with {torch_dtype}")
     return model
@@ -431,6 +452,7 @@ def create_model(config):
                 config.model.model_path,
                 config.system.device,
                 config.system.torch_dtype,
+                gpu_memory_utilization=config.model.get("gpu_memory_utilization"),
             )
             base_model.eval()
             model = WhiteboxModel(base_model, tokenizer)

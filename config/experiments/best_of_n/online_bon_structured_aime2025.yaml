@@ -24,6 +24,7 @@ model:
   type: "local"
   model_path: "Qwen/Qwen3-8B"
   disable_thinking_mode: true  # DISABLE thinking mode
+  gpu_memory_utilization: 0.9  # Limit GPU memory to avoid OOM
 
 # System configuration
 system:
