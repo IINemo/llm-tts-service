@@ -886,63 +886,29 @@ def generate_trajectories(
             import wandb
 
             if wandb.run is not None:
-                # Extract token count - prefer token_stats from step generator
-                sample_tokens = 0
-                sample_tflops = 0
-
-                if "token_stats" in result and result["token_stats"]:
-                    # Online BON: use token_stats from step generator
-                    token_stats = result["token_stats"]
-                    sample_tokens = token_stats.get("tokens", 0)
-                    sample_tflops = token_stats.get("tflops") or 0
-                elif "all_traces" in result:
-                    # DeepConf: sum tokens from all traces
-                    sample_tokens = sum(
-                        t.get("num_tokens", 0) for t in result["all_traces"]
-                    )
-                elif "metadata" in result:
-                    # Try to get from metadata
-                    metadata = result["metadata"]
-                    if (
-                        "generation" in metadata
-                        and "all_traces" in metadata["generation"]
-                    ):
-                        sample_tokens = sum(
-                            t.get("num_tokens", 0)
-                            for t in metadata["generation"]["all_traces"]
-                        )
-
-                # Calculate running token statistics from all results
-                all_sample_tokens = []
-                for r in results:
-                    tokens = 0
-                    if "token_stats" in r and r["token_stats"]:
-                        tokens = r["token_stats"].get("tokens", 0)
-                    elif "all_traces" in r:
-                        tokens = sum(t.get("num_tokens", 0) for t in r["all_traces"])
-                    elif "metadata" in r:
-                        meta = r["metadata"]
-                        if "generation" in meta and "all_traces" in meta["generation"]:
-                            tokens = sum(
-                                t.get("num_tokens", 0)
-                                for t in meta["generation"]["all_traces"]
-                            )
-                    all_sample_tokens.append(tokens)
+                # Get token_stats from generator (contains input/output/total tokens)
+                token_stats = result.get("token_stats") or {}
+                all_token_stats = [r.get("token_stats") or {} for r in results]
 
                 # Count number of traces for this sample
                 num_traces = len(result.get("all_traces", result.get("steps", [])))
-                avg_tokens_per_trace = (
-                    sample_tokens / num_traces if num_traces > 0 else 0
-                )
 
-                # Calculate FLOPs if not already computed and calculator is available
-                running_total_tflops = 0
-                if sample_tflops == 0 and flop_calculator and sample_tokens > 0:
-                    sample_tflops = flop_calculator.compute_tflops(sample_tokens)
-                if flop_calculator and sum(all_sample_tokens) > 0:
-                    running_total_tflops = flop_calculator.compute_tflops(
-                        sum(all_sample_tokens)
-                    )
+                # Calculate running totals from all results
+                running_total_tokens = sum(
+                    ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
+                )
+                running_total_input = sum(
+                    ts.get("input_tokens", 0) for ts in all_token_stats
+                )
+                running_total_output = sum(
+                    ts.get("output_tokens", 0) for ts in all_token_stats
+                )
+                running_total_gens = sum(
+                    ts.get("generation_count", 0) for ts in all_token_stats
+                )
+                running_total_tflops = sum(
+                    ts.get("tflops") or 0 for ts in all_token_stats
+                )
 
                 # Count correct samples using grade_answer
                 running_correct = sum(
@@ -961,18 +927,25 @@ def generate_trajectories(
                     ),
                     "response_num_steps": result.get("response_num_steps", 0),
                     "num_traces": num_traces,
-                    "running_correct": running_correct,  # Number of correct samples so far
+                    "running_correct": running_correct,
                     "running_accuracy": running_correct / len(results),
                     "samples_completed": len(results),
-                    # Token statistics (actual counts from model output)
-                    "tokens_this_sample": sample_tokens,  # Total tokens for this sample (all traces)
-                    "avg_tokens_per_trace": avg_tokens_per_trace,  # Avg tokens per trace this sample
-                    "running_avg_tokens_per_sample": (
-                        np.mean(all_sample_tokens) if all_sample_tokens else 0
+                    # Token statistics from generator
+                    "total_tokens_this_sample": token_stats.get(
+                        "total_tokens_this_sample", 0
                     ),
-                    "running_total_tokens": sum(all_sample_tokens),
-                    # FLOP statistics (compute cost estimation)
-                    "tflops_this_sample": sample_tflops,  # TFLOPs for this sample
+                    "input_tokens_this_sample": token_stats.get("input_tokens", 0),
+                    "output_tokens_this_sample": token_stats.get("output_tokens", 0),
+                    "generations_this_sample": token_stats.get("generation_count", 0),
+                    "tflops_this_sample": token_stats.get("tflops") or 0,
+                    # Running totals
+                    "running_avg_tokens_per_sample": (
+                        running_total_tokens / len(results) if results else 0
+                    ),
+                    "running_total_tokens": running_total_tokens,
+                    "running_total_input_tokens": running_total_input,
+                    "running_total_output_tokens": running_total_output,
+                    "running_total_generations": running_total_gens,
                     "running_avg_tflops_per_sample": (
                         running_total_tflops / len(results) if results else 0
                     ),
