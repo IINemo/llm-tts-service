@@ -36,7 +36,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # vLLM imports (optional, only if vLLM is installed)
 try:
     from lm_polygraph.model_adapters import WhiteboxModelvLLM
-    from lm_polygraph.utils import VLLMWithUncertainty
+
+    # TODO: VLLMWithUncertainty requires lm-polygraph wrapper for vLLM (not yet implemented)
+    # from lm_polygraph.utils import VLLMWithUncertainty
     from vllm import LLM, SamplingParams
 
     VLLM_AVAILABLE = True
@@ -244,7 +246,13 @@ def create_model(config):
         if not VLLM_AVAILABLE:
             raise ImportError("vLLM not installed. Run: pip install vllm")
 
-        log.info(f"Loading vLLM model: {config.model.model_path}")
+        raise NotImplementedError(
+            "vLLM uncertainty scoring is currently unavailable. "
+            "Requires lm-polygraph wrapper for vLLM which has limitations: "
+            "1) vLLM doesn't expose hidden states needed for some uncertainty methods, "
+            "2) logprobs-based methods need custom stat calculators. "
+            "See PR: https://github.com/IINemo/llm-tts-service/pull/65"
+        )
 
         # Initialize vLLM engine with seed for reproducibility
         llm = LLM(
