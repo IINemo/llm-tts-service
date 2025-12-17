@@ -356,8 +356,8 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
 
     def _get_uncertainty_data(self, outputs, index: int) -> Optional[Dict]:
         """Extract uncertainty data for a sequence from outputs."""
-        if hasattr(outputs, "uncertainty_score"):
-            return {"uncertainty_score": 1.0 / (1.0 + outputs.uncertainty_score[index])}
+        if hasattr(outputs, "validity_score"):
+            return {"validity_score": 1.0 / (1.0 + outputs.validity_score[index])}
         return None
 
     # =========================================================================

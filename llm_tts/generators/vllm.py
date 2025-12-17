@@ -249,7 +249,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             truncated_text: The truncated generated text to score
 
         Returns:
-            Dict with 'perplexity', 'mean_entropy', and 'uncertainty_score' keys
+            Dict with 'perplexity', 'mean_entropy', and 'validity_score' keys
         """
         # Combine prompt and truncated text
         full_text = prompt + truncated_text
@@ -267,14 +267,14 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         if not request_output.prompt_logprobs:
             log.warning("No prompt_logprobs returned, returning default metrics")
-            return {"perplexity": 1.0, "mean_entropy": 0.0, "uncertainty_score": 1.0}
+            return {"perplexity": 1.0, "mean_entropy": 0.0, "validity_score": 1.0}
 
         # Extract logprobs for the truncated_text portion only
         prompt_tokens = len(self.tokenizer.encode(prompt))
         truncated_logprobs = request_output.prompt_logprobs[prompt_tokens:]
 
         if not truncated_logprobs:
-            return {"perplexity": 1.0, "mean_entropy": 0.0, "uncertainty_score": 1.0}
+            return {"perplexity": 1.0, "mean_entropy": 0.0, "validity_score": 1.0}
 
         # Convert prompt_logprobs to format expected by _compute_uncertainty_metrics
         # prompt_logprobs is List[Optional[Dict[int, Logprob]]]
@@ -291,11 +291,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 valid_token_ids.append(truncated_token_ids[i])
 
         if not valid_logprobs:
-            return {"perplexity": 1.0, "mean_entropy": 0.0, "uncertainty_score": 1.0}
+            return {"perplexity": 1.0, "mean_entropy": 0.0, "validity_score": 1.0}
 
         # Compute uncertainty metrics
         metrics = self._compute_uncertainty_metrics(valid_token_ids, valid_logprobs)
-        metrics["uncertainty_score"] = 1.0 / (1.0 + metrics["mean_entropy"])
+        metrics["validity_score"] = 1.0 / (1.0 + metrics["mean_entropy"])
 
         return metrics
 
@@ -571,7 +571,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             is_trajectory_complete=thinking_complete,
             other_data={
                 # Convert mean_entropy to validity score (lower entropy = higher score)
-                "uncertainty_score": 1.0 / (1.0 + uncertainty_metrics["mean_entropy"]),
+                "validity_score": 1.0 / (1.0 + uncertainty_metrics["mean_entropy"]),
                 "perplexity": uncertainty_metrics["perplexity"],
                 "mean_entropy": uncertainty_metrics["mean_entropy"],
                 "logprobs": self._extract_logprobs(
@@ -646,7 +646,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 is_trajectory_complete=True,
                 other_data={
                     # Convert mean_entropy to validity score (lower entropy = higher score)
-                    "uncertainty_score": 1.0
+                    "validity_score": 1.0
                     / (1.0 + uncertainty_metrics["mean_entropy"]),
                     "perplexity": uncertainty_metrics["perplexity"],
                     "mean_entropy": uncertainty_metrics["mean_entropy"],
@@ -702,7 +702,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 is_trajectory_complete=True,
                 other_data={
                     # Convert mean_entropy to validity score (lower entropy = higher score)
-                    "uncertainty_score": 1.0
+                    "validity_score": 1.0
                     / (1.0 + uncertainty_metrics["mean_entropy"]),
                     "perplexity": uncertainty_metrics["perplexity"],
                     "mean_entropy": uncertainty_metrics["mean_entropy"],
@@ -752,7 +752,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 is_trajectory_complete=is_trajectory_complete,
                 other_data={
                     # Convert mean_entropy to validity score (lower entropy = higher score)
-                    "uncertainty_score": 1.0
+                    "validity_score": 1.0
                     / (1.0 + uncertainty_metrics["mean_entropy"]),
                     "perplexity": uncertainty_metrics["perplexity"],
                     "mean_entropy": uncertainty_metrics["mean_entropy"],
@@ -865,7 +865,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 is_trajectory_complete=is_trajectory_complete,
                 other_data={
                     # Convert mean_entropy to validity score (lower entropy = higher score)
-                    "uncertainty_score": 1.0
+                    "validity_score": 1.0
                     / (1.0 + uncertainty_metrics["mean_entropy"]),
                     "perplexity": uncertainty_metrics["perplexity"],
                     "mean_entropy": uncertainty_metrics["mean_entropy"],

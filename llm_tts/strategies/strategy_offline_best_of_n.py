@@ -274,8 +274,8 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "text": candidate.text,
                     "token_ids": candidate.token_ids,
                     "logprobs": candidate.other_data.get("logprobs", []),
-                    "uncertainty_score": candidate.other_data.get(
-                        "uncertainty_score", 1.0
+                    "validity_score": candidate.other_data.get(
+                        "validity_score", 1.0
                     ),
                     "generation_scores": candidate.generation_scores,
                 }
@@ -350,8 +350,8 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "text": text,
                     "token_ids": candidate.token_ids,
                     "logprobs": candidate.other_data.get("logprobs", []),
-                    "uncertainty_score": candidate.other_data.get(
-                        "uncertainty_score", 1.0
+                    "validity_score": candidate.other_data.get(
+                        "validity_score", 1.0
                     ),
                     "generation_scores": candidate.generation_scores,
                 }
@@ -439,10 +439,10 @@ class StrategyOfflineBestOfN(StrategyBase):
             total_tokens = thinking_tokens + response_tokens
             all_token_counts.append(total_tokens)
 
-            # Use uncertainty_score from step generator output
+            # Use validity_score from step generator output
             # These are already computed by the wrapper (VLLMWithUncertainty or CausalLMWithUncertainty)
-            thinking_uncertainty = thinking.get("uncertainty_score", 1.0)
-            response_uncertainty = response.get("uncertainty_score", 1.0)
+            thinking_uncertainty = thinking.get("validity_score", 1.0)
+            response_uncertainty = response.get("validity_score", 1.0)
             # Average uncertainty scores (lower = more confident)
             avg_uncertainty = (thinking_uncertainty + response_uncertainty) / 2
 
@@ -453,7 +453,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                 is_complete=True,
                 is_trajectory_complete=True,
                 other_data={
-                    "uncertainty_score": avg_uncertainty,
+                    "validity_score": avg_uncertainty,
                 },
             )
 
@@ -494,7 +494,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             is_trajectory_complete=False,
             other_data={
                 "logprobs": best_thinking.get("logprobs", []),
-                "uncertainty_score": best_thinking.get("uncertainty_score", 1.0),
+                "validity_score": best_thinking.get("validity_score", 1.0),
                 "phase": "thinking",
             },
         )
@@ -507,7 +507,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             is_trajectory_complete=True,
             other_data={
                 "logprobs": best_response.get("logprobs", []),
-                "uncertainty_score": best_response.get("uncertainty_score", 1.0),
+                "validity_score": best_response.get("validity_score", 1.0),
                 "phase": "response",
                 "validity": best_score,
             },
