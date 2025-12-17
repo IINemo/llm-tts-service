@@ -41,6 +41,17 @@ try:
     VLLM_AVAILABLE = True
 except ImportError:
     VLLM_AVAILABLE = False
+
+# lm-polygraph uncertainty wrapper (for vLLM uncertainty scoring)
+try:
+    from lm_polygraph.estimators import MeanTokenEntropy, Perplexity
+    from lm_polygraph.stat_calculators import EntropyCalculator, VLLMLogprobsCalculator
+    from lm_polygraph.utils import VLLMWithUncertainty
+
+    POLYGRAPH_UNCERTAINTY_AVAILABLE = True
+except ImportError:
+    POLYGRAPH_UNCERTAINTY_AVAILABLE = False
+    VLLMWithUncertainty = None
 from utils.results import load_results_json, parse_resume_arguments, save_results_json
 
 from llm_tts.evaluation import (
@@ -288,6 +299,30 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
+            # Create uncertainty wrapper for vLLM scoring
+            if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
+                raise ImportError(
+                    "lm-polygraph uncertainty components not available. "
+                    "Ensure lm_polygraph_updates package is installed."
+                )
+
+            # Select estimator based on scorer config
+            scorer_type = config.scorer.type if config.scorer else "entropy"
+            if scorer_type == "perplexity":
+                stat_calculators = [VLLMLogprobsCalculator()]
+                estimator = Perplexity()
+            else:
+                # Default to entropy-based scoring
+                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                estimator = MeanTokenEntropy()
+
+            uncertainty_wrapper = VLLMWithUncertainty(
+                llm=llm,
+                stat_calculators=stat_calculators,
+                estimator=estimator,
+            )
+            log.info(f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__}")
+
             detector_type = config.strategy.get("detector_type", "structured")
 
             if detector_type == "thinking_marker":
@@ -309,13 +344,10 @@ def create_model(config):
                     custom_markers=config.strategy.get("custom_words", None),
                 )
 
-                # Use raw vLLM model - uncertainty scoring is done inline
-                # using lm-polygraph estimators computed from logprobs
                 step_generator = VLLMStepGenerator(
-                    model=llm,
+                    model=uncertainty_wrapper,
                     thinking_mode=True,
                     detector=detector,
-                    # thinking_stop_tokens derived automatically from detector
                     max_new_tokens=config.generation.max_new_tokens,
                     temperature=config.generation.temperature,
                     top_p=config.generation.top_p,
@@ -324,7 +356,6 @@ def create_model(config):
                         "detector_answer_patterns",
                         ["</think>", "<Answer>:", "\\boxed{"],
                     ),
-                    # Context length limit for trajectory truncation
                     max_model_len=config.model.get("max_model_len", 32768),
                 )
             else:
@@ -348,9 +379,8 @@ def create_model(config):
                     stop=detector.step_patterns,
                 )
 
-                # Use raw vLLM model - uncertainty scoring is done inline
                 step_generator = VLLMStepGenerator(
-                    model=llm,
+                    model=uncertainty_wrapper,
                     thinking_mode=False,
                     detector=detector,
                     sampling_params=step_sampling_params,
