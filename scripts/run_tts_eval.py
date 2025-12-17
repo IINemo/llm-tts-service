@@ -36,9 +36,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # vLLM imports (optional, only if vLLM is installed)
 try:
     from lm_polygraph.model_adapters import WhiteboxModelvLLM
-
-    # TODO: VLLMWithUncertainty requires lm-polygraph wrapper for vLLM (not yet implemented)
-    # from lm_polygraph.utils import VLLMWithUncertainty
     from vllm import LLM, SamplingParams
 
     VLLM_AVAILABLE = True
@@ -243,16 +240,10 @@ def create_scorer(config):
 def create_model(config):
     if config.model.type == "vllm":
         # vLLM backend - fast inference with PagedAttention
+        # Uncertainty scoring is done locally using lm-polygraph estimators
+        # (Perplexity, MeanTokenEntropy) computed from vLLM logprobs
         if not VLLM_AVAILABLE:
             raise ImportError("vLLM not installed. Run: pip install vllm")
-
-        raise NotImplementedError(
-            "vLLM uncertainty scoring is currently unavailable. "
-            "Requires lm-polygraph wrapper for vLLM which has limitations: "
-            "1) vLLM doesn't expose hidden states needed for some uncertainty methods, "
-            "2) logprobs-based methods need custom stat calculators. "
-            "See PR: https://github.com/IINemo/llm-tts-service/pull/65"
-        )
 
         # Initialize vLLM engine with seed for reproducibility
         llm = LLM(
@@ -274,63 +265,12 @@ def create_model(config):
             seed=config.system.seed,  # Reproducibility
         )
 
-        # Check if uncertainty scoring is needed
-        scorer_type = config.scorer.type if config.scorer else None
-        if scorer_type in ["uncertainty", "uncertainty_pd", "entropy", "perplexity"]:
-            # Wrap with VLLMWithUncertainty (similar to CausalLMWithUncertainty for HF)
-            log.info(f"Wrapping vLLM with VLLMWithUncertainty (scorer: {scorer_type})")
-
-            # Get estimator and stat_calculators based on scorer type
-            from lm_polygraph.estimators import MeanTokenEntropy, Perplexity
-            from lm_polygraph.stat_calculators import (
-                EntropyCalculator,
-                VLLMLogprobsCalculator,
-            )
-
-            from llm_tts.scorers.estimator_uncertainty_pd import PDGap
-
-            if scorer_type == "entropy":
-                # Use MeanTokenEntropy for entropy-based scoring
-                # VLLMLogprobsCalculator extracts logprobs, EntropyCalculator computes entropy
-                log.info("Using MeanTokenEntropy estimator with EntropyCalculator")
-                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
-                estimator = MeanTokenEntropy()
-            elif scorer_type == "uncertainty_pd":
-                # Use PDGap (probability differential) for uncertainty scoring
-                # Note: PDGap needs full vocab logprobs for accurate results
-                # Set top_logprobs=vocab_size in config for exact calculation
-                log.info("Using PDGap estimator (probability differential)")
-                stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
-                estimator = PDGap()
-            else:
-                # Default: Perplexity (only needs log-likelihood of chosen token)
-                # Covers "uncertainty" and "perplexity" scorer types
-                log.info("Using Perplexity estimator")
-                stat_calculators = [VLLMLogprobsCalculator()]
-                estimator = Perplexity()
-
-            llm_with_uncertainty = VLLMWithUncertainty(
-                llm=llm,
-                stat_calculators=stat_calculators,
-                estimator=estimator,
-            )
-
-            # Wrap with lm-polygraph adapter for compatibility
-            model = WhiteboxModelvLLM(
-                model=llm,
-                sampling_params=sampling_params,
-                device=config.model.get("device", "cuda"),
-            )
-
-            # Store the uncertainty wrapper for use by step generator
-            model.llm_with_uncertainty = llm_with_uncertainty
-        else:
-            # Wrap with lm-polygraph adapter (no uncertainty)
-            model = WhiteboxModelvLLM(
-                model=llm,
-                sampling_params=sampling_params,
-                device=config.model.get("device", "cuda"),
-            )
+        # Wrap with lm-polygraph adapter for compatibility with strategies
+        model = WhiteboxModelvLLM(
+            model=llm,
+            sampling_params=sampling_params,
+            device=config.model.get("device", "cuda"),
+        )
 
         # Mark as vLLM model for strategy detection
         model.is_vllm = True
@@ -369,11 +309,10 @@ def create_model(config):
                     custom_markers=config.strategy.get("custom_words", None),
                 )
 
-                # Use wrapped model for uncertainty scoring if available
-                vllm_model = getattr(model, "llm_with_uncertainty", llm)
-
+                # Use raw vLLM model - uncertainty scoring is done inline
+                # using lm-polygraph estimators computed from logprobs
                 step_generator = VLLMStepGenerator(
-                    model=vllm_model,
+                    model=llm,
                     thinking_mode=True,
                     detector=detector,
                     # thinking_stop_tokens derived automatically from detector
@@ -409,11 +348,9 @@ def create_model(config):
                     stop=detector.step_patterns,
                 )
 
-                # Use wrapped model for uncertainty scoring if available
-                vllm_model = getattr(model, "llm_with_uncertainty", llm)
-
+                # Use raw vLLM model - uncertainty scoring is done inline
                 step_generator = VLLMStepGenerator(
-                    model=vllm_model,
+                    model=llm,
                     thinking_mode=False,
                     detector=detector,
                     sampling_params=step_sampling_params,
@@ -422,6 +359,92 @@ def create_model(config):
             log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
 
         return model, step_generator
+
+    elif config.model.type == "hybrid":
+        # Hybrid backend: vLLM for generation, HuggingFace for uncertainty scoring
+        # This combines vLLM's fast generation with HF's full access to hidden states
+        if not VLLM_AVAILABLE:
+            raise ImportError("vLLM not installed. Run: pip install vllm")
+
+        from llm_tts.generators.hybrid import HybridStepGenerator
+
+        log.info("Initializing hybrid generator (vLLM generate + HuggingFace score)")
+
+        # Initialize vLLM engine for generation
+        vllm_gpu_util = config.model.get("vllm_gpu_memory_utilization", 0.45)
+        llm = LLM(
+            model=config.model.model_path,
+            gpu_memory_utilization=vllm_gpu_util,
+            tensor_parallel_size=config.model.get("tensor_parallel_size", 1),
+            enable_prefix_caching=config.model.get("enable_prefix_caching", True),
+            trust_remote_code=config.model.get("trust_remote_code", True),
+            max_model_len=config.model.get("max_model_len", 32768),
+            seed=config.system.seed,
+        )
+
+        # HuggingFace model will be loaded by HybridStepGenerator
+        # Configure HF options
+        hf_device = config.model.get("hf_device", "cuda")
+        hf_dtype_str = config.model.get("hf_dtype", "float16")
+        hf_dtype = getattr(torch, hf_dtype_str, torch.float16)
+
+        # Choose detector based on thinking mode
+        detector_type = config.strategy.get("detector_type", "structured")
+        use_thinking_mode = detector_type == "thinking_marker" or (
+            not config.model.disable_thinking_mode and detector_type == "auto"
+        )
+
+        if use_thinking_mode:
+            log.info("Using ThinkingMarkerDetector for hybrid generator")
+            detector = ThinkingMarkerDetector(
+                min_step_tokens=config.strategy.min_step_tokens,
+                max_step_tokens=config.strategy.max_step_tokens,
+                use_sequence=config.strategy.get("use_sequence", True),
+                use_conclusion=config.strategy.get("use_conclusion", True),
+                use_thinking=config.strategy.get("use_thinking", True),
+                use_verification=config.strategy.get("use_verification", True),
+                use_structure=config.strategy.get("use_structure", False),
+                use_reasoning=config.strategy.get("use_reasoning", False),
+                use_sentence_start=config.strategy.get("use_sentence_start", False),
+                use_correction=config.strategy.get("use_correction", False),
+                custom_markers=config.strategy.get("custom_markers"),
+            )
+        else:
+            log.info("Using StructuredStepDetector for hybrid generator")
+            detector = StructuredStepDetector(
+                step_patterns=config.strategy.get(
+                    "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+                ),
+                answer_patterns=config.strategy.get(
+                    "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+                ),
+                max_tokens_per_step=config.generation.max_new_tokens,
+            )
+
+        # Create hybrid step generator
+        step_generator = HybridStepGenerator(
+            vllm_model=llm,
+            model_name=config.model.model_path,
+            thinking_mode=use_thinking_mode,
+            detector=detector,
+            answer_patterns=config.strategy.get(
+                "detector_answer_patterns", ["<end of response>"]
+            ),
+            max_new_tokens=config.generation.max_new_tokens,
+            temperature=config.generation.temperature,
+            top_p=config.generation.top_p,
+            top_k=config.generation.get("top_k", 20),
+            max_model_len=config.model.get("max_model_len", 32768),
+            hf_device=hf_device,
+            hf_dtype=hf_dtype,
+            output_hidden_states=config.model.get("output_hidden_states", True),
+            output_attentions=config.model.get("output_attentions", False),
+        )
+
+        log.info("Hybrid step generator created successfully")
+
+        # Return None for model since hybrid generator handles both
+        return None, step_generator
 
     elif config.model.type == "local":
         scorer_type = config.scorer.type if config.scorer else None

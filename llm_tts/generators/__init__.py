@@ -35,6 +35,15 @@ except ImportError:
     VLLMStepGenerator = None
     VLLM_AVAILABLE = False
 
+# Hybrid generator (vLLM + HuggingFace, optional - requires vllm package)
+try:
+    from llm_tts.generators.hybrid import HybridStepGenerator
+
+    HYBRID_AVAILABLE = True
+except ImportError:
+    HybridStepGenerator = None
+    HYBRID_AVAILABLE = False
+
 __all__ = [
     # Base classes
     "StepCandidate",
@@ -44,10 +53,12 @@ __all__ = [
     "api",
     "huggingface",
     "VLLM_AVAILABLE",
+    "HYBRID_AVAILABLE",
     # Exports
     "StepCandidateGeneratorThroughAPI",
     "StepCandidateGeneratorThroughHuggingface",
     "VLLMStepGenerator",
+    "HybridStepGenerator",
     "BatchStepStoppingCriteria",
     "ThinkingStepStoppingCriteria",
 ]

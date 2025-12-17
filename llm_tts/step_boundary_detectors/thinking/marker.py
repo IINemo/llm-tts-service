@@ -556,6 +556,9 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         """
         Get vLLM stop tokens derived from this detector's configuration.
 
+        Uses sentence-start matching by default to avoid mid-sentence breaks.
+        Only matches words at the START of a new sentence (after . ? ! or newline).
+
         Args:
             include_answer_tokens: If True, include answer patterns like </think>.
                                   Default False - generator adds </think> separately.
@@ -563,9 +566,11 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         Returns:
             List of stop token strings for vLLM SamplingParams.stop
         """
-        from llm_tts.step_boundary_detectors.thinking.vllm import get_stop_tokens
+        from llm_tts.step_boundary_detectors.thinking.vllm import (
+            get_stop_tokens_sentence_start,
+        )
 
-        return get_stop_tokens(
+        return get_stop_tokens_sentence_start(
             use_sequence=self.use_sequence,
             use_conclusion=self.use_conclusion,
             use_thinking=self.use_thinking,
@@ -574,5 +579,4 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
             use_correction=self.use_correction,
             use_structure=self.use_structure,
             custom_words=self.custom_markers,
-            include_answer_tokens=include_answer_tokens,
         )

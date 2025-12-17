@@ -16,6 +16,11 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
+import numpy as np
+
+# lm-polygraph imports for uncertainty computation
+from lm_polygraph.estimators.perplexity import Perplexity
+from lm_polygraph.estimators.token_entropy import MeanTokenEntropy
 from vllm import LLM, SamplingParams
 
 from llm_tts.generators.base import (
@@ -36,12 +41,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     """
     Unified vLLM step generator supporting both thinking and structured modes.
 
-    For uncertainty estimation, pass a VLLMWithUncertainty wrapper as model.
-    The generator will read uncertainty_scores from the wrapper output,
-    similar to how HF generator reads from CausalLMWithUncertainty output.
+    Uncertainty estimation is done locally using perplexity/entropy from logprobs,
+    or optionally via an external scorer for truncated sequences.
 
     Args:
-        model: vLLM model instance (LLM or VLLMWithUncertainty wrapper)
+        model: vLLM model instance (LLM)
         thinking_mode: If True, use two-phase thinking generation (default).
                       If False, use simple structured generation.
         detector: Step boundary detector (StructuredStepDetector or ThinkingMarkerDetector).
@@ -52,6 +56,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         temperature, top_p, top_k: Sampling parameters
         max_model_len: Maximum context length for truncation
         flop_calculator: Optional FLOP calculator for token tracking
+        scorer: Optional scorer for truncated sequence scoring
     """
 
     def __init__(
@@ -75,6 +80,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         max_model_len: int = 32768,
         # FLOP calculator for token tracking
         flop_calculator: Optional["FLOPCalculator"] = None,
+        # Optional scorer for truncated sequence scoring
+        scorer=None,
     ):
         # vLLM handles batching internally, so generation_batch_size is large
         super().__init__(generation_batch_size=1024, flop_calculator=flop_calculator)
@@ -82,6 +89,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.model = model
         self.thinking_mode = thinking_mode
         self.tokenizer = model.get_tokenizer()
+        self.scorer = scorer  # Optional scorer for truncated sequences
+
+        # Initialize lm-polygraph estimators once (avoid repeated initialization)
+        self._perplexity_estimator = Perplexity()
+        self._entropy_estimator = MeanTokenEntropy()
 
         # Store common parameters
         self.max_new_tokens = max_new_tokens
@@ -169,28 +181,123 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 result.append(-100.0)
         return result
 
-    def _get_uncertainty_from_output(
-        self, request_output, output_idx: int = 0
-    ) -> float:
-        """
-        Extract uncertainty score from wrapper output (if available).
+    def _compute_uncertainty_metrics(
+        self, token_ids: List[int], logprobs: List[Dict]
+    ) -> Dict[str, float]:
+        """Compute uncertainty metrics using lm-polygraph estimators.
 
-        If model is VLLMWithUncertainty wrapper, outputs have uncertainty_scores.
-        Otherwise, returns 0.0 (no uncertainty computed).
+        Note: vLLM only provides top-k logprobs (configured via logprobs parameter).
+        - Perplexity: accurate (uses selected token logprobs only)
+        - Mean entropy: approximate (uses top-k logprobs, not full vocabulary)
+
+        For full-vocabulary uncertainty, use HybridStepGenerator or HuggingFace.
 
         Args:
-            request_output: Output from model.generate()
-            output_idx: Index of the output sequence (for n > 1)
+            token_ids: Generated token IDs
+            logprobs: List of logprob dicts from vLLM output
 
         Returns:
-            Uncertainty score (higher = more uncertain), or 0.0 if not available
+            Dict with 'perplexity' and 'mean_entropy' keys
         """
-        if hasattr(request_output, "uncertainty_scores"):
-            # Model is VLLMWithUncertainty wrapper
-            scores = request_output.uncertainty_scores
-            if scores and output_idx < len(scores):
-                return scores[output_idx]
-        return 0.0
+        if not logprobs or not token_ids:
+            return {"perplexity": 0.0, "mean_entropy": 0.0}
+
+        # Extract selected token log probs for Perplexity
+        log_likelihoods = []
+        for token, logprob_dict in zip(token_ids, logprobs):
+            if token in logprob_dict:
+                log_likelihoods.append(logprob_dict[token].logprob)
+            else:
+                log_likelihoods.append(-100.0)  # Very unlikely token
+
+        # Compute perplexity using cached lm-polygraph estimator
+        stats_ppl = {"greedy_log_likelihoods": [log_likelihoods]}
+        neg_mean_ll = float(self._perplexity_estimator(stats_ppl)[0])
+        perplexity = float(np.exp(neg_mean_ll))
+
+        # Compute entropy from top-k logprobs (approximate)
+        # This is approximate because vLLM only gives top-k logprobs
+        entropies = []
+        for logprob_dict in logprobs:
+            # Get all log probs from the dict
+            lps = np.array([v.logprob for v in logprob_dict.values()])
+            # Compute entropy from available logprobs
+            mask = ~np.isinf(lps)
+            if mask.any():
+                entropies.append(-np.sum(lps[mask] * np.exp(lps[mask])))
+            else:
+                entropies.append(0.0)
+
+        # Compute mean entropy using cached lm-polygraph estimator
+        stats_entropy = {"entropy": [entropies]}
+        mean_entropy = float(self._entropy_estimator(stats_entropy)[0])
+
+        return {"perplexity": perplexity, "mean_entropy": mean_entropy}
+
+    def score_truncated_sequence(
+        self,
+        prompt: str,
+        truncated_text: str,
+    ) -> Dict[str, float]:
+        """Score a truncated sequence using vLLM's prompt_logprobs (forward pass).
+
+        This is used after step boundary truncation to re-compute uncertainty
+        on the actual truncated text rather than the original generation.
+
+        Args:
+            prompt: The original prompt (context)
+            truncated_text: The truncated generated text to score
+
+        Returns:
+            Dict with 'perplexity', 'mean_entropy', and 'uncertainty_score' keys
+        """
+        # Combine prompt and truncated text
+        full_text = prompt + truncated_text
+
+        # Use vLLM to get logprobs for the truncated portion
+        # prompt_logprobs returns logprobs for input tokens (teacher forcing)
+        scoring_params = SamplingParams(
+            max_tokens=1,  # Generate minimal tokens
+            temperature=0.0,  # Deterministic
+            prompt_logprobs=20,  # Get logprobs for prompt tokens
+        )
+
+        outputs = self.model.generate([full_text], scoring_params)
+        request_output = outputs[0]
+
+        if not request_output.prompt_logprobs:
+            log.warning("No prompt_logprobs returned, returning default metrics")
+            return {"perplexity": 1.0, "mean_entropy": 0.0, "uncertainty_score": 1.0}
+
+        # Extract logprobs for the truncated_text portion only
+        prompt_tokens = len(self.tokenizer.encode(prompt))
+        truncated_logprobs = request_output.prompt_logprobs[prompt_tokens:]
+
+        if not truncated_logprobs:
+            return {"perplexity": 1.0, "mean_entropy": 0.0, "uncertainty_score": 1.0}
+
+        # Convert prompt_logprobs to format expected by _compute_uncertainty_metrics
+        # prompt_logprobs is List[Optional[Dict[int, Logprob]]]
+        # Get token IDs from the truncated portion
+        full_token_ids = self.tokenizer.encode(full_text)
+        truncated_token_ids = full_token_ids[prompt_tokens:]
+
+        # Filter out None entries and create logprob dicts
+        valid_logprobs = []
+        valid_token_ids = []
+        for i, lp in enumerate(truncated_logprobs):
+            if lp is not None and i < len(truncated_token_ids):
+                valid_logprobs.append(lp)
+                valid_token_ids.append(truncated_token_ids[i])
+
+        if not valid_logprobs:
+            return {"perplexity": 1.0, "mean_entropy": 0.0, "uncertainty_score": 1.0}
+
+        # Compute uncertainty metrics
+        metrics = self._compute_uncertainty_metrics(valid_token_ids, valid_logprobs)
+        metrics["uncertainty_score"] = 1.0 / (1.0 + metrics["mean_entropy"])
+
+        return metrics
 
     def _create_sampling_params(
         self,
@@ -209,6 +316,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             top_k=self.top_k,
             logprobs=20,
             stop=stop_tokens,
+            repetition_penalty=1.05,  # Penalize repetitive text
         )
 
     # =========================================================================
@@ -370,6 +478,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             last_request_output = outputs[0]  # Store for uncertainty
             output = last_request_output.outputs[0]
 
+            # Log raw vLLM output
+            stop_reason = getattr(output, "stop_reason", None)
+            log.debug(
+                f"vLLM output: {len(output.token_ids)} tokens, stop={repr(stop_reason)}\n"
+                f"  Raw text: {repr(output.text[-80:] if len(output.text) > 80 else output.text)}"
+            )
+
             accumulated_text += output.text
             accumulated_tokens.extend(output.token_ids)
             if output.logprobs:
@@ -396,8 +511,58 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         thinking_complete = self._is_thinking_complete(accumulated_text)
 
-        # Get uncertainty from wrapper output (if available)
-        uncertainty = self._get_uncertainty_from_output(last_request_output, 0)
+        # Get stop reason from last output (what triggered the stop)
+        stop_reason = getattr(output, "stop_reason", None) if output else None
+
+        # Check if text was truncated (e.g., at </think> boundary)
+        # If truncated, find how many tokens to keep by decoding prefixes
+        truncated_text = accumulated_text.strip()
+        original_token_count = len(accumulated_tokens) if accumulated_tokens else 0
+
+        if original_token_count > 0:
+            # Find the longest token prefix that decodes to a prefix of truncated_text
+            # This handles whitespace stripping and mid-token truncation correctly
+            best_prefix_len = original_token_count  # Default: use all tokens
+
+            for prefix_len in range(original_token_count, 0, -1):
+                prefix_tokens = accumulated_tokens[:prefix_len]
+                prefix_text = self.tokenizer.decode(prefix_tokens, skip_special_tokens=True)
+
+                # Check if this prefix is contained in the truncated text
+                # (allowing for whitespace differences)
+                if prefix_text.strip() == truncated_text or truncated_text.startswith(
+                    prefix_text.strip()
+                ):
+                    best_prefix_len = prefix_len
+                    break
+
+            # Log scoring details - decode both full tokens and truncated for comparison
+            full_decoded = self.tokenizer.decode(
+                accumulated_tokens, skip_special_tokens=True
+            )
+            scoring_text = self.tokenizer.decode(
+                accumulated_tokens[:best_prefix_len], skip_special_tokens=True
+            )
+            if best_prefix_len < original_token_count:
+                log.info(
+                    f"Scoring: {best_prefix_len}/{original_token_count} tokens (truncated {original_token_count - best_prefix_len})\n"
+                    f"  Full tokens decoded:      {repr(full_decoded)}\n"
+                    f"  Truncated tokens decoded: {repr(scoring_text)}"
+                )
+            else:
+                log.info(
+                    f"Scoring: {best_prefix_len} tokens (full, no truncation)\n"
+                    f"  Text: {repr(full_decoded)}"
+                )
+
+            uncertainty_metrics = self._compute_uncertainty_metrics(
+                accumulated_tokens[:best_prefix_len],
+                accumulated_logprobs[:best_prefix_len],
+            )
+        else:
+            # No tokens - return default metrics
+            log.warning("No tokens to score, using default metrics")
+            uncertainty_metrics = {"perplexity": 1.0, "mean_entropy": 0.0}
 
         return StepCandidate(
             text=accumulated_text.strip(),
@@ -405,8 +570,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             is_complete=True,
             is_trajectory_complete=thinking_complete,
             other_data={
-                # Convert uncertainty to validity score (lower uncertainty = higher score)
-                "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                # Convert mean_entropy to validity score (lower entropy = higher score)
+                "uncertainty_score": 1.0 / (1.0 + uncertainty_metrics["mean_entropy"]),
+                "perplexity": uncertainty_metrics["perplexity"],
+                "mean_entropy": uncertainty_metrics["mean_entropy"],
                 "logprobs": self._extract_logprobs(
                     accumulated_tokens, accumulated_logprobs
                 ),
@@ -467,8 +634,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     text = text + pattern
                     break
 
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, idx)
+            # Compute uncertainty metrics using lm-polygraph
+            uncertainty_metrics = self._compute_uncertainty_metrics(
+                output.token_ids, output.logprobs
+            )
 
             candidate = StepCandidate(
                 text=text.strip(),
@@ -476,8 +645,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 is_complete=True,
                 is_trajectory_complete=True,
                 other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                    # Convert mean_entropy to validity score (lower entropy = higher score)
+                    "uncertainty_score": 1.0
+                    / (1.0 + uncertainty_metrics["mean_entropy"]),
+                    "perplexity": uncertainty_metrics["perplexity"],
+                    "mean_entropy": uncertainty_metrics["mean_entropy"],
                     "logprobs": self._extract_logprobs(
                         output.token_ids, output.logprobs
                     ),
@@ -518,8 +690,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             if "</think>" not in text:
                 text = text + "</think>"
 
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, idx)
+            # Compute uncertainty metrics using lm-polygraph
+            uncertainty_metrics = self._compute_uncertainty_metrics(
+                output.token_ids, output.logprobs
+            )
 
             candidate = StepCandidate(
                 text=text.strip(),
@@ -527,8 +701,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 is_complete=True,
                 is_trajectory_complete=True,
                 other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                    # Convert mean_entropy to validity score (lower entropy = higher score)
+                    "uncertainty_score": 1.0
+                    / (1.0 + uncertainty_metrics["mean_entropy"]),
+                    "perplexity": uncertainty_metrics["perplexity"],
+                    "mean_entropy": uncertainty_metrics["mean_entropy"],
                     "logprobs": self._extract_logprobs(
                         output.token_ids, output.logprobs
                     ),
@@ -563,8 +740,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             )
             token_ids = answers[i].token_ids
 
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, i)
+            # Compute uncertainty metrics using lm-polygraph
+            uncertainty_metrics = self._compute_uncertainty_metrics(
+                token_ids, answers[i].logprobs
+            )
 
             candidate = StepCandidate(
                 text=step_text,
@@ -572,8 +751,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 is_complete=is_complete,
                 is_trajectory_complete=is_trajectory_complete,
                 other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                    # Convert mean_entropy to validity score (lower entropy = higher score)
+                    "uncertainty_score": 1.0
+                    / (1.0 + uncertainty_metrics["mean_entropy"]),
+                    "perplexity": uncertainty_metrics["perplexity"],
+                    "mean_entropy": uncertainty_metrics["mean_entropy"],
                     "logprobs": self._extract_logprobs(
                         answers[i].token_ids, answers[i].logprobs
                     ),
@@ -671,8 +853,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             is_trajectory_complete = self.detector.is_trajectory_complete(output.text)
             token_ids = output.token_ids
 
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, 0)
+            # Compute uncertainty metrics using lm-polygraph
+            uncertainty_metrics = self._compute_uncertainty_metrics(
+                token_ids, output.logprobs
+            )
 
             candidate = StepCandidate(
                 text=step_text,
@@ -680,8 +864,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 is_complete=is_complete,
                 is_trajectory_complete=is_trajectory_complete,
                 other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                    # Convert mean_entropy to validity score (lower entropy = higher score)
+                    "uncertainty_score": 1.0
+                    / (1.0 + uncertainty_metrics["mean_entropy"]),
+                    "perplexity": uncertainty_metrics["perplexity"],
+                    "mean_entropy": uncertainty_metrics["mean_entropy"],
                     "logprobs": self._extract_logprobs(
                         output.token_ids,
                         output.logprobs,
