@@ -21,7 +21,6 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
-import numpy as np
 from vllm import SamplingParams
 
 # Optional lm-polygraph imports for uncertainty computation
