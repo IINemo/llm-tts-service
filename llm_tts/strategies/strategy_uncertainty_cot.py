@@ -43,7 +43,7 @@ class StrategyUncertaintyCoT:
         self.uncertainty_sampling_mode = uncertainty_sampling.lower()
 
     def generate_trajectory(
-        self, prompt_or_chat: Union[str, List[Dict[str, str]]]
+        self, prompt_or_chat: Union[str, List[Dict[str, str]]], sample_idx: int = 0
     ) -> Dict[str, any]:
         """
         Uncertainty-guided decoding pipeline.
@@ -68,7 +68,7 @@ class StrategyUncertaintyCoT:
             num_greedy_steps = 0
 
             for step_num in range(self.max_steps):
-                log.info(f"\n=== PD step {step_num+1} ===")
+                log.info(f"=== PD step {step_num+1} ===")
 
                 # 1) Get initial uncertainty score
                 initial_candidate = None
@@ -90,7 +90,10 @@ class StrategyUncertaintyCoT:
                     )[0]
                     if not initial_candidate:
                         raise RuntimeError("Initial generation returned no candidates")
-                    initial_uncertainty = initial_candidate.other_data["validity_score"]
+                    # Contract: uncertainty_score is raw uncertainty
+                    initial_uncertainty = initial_candidate.other_data[
+                        "uncertainty_score"
+                    ]
 
                 log.info(
                     f"[initial] Uncertainty ({self.uncertainty_sampling_mode}): {initial_uncertainty}"
@@ -109,14 +112,14 @@ class StrategyUncertaintyCoT:
                     if not cand_list:
                         raise RuntimeError("No candidates returned for CoT branch")
 
-                    cand_scores = np.array(
-                        [cand.other_data["validity_score"] for cand in cand_list]
+                    cand_uncertainties = np.array(
+                        [cand.other_data["uncertainty_score"] for cand in cand_list]
                     )
-                    # we want to choose the candidate with the lowest uncertainty
-                    chosen = cand_list[np.argmin(cand_scores)]
+                    # Choose the candidate with the lowest uncertainty (most confident)
+                    chosen = cand_list[np.argmin(cand_uncertainties)]
                     for cand_idx, cand in enumerate(cand_list):
                         log.info(
-                            f"[{cand_idx}] Uncertainty: {cand_scores[cand_idx]:.3f} | Text: {cand.text}"
+                            f"[{cand_idx}] Uncertainty: {cand_uncertainties[cand_idx]:.3f} | Text: {cand.text}"
                         )
 
                     num_multi_path_steps += 1
@@ -128,7 +131,8 @@ class StrategyUncertaintyCoT:
                             "num_candidates": len(cand_list),
                             "all_candidates": [cand.text for cand in cand_list],
                             "all_uncertainties": [
-                                cand.other_data["validity_score"] for cand in cand_list
+                                cand.other_data["uncertainty_score"]
+                                for cand in cand_list
                             ],
                         }
                     }
@@ -159,14 +163,14 @@ class StrategyUncertaintyCoT:
 
                 # 3) Append and check for answer
                 chosen_text = chosen.text
-                chosen_uncert = chosen.other_data["validity_score"]
                 chosen.other_data.update(extra)
 
                 trajectory_steps.append(chosen)
                 trajectory_text += ("\n" if trajectory_text != "" else "") + chosen_text
 
-                uncertainties.append(initial_uncertainty)
-                validity_scores.append(1 - chosen_uncert)
+                # Store raw uncertainties AND derived validity scores consistently
+                uncertainties.append(float(initial_uncertainty))
+                validity_scores.append(float(chosen.other_data["validity_score"]))
 
                 if chosen_text == "":
                     empty_gen_count += 1
@@ -189,23 +193,27 @@ class StrategyUncertaintyCoT:
                     )
                     if answer_cands:
                         log.info("Answer candidates generated")
-                        answer_scores = np.array(
+                        answer_uncertainties = np.array(
                             [
-                                candidate.other_data["validity_score"]
+                                candidate.other_data["uncertainty_score"]
                                 for candidate in answer_cands
                             ]
                         )
-                        chosen = answer_cands[np.argmin(answer_scores)]
+                        chosen = answer_cands[np.argmin(answer_uncertainties)]
 
                         for cand_idx, cand in enumerate(answer_cands):
                             log.info(
-                                f"[{cand_idx}] Uncertainty: {answer_scores[cand_idx]:.3f} | Text: {cand.text}"
+                                f"[{cand_idx}] Uncertainty: {answer_uncertainties[cand_idx]:.3f} | Text: {cand.text}"
                             )
 
                         trajectory_steps.append(chosen)
                         trajectory_text += chosen.text
-                        uncertainties.append(chosen.other_data["validity_score"])
-                        validity_scores.append(1 - chosen.other_data["validity_score"])
+                        uncertainties.append(
+                            float(chosen.other_data["uncertainty_score"])
+                        )
+                        validity_scores.append(
+                            float(chosen.other_data["validity_score"])
+                        )
 
                         break
 
@@ -246,7 +254,7 @@ class StrategyUncertaintyCoT:
         )
         if not probe:
             raise RuntimeError("Token-level probe generation returned no candidates")
-        return probe[0].other_data.get("validity_score")
+        return probe[0].other_data.get("uncertainty_score")
 
     def _normalize_to_prompt(
         self, prompt_or_chat: Union[str, List[Dict[str, str]]]
