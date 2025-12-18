@@ -221,9 +221,7 @@ class StrategyOfflineBestOfN(StrategyBase):
     def _get_validity_score(self, candidate: "StepCandidate") -> float:
         """Get validity_score from candidate, logging error if missing."""
         if candidate.other_data is None:
-            log.error(
-                f"Candidate has no other_data! Text: {candidate.text[:100]}..."
-            )
+            log.error(f"Candidate has no other_data! Text: {candidate.text[:100]}...")
             return 1.0
         if "validity_score" not in candidate.other_data:
             log.error(

@@ -92,9 +92,16 @@ class StrategyOnlineBestOfN(StrategyBase):
                 # Get uncertainty score from other_data
                 uncertainty = self._get_uncertainty_score(candidate)
                 # Count tokens: generated (before truncation) vs truncated (actual text)
-                generated_tokens = len(candidate.token_ids) if candidate.token_ids else 0
-                if hasattr(self.step_generator, 'tokenizer') and self.step_generator.tokenizer:
-                    truncated_tokens = len(self.step_generator.tokenizer.encode(candidate.text))
+                generated_tokens = (
+                    len(candidate.token_ids) if candidate.token_ids else 0
+                )
+                if (
+                    hasattr(self.step_generator, "tokenizer")
+                    and self.step_generator.tokenizer
+                ):
+                    truncated_tokens = len(
+                        self.step_generator.tokenizer.encode(candidate.text)
+                    )
                 else:
                     truncated_tokens = generated_tokens
                 tflops = (
@@ -207,9 +214,7 @@ class StrategyOnlineBestOfN(StrategyBase):
     def _get_uncertainty_score(self, candidate: "StepCandidate") -> float:
         """Get uncertainty_score from candidate, logging error if missing."""
         if candidate.other_data is None:
-            log.error(
-                f"Candidate has no other_data! Text: {candidate.text[:100]}..."
-            )
+            log.error(f"Candidate has no other_data! Text: {candidate.text[:100]}...")
             return 0.0
         if "uncertainty_score" not in candidate.other_data:
             log.error(

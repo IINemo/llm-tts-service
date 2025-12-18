@@ -90,9 +90,7 @@ class StrategyUncertaintyCoT:
                     )[0]
                     if not initial_candidate:
                         raise RuntimeError("Initial generation returned no candidates")
-                    initial_uncertainty = initial_candidate.other_data[
-                        "validity_score"
-                    ]
+                    initial_uncertainty = initial_candidate.other_data["validity_score"]
 
                 log.info(
                     f"[initial] Uncertainty ({self.uncertainty_sampling_mode}): {initial_uncertainty}"
@@ -130,8 +128,7 @@ class StrategyUncertaintyCoT:
                             "num_candidates": len(cand_list),
                             "all_candidates": [cand.text for cand in cand_list],
                             "all_uncertainties": [
-                                cand.other_data["validity_score"]
-                                for cand in cand_list
+                                cand.other_data["validity_score"] for cand in cand_list
                             ],
                         }
                     }
@@ -208,9 +205,7 @@ class StrategyUncertaintyCoT:
                         trajectory_steps.append(chosen)
                         trajectory_text += chosen.text
                         uncertainties.append(chosen.other_data["validity_score"])
-                        validity_scores.append(
-                            1 - chosen.other_data["validity_score"]
-                        )
+                        validity_scores.append(1 - chosen.other_data["validity_score"])
 
                         break
 
