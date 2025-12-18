@@ -48,7 +48,7 @@ generation:
 strategy:
   type: online_best_of_n
   candidates_per_step: 4
-  max_steps: 250
+  max_steps: 50
   # Use structured detector for non-thinking mode
   detector_type: structured
   # Step boundary token limits
