@@ -15,12 +15,12 @@ class StepScorerConfidence(StepScorerBase):
     ) -> List[CandidateScore]:
         result = []
         for candidate in candidates:
-            uncertainty_score = candidate.other_data["uncertainty_score"]
+            validity_score = candidate.other_data["validity_score"]
 
-            if not isinstance(uncertainty_score, Iterable):
-                uncertainty_score = [uncertainty_score]
+            if not isinstance(validity_score, Iterable):
+                validity_score = [validity_score]
 
-            claim_scores = np.asarray(uncertainty_score)
+            claim_scores = np.asarray(validity_score)
             result.append(
                 CandidateScore(
                     candidate_text=candidate,

@@ -90,9 +90,7 @@ class StrategyUncertaintyCoT:
                     )[0]
                     if not initial_candidate:
                         raise RuntimeError("Initial generation returned no candidates")
-                    initial_uncertainty = initial_candidate.other_data[
-                        "uncertainty_score"
-                    ]
+                    initial_uncertainty = initial_candidate.other_data["validity_score"]
 
                 log.info(
                     f"[initial] Uncertainty ({self.uncertainty_sampling_mode}): {initial_uncertainty}"
@@ -112,7 +110,7 @@ class StrategyUncertaintyCoT:
                         raise RuntimeError("No candidates returned for CoT branch")
 
                     cand_scores = np.array(
-                        [cand.other_data["uncertainty_score"] for cand in cand_list]
+                        [cand.other_data["validity_score"] for cand in cand_list]
                     )
                     # we want to choose the candidate with the lowest uncertainty
                     chosen = cand_list[np.argmin(cand_scores)]
@@ -130,8 +128,7 @@ class StrategyUncertaintyCoT:
                             "num_candidates": len(cand_list),
                             "all_candidates": [cand.text for cand in cand_list],
                             "all_uncertainties": [
-                                cand.other_data["uncertainty_score"]
-                                for cand in cand_list
+                                cand.other_data["validity_score"] for cand in cand_list
                             ],
                         }
                     }
@@ -162,7 +159,7 @@ class StrategyUncertaintyCoT:
 
                 # 3) Append and check for answer
                 chosen_text = chosen.text
-                chosen_uncert = chosen.other_data["uncertainty_score"]
+                chosen_uncert = chosen.other_data["validity_score"]
                 chosen.other_data.update(extra)
 
                 trajectory_steps.append(chosen)
@@ -194,7 +191,7 @@ class StrategyUncertaintyCoT:
                         log.info("Answer candidates generated")
                         answer_scores = np.array(
                             [
-                                candidate.other_data["uncertainty_score"]
+                                candidate.other_data["validity_score"]
                                 for candidate in answer_cands
                             ]
                         )
@@ -207,10 +204,8 @@ class StrategyUncertaintyCoT:
 
                         trajectory_steps.append(chosen)
                         trajectory_text += chosen.text
-                        uncertainties.append(chosen.other_data["uncertainty_score"])
-                        validity_scores.append(
-                            1 - chosen.other_data["uncertainty_score"]
-                        )
+                        uncertainties.append(chosen.other_data["validity_score"])
+                        validity_scores.append(1 - chosen.other_data["validity_score"])
 
                         break
 
@@ -251,7 +246,7 @@ class StrategyUncertaintyCoT:
         )
         if not probe:
             raise RuntimeError("Token-level probe generation returned no candidates")
-        return probe[0].other_data.get("uncertainty_score")
+        return probe[0].other_data.get("validity_score")
 
     def _normalize_to_prompt(
         self, prompt_or_chat: Union[str, List[Dict[str, str]]]

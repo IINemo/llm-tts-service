@@ -122,17 +122,12 @@ class StructuredStepDetector(StepBoundaryDetectorBase):
     def is_trajectory_complete(
         self, generated_text: str, reached_eos: bool = False
     ) -> bool:
-        """Check if trajectory is complete."""
-        first_answer_pos = None
-        for pattern in self.answer_patterns:
-            pos = generated_text.find(pattern)
-            if pos != -1:
-                if first_answer_pos is None or pos < first_answer_pos:
-                    first_answer_pos = pos
+        """Check if trajectory is complete.
 
-        if first_answer_pos is not None:
-            return True
-
+        Trajectory is complete when we see <end of response> or other eos_patterns,
+        NOT just <Answer>:. The answer marker indicates the answer is coming,
+        but <end of response> marks the actual end.
+        """
         if reached_eos:
             return True
 

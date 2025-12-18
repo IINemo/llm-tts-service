@@ -12,11 +12,13 @@ from .stop_tokens import (
     expand_word_boundary,
     get_stop_tokens,
     get_stop_tokens_compact,
+    get_stop_tokens_sentence_start,
 )
 
 __all__ = [
     "get_stop_tokens",
     "get_stop_tokens_compact",
+    "get_stop_tokens_sentence_start",
     "expand_word_boundary",
     "SEQUENCE_WORDS",
     "CONCLUSION_WORDS",

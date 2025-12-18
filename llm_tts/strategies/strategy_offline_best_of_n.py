@@ -218,6 +218,20 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         return prompt
 
+    def _get_validity_score(self, candidate: "StepCandidate") -> float:
+        """Get validity_score from candidate, logging error if missing."""
+        if candidate.other_data is None:
+            log.error(f"Candidate has no other_data! Text: {candidate.text[:100]}...")
+            return 1.0
+        if "validity_score" not in candidate.other_data:
+            log.error(
+                f"validity_score missing from candidate.other_data! "
+                f"Keys: {list(candidate.other_data.keys())}, "
+                f"Text: {candidate.text[:100]}..."
+            )
+            return 1.0
+        return candidate.other_data["validity_score"]
+
     def _generate_thinking_phase(
         self, request: List[Dict[str, str]], n: int
     ) -> List[Dict[str, any]]:
@@ -274,9 +288,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "text": candidate.text,
                     "token_ids": candidate.token_ids,
                     "logprobs": candidate.other_data.get("logprobs", []),
-                    "uncertainty_score": candidate.other_data.get(
-                        "uncertainty_score", 1.0
-                    ),
+                    "validity_score": self._get_validity_score(candidate),
                     "generation_scores": candidate.generation_scores,
                 }
             )
@@ -350,9 +362,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "text": text,
                     "token_ids": candidate.token_ids,
                     "logprobs": candidate.other_data.get("logprobs", []),
-                    "uncertainty_score": candidate.other_data.get(
-                        "uncertainty_score", 1.0
-                    ),
+                    "validity_score": self._get_validity_score(candidate),
                     "generation_scores": candidate.generation_scores,
                 }
             )
@@ -439,10 +449,20 @@ class StrategyOfflineBestOfN(StrategyBase):
             total_tokens = thinking_tokens + response_tokens
             all_token_counts.append(total_tokens)
 
-            # Use uncertainty_score from step generator output
+            # Use validity_score from step generator output
             # These are already computed by the wrapper (VLLMWithUncertainty or CausalLMWithUncertainty)
-            thinking_uncertainty = thinking.get("uncertainty_score", 1.0)
-            response_uncertainty = response.get("uncertainty_score", 1.0)
+            if "validity_score" not in thinking:
+                log.error(
+                    f"validity_score missing from thinking dict! "
+                    f"Keys: {list(thinking.keys())}"
+                )
+            if "validity_score" not in response:
+                log.error(
+                    f"validity_score missing from response dict! "
+                    f"Keys: {list(response.keys())}"
+                )
+            thinking_uncertainty = thinking.get("validity_score", 1.0)
+            response_uncertainty = response.get("validity_score", 1.0)
             # Average uncertainty scores (lower = more confident)
             avg_uncertainty = (thinking_uncertainty + response_uncertainty) / 2
 
@@ -453,7 +473,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                 is_complete=True,
                 is_trajectory_complete=True,
                 other_data={
-                    "uncertainty_score": avg_uncertainty,
+                    "validity_score": avg_uncertainty,
                 },
             )
 
@@ -487,6 +507,11 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         # Build step candidates with full token_ids and logprobs
         # First: thinking phase (full, with token_ids)
+        if "validity_score" not in best_thinking:
+            log.error(
+                f"validity_score missing from best_thinking dict! "
+                f"Keys: {list(best_thinking.keys())}"
+            )
         thinking_candidate = StepCandidate(
             text=best_thinking["text"],
             token_ids=best_thinking.get("token_ids", []),
@@ -494,12 +519,17 @@ class StrategyOfflineBestOfN(StrategyBase):
             is_trajectory_complete=False,
             other_data={
                 "logprobs": best_thinking.get("logprobs", []),
-                "uncertainty_score": best_thinking.get("uncertainty_score", 1.0),
+                "validity_score": best_thinking.get("validity_score", 1.0),
                 "phase": "thinking",
             },
         )
 
         # Second: response phase (with token_ids)
+        if "validity_score" not in best_response:
+            log.error(
+                f"validity_score missing from best_response dict! "
+                f"Keys: {list(best_response.keys())}"
+            )
         response_candidate = StepCandidate(
             text=best_response["text"],
             token_ids=best_response.get("token_ids", []),
@@ -507,7 +537,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             is_trajectory_complete=True,
             other_data={
                 "logprobs": best_response.get("logprobs", []),
-                "uncertainty_score": best_response.get("uncertainty_score", 1.0),
+                "validity_score": best_response.get("validity_score", 1.0),
                 "phase": "response",
                 "validity": best_score,
             },

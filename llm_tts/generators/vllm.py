@@ -10,13 +10,27 @@ Two modes:
 2. thinking_mode=False: Simple structured generation
    - Uses StructuredStepDetector with explicit step patterns
    - Single-phase generation
+
+Uncertainty scoring:
+- Uses VLLMWithUncertainty wrapper from lm-polygraph for scoring
+- Supports truncation: score only the tokens before step boundary
+- Pass VLLMWithUncertainty as the model parameter
 """
 
 import inspect
 import logging
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
-from vllm import LLM, SamplingParams
+from vllm import SamplingParams
+
+# Optional lm-polygraph imports for uncertainty computation
+try:
+    from lm_polygraph.utils import VLLMWithUncertainty
+
+    POLYGRAPH_AVAILABLE = True
+except ImportError:
+    POLYGRAPH_AVAILABLE = False
+    VLLMWithUncertainty = None
 
 from llm_tts.generators.base import (
     StepCandidate,
@@ -36,12 +50,12 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     """
     Unified vLLM step generator supporting both thinking and structured modes.
 
-    For uncertainty estimation, pass a VLLMWithUncertainty wrapper as model.
-    The generator will read uncertainty_scores from the wrapper output,
-    similar to how HF generator reads from CausalLMWithUncertainty output.
+    Uses VLLMWithUncertainty wrapper from lm-polygraph for both generation and
+    uncertainty scoring. The wrapper's score() method computes uncertainty on
+    (possibly truncated) tokens.
 
     Args:
-        model: vLLM model instance (LLM or VLLMWithUncertainty wrapper)
+        model: VLLMWithUncertainty wrapper instance (wraps vLLM LLM with scoring)
         thinking_mode: If True, use two-phase thinking generation (default).
                       If False, use simple structured generation.
         detector: Step boundary detector (StructuredStepDetector or ThinkingMarkerDetector).
@@ -56,30 +70,23 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
     def __init__(
         self,
-        model: LLM,
+        model: "VLLMWithUncertainty",
         thinking_mode: bool = True,
-        # Detector (works for both modes)
         detector: Optional[
             Union[StructuredStepDetector, ThinkingMarkerDetector]
         ] = None,
-        # Structured mode parameters
         sampling_params: Optional[SamplingParams] = None,
-        # Common parameters
         answer_patterns: Optional[List[str]] = None,
-        # Common generation parameters
         max_new_tokens: int = 4096,
         temperature: float = 0.6,
         top_p: float = 0.95,
         top_k: int = 20,
-        # Context length limit
         max_model_len: int = 32768,
-        # FLOP calculator for token tracking
         flop_calculator: Optional["FLOPCalculator"] = None,
     ):
-        # vLLM handles batching internally, so generation_batch_size is large
         super().__init__(generation_batch_size=1024, flop_calculator=flop_calculator)
 
-        self.model = model
+        self.model = model  # VLLMWithUncertainty wrapper
         self.thinking_mode = thinking_mode
         self.tokenizer = model.get_tokenizer()
 
@@ -142,7 +149,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         """Initialize structured mode specific components."""
         self.detector = detector or StructuredStepDetector()
         self.sampling_params = sampling_params or SamplingParams(
-            min_tokens=100,
+            min_tokens=0,  # No minimum - stop tokens can trigger immediately
             max_tokens=self.max_new_tokens,
             logprobs=20,
             temperature=self.temperature,
@@ -169,28 +176,71 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 result.append(-100.0)
         return result
 
-    def _get_uncertainty_from_output(
-        self, request_output, output_idx: int = 0
-    ) -> float:
-        """
-        Extract uncertainty score from wrapper output (if available).
+    def score_truncated_sequence(
+        self,
+        prompt: str,
+        truncated_text: str,
+    ) -> Dict[str, float]:
+        """Score a truncated sequence using vLLM's prompt_logprobs (forward pass).
 
-        If model is VLLMWithUncertainty wrapper, outputs have uncertainty_scores.
-        Otherwise, returns 0.0 (no uncertainty computed).
+        This is used after step boundary truncation to re-compute uncertainty
+        on the actual truncated text rather than the original generation.
 
         Args:
-            request_output: Output from model.generate()
-            output_idx: Index of the output sequence (for n > 1)
+            prompt: The original prompt (context)
+            truncated_text: The truncated generated text to score
 
         Returns:
-            Uncertainty score (higher = more uncertain), or 0.0 if not available
+            Dict with 'uncertainty_score' key (from configured estimator)
         """
-        if hasattr(request_output, "uncertainty_scores"):
-            # Model is VLLMWithUncertainty wrapper
-            scores = request_output.uncertainty_scores
-            if scores and output_idx < len(scores):
-                return scores[output_idx]
-        return 0.0
+        # Combine prompt and truncated text
+        full_text = prompt + truncated_text
+
+        # Use vLLM to get logprobs for the truncated portion
+        # prompt_logprobs returns logprobs for input tokens (teacher forcing)
+        scoring_params = SamplingParams(
+            max_tokens=1,  # Generate minimal tokens
+            temperature=0.0,  # Deterministic
+            prompt_logprobs=20,  # Get logprobs for prompt tokens
+        )
+
+        outputs = self.model.generate([full_text], scoring_params)
+        request_output = outputs[0]
+
+        if not request_output.prompt_logprobs:
+            log.warning("No prompt_logprobs returned, returning default metrics")
+            return {"uncertainty_score": 0.0, "validity_score": 1.0}
+
+        # Extract logprobs for the truncated_text portion only
+        prompt_tokens = len(self.tokenizer.encode(prompt))
+        truncated_logprobs = request_output.prompt_logprobs[prompt_tokens:]
+
+        if not truncated_logprobs:
+            return {"uncertainty_score": 0.0, "validity_score": 1.0}
+
+        # Convert prompt_logprobs to format expected by wrapper.score()
+        # prompt_logprobs is List[Optional[Dict[int, Logprob]]]
+        # Get token IDs from the truncated portion
+        full_token_ids = self.tokenizer.encode(full_text)
+        truncated_token_ids = full_token_ids[prompt_tokens:]
+
+        # Filter out None entries and create logprob dicts
+        valid_logprobs = []
+        valid_token_ids = []
+        for i, lp in enumerate(truncated_logprobs):
+            if lp is not None and i < len(truncated_token_ids):
+                valid_logprobs.append(lp)
+                valid_token_ids.append(truncated_token_ids[i])
+
+        if not valid_logprobs:
+            return {"uncertainty_score": 0.0, "validity_score": 1.0}
+
+        # Compute uncertainty using wrapper
+        uncertainty = self.model.score(valid_token_ids, valid_logprobs)
+        return {
+            "uncertainty_score": uncertainty,
+            "validity_score": 1.0 / (1.0 + uncertainty),
+        }
 
     def _create_sampling_params(
         self,
@@ -209,6 +259,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             top_k=self.top_k,
             logprobs=20,
             stop=stop_tokens,
+            repetition_penalty=1.05,  # Penalize repetitive text
         )
 
     # =========================================================================
@@ -340,6 +391,44 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         trajectory_text = convert_trajectory_to_string(trajectory)
         return base_prompt + trajectory_text
 
+    def _apply_chat_template(
+        self,
+        request: List[Dict[str, str]],
+        enable_thinking: bool = True,
+    ) -> str:
+        """
+        Apply chat template to request with enable_thinking support.
+
+        Args:
+            request: Chat messages in OpenAI format
+            enable_thinking: Whether to enable thinking mode (if tokenizer supports it)
+
+        Returns:
+            Formatted prompt string
+        """
+        tokenizer_signature = inspect.signature(self.tokenizer.apply_chat_template)
+        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
+
+        if has_enable_thinking:
+            result = self.tokenizer.apply_chat_template(
+                request,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=enable_thinking,
+            )
+        else:
+            result = self.tokenizer.apply_chat_template(
+                request,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
+        # Force-close thinking when disabled but tokenizer doesn't support enable_thinking
+        if not enable_thinking and not has_enable_thinking:
+            result += "<think>\n\n</think>\n\n"
+
+        return result
+
     def _generate_single_thinking_step(
         self,
         request: List[Dict[str, str]],
@@ -370,6 +459,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             last_request_output = outputs[0]  # Store for uncertainty
             output = last_request_output.outputs[0]
 
+            # Log raw vLLM output
+            stop_reason = getattr(output, "stop_reason", None)
+            log.debug(
+                f"vLLM output: {len(output.token_ids)} tokens, stop={repr(stop_reason)}\n"
+                f"  Raw text: {repr(output.text[-80:] if len(output.text) > 80 else output.text)}"
+            )
+
             accumulated_text += output.text
             accumulated_tokens.extend(output.token_ids)
             if output.logprobs:
@@ -396,8 +492,60 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         thinking_complete = self._is_thinking_complete(accumulated_text)
 
-        # Get uncertainty from wrapper output (if available)
-        uncertainty = self._get_uncertainty_from_output(last_request_output, 0)
+        # Get stop reason from last output (what triggered the stop)
+        stop_reason = getattr(output, "stop_reason", None) if output else None
+
+        # Check if text was truncated (e.g., at </think> boundary)
+        # If truncated, find how many tokens to keep by decoding prefixes
+        truncated_text = accumulated_text.strip()
+        original_token_count = len(accumulated_tokens) if accumulated_tokens else 0
+
+        if original_token_count > 0:
+            # Find the longest token prefix that decodes to a prefix of truncated_text
+            # This handles whitespace stripping and mid-token truncation correctly
+            best_prefix_len = original_token_count  # Default: use all tokens
+
+            for prefix_len in range(original_token_count, 0, -1):
+                prefix_tokens = accumulated_tokens[:prefix_len]
+                prefix_text = self.tokenizer.decode(
+                    prefix_tokens, skip_special_tokens=True
+                )
+
+                # Check if this prefix is contained in the truncated text
+                # (allowing for whitespace differences)
+                if prefix_text.strip() == truncated_text or truncated_text.startswith(
+                    prefix_text.strip()
+                ):
+                    best_prefix_len = prefix_len
+                    break
+
+            # Log scoring details - decode both full tokens and truncated for comparison
+            full_decoded = self.tokenizer.decode(
+                accumulated_tokens, skip_special_tokens=True
+            )
+            scoring_text = self.tokenizer.decode(
+                accumulated_tokens[:best_prefix_len], skip_special_tokens=True
+            )
+            if best_prefix_len < original_token_count:
+                log.info(
+                    f"Scoring: {best_prefix_len}/{original_token_count} tokens (truncated {original_token_count - best_prefix_len})\n"
+                    f"  Full tokens decoded:      {repr(full_decoded)}\n"
+                    f"  Truncated tokens decoded: {repr(scoring_text)}"
+                )
+            else:
+                log.info(
+                    f"Scoring: {best_prefix_len} tokens (full, no truncation)\n"
+                    f"  Text: {repr(full_decoded)}"
+                )
+
+            uncertainty_score = self.model.score(
+                accumulated_tokens[:best_prefix_len],
+                accumulated_logprobs[:best_prefix_len],
+            )
+        else:
+            # No tokens - return default metrics
+            log.warning("No tokens to score, using default metrics")
+            uncertainty_score = 0.0
 
         return StepCandidate(
             text=accumulated_text.strip(),
@@ -405,8 +553,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             is_complete=True,
             is_trajectory_complete=thinking_complete,
             other_data={
-                # Convert uncertainty to validity score (lower uncertainty = higher score)
-                "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                "uncertainty_score": uncertainty_score,
+                "validity_score": 1.0 / (1.0 + uncertainty_score),
                 "logprobs": self._extract_logprobs(
                     accumulated_tokens, accumulated_logprobs
                 ),
@@ -467,8 +615,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     text = text + pattern
                     break
 
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, idx)
+            # Compute uncertainty using wrapper
+            uncertainty_score = self.model.score(output.token_ids, output.logprobs)
 
             candidate = StepCandidate(
                 text=text.strip(),
@@ -476,8 +624,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 is_complete=True,
                 is_trajectory_complete=True,
                 other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                    "uncertainty_score": uncertainty_score,
+                    "validity_score": 1.0 / (1.0 + uncertainty_score),
                     "logprobs": self._extract_logprobs(
                         output.token_ids, output.logprobs
                     ),
@@ -518,8 +666,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             if "</think>" not in text:
                 text = text + "</think>"
 
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, idx)
+            # Compute uncertainty using wrapper
+            uncertainty_score = self.model.score(output.token_ids, output.logprobs)
 
             candidate = StepCandidate(
                 text=text.strip(),
@@ -527,8 +675,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 is_complete=True,
                 is_trajectory_complete=True,
                 other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                    "uncertainty_score": uncertainty_score,
+                    "validity_score": 1.0 / (1.0 + uncertainty_score),
                     "logprobs": self._extract_logprobs(
                         output.token_ids, output.logprobs
                     ),
@@ -543,42 +691,144 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     # Structured mode methods
     # =========================================================================
 
+    def _truncate_at_step_boundary(self, text: str) -> str:
+        """Truncate text at the SECOND occurrence of '- Step' pattern.
+
+        We want to keep the first step but remove any subsequent steps.
+        Example: '- Step 1: foo\n- Step 2: bar' -> '- Step 1: foo\n'
+        """
+        if not hasattr(self, "detector"):
+            return text
+
+        # Only truncate at "- Step" marker
+        step_marker = "- Step"
+        first_pos = text.find(step_marker)
+        if first_pos == -1:
+            return text  # No step marker found
+
+        # Find second occurrence
+        second_pos = text.find(step_marker, first_pos + len(step_marker))
+        if second_pos > 0:
+            return text[:second_pos]
+        return text
+
     def _generate_structured_candidates(
-        self, request, candidates_per_step: int = 1
+        self,
+        request,
+        candidates_per_step: int = 1,
+        trajectory: Optional[List[StepCandidate]] = None,
     ) -> List[StepCandidate]:
-        """Generate candidates using structured mode (simple generation)."""
+        """Generate candidates using structured mode with step prefix injection.
+
+        Key approach (from PR #57):
+        1. Prepend "- Step N: " to prompt BEFORE generation
+        2. Model only generates step CONTENT (not the step marker)
+        3. "- Step" stop token triggers only if model tries to start NEXT step
+        4. No truncation needed - cleaner token counting
+        """
         candidates = []
+        trajectory = trajectory or []
+
+        # Build prompt with enable_thinking=False to disable thinking mode
+        prompt = self._apply_chat_template(request, enable_thinking=False)
+
+        # Append trajectory if present (continue from previous steps)
+        if trajectory:
+            trajectory_text = convert_trajectory_to_string(trajectory)
+            prompt = prompt + trajectory_text
+
+        # Calculate step number and create prefix
+        # Step 0 = first step = "- Step 1: " (1-indexed for display)
+        step_number = len(trajectory) + 1
+
+        # No leading newline - previous step ends with newline
+        # No trailing space - model will generate space if needed
+        if step_number == 1:
+            step_prefix = "<start of response>\nReasoning Steps:\n- Step 1:"
+        else:
+            step_prefix = f"- Step {step_number}:"
+
+        # Append step prefix to prompt - model generates only the step content
+        prompt_with_prefix = prompt + step_prefix
 
         self.sampling_params.n = candidates_per_step
-        outputs = self.model.generate(request, sampling_params=self.sampling_params)
+        log.info(
+            f"Structured mode: step {step_number}, "
+            f"stop={self.sampling_params.stop}, min_tokens={self.sampling_params.min_tokens}"
+        )
+
+        outputs = self.model.generate(
+            prompt_with_prefix, sampling_params=self.sampling_params
+        )
         request_output = outputs[0]
         answers = request_output.outputs
 
         for i in range(candidates_per_step):
-            step_text = answers[i].text
+            raw_text = answers[i].text
+            generated_token_ids = answers[i].token_ids
+            generated_logprobs = answers[i].logprobs
+
+            # Log raw vLLM output
+            stop_reason = getattr(answers[i], "stop_reason", None)
+            log.debug(
+                f"vLLM output [{i}]: {len(generated_token_ids)} tokens, stop={repr(stop_reason)}\n"
+                f"  Raw text: {repr(raw_text[-80:] if len(raw_text) > 80 else raw_text)}"
+            )
+
+            # Build full step text by prepending the step prefix we injected
+            # Model generates \n before "- Step", so raw_text ends with \n - keep it
+            step_text = step_prefix + raw_text
+
+            # Check if stopped at end-of-response marker
+            # vLLM strips stop tokens from output, so check stop_reason
+            stopped_at_eos = stop_reason == "<end of response>"
+            if stopped_at_eos:
+                # Append the EOS marker back since vLLM stripped it
+                # raw_text already ends with \n, so just append the marker
+                step_text = step_text + "<end of response>"
+                log.info(
+                    f"Candidate [{i}] stopped at <end of response>, appending marker"
+                )
+
             is_complete = True
 
-            is_trajectory_complete = self.detector.is_trajectory_complete(
-                answers[i].text
+            # Check if trajectory is complete:
+            # Either stop_reason is <end of response>, or text contains it
+            is_trajectory_complete = (
+                stopped_at_eos or self.detector.is_trajectory_complete(raw_text)
             )
-            token_ids = answers[i].token_ids
 
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, i)
+            # Log scoring details with full repr to see newlines
+            # Decode full token_ids to see what triggered the stop (includes stop token)
+            token_count = len(generated_token_ids)
+            full_decoded = self.tokenizer.decode(
+                generated_token_ids, skip_special_tokens=True
+            )
+            log.info(
+                f"Scoring [{i}]: {token_count} tokens, stop={repr(stop_reason)}\n"
+                f"  Full tokens decoded: {repr(full_decoded)}\n"
+                f"  Raw text (stripped): {repr(raw_text)}\n"
+                f"  Step text:           {repr(step_text)}"
+            )
+
+            # Compute uncertainty on generated tokens (no truncation needed)
+            uncertainty_score = self.model.score(
+                generated_token_ids, generated_logprobs
+            )
 
             candidate = StepCandidate(
                 text=step_text,
-                token_ids=token_ids,
+                token_ids=generated_token_ids,
                 is_complete=is_complete,
                 is_trajectory_complete=is_trajectory_complete,
                 other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                    "uncertainty_score": uncertainty_score,
+                    "validity_score": 1.0 / (1.0 + uncertainty_score),
                     "logprobs": self._extract_logprobs(
-                        answers[i].token_ids, answers[i].logprobs
+                        generated_token_ids, generated_logprobs
                     ),
                 },
-                raw_text=answers[i].text,
+                raw_text=raw_text,
             )
             candidates.append(candidate)
 
@@ -608,7 +858,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     request, trajectory, candidates_per_step
                 )
         else:
-            return self._generate_structured_candidates(request, candidates_per_step)
+            return self._generate_structured_candidates(
+                request, candidates_per_step, trajectory
+            )
 
     def generate_answer_candidates(
         self,
@@ -642,7 +894,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             self._record_generation(candidates, context_tokens=context_tokens)
             return candidates
         else:
-            return self._generate_structured_candidates(request, candidates_per_step)
+            return self._generate_structured_candidates(
+                request, candidates_per_step, trajectory
+            )
 
     def generate_answer(
         self, request, candidates_per_step: int, more_information=False
@@ -671,8 +925,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             is_trajectory_complete = self.detector.is_trajectory_complete(output.text)
             token_ids = output.token_ids
 
-            # Get uncertainty from wrapper output (if available)
-            uncertainty = self._get_uncertainty_from_output(request_output, 0)
+            # Compute uncertainty using wrapper
+            uncertainty_score = self.model.score(token_ids, output.logprobs)
 
             candidate = StepCandidate(
                 text=step_text,
@@ -680,8 +934,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 is_complete=is_complete,
                 is_trajectory_complete=is_trajectory_complete,
                 other_data={
-                    # Convert uncertainty to validity score (lower uncertainty = higher score)
-                    "uncertainty_score": 1.0 / (1.0 + uncertainty),
+                    "uncertainty_score": uncertainty_score,
+                    "validity_score": 1.0 / (1.0 + uncertainty_score),
                     "logprobs": self._extract_logprobs(
                         output.token_ids,
                         output.logprobs,

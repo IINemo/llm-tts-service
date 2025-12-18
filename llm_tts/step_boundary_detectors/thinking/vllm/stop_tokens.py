@@ -326,6 +326,78 @@ def get_stop_tokens_compact(
     return sorted(all_tokens)
 
 
+def get_stop_tokens_sentence_start(
+    use_sequence: bool = True,
+    use_conclusion: bool = True,
+    use_thinking: bool = True,
+    use_verification: bool = True,
+    use_reasoning: bool = False,
+    use_correction: bool = False,
+    use_structure: bool = False,
+    custom_words: List[str] = None,
+) -> List[str]:
+    """
+    Get stop tokens that match at sentence boundaries only.
+
+    Only matches words after NEWLINE (not inline punctuation) to ensure:
+    1. Previous sentence completes naturally with its punctuation
+    2. Stop token doesn't eat the period/question mark
+
+    Patterns like ". So " are NOT used because vLLM returns text UP TO
+    the stop token, which would exclude the period from the step text.
+
+    Returns stop tokens like:
+    - "\\nSo "
+    - "\\nLet me "
+    - "\\nTherefore,"
+    etc.
+    """
+    all_tokens: Set[str] = set()
+
+    words = []
+    if use_sequence:
+        words.extend(SEQUENCE_WORDS)
+    if use_conclusion:
+        words.extend(CONCLUSION_WORDS)
+    if use_thinking:
+        words.extend(THINKING_WORDS)
+    if use_verification:
+        words.extend(VERIFICATION_WORDS)
+    if use_reasoning:
+        words.extend(REASONING_WORDS)
+    if use_correction:
+        words.extend(CORRECTION_WORDS)
+    if custom_words:
+        words.extend(custom_words)
+
+    # Only use newline prefixes to preserve sentence-ending punctuation
+    # DO NOT use ". ", "? ", "! " - these eat the punctuation from previous sentence
+    for word in words:
+        word_cap = word.capitalize()
+
+        # Newline-based prefixes only (preserves punctuation in step text)
+        newline_prefixes = [
+            "\n",  # Plain newline
+            "\n\n",  # Double newline (paragraph break)
+        ]
+
+        # Word suffixes (what comes after the word)
+        suffixes = [" ", ", ", ": "]
+
+        for prefix in newline_prefixes:
+            for suffix in suffixes:
+                all_tokens.add(f"{prefix}{word_cap}{suffix}")
+
+    # Add structure tokens
+    if use_structure:
+        all_tokens.update(STRUCTURE_TOKENS)
+
+    # Always add answer tokens
+    all_tokens.update(ANSWER_TOKENS)
+
+    return sorted(all_tokens)
+
+
 # Quick test
 if __name__ == "__main__":
     # Test expansion
