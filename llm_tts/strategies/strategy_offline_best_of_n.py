@@ -218,6 +218,22 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         return prompt
 
+    def _get_validity_score(self, candidate: "StepCandidate") -> float:
+        """Get validity_score from candidate, logging error if missing."""
+        if candidate.other_data is None:
+            log.error(
+                f"Candidate has no other_data! Text: {candidate.text[:100]}..."
+            )
+            return 1.0
+        if "validity_score" not in candidate.other_data:
+            log.error(
+                f"validity_score missing from candidate.other_data! "
+                f"Keys: {list(candidate.other_data.keys())}, "
+                f"Text: {candidate.text[:100]}..."
+            )
+            return 1.0
+        return candidate.other_data["validity_score"]
+
     def _generate_thinking_phase(
         self, request: List[Dict[str, str]], n: int
     ) -> List[Dict[str, any]]:
@@ -274,9 +290,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "text": candidate.text,
                     "token_ids": candidate.token_ids,
                     "logprobs": candidate.other_data.get("logprobs", []),
-                    "validity_score": candidate.other_data.get(
-                        "validity_score", 1.0
-                    ),
+                    "validity_score": self._get_validity_score(candidate),
                     "generation_scores": candidate.generation_scores,
                 }
             )
@@ -350,9 +364,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "text": text,
                     "token_ids": candidate.token_ids,
                     "logprobs": candidate.other_data.get("logprobs", []),
-                    "validity_score": candidate.other_data.get(
-                        "validity_score", 1.0
-                    ),
+                    "validity_score": self._get_validity_score(candidate),
                     "generation_scores": candidate.generation_scores,
                 }
             )
