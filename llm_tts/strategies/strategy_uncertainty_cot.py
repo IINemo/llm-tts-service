@@ -56,6 +56,13 @@ class StrategyUncertaintyCoT:
             request_chat = self._normalize_to_chat(prompt_or_chat)
             prompt_text = self._normalize_to_prompt(prompt_or_chat)
 
+            # Reset per-sample token/FLOP tracking (if supported by generator)
+            if hasattr(self.step_generator, "reset_sample_stats"):
+                try:
+                    self.step_generator.reset_sample_stats()
+                except Exception as e:
+                    log.warning(f"Failed to reset sample stats: {e}")
+
             log_prompt = prompt_text.replace("\n", "\\n")
             log.info(f"Initial prompt: {log_prompt}")
 
@@ -181,11 +188,13 @@ class StrategyUncertaintyCoT:
                         )
                         break
 
-                if self.step_generator.detector.is_trajectory_complete(trajectory_text):
+                if chosen.is_trajectory_complete:
                     log.info(
                         f"Trajectory complete at step {step_num+1}; Generating answer candidates"
                     )
+                    break
 
+                if step_num == self.max_steps and not chosen.is_trajectory_complete:
                     answer_cands = self.step_generator.generate_answer_candidates(
                         request_chat,
                         trajectory_steps,
@@ -215,7 +224,18 @@ class StrategyUncertaintyCoT:
                             float(chosen.other_data["validity_score"])
                         )
 
-                        break
+            # Finalize and capture token/FLOP stats (if supported by generator)
+            token_stats = None
+            if hasattr(self.step_generator, "finalize_sample_stats"):
+                try:
+                    self.step_generator.finalize_sample_stats()
+                except Exception as e:
+                    log.warning(f"Failed to finalize sample stats: {e}")
+            if hasattr(self.step_generator, "get_sample_stats"):
+                try:
+                    token_stats = self.step_generator.get_sample_stats()
+                except Exception as e:
+                    log.warning(f"Failed to get sample stats: {e}")
 
             return {
                 "trajectory": trajectory_text,
@@ -225,6 +245,7 @@ class StrategyUncertaintyCoT:
                 "completed": self.step_generator.detector.contains_answer_pattern(
                     trajectory_text
                 ),
+                "token_stats": token_stats,
                 "metadata": {
                     "uncert_cot_threshold": self.uncertainty_threshold,
                     "uncert_sampling_mode": self.uncertainty_sampling_mode,
