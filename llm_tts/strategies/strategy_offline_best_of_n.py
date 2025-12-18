@@ -453,6 +453,16 @@ class StrategyOfflineBestOfN(StrategyBase):
 
             # Use validity_score from step generator output
             # These are already computed by the wrapper (VLLMWithUncertainty or CausalLMWithUncertainty)
+            if "validity_score" not in thinking:
+                log.error(
+                    f"validity_score missing from thinking dict! "
+                    f"Keys: {list(thinking.keys())}"
+                )
+            if "validity_score" not in response:
+                log.error(
+                    f"validity_score missing from response dict! "
+                    f"Keys: {list(response.keys())}"
+                )
             thinking_uncertainty = thinking.get("validity_score", 1.0)
             response_uncertainty = response.get("validity_score", 1.0)
             # Average uncertainty scores (lower = more confident)
@@ -499,6 +509,11 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         # Build step candidates with full token_ids and logprobs
         # First: thinking phase (full, with token_ids)
+        if "validity_score" not in best_thinking:
+            log.error(
+                f"validity_score missing from best_thinking dict! "
+                f"Keys: {list(best_thinking.keys())}"
+            )
         thinking_candidate = StepCandidate(
             text=best_thinking["text"],
             token_ids=best_thinking.get("token_ids", []),
@@ -512,6 +527,11 @@ class StrategyOfflineBestOfN(StrategyBase):
         )
 
         # Second: response phase (with token_ids)
+        if "validity_score" not in best_response:
+            log.error(
+                f"validity_score missing from best_response dict! "
+                f"Keys: {list(best_response.keys())}"
+            )
         response_candidate = StepCandidate(
             text=best_response["text"],
             token_ids=best_response.get("token_ids", []),
