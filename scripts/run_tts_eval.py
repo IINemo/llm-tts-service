@@ -836,6 +836,7 @@ def generate_trajectories(
     question_field: str = "question",
     answer_field: str = "answer",
     flop_calculator: FLOPCalculator = None,
+    exact_match_dataset_answer_format: str = "numeric",
 ):
     # Phase 1: Generate trajectories (without checking correctness)
     log.info("\n" + "=" * 60)
@@ -843,6 +844,9 @@ def generate_trajectories(
     log.info("=" * 60)
 
     save_path_file = Path(save_path) / "results.json"
+    exact_match_evaluator = EvaluatorExactMatch(
+        dataset_answer_format=exact_match_dataset_answer_format
+    )
 
     subset_size = len(dataset)
     for i in tqdm(range(subset_size), desc="Generating trajectories"):
@@ -932,7 +936,9 @@ def generate_trajectories(
         log.info(f"FINAL ANSWER: {generated_text}")
         log.info(f"Gold answer:  {gold_answer_num}")
         # Use grade_answer for proper mathematical comparison (handles LaTeX normalization, sympy)
-        is_correct = grade_answer(str(generated_text), str(gold_answer_num))
+        is_correct = exact_match_evaluator._score_single(
+            (question, str(generated_text), str(gold_answer_num))
+        )
         log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
         log.info("-" * 60)
         log.info(f"Num steps: {len(result['steps'])}")
@@ -1418,6 +1424,7 @@ def main(config):
         question_field=config.dataset.get("question_field", "question"),
         answer_field=config.dataset.get("answer_field", "answer"),
         flop_calculator=flop_calculator,
+        exact_match_dataset_answer_format=config.dataset.answer_format,
     )
 
     # Evaluate results

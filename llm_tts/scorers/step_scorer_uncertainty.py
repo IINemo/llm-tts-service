@@ -20,7 +20,8 @@ class StepScorerUncertainty(StepScorerBase):
             if not isinstance(validity_score, Iterable):
                 validity_score = [validity_score]
 
-            claim_scores = 1.0 - np.asarray(validity_score)
+            # since we're using validity score, we need to convert it to uncertainty score
+            claim_scores = np.asarray(validity_score)
             result.append(
                 CandidateScore(
                     candidate_text=candidate,
