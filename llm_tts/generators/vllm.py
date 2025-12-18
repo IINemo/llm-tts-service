@@ -996,7 +996,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             f"Structured mode: generating final answer with prefix '{answer_prefix}'"
         )
 
-        outputs = self.model.generate(prompt_with_prefix, sampling_params=answer_sampling_params)
+        outputs = self.model.generate(
+            prompt_with_prefix, sampling_params=answer_sampling_params
+        )
         request_output = outputs[0]
         answers = request_output.outputs
 
@@ -1019,7 +1021,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             )
 
             # Compute uncertainty
-            uncertainty_score = self.model.score(generated_token_ids, generated_logprobs)
+            uncertainty_score = self.model.score(
+                generated_token_ids, generated_logprobs
+            )
 
             candidate = StepCandidate(
                 text=answer_text,
