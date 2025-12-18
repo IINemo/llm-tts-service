@@ -419,8 +419,8 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             min_tokens=self.min_step_tokens,
         )
 
-        # Build generation params
-        gen_params = self._get_base_gen_params(self.max_new_tokens)
+        # Build generation params - limit to max_step_tokens for thinking steps
+        gen_params = self._get_base_gen_params(self.max_step_tokens)
         gen_params["stopping_criteria"] = StoppingCriteriaList([stopping_criteria])
 
         # Generate
