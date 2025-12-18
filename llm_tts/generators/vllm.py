@@ -443,14 +443,15 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         last_request_output = None  # Track for uncertainty extraction
 
         for attempt in range(max_continuation_attempts):
-            remaining_tokens = self.max_new_tokens - len(accumulated_tokens)
-            if remaining_tokens <= 0:
+            # Limit per-step tokens to max_step_tokens
+            remaining_step_tokens = self.max_step_tokens - len(accumulated_tokens)
+            if remaining_step_tokens <= 0:
                 break
 
             sampling_params = self._create_sampling_params(
                 stop_tokens=self.thinking_stop_tokens,
                 n=1,
-                max_tokens=remaining_tokens,
+                max_tokens=remaining_step_tokens,
                 min_tokens=self.min_step_tokens if attempt == 0 else 0,
             )
 
