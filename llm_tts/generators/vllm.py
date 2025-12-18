@@ -149,7 +149,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         """Initialize structured mode specific components."""
         self.detector = detector or StructuredStepDetector()
         self.sampling_params = sampling_params or SamplingParams(
-            min_tokens=100,
+            min_tokens=0,  # No minimum - stop tokens can trigger immediately
             max_tokens=self.max_new_tokens,
             logprobs=20,
             temperature=self.temperature,
@@ -388,6 +388,44 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         trajectory_text = convert_trajectory_to_string(trajectory)
         return base_prompt + trajectory_text
+
+    def _apply_chat_template(
+        self,
+        request: List[Dict[str, str]],
+        enable_thinking: bool = True,
+    ) -> str:
+        """
+        Apply chat template to request with enable_thinking support.
+
+        Args:
+            request: Chat messages in OpenAI format
+            enable_thinking: Whether to enable thinking mode (if tokenizer supports it)
+
+        Returns:
+            Formatted prompt string
+        """
+        tokenizer_signature = inspect.signature(self.tokenizer.apply_chat_template)
+        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
+
+        if has_enable_thinking:
+            result = self.tokenizer.apply_chat_template(
+                request,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=enable_thinking,
+            )
+        else:
+            result = self.tokenizer.apply_chat_template(
+                request,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
+        # Force-close thinking when disabled but tokenizer doesn't support enable_thinking
+        if not enable_thinking and not has_enable_thinking:
+            result += "<think>\n\n</think>\n\n"
+
+        return result
 
     def _generate_single_thinking_step(
         self,
@@ -653,44 +691,129 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     # Structured mode methods
     # =========================================================================
 
+    def _truncate_at_step_boundary(self, text: str) -> str:
+        """Truncate text at the SECOND occurrence of '- Step' pattern.
+
+        We want to keep the first step but remove any subsequent steps.
+        Example: '- Step 1: foo\n- Step 2: bar' -> '- Step 1: foo\n'
+        """
+        if not hasattr(self, 'detector'):
+            return text
+
+        # Only truncate at "- Step" marker
+        step_marker = "- Step"
+        first_pos = text.find(step_marker)
+        if first_pos == -1:
+            return text  # No step marker found
+
+        # Find second occurrence
+        second_pos = text.find(step_marker, first_pos + len(step_marker))
+        if second_pos > 0:
+            return text[:second_pos]
+        return text
+
     def _generate_structured_candidates(
-        self, request, candidates_per_step: int = 1
+        self, request, candidates_per_step: int = 1, trajectory: Optional[List[StepCandidate]] = None
     ) -> List[StepCandidate]:
-        """Generate candidates using structured mode (simple generation)."""
+        """Generate candidates using structured mode with step prefix injection.
+
+        Key approach (from PR #57):
+        1. Prepend "- Step N: " to prompt BEFORE generation
+        2. Model only generates step CONTENT (not the step marker)
+        3. "- Step" stop token triggers only if model tries to start NEXT step
+        4. No truncation needed - cleaner token counting
+        """
         candidates = []
+        trajectory = trajectory or []
+
+        # Build prompt with enable_thinking=False to disable thinking mode
+        prompt = self._apply_chat_template(request, enable_thinking=False)
+
+        # Append trajectory if present (continue from previous steps)
+        if trajectory:
+            trajectory_text = convert_trajectory_to_string(trajectory)
+            prompt = prompt + trajectory_text
+
+        # Calculate step number and create prefix
+        # Step 0 = first step = "- Step 1: " (1-indexed for display)
+        step_number = len(trajectory) + 1
+
+        # No leading newline - previous step ends with newline
+        # No trailing space - model will generate space if needed
+        if step_number == 1:
+            step_prefix = "<start of response>\nReasoning Steps:\n- Step 1:"
+        else:
+            step_prefix = f"- Step {step_number}:"
+
+        # Append step prefix to prompt - model generates only the step content
+        prompt_with_prefix = prompt + step_prefix
 
         self.sampling_params.n = candidates_per_step
-        outputs = self.model.generate(request, sampling_params=self.sampling_params)
+        log.info(
+            f"Structured mode: step {step_number}, "
+            f"stop={self.sampling_params.stop}, min_tokens={self.sampling_params.min_tokens}"
+        )
+
+        outputs = self.model.generate(prompt_with_prefix, sampling_params=self.sampling_params)
         request_output = outputs[0]
         answers = request_output.outputs
 
         for i in range(candidates_per_step):
-            step_text = answers[i].text
+            raw_text = answers[i].text
+            generated_token_ids = answers[i].token_ids
+            generated_logprobs = answers[i].logprobs
+
+            # Log raw vLLM output
+            stop_reason = getattr(answers[i], "stop_reason", None)
+            log.debug(
+                f"vLLM output [{i}]: {len(generated_token_ids)} tokens, stop={repr(stop_reason)}\n"
+                f"  Raw text: {repr(raw_text[-80:] if len(raw_text) > 80 else raw_text)}"
+            )
+
+            # Build full step text by prepending the step prefix we injected
+            # Model generates \n before "- Step", so raw_text ends with \n - keep it
+            step_text = step_prefix + raw_text
+
+            # Check if stopped at end-of-response marker
+            # vLLM strips stop tokens from output, so check stop_reason
+            stopped_at_eos = stop_reason == "<end of response>"
+            if stopped_at_eos:
+                # Append the EOS marker back since vLLM stripped it
+                # raw_text already ends with \n, so just append the marker
+                step_text = step_text + "<end of response>"
+                log.info(f"Candidate [{i}] stopped at <end of response>, appending marker")
+
             is_complete = True
 
-            is_trajectory_complete = self.detector.is_trajectory_complete(
-                answers[i].text
-            )
-            token_ids = answers[i].token_ids
+            # Check if trajectory is complete:
+            # Either stop_reason is <end of response>, or text contains it
+            is_trajectory_complete = stopped_at_eos or self.detector.is_trajectory_complete(raw_text)
 
-            # Compute uncertainty using wrapper
-            uncertainty_score = self.model.score(
-                token_ids, answers[i].logprobs
+            # Log scoring details with full repr to see newlines
+            # Decode full token_ids to see what triggered the stop (includes stop token)
+            token_count = len(generated_token_ids)
+            full_decoded = self.tokenizer.decode(generated_token_ids, skip_special_tokens=True)
+            log.info(
+                f"Scoring [{i}]: {token_count} tokens, stop={repr(stop_reason)}\n"
+                f"  Full tokens decoded: {repr(full_decoded)}\n"
+                f"  Raw text (stripped): {repr(raw_text)}\n"
+                f"  Step text:           {repr(step_text)}"
             )
+
+            # Compute uncertainty on generated tokens (no truncation needed)
+            uncertainty_score = self.model.score(generated_token_ids, generated_logprobs)
 
             candidate = StepCandidate(
                 text=step_text,
-                token_ids=token_ids,
+                token_ids=generated_token_ids,
                 is_complete=is_complete,
                 is_trajectory_complete=is_trajectory_complete,
                 other_data={
                     "uncertainty_score": uncertainty_score,
                     "validity_score": 1.0 / (1.0 + uncertainty_score),
-                    "logprobs": self._extract_logprobs(
-                        answers[i].token_ids, answers[i].logprobs
-                    ),
+                    "logprobs": self._extract_logprobs(generated_token_ids, generated_logprobs),
                 },
-                raw_text=answers[i].text,
+                raw_text=raw_text,
             )
             candidates.append(candidate)
 
@@ -720,7 +843,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     request, trajectory, candidates_per_step
                 )
         else:
-            return self._generate_structured_candidates(request, candidates_per_step)
+            return self._generate_structured_candidates(request, candidates_per_step, trajectory)
 
     def generate_answer_candidates(
         self,
@@ -754,7 +877,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             self._record_generation(candidates, context_tokens=context_tokens)
             return candidates
         else:
-            return self._generate_structured_candidates(request, candidates_per_step)
+            return self._generate_structured_candidates(request, candidates_per_step, trajectory)
 
     def generate_answer(
         self, request, candidates_per_step: int, more_information=False

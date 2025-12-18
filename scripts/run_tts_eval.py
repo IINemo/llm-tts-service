@@ -360,23 +360,34 @@ def create_model(config):
                 )
             else:
                 # Use VLLMStepGenerator in structured mode
+                # step_patterns: boundaries for step truncation (only step markers, not answer)
+                # answer_patterns: markers indicating the final answer
+                # eos_patterns: markers indicating end of response (used as stop tokens)
                 detector = StructuredStepDetector(
                     step_patterns=config.strategy.get(
-                        "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+                        "detector_step_patterns", ["- Step"]
                     ),
                     answer_patterns=config.strategy.get(
                         "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+                    ),
+                    eos_patterns=config.strategy.get(
+                        "detector_eos_patterns", ["<end of response>"]
                     ),
                     max_tokens_per_step=config.generation.max_new_tokens,
                 )
 
                 # Create sampling params for step generation
+                # Stop at step boundaries (- Step) and end of response, but NOT at <Answer>:
+                # We want the model to generate the full answer: <Answer>: 49\n<end of response>
+                # Cast to list to avoid OmegaConf ListConfig issues with vLLM
+                stop_patterns = list(detector.step_patterns) + list(detector.eos_patterns)
                 step_sampling_params = SamplingParams(
                     max_tokens=config.generation.max_new_tokens,
+                    min_tokens=0,  # No minimum - with step prefix injection, stop tokens trigger immediately
                     temperature=config.generation.temperature,
                     top_p=config.generation.top_p,
                     logprobs=config.strategy.get("top_logprobs", 20),
-                    stop=detector.step_patterns,
+                    stop=stop_patterns,
                 )
 
                 step_generator = VLLMStepGenerator(
