@@ -757,6 +757,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             f"stop={self.sampling_params.stop}, min_tokens={self.sampling_params.min_tokens}"
         )
 
+        context_tokens = len(self.tokenizer.encode(prompt_with_prefix))
         outputs = self.model.generate(
             prompt_with_prefix, sampling_params=self.sampling_params
         )
@@ -831,6 +832,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 raw_text=raw_text,
             )
             candidates.append(candidate)
+
+        # IMPORTANT: VLLMStepGenerator overrides __call__ and therefore does NOT
+        # inherit the base class' automatic token tracking for structured mode.
+        # Record tokens here so per-sample token/FLOP metrics are non-zero.
+        self._record_generation(candidates, context_tokens=context_tokens)
 
         return candidates
 
