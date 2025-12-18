@@ -1,12 +1,8 @@
 """
 vLLM wrapper with uncertainty estimation, similar to CausalLMWithUncertainty.
 
-Reference implementation (HuggingFace):
-    lm_polygraph/utils/causal_lm_with_uncertainty.py
-    https://github.com/IINemo/lm-polygraph/blob/main/src/lm_polygraph/utils/causal_lm_with_uncertainty.py
-
 Usage:
-    from lm_polygraph.estimators import Perplexity
+    from lm_polygraph.estimators import Perplexity, MeanTokenEntropy
     from lm_polygraph.stat_calculators import VLLMLogprobsCalculator, EntropyCalculator
     from vllm import LLM, SamplingParams
 
@@ -21,12 +17,20 @@ Usage:
     estimator = MeanTokenEntropy()
 
     llm_with_uncertainty = VLLMWithUncertainty(llm, stat_calculators, estimator)
+
+    # Option 1: Generate with immediate scoring (scores ALL tokens)
     outputs = llm_with_uncertainty.generate(prompts, sampling_params)
+
+    # Option 2: Generate then score truncated tokens separately
+    outputs = llm_with_uncertainty.generate(prompts, sampling_params, compute_uncertainty=False)
+    # ... find truncation boundary ...
+    uncertainty = llm_with_uncertainty.score(truncated_token_ids, truncated_logprobs)
 """
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 
+import numpy as np
 from lm_polygraph.estimators import Estimator
 from vllm import LLM, SamplingParams
 from vllm.outputs import RequestOutput
@@ -38,7 +42,6 @@ class RequestOutputWithUncertainty:
 
     request_output: RequestOutput
     uncertainty_scores: List[float]  # One score per output sequence
-    deps: Optional[List[Dict]] = None  # Dependencies from stat calculators (if keep_deps=True)
 
     def __getattr__(self, name):
         """Delegate attribute access to the wrapped RequestOutput."""
@@ -55,7 +58,6 @@ class VLLMWithUncertainty:
         llm: vLLM LLM instance
         stat_calculators: List of stat calculators (e.g., [VLLMLogprobsCalculator(), EntropyCalculator()])
         estimator: lm-polygraph Estimator (e.g., Perplexity, MeanTokenEntropy)
-        keep_deps: If True, include computed dependencies (stats) in output for debugging/analysis
     """
 
     def __init__(
@@ -63,28 +65,31 @@ class VLLMWithUncertainty:
         llm: LLM,
         stat_calculators: List,
         estimator: Estimator,
-        keep_deps: bool = False,
     ):
         self.llm = llm
         self.tokenizer = llm.get_tokenizer()
         self.stat_calculators = stat_calculators
         self.estimator = estimator
-        self.keep_deps = keep_deps
 
     def generate(
         self,
         prompts: Union[str, List[str]],
         sampling_params: Optional[SamplingParams] = None,
+        compute_uncertainty: bool = True,
     ) -> List[RequestOutputWithUncertainty]:
         """
-        Generate completions with uncertainty scores.
+        Generate completions with optional uncertainty scores.
 
         Args:
             prompts: Input prompts (single string or list)
             sampling_params: SamplingParams (must have logprobs > 0)
+            compute_uncertainty: If True, compute uncertainty for all tokens.
+                                If False, return outputs without uncertainty
+                                (use score() method later for truncated tokens).
 
         Returns:
             List of RequestOutputWithUncertainty with uncertainty_scores
+            (scores will be empty list if compute_uncertainty=False)
         """
         # Ensure logprobs enabled
         if sampling_params and (sampling_params.logprobs is None or sampling_params.logprobs == 0):
@@ -97,34 +102,55 @@ class VLLMWithUncertainty:
         results = []
         for request_output in outputs:
             request_scores = []
-            request_deps = [] if self.keep_deps else None
 
-            for output in request_output.outputs:
-                # Build deps dict with vLLM output for stat_calculators
-                deps = {"vllm_output": output}
-
-                # Run stat calculators
-                for calc in self.stat_calculators:
-                    deps.update(calc(deps))
-
-                # Call estimator
-                uncertainty = self.estimator(deps)
-                request_scores.append(float(uncertainty[0]))
-
-                # Store deps if requested (remove vllm_output to avoid serialization issues)
-                if self.keep_deps:
-                    deps_copy = {k: v for k, v in deps.items() if k != "vllm_output"}
-                    request_deps.append(deps_copy)
+            if compute_uncertainty:
+                for output in request_output.outputs:
+                    uncertainty = self.score(output.token_ids, output.logprobs)
+                    request_scores.append(uncertainty)
 
             results.append(
                 RequestOutputWithUncertainty(
                     request_output=request_output,
                     uncertainty_scores=request_scores,
-                    deps=request_deps,
                 )
             )
 
         return results
+
+    def score(
+        self,
+        token_ids: List[int],
+        logprobs: List[Dict],
+    ) -> float:
+        """
+        Compute uncertainty score for given tokens and logprobs.
+
+        This method can be used to score truncated tokens separately from generation.
+        Useful when you need to truncate at a step boundary before scoring.
+
+        Args:
+            token_ids: List of token IDs (can be truncated)
+            logprobs: List of logprob dicts from vLLM (can be truncated)
+
+        Returns:
+            Uncertainty score (float). Lower = more certain for most estimators.
+        """
+        if not token_ids or not logprobs:
+            return 0.0
+
+        # Build deps dict with token_ids and logprobs directly
+        deps = {
+            "token_ids": token_ids,
+            "logprobs": logprobs,
+        }
+
+        # Run stat calculators
+        for calc in self.stat_calculators:
+            deps.update(calc(deps))
+
+        # Call estimator
+        uncertainty = self.estimator(deps)
+        return float(uncertainty[0])
 
     def get_tokenizer(self):
         """Return the tokenizer."""
