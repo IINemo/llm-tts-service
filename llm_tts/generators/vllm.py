@@ -484,6 +484,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
             if len(accumulated_tokens) >= self.max_step_tokens:
                 log.debug(f"Max step tokens reached after {attempt + 1} attempts")
+                # Truncate at last sentence boundary to avoid mid-sentence cuts
+                accumulated_text = self._truncate_at_sentence_boundary(accumulated_text)
                 break
 
             log.debug(
@@ -756,6 +758,34 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             return text + "<end of response>", True
 
         return text, False
+
+    def _truncate_at_sentence_boundary(self, text: str) -> str:
+        """Truncate text at the last sentence boundary (period, newline, etc.).
+
+        Used when hitting max_step_tokens to avoid cutting mid-sentence.
+        """
+        # Find last sentence boundary
+        boundaries = [". ", ".\n", "?\n", "? ", "!\n", "! ", "\n\n"]
+        last_boundary_pos = -1
+        last_boundary = None
+
+        for boundary in boundaries:
+            pos = text.rfind(boundary)
+            if pos > last_boundary_pos:
+                last_boundary_pos = pos
+                last_boundary = boundary
+
+        if last_boundary_pos > 0:
+            # Include the boundary character (period, etc.) but not trailing space/newline
+            truncated = text[: last_boundary_pos + 1]
+            log.debug(
+                f"Truncated at sentence boundary '{repr(last_boundary)}' "
+                f"pos {last_boundary_pos}, kept {len(truncated)}/{len(text)} chars"
+            )
+            return truncated
+
+        # No sentence boundary found - return as-is
+        return text
 
     def _generate_structured_candidates(
         self,
