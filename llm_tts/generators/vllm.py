@@ -508,6 +508,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             text = output.text
             token_ids = output.token_ids
             logprobs = output.logprobs
+            stop_reason = getattr(output, "stop_reason", None)
 
             # Check if thinking phase is complete
             thinking_complete = "</think>" in text
@@ -515,6 +516,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 # Truncate at </think>
                 think_pos = text.find("</think>")
                 text = text[: think_pos + len("</think>")]
+
+            # If hit max_tokens, truncate at sentence boundary to avoid mid-word cuts
+            hit_max_tokens = stop_reason is None or stop_reason == "length"
+            if hit_max_tokens and not thinking_complete:
+                text = self._truncate_at_sentence_boundary(text)
 
             # Check for repetitions
             repetition_detected = self._detect_line_repetitions(text)
