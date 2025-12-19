@@ -518,7 +518,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
     # Main generation methods
     # =========================================================================
 
-    def generate_candidates(
+    def generate_step_candidates(
         self,
         request: List[Dict[str, str]],
         trajectory: List[StepCandidate],

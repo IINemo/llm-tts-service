@@ -161,10 +161,10 @@ class StepCandidateGeneratorBase:
         return stats
 
     @abstractmethod
-    def generate_candidates(
+    def generate_step_candidates(
         self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
     ) -> List[StepCandidate]:
-        """Generate candidates for a given trajectory"""
+        """Generate N candidate next steps for a given trajectory."""
         pass
 
     @abstractmethod
@@ -185,13 +185,13 @@ class StepCandidateGeneratorBase:
         Automatically records token statistics after generation.
         """
         if self.generation_batch_size < candidates_per_step:
-            candidates = self._generate_candidates_in_batches(
+            candidates = self._generate_step_candidates_in_batches(
                 request,
                 trajectory=trajectory,
                 candidates_per_step=candidates_per_step,
             )
         else:
-            candidates = self.generate_candidates(
+            candidates = self.generate_step_candidates(
                 request,
                 trajectory=trajectory,
                 candidates_per_step=candidates_per_step,
@@ -201,13 +201,13 @@ class StepCandidateGeneratorBase:
 
         return candidates
 
-    def _generate_candidates_in_batches(
+    def _generate_step_candidates_in_batches(
         self,
         request: List[Dict[str, str]],
         trajectory: List[StepCandidate],
         candidates_per_step: int,
     ) -> List:
-        """Generate candidates in smaller batches to avoid OOM.
+        """Generate step candidates in smaller batches to avoid OOM.
 
         Records token statistics for each batch.
         """
@@ -232,7 +232,7 @@ class StepCandidateGeneratorBase:
             )
 
             # Generate batch
-            batch_candidates = self.generate_candidates(
+            batch_candidates = self.generate_step_candidates(
                 request, trajectory=trajectory, candidates_per_step=batch_size
             )
             if batch_candidates:

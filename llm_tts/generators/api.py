@@ -43,13 +43,13 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self.detector = detector or StructuredStepDetector()
         self.prefill_mode = prefill_mode
 
-    def generate_candidates(
+    def generate_step_candidates(
         self,
         request: List[Dict[str, str]],
         trajectory: List[StepCandidate],
         candidates_per_step: int,
     ) -> List[StepCandidate]:
-        """Generate N candidate next steps from current trajectory"""
+        """Generate N candidate next steps from current trajectory."""
 
         log.info(f"Generating {candidates_per_step} candidates from trajectory")
 
