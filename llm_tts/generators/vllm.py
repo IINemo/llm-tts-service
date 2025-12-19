@@ -3,7 +3,7 @@ Unified vLLM step candidate generator supporting both structured and thinking mo
 
 Two modes:
 1. thinking_mode=True (default): Two-phase generation with <think>...</think>
-   - Uses semantic stop tokens for step boundaries
+   - Uses semantic stop tokens for step boundaries (e.g., "Wait,", "Hmm,", etc.)
    - Phase 1: Generate thinking content inside <think>...</think>
    - Phase 2: Generate response after thinking
 
@@ -13,8 +13,30 @@ Two modes:
 
 Uncertainty scoring:
 - Uses VLLMWithUncertainty wrapper from lm-polygraph for scoring
-- Supports truncation: score only the tokens before step boundary
 - Pass VLLMWithUncertainty as the model parameter
+
+Architecture Notes:
+-------------------
+
+Both modes use vLLM's native batch generation (n=candidates_per_step) for efficiency.
+Step boundaries are enforced via stop tokens and min_tokens parameter.
+
+Method naming convention:
+- PUBLIC API (no underscore prefix):
+  - generate_step_candidates()   - Generate N candidate next steps
+  - generate_answer_candidates() - Generate N final answer candidates
+
+- PRIVATE IMPLEMENTATION (underscore prefix):
+  - Thinking mode:
+    - _generate_thinking_step_candidates()  - Generate N thinking step candidates
+    - _generate_thinking_answer_candidates()- Generate N answer candidates after </think>
+  - Structured mode:
+    - _generate_structured_step_candidates()  - Generate N structured step candidates
+    - _generate_structured_answer_candidates()- Generate N answer candidates
+
+Token tracking (_record_generation):
+- Called at LEAF methods that invoke model.generate() to ensure accurate FLOP calculation
+- Each leaf method tracks: context_tokens (input) and output_tokens (generated)
 """
 
 import inspect
@@ -266,17 +288,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     # Thinking mode methods
     # =========================================================================
 
-    def _is_valid_step_boundary(self, text: str, num_tokens: int) -> bool:
-        """Check if text represents a valid step boundary (thinking mode)."""
-        if num_tokens < self.min_step_tokens:
-            return False
-
-        text = text.strip()
-        if text and text[-1] in ".!?\n":
-            return True
-
-        return False
-
     def _is_thinking_complete(self, text: str) -> bool:
         """Check if thinking phase is complete (contains </think>)."""
         return "</think>" in text
@@ -437,158 +448,24 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         return result
 
-    def _generate_single_thinking_step(
-        self,
-        request: List[Dict[str, str]],
-        trajectory: List[StepCandidate],
-    ) -> StepCandidate:
-        """Generate a single thinking step with boundary validation."""
-        prompt = self._build_prompt(request, trajectory)
-        accumulated_text = ""
-        accumulated_tokens = []
-        accumulated_logprobs = []
-        max_continuation_attempts = 5
-        last_request_output = None  # Track for uncertainty extraction
-
-        for attempt in range(max_continuation_attempts):
-            # Limit per-step tokens to max_step_tokens
-            remaining_step_tokens = self.max_step_tokens - len(accumulated_tokens)
-            if remaining_step_tokens <= 0:
-                break
-
-            sampling_params = self._create_sampling_params(
-                stop_tokens=self.thinking_stop_tokens,
-                n=1,
-                max_tokens=remaining_step_tokens,
-                min_tokens=self.min_step_tokens if attempt == 0 else 0,
-            )
-
-            current_prompt = prompt + accumulated_text
-            outputs = self.model.generate([current_prompt], sampling_params)
-            last_request_output = outputs[0]  # Store for uncertainty
-            output = last_request_output.outputs[0]
-
-            # Log raw vLLM output
-            stop_reason = getattr(output, "stop_reason", None)
-            log.debug(
-                f"vLLM output: {len(output.token_ids)} tokens, stop={repr(stop_reason)}\n"
-                f"  Raw text: {repr(output.text[-80:] if len(output.text) > 80 else output.text)}"
-            )
-
-            accumulated_text += output.text
-            accumulated_tokens.extend(output.token_ids)
-            if output.logprobs:
-                accumulated_logprobs.extend(output.logprobs)
-
-            if self._is_thinking_complete(accumulated_text):
-                log.debug(f"Thinking complete (</think>) after {attempt + 1} attempts")
-                think_pos = accumulated_text.find("</think>")
-                accumulated_text = accumulated_text[: think_pos + len("</think>")]
-                break
-
-            if self._is_valid_step_boundary(accumulated_text, len(accumulated_tokens)):
-                log.debug(f"Valid thinking step boundary after {attempt + 1} attempts")
-                break
-
-            if len(accumulated_tokens) >= self.max_step_tokens:
-                log.debug(f"Max step tokens reached after {attempt + 1} attempts")
-                # Truncate at last sentence boundary to avoid mid-sentence cuts
-                accumulated_text = self._truncate_at_sentence_boundary(accumulated_text)
-                break
-
-            log.debug(
-                f"Attempt {attempt + 1}: Invalid boundary "
-                f"(tokens={len(accumulated_tokens)}, min={self.min_step_tokens}), continuing..."
-            )
-
-        thinking_complete = self._is_thinking_complete(accumulated_text)
-
-        # Check for repetitions - mark trajectory complete if detected
-        repetition_detected = self._detect_line_repetitions(accumulated_text)
-        if repetition_detected:
-            log.warning(
-                "Repetition detected in thinking step, marking trajectory complete"
-            )
-
-        # Get stop reason from last output (what triggered the stop)
-        stop_reason = getattr(output, "stop_reason", None) if output else None
-
-        # Check if text was truncated (e.g., at </think> boundary)
-        # If truncated, find how many tokens to keep by decoding prefixes
-        truncated_text = accumulated_text.strip()
-        original_token_count = len(accumulated_tokens) if accumulated_tokens else 0
-
-        if original_token_count > 0:
-            # Find the longest token prefix that decodes to a prefix of truncated_text
-            # This handles whitespace stripping and mid-token truncation correctly
-            best_prefix_len = original_token_count  # Default: use all tokens
-
-            for prefix_len in range(original_token_count, 0, -1):
-                prefix_tokens = accumulated_tokens[:prefix_len]
-                prefix_text = self.tokenizer.decode(
-                    prefix_tokens, skip_special_tokens=True
-                )
-
-                # Check if this prefix is contained in the truncated text
-                # (allowing for whitespace differences)
-                if prefix_text.strip() == truncated_text or truncated_text.startswith(
-                    prefix_text.strip()
-                ):
-                    best_prefix_len = prefix_len
-                    break
-
-            # Log scoring details - decode both full tokens and truncated for comparison
-            full_decoded = self.tokenizer.decode(
-                accumulated_tokens, skip_special_tokens=True
-            )
-            scoring_text = self.tokenizer.decode(
-                accumulated_tokens[:best_prefix_len], skip_special_tokens=True
-            )
-            if best_prefix_len < original_token_count:
-                log.info(
-                    f"Scoring: {best_prefix_len}/{original_token_count} tokens (truncated {original_token_count - best_prefix_len})\n"
-                    f"  Full tokens decoded:      {repr(full_decoded)}\n"
-                    f"  Truncated tokens decoded: {repr(scoring_text)}"
-                )
-            else:
-                log.info(
-                    f"Scoring: {best_prefix_len} tokens (full, no truncation)\n"
-                    f"  Text: {repr(full_decoded)}"
-                )
-
-            uncertainty_score = self.model.score(
-                accumulated_tokens[:best_prefix_len],
-                accumulated_logprobs[:best_prefix_len],
-            )
-        else:
-            # No tokens - return default metrics
-            log.warning("No tokens to score, using default metrics")
-            uncertainty_score = 0.0
-
-        return StepCandidate(
-            text=accumulated_text.strip(),
-            token_ids=accumulated_tokens,
-            is_complete=True,
-            is_trajectory_complete=thinking_complete or repetition_detected,
-            other_data={
-                "uncertainty_score": uncertainty_score,
-                "validity_score": 1.0 / (1.0 + uncertainty_score),
-                "logprobs": self._extract_logprobs(
-                    accumulated_tokens, accumulated_logprobs
-                ),
-            },
-            raw_text=accumulated_text,
-        )
-
-    def generate_thinking_step(
+    def _generate_thinking_step_candidates(
         self,
         request: List[Dict[str, str]],
         trajectory: Optional[List[StepCandidate]] = None,
         candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
-        """Generate thinking step candidates (inside <think> block)."""
+        """Generate N thinking step candidates using vLLM batch generation.
+
+        Uses vLLM's native batching (n=candidates_per_step) with stop tokens
+        to define step boundaries. No continuation logic needed since semantic
+        markers like "Wait,", "Hmm," etc. are valid reasoning step boundaries.
+
+        Records token usage for FLOP calculation.
+        """
         if not self.thinking_mode:
-            raise RuntimeError("generate_thinking_step() requires thinking_mode=True")
+            raise RuntimeError(
+                "_generate_thinking_step_candidates() requires thinking_mode=True"
+            )
 
         trajectory = trajectory or []
         trajectory, context_limit_reached = self._truncate_trajectory(
@@ -612,25 +489,137 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             )
             return [closing_step] * candidates_per_step
 
+        prompt = self._build_prompt(request, trajectory)
+        context_tokens = len(self.tokenizer.encode(prompt))
+
+        # Use vLLM batch generation with n=candidates_per_step
+        sampling_params = self._create_sampling_params(
+            stop_tokens=self.thinking_stop_tokens,
+            n=candidates_per_step,
+            max_tokens=self.max_step_tokens,
+            min_tokens=self.min_step_tokens,
+        )
+
+        outputs = self.model.generate([prompt], sampling_params)
+        request_output = outputs[0]
+
         candidates = []
-        for i in range(candidates_per_step):
-            candidate = self._generate_single_thinking_step(request, trajectory)
+        for idx, output in enumerate(request_output.outputs):
+            text = output.text
+            token_ids = output.token_ids
+            logprobs = output.logprobs
+            stop_reason = getattr(output, "stop_reason", None)
+
+            # Check if thinking phase is complete
+            thinking_complete = "</think>" in text
+            if thinking_complete:
+                # Truncate at </think>
+                think_pos = text.find("</think>")
+                text = text[: think_pos + len("</think>")]
+
+            # If hit max_tokens, truncate at sentence boundary to avoid mid-word cuts
+            hit_max_tokens = stop_reason is None or stop_reason == "length"
+            if hit_max_tokens and not thinking_complete:
+                text = self._truncate_at_sentence_boundary(text)
+
+            # Check for repetitions
+            repetition_detected = self._detect_line_repetitions(text)
+            if repetition_detected:
+                log.warning(
+                    f"Repetition detected in thinking step [{idx}], "
+                    "marking trajectory complete"
+                )
+
+            # Find the best token prefix that matches the (possibly truncated) text
+            # This is needed because text may be truncated at sentence boundary,
+            # but we need to score only the tokens corresponding to the truncated text
+            truncated_text = text.strip()
+            original_token_count = len(token_ids)
+            best_prefix_len = original_token_count  # Default: use all tokens
+
+            if original_token_count > 0:
+                # Find the longest token prefix that decodes to a prefix of truncated_text
+                for prefix_len in range(original_token_count, 0, -1):
+                    prefix_tokens = token_ids[:prefix_len]
+                    prefix_text = self.tokenizer.decode(
+                        prefix_tokens, skip_special_tokens=True
+                    )
+                    # Check if this prefix matches the truncated text
+                    if (
+                        prefix_text.strip() == truncated_text
+                        or truncated_text.startswith(prefix_text.strip())
+                    ):
+                        best_prefix_len = prefix_len
+                        break
+
+            # Log scoring details
+            full_decoded = self.tokenizer.decode(token_ids, skip_special_tokens=True)
+            if best_prefix_len < original_token_count:
+                scoring_text = self.tokenizer.decode(
+                    token_ids[:best_prefix_len], skip_special_tokens=True
+                )
+                log.info(
+                    f"Scoring: {best_prefix_len}/{original_token_count} tokens "
+                    f"(truncated {original_token_count - best_prefix_len})\n"
+                    f"  Stop reason: {repr(stop_reason)}\n"
+                    f"  Full tokens decoded:      {repr(full_decoded)}\n"
+                    f"  Truncated tokens decoded: {repr(scoring_text)}"
+                )
+            else:
+                log.info(
+                    f"Scoring: {best_prefix_len} tokens (full, no truncation)\n"
+                    f"  Stop reason: {repr(stop_reason)}\n"
+                    f"  Text: {repr(full_decoded)}"
+                )
+
+            # Compute uncertainty on truncated tokens only
+            uncertainty_score = self.model.score(
+                token_ids[:best_prefix_len],
+                logprobs[:best_prefix_len],
+            )
+
+            candidate = StepCandidate(
+                text=text.strip(),
+                token_ids=token_ids[:best_prefix_len],
+                is_complete=True,
+                is_trajectory_complete=thinking_complete or repetition_detected,
+                other_data={
+                    "uncertainty_score": uncertainty_score,
+                    "validity_score": 1.0 / (1.0 + uncertainty_score),
+                    "logprobs": self._extract_logprobs(
+                        token_ids[:best_prefix_len], logprobs[:best_prefix_len]
+                    ),
+                    "original_token_count": original_token_count,
+                },
+                raw_text=output.text,
+            )
             candidates.append(candidate)
+
+        # Record token usage for FLOP calculation
+        self._record_generation(candidates, context_tokens=context_tokens)
 
         return candidates
 
-    def generate_response(
+    def _generate_thinking_answer_candidates(
         self,
         request: List[Dict[str, str]],
         trajectory: List[StepCandidate],
         candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
-        """Generate response after thinking phase."""
+        """Generate N answer candidates after thinking phase (after </think>).
+
+        This is a leaf method that calls model.generate() directly using
+        vLLM's native batching (n=candidates_per_step).
+        Records token usage for FLOP calculation.
+        """
         if not self.thinking_mode:
-            raise RuntimeError("generate_response() requires thinking_mode=True")
+            raise RuntimeError(
+                "_generate_thinking_answer_candidates() requires thinking_mode=True"
+            )
 
         candidates = []
         prompt = self._build_prompt(request, trajectory)
+        context_tokens = len(self.tokenizer.encode(prompt))
 
         sampling_params = self._create_sampling_params(
             stop_tokens=self.response_stop_tokens,
@@ -669,6 +658,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             )
             candidates.append(candidate)
 
+        # Record token usage for FLOP calculation
+        self._record_generation(candidates, context_tokens=context_tokens)
+
         return candidates
 
     def generate_full_thinking(
@@ -677,11 +669,15 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         num_candidates: int = 1,
         max_tokens: Optional[int] = None,
     ) -> List[StepCandidate]:
-        """Generate N complete thinking phases in batch (no step boundaries)."""
+        """Generate N complete thinking phases in batch (no step boundaries).
+
+        Records token usage for FLOP calculation.
+        """
         if not self.thinking_mode:
             raise RuntimeError("generate_full_thinking() requires thinking_mode=True")
 
         prompt = self._build_prompt(request, [])
+        context_tokens = len(self.tokenizer.encode(prompt))
         max_tokens = max_tokens or self.max_new_tokens
 
         sampling_params = self._create_sampling_params(
@@ -719,6 +715,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 raw_text=output.text,
             )
             candidates.append(candidate)
+
+        # Record token usage for FLOP calculation
+        self._record_generation(candidates, context_tokens=context_tokens)
 
         return candidates
 
@@ -856,19 +855,26 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         # No sentence boundary found - return as-is
         return text
 
-    def _generate_structured_candidates(
+    def _generate_structured_step_candidates(
         self,
         request,
         candidates_per_step: int = 1,
         trajectory: Optional[List[StepCandidate]] = None,
     ) -> List[StepCandidate]:
-        """Generate candidates using structured mode with step prefix injection.
+        """Generate N step candidates using structured mode with step prefix injection.
+
+        This is a leaf method that calls model.generate() directly using
+        vLLM's native batching (n=candidates_per_step).
 
         Key approach (from PR #57):
         1. Prepend "- Step N: " to prompt BEFORE generation
         2. Model only generates step CONTENT (not the step marker)
         3. "- Step" stop token triggers only if model tries to start NEXT step
         4. No truncation needed - cleaner token counting
+
+        Unlike thinking mode, structured mode doesn't need a separate
+        _generate_structured_step() method because vLLM handles batching natively
+        and step boundaries are enforced via stop tokens without iterative continuation.
         """
         candidates = []
         trajectory = trajectory or []
@@ -901,6 +907,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             f"stop={self.sampling_params.stop}, min_tokens={self.sampling_params.min_tokens}"
         )
 
+        context_tokens = len(self.tokenizer.encode(prompt_with_prefix))
         outputs = self.model.generate(
             prompt_with_prefix, sampling_params=self.sampling_params
         )
@@ -987,19 +994,28 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             )
             candidates.append(candidate)
 
+        # IMPORTANT: VLLMStepGenerator overrides __call__ and therefore does NOT
+        # inherit the base class' automatic token tracking for structured mode.
+        # Record tokens here so per-sample token/FLOP metrics are non-zero.
+        self._record_generation(candidates, context_tokens=context_tokens)
+
         return candidates
 
     # =========================================================================
     # Common interface methods
     # =========================================================================
 
-    def generate_candidates(
+    def generate_step_candidates(
         self,
         request: List[Dict[str, str]],
         trajectory: Optional[List[StepCandidate]] = None,
         candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
-        """Generate N candidate next steps from current trajectory."""
+        """Generate N candidate next steps from current trajectory.
+
+        PUBLIC API - Main entry point for step generation.
+        Routes to appropriate private method based on mode and trajectory state.
+        """
         if self.thinking_mode:
             trajectory = trajectory or []
             full_trajectory = convert_trajectory_to_string(trajectory)
@@ -1007,13 +1023,15 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
             if thinking_complete:
                 log.info("Thinking complete, generating response")
-                return self.generate_response(request, trajectory, candidates_per_step)
+                return self._generate_thinking_answer_candidates(
+                    request, trajectory, candidates_per_step
+                )
             else:
-                return self.generate_thinking_step(
+                return self._generate_thinking_step_candidates(
                     request, trajectory, candidates_per_step
                 )
         else:
-            return self._generate_structured_candidates(
+            return self._generate_structured_step_candidates(
                 request, candidates_per_step, trajectory
             )
 
@@ -1023,7 +1041,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         trajectory: List[StepCandidate],
         candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
-        """Generate answer candidates with token tracking."""
+        """Generate N final answer candidates.
+
+        PUBLIC API - Force generation of final answer even if model hasn't
+        naturally reached end-of-response marker.
+        """
         if self.thinking_mode:
             # Check if thinking phase is complete
             full_trajectory = convert_trajectory_to_string(trajectory)
@@ -1040,30 +1062,29 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 )
                 trajectory.append(close_thinking_step)
 
-            prompt = self._build_prompt(request, trajectory)
-            context_tokens = len(self.tokenizer.encode(prompt))
-
-            candidates = self.generate_response(
+            return self._generate_thinking_answer_candidates(
                 request, trajectory, candidates_per_step
             )
-            self._record_generation(candidates, context_tokens=context_tokens)
-            return candidates
         else:
             # Structured mode: force generation of <Answer>: instead of another step
-            return self._generate_structured_answer(
+            return self._generate_structured_answer_candidates(
                 request, candidates_per_step, trajectory
             )
 
-    def _generate_structured_answer(
+    def _generate_structured_answer_candidates(
         self,
         request: List[Dict[str, str]],
         candidates_per_step: int = 1,
         trajectory: Optional[List[StepCandidate]] = None,
     ) -> List[StepCandidate]:
-        """Generate final answer in structured mode by injecting <Answer>: prefix.
+        """Generate N final answer candidates in structured mode.
+
+        This is a leaf method that calls model.generate() directly using
+        vLLM's native batching (n=candidates_per_step).
+        Records token usage for FLOP calculation.
 
         Called when max_steps is reached without the model naturally generating <Answer>:.
-        Forces the model to provide a final answer.
+        Forces the model to provide a final answer by injecting <Answer>: prefix.
         """
         candidates = []
         trajectory = trajectory or []
@@ -1079,6 +1100,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         # Inject <Answer>: prefix to force answer generation
         answer_prefix = "<Answer>:"
         prompt_with_prefix = prompt + answer_prefix
+        context_tokens = len(self.tokenizer.encode(prompt_with_prefix))
 
         # Only stop at <end of response>
         answer_sampling_params = SamplingParams(
@@ -1141,20 +1163,29 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             )
             candidates.append(candidate)
 
+        # Record token usage for FLOP calculation
+        self._record_generation(candidates, context_tokens=context_tokens)
+
         return candidates
 
     def generate_answer(
         self, request, candidates_per_step: int, more_information=False
     ) -> List[StepCandidate]:
         """Generate final answer (structured mode compatibility)."""
-        return self.generate_candidates(request, None, candidates_per_step)
+        return self.generate_step_candidates(request, None, candidates_per_step)
 
     def generate_batch(
         self, requests: List[str], candidates_per_step: int = 1
     ) -> List[StepCandidate]:
-        """Generate batch of completions from requests (structured mode)."""
+        """Generate batch of completions from requests (structured mode).
+
+        Records token usage for FLOP calculation.
+        """
         if self.thinking_mode:
             raise RuntimeError("generate_batch() requires thinking_mode=False")
+
+        # Calculate total context tokens across all requests
+        context_tokens = sum(len(self.tokenizer.encode(req)) for req in requests)
 
         self.sampling_params.n = candidates_per_step
         vllm_outputs = self.model.generate(
@@ -1190,6 +1221,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             )
             result.append(candidate)
 
+        # Record token usage for FLOP calculation
+        self._record_generation(result, context_tokens=context_tokens)
+
         return result
 
     def __call__(
@@ -1198,18 +1232,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         trajectory: Optional[List[StepCandidate]] = None,
         candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
-        """Callable interface for step generation with token tracking."""
-        trajectory = trajectory or []
+        """Callable interface for step generation.
 
-        if self.thinking_mode:
-            prompt = self._build_prompt(request, trajectory)
-            context_tokens = len(self.tokenizer.encode(prompt))
-        else:
-            context_tokens = 0
-
-        candidates = self.generate_candidates(request, trajectory, candidates_per_step)
-
-        if self.thinking_mode:
-            self._record_generation(candidates, context_tokens=context_tokens)
-
-        return candidates
+        Delegates to generate_step_candidates(). Token tracking is handled
+        at leaf methods (_generate_thinking_step, _generate_structured_step_candidates, etc.)
+        """
+        return self.generate_step_candidates(request, trajectory, candidates_per_step)

@@ -91,19 +91,16 @@ class StrategyOnlineBestOfN(StrategyBase):
             ):
                 # Get uncertainty score from other_data
                 uncertainty = self._get_uncertainty_score(candidate)
-                # Count tokens: generated (before truncation) vs truncated (actual text)
-                generated_tokens = (
+                # Count tokens: generated (before truncation) vs truncated (in token_ids)
+                truncated_tokens = (
                     len(candidate.token_ids) if candidate.token_ids else 0
                 )
-                if (
-                    hasattr(self.step_generator, "tokenizer")
-                    and self.step_generator.tokenizer
-                ):
-                    truncated_tokens = len(
-                        self.step_generator.tokenizer.encode(candidate.text)
-                    )
-                else:
-                    truncated_tokens = generated_tokens
+                # Original generated count stored in other_data, fallback to truncated
+                generated_tokens = (
+                    candidate.other_data.get("original_token_count", truncated_tokens)
+                    if candidate.other_data
+                    else truncated_tokens
+                )
                 tflops = (
                     self.step_generator.flop_calculator.compute_tflops(truncated_tokens)
                     if self.step_generator.flop_calculator

@@ -14,6 +14,7 @@ import multiprocessing
 if multiprocessing.get_start_method(allow_none=True) is None:
     multiprocessing.set_start_method("spawn")
 
+import json
 import logging
 import random
 import sys
@@ -844,6 +845,7 @@ def generate_trajectories(
     log.info("=" * 60)
 
     save_path_file = Path(save_path) / "results.json"
+    sample_metrics_path = Path(save_path) / "sample_metrics.jsonl"
     exact_match_evaluator = EvaluatorExactMatch(
         dataset_answer_format=exact_match_dataset_answer_format
     )
@@ -979,81 +981,83 @@ def generate_trajectories(
         save_results_json(results, save_path_file)
         log.info(f"Saved result for sample {i} to {save_path_file}")
 
+        # Compute + persist per-sample metrics locally (and optionally log to wandb)
+        token_stats = result.get("token_stats") or {}
+        all_token_stats = [r.get("token_stats") or {} for r in results]
+
+        # Count number of traces for this sample
+        num_traces = len(result.get("all_traces", result.get("steps", [])))
+
+        # Calculate running totals from all results
+        running_total_tokens = sum(
+            ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
+        )
+        running_total_input = sum(ts.get("input_tokens", 0) for ts in all_token_stats)
+        running_total_output = sum(ts.get("output_tokens", 0) for ts in all_token_stats)
+        running_total_gens = sum(
+            ts.get("generation_count", 0) for ts in all_token_stats
+        )
+        running_total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
+
+        # Count correct samples using grade_answer
+        running_correct = sum(
+            1
+            for r in results
+            if grade_answer(
+                str(r.get("generated_answer", "")),
+                str(r.get("gold_answer", "")),
+            )
+        )
+
+        sample_metrics = {
+            "sample_index": i,
+            "is_correct": bool(is_correct),
+            "thinking_num_steps": result.get(
+                "thinking_num_steps", len(result["steps"])
+            ),
+            "response_num_steps": result.get("response_num_steps", 0),
+            "num_traces": num_traces,
+            "running_correct": running_correct,
+            "running_accuracy": (running_correct / len(results)) if results else 0.0,
+            "samples_completed": len(results),
+            # Token statistics from generator
+            "total_tokens_this_sample": token_stats.get("total_tokens_this_sample", 0),
+            "input_tokens_this_sample": token_stats.get("input_tokens", 0),
+            "output_tokens_this_sample": token_stats.get("output_tokens", 0),
+            "generations_this_sample": token_stats.get("generation_count", 0),
+            "tflops_this_sample": token_stats.get("tflops") or 0,
+            # Running totals
+            "running_avg_tokens_per_sample": (
+                (running_total_tokens / len(results)) if results else 0.0
+            ),
+            "running_total_tokens": running_total_tokens,
+            "running_total_input_tokens": running_total_input,
+            "running_total_output_tokens": running_total_output,
+            "running_total_generations": running_total_gens,
+            "running_avg_tflops_per_sample": (
+                (running_total_tflops / len(results)) if results else 0.0
+            ),
+            "running_total_tflops": running_total_tflops,
+        }
+        if "validity_scores" in result and result["validity_scores"]:
+            sample_metrics["confidence"] = float(np.mean(result["validity_scores"]))
+        if "consensus_score" in result:
+            sample_metrics["consensus_score"] = result["consensus_score"]
+
+        # Append metrics line (JSONL) for easy streaming/plotting
+        try:
+            with open(sample_metrics_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(sample_metrics, ensure_ascii=False) + "\n")
+        except Exception as e:
+            log.warning(
+                f"Failed to append sample metrics to {sample_metrics_path}: {e}"
+            )
+
         # Log per-sample metrics to wandb if enabled
         try:
             import wandb
 
             if wandb.run is not None:
-                # Get token_stats from generator (contains input/output/total tokens)
-                token_stats = result.get("token_stats") or {}
-                all_token_stats = [r.get("token_stats") or {} for r in results]
-
-                # Count number of traces for this sample
-                num_traces = len(result.get("all_traces", result.get("steps", [])))
-
-                # Calculate running totals from all results
-                running_total_tokens = sum(
-                    ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
-                )
-                running_total_input = sum(
-                    ts.get("input_tokens", 0) for ts in all_token_stats
-                )
-                running_total_output = sum(
-                    ts.get("output_tokens", 0) for ts in all_token_stats
-                )
-                running_total_gens = sum(
-                    ts.get("generation_count", 0) for ts in all_token_stats
-                )
-                running_total_tflops = sum(
-                    ts.get("tflops") or 0 for ts in all_token_stats
-                )
-
-                # Count correct samples using grade_answer
-                running_correct = sum(
-                    1
-                    for r in results
-                    if grade_answer(
-                        str(r.get("generated_answer", "")),
-                        str(r.get("gold_answer", "")),
-                    )
-                )
-                sample_metrics = {
-                    "sample_index": i,
-                    "is_correct": is_correct,
-                    "thinking_num_steps": result.get(
-                        "thinking_num_steps", len(result["steps"])
-                    ),
-                    "response_num_steps": result.get("response_num_steps", 0),
-                    "num_traces": num_traces,
-                    "running_correct": running_correct,
-                    "running_accuracy": running_correct / len(results),
-                    "samples_completed": len(results),
-                    # Token statistics from generator
-                    "total_tokens_this_sample": token_stats.get(
-                        "total_tokens_this_sample", 0
-                    ),
-                    "input_tokens_this_sample": token_stats.get("input_tokens", 0),
-                    "output_tokens_this_sample": token_stats.get("output_tokens", 0),
-                    "generations_this_sample": token_stats.get("generation_count", 0),
-                    "tflops_this_sample": token_stats.get("tflops") or 0,
-                    # Running totals
-                    "running_avg_tokens_per_sample": (
-                        running_total_tokens / len(results) if results else 0
-                    ),
-                    "running_total_tokens": running_total_tokens,
-                    "running_total_input_tokens": running_total_input,
-                    "running_total_output_tokens": running_total_output,
-                    "running_total_generations": running_total_gens,
-                    "running_avg_tflops_per_sample": (
-                        running_total_tflops / len(results) if results else 0
-                    ),
-                    "running_total_tflops": running_total_tflops,
-                }
-                if "validity_scores" in result and result["validity_scores"]:
-                    sample_metrics["confidence"] = np.mean(result["validity_scores"])
-                # Log consensus_score for DeepConf (similar to self-consistency)
-                if "consensus_score" in result:
-                    sample_metrics["consensus_score"] = result["consensus_score"]
                 # Log individual confidence charts for each DeepConf trace
                 # Batch all charts into single log call to avoid incrementing step
                 trace_charts = {}
@@ -1246,41 +1250,74 @@ def evaluate_results(
     log.info(f"Avg response steps per trajectory: {np.mean(all_response_steps):.1f}")
     log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
 
+    # Build final metrics (also saved locally)
+    metrics = {
+        "total_samples": len(results),
+        "completed": completed,
+        "completed_pct": completed / len(results) if results else 0.0,
+        "errors": errors,
+        "errors_pct": errors / len(results) if results else 0.0,
+    }
+
+    # Add per-evaluator metrics
+    for name in evaluators.keys():
+        correct = summary_correct[name]
+        incorrect = summary_incorrect[name]
+        metrics[f"{name}/correct"] = correct
+        metrics[f"{name}/correct_pct"] = correct / len(results) if results else 0.0
+        metrics[f"{name}/incorrect"] = incorrect
+        metrics[f"{name}/incorrect_pct"] = incorrect / len(results) if results else 0.0
+        metrics[f"{name}/accuracy"] = correct / len(results) if results else 0.0
+
+    # Add step statistics
+    if all_thinking_steps:
+        metrics["avg_thinking_steps_per_trajectory"] = float(
+            np.mean(all_thinking_steps)
+        )
+    if all_response_steps:
+        metrics["avg_response_steps_per_trajectory"] = float(
+            np.mean(all_response_steps)
+        )
+    if all_validities:
+        metrics["avg_validity_score"] = float(np.mean(all_validities))
+
+    # Add token / FLOPs aggregates if available
+    all_token_stats = [r.get("token_stats") or {} for r in results]
+    total_tokens = sum(ts.get("total_tokens_this_sample", 0) for ts in all_token_stats)
+    total_input_tokens = sum(ts.get("input_tokens", 0) for ts in all_token_stats)
+    total_output_tokens = sum(ts.get("output_tokens", 0) for ts in all_token_stats)
+    total_generations = sum(ts.get("generation_count", 0) for ts in all_token_stats)
+    total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
+
+    metrics["total_tokens"] = int(total_tokens)
+    metrics["total_input_tokens"] = int(total_input_tokens)
+    metrics["total_output_tokens"] = int(total_output_tokens)
+    metrics["total_generations"] = int(total_generations)
+    metrics["total_tflops"] = float(total_tflops)
+    metrics["avg_tokens_per_sample"] = (
+        float(total_tokens / len(results)) if results else 0.0
+    )
+    metrics["avg_tflops_per_sample"] = (
+        float(total_tflops / len(results)) if results else 0.0
+    )
+    metrics["tflops_per_1k_tokens"] = (
+        float(total_tflops * 1000.0 / total_tokens) if total_tokens else 0.0
+    )
+
+    # Save metrics locally (so FLOPs metrics aren't only in W&B)
+    metrics_path = Path(save_path) / "metrics.json"
+    try:
+        with open(metrics_path, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=2, ensure_ascii=False, sort_keys=True)
+        log.info(f"Saved metrics to {metrics_path}")
+    except Exception as e:
+        log.warning(f"Failed to save metrics to {metrics_path}: {e}")
+
     # Log key metrics to wandb if enabled
     try:
         import wandb
 
         if wandb.run is not None:
-            metrics = {
-                "total_samples": len(results),
-                "completed": completed,
-                "completed_pct": completed / len(results),
-                "errors": errors,
-                "errors_pct": errors / len(results),
-            }
-
-            # Add per-evaluator metrics
-            for name in evaluators.keys():
-                correct = summary_correct[name]
-                incorrect = summary_incorrect[name]
-                metrics[f"{name}/correct"] = correct
-                metrics[f"{name}/correct_pct"] = correct / len(results)
-                metrics[f"{name}/incorrect"] = incorrect
-                metrics[f"{name}/incorrect_pct"] = incorrect / len(results)
-                metrics[f"{name}/accuracy"] = correct / len(results)
-
-            # Add step statistics
-            if all_thinking_steps:
-                metrics["avg_thinking_steps_per_trajectory"] = np.mean(
-                    all_thinking_steps
-                )
-            if all_response_steps:
-                metrics["avg_response_steps_per_trajectory"] = np.mean(
-                    all_response_steps
-                )
-            if all_validities:
-                metrics["avg_validity_score"] = np.mean(all_validities)
-
             wandb.log(metrics)
             log.info("Logged metrics to wandb")
     except ImportError:

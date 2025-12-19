@@ -518,7 +518,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
     # Main generation methods
     # =========================================================================
 
-    def generate_candidates(
+    def generate_step_candidates(
         self,
         request: List[Dict[str, str]],
         trajectory: List[StepCandidate],
@@ -587,6 +587,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         )
         gen_params["stopping_criteria"] = StoppingCriteriaList([stopping_criteria])
 
+        context_tokens = inputs["input_ids"].shape[1]
         # Generate
         with torch.no_grad():
             outputs = self.model.generate(**inputs, **gen_params)
@@ -625,6 +626,8 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 other_data=self._get_uncertainty_data(outputs, i),
             )
             candidates.append(candidate)
+
+        self._record_generation(candidates, context_tokens=context_tokens)
 
         return candidates
 
