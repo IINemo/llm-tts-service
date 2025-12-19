@@ -55,7 +55,10 @@ def test_online_gest_of_n():
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     model_path = "Qwen/Qwen3-0.6B"
     omega_config = OmegaConf.create(
-        {"model": {"model_path": model_path, "device": device}}
+        {
+            "model": {"model_path": model_path, "device": device},
+            "system": {"torch_dtype": "bfloat16"},
+        }
     )
     polygraph_model = create_uncertainty_model(omega_config)
     polygraph_model.generation_parameters = GenerationParameters()
