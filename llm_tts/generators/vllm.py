@@ -530,18 +530,66 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     "marking trajectory complete"
                 )
 
-            # Compute uncertainty
-            uncertainty_score = self.model.score(token_ids, logprobs)
+            # Find the best token prefix that matches the (possibly truncated) text
+            # This is needed because text may be truncated at sentence boundary,
+            # but we need to score only the tokens corresponding to the truncated text
+            truncated_text = text.strip()
+            original_token_count = len(token_ids)
+            best_prefix_len = original_token_count  # Default: use all tokens
+
+            if original_token_count > 0:
+                # Find the longest token prefix that decodes to a prefix of truncated_text
+                for prefix_len in range(original_token_count, 0, -1):
+                    prefix_tokens = token_ids[:prefix_len]
+                    prefix_text = self.tokenizer.decode(
+                        prefix_tokens, skip_special_tokens=True
+                    )
+                    # Check if this prefix matches the truncated text
+                    if (
+                        prefix_text.strip() == truncated_text
+                        or truncated_text.startswith(prefix_text.strip())
+                    ):
+                        best_prefix_len = prefix_len
+                        break
+
+            # Log scoring details
+            full_decoded = self.tokenizer.decode(token_ids, skip_special_tokens=True)
+            if best_prefix_len < original_token_count:
+                scoring_text = self.tokenizer.decode(
+                    token_ids[:best_prefix_len], skip_special_tokens=True
+                )
+                log.info(
+                    f"Scoring: {best_prefix_len}/{original_token_count} tokens "
+                    f"(truncated {original_token_count - best_prefix_len})\n"
+                    f"  Stop reason: {repr(stop_reason)}\n"
+                    f"  Full tokens decoded:      {repr(full_decoded)}\n"
+                    f"  Truncated tokens decoded: {repr(scoring_text)}"
+                )
+            else:
+                log.info(
+                    f"Scoring: {best_prefix_len} tokens (full, no truncation)\n"
+                    f"  Stop reason: {repr(stop_reason)}\n"
+                    f"  Text: {repr(full_decoded)}"
+                )
+
+            # Compute uncertainty on truncated tokens only
+            uncertainty_score = self.model.score(
+                token_ids[:best_prefix_len],
+                logprobs[:best_prefix_len],
+            )
 
             candidate = StepCandidate(
                 text=text.strip(),
-                token_ids=token_ids,
+                token_ids=token_ids[:best_prefix_len],
                 is_complete=True,
                 is_trajectory_complete=thinking_complete or repetition_detected,
                 other_data={
                     "uncertainty_score": uncertainty_score,
                     "validity_score": 1.0 / (1.0 + uncertainty_score),
-                    "logprobs": self._extract_logprobs(token_ids, logprobs),
+                    "logprobs": self._extract_logprobs(
+                        token_ids[:best_prefix_len], logprobs[:best_prefix_len]
+                    ),
+                    "original_token_count": original_token_count,
                 },
                 raw_text=output.text,
             )
