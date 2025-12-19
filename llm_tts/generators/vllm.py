@@ -286,10 +286,14 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         request: List[Dict[str, str]],
         trajectory: List[StepCandidate],
         reserved_tokens: int = 4096,
-    ) -> List[StepCandidate]:
-        """Truncate trajectory to fit within max_model_len."""
+    ) -> tuple:
+        """Truncate trajectory to fit within max_model_len.
+
+        Returns:
+            Tuple of (truncated_trajectory, was_truncated)
+        """
         if not trajectory:
-            return trajectory
+            return trajectory, False
 
         # Calculate base prompt tokens (without trajectory)
         tokenizer_signature = inspect.signature(self.tokenizer.apply_chat_template)
@@ -317,7 +321,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 f"Base prompt ({base_tokens} tokens) + reserved ({reserved_tokens}) "
                 f"exceeds max_model_len ({self.max_model_len}). Returning empty trajectory."
             )
-            return []
+            return [], True
 
         # Calculate tokens for each step
         step_tokens = []
@@ -328,24 +332,28 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         total_tokens = sum(step_tokens)
 
         if total_tokens <= available_tokens:
-            return trajectory
+            return trajectory, False
 
         # Truncate from the beginning (keep recent steps)
         truncated = list(trajectory)
         truncated_tokens = list(step_tokens)
+        removed_count = 0
 
         while sum(truncated_tokens) > available_tokens and truncated:
             truncated.pop(0)
-            removed_tokens = truncated_tokens.pop(0)
-            log.info(
-                f"Truncating trajectory: removed step with {removed_tokens} tokens "
-                f"(remaining: {len(truncated)} steps, {sum(truncated_tokens)} tokens)"
-            )
+            truncated_tokens.pop(0)
+            removed_count += 1
+
+        log.warning(
+            f"Context limit reached: removed {removed_count} old steps "
+            f"(remaining: {len(truncated)} steps, {sum(truncated_tokens)} tokens). "
+            f"Marking trajectory complete."
+        )
 
         if not truncated:
             log.warning("All trajectory steps truncated due to context length limit")
 
-        return truncated
+        return truncated, True
 
     def _build_prompt(
         self,
@@ -443,14 +451,15 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         last_request_output = None  # Track for uncertainty extraction
 
         for attempt in range(max_continuation_attempts):
-            remaining_tokens = self.max_new_tokens - len(accumulated_tokens)
-            if remaining_tokens <= 0:
+            # Limit per-step tokens to max_step_tokens
+            remaining_step_tokens = self.max_step_tokens - len(accumulated_tokens)
+            if remaining_step_tokens <= 0:
                 break
 
             sampling_params = self._create_sampling_params(
                 stop_tokens=self.thinking_stop_tokens,
                 n=1,
-                max_tokens=remaining_tokens,
+                max_tokens=remaining_step_tokens,
                 min_tokens=self.min_step_tokens if attempt == 0 else 0,
             )
 
@@ -483,6 +492,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
             if len(accumulated_tokens) >= self.max_step_tokens:
                 log.debug(f"Max step tokens reached after {attempt + 1} attempts")
+                # Truncate at last sentence boundary to avoid mid-sentence cuts
+                accumulated_text = self._truncate_at_sentence_boundary(accumulated_text)
                 break
 
             log.debug(
@@ -491,6 +502,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             )
 
         thinking_complete = self._is_thinking_complete(accumulated_text)
+
+        # Check for repetitions - mark trajectory complete if detected
+        repetition_detected = self._detect_line_repetitions(accumulated_text)
+        if repetition_detected:
+            log.warning(
+                "Repetition detected in thinking step, marking trajectory complete"
+            )
 
         # Get stop reason from last output (what triggered the stop)
         stop_reason = getattr(output, "stop_reason", None) if output else None
@@ -551,7 +569,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             text=accumulated_text.strip(),
             token_ids=accumulated_tokens,
             is_complete=True,
-            is_trajectory_complete=thinking_complete,
+            is_trajectory_complete=thinking_complete or repetition_detected,
             other_data={
                 "uncertainty_score": uncertainty_score,
                 "validity_score": 1.0 / (1.0 + uncertainty_score),
@@ -573,9 +591,26 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             raise RuntimeError("generate_thinking_step() requires thinking_mode=True")
 
         trajectory = trajectory or []
-        trajectory = self._truncate_trajectory(
+        trajectory, context_limit_reached = self._truncate_trajectory(
             request, trajectory, reserved_tokens=self.max_new_tokens
         )
+
+        # If context limit reached, return a closing step with </think>
+        if context_limit_reached:
+            log.warning("Context limit reached, closing thinking phase with </think>")
+            closing_step = StepCandidate(
+                text="</think>",
+                token_ids=[],
+                is_complete=True,
+                is_trajectory_complete=True,
+                other_data={
+                    "uncertainty_score": 0.0,
+                    "validity_score": 1.0,
+                    "context_limit_reached": True,
+                },
+                raw_text="</think>",
+            )
+            return [closing_step] * candidates_per_step
 
         candidates = []
         for i in range(candidates_per_step):
@@ -712,6 +747,115 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             return text[:second_pos]
         return text
 
+    def _detect_line_repetitions(
+        self,
+        text: str,
+        min_lines: int = 4,
+        max_unique_ratio: float = 0.3,
+    ) -> bool:
+        """Detect if text contains excessive line-by-line repetitions.
+
+        Args:
+            text: Generated text to check
+            min_lines: Minimum number of lines to check (avoid false positives on short text)
+            max_unique_ratio: If unique_lines/total_lines < this ratio, it's repetition
+
+        Returns:
+            True if repetition detected, False otherwise
+        """
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+
+        if len(lines) < min_lines:
+            return False
+
+        unique_lines = set(lines)
+        unique_ratio = len(unique_lines) / len(lines)
+
+        if unique_ratio <= max_unique_ratio:
+            log.warning(
+                f"Detected line repetitions: {len(unique_lines)} unique out of "
+                f"{len(lines)} lines (ratio {unique_ratio:.2f} <= {max_unique_ratio})"
+            )
+            return True
+
+        return False
+
+    def _truncate_repetitions(
+        self,
+        text: str,
+        token_count: int,
+        min_tokens_for_check: int = 1000,
+        min_sentences_per_1k_tokens: int = 2,
+    ) -> tuple:
+        """Detect and truncate repetitive text when model hits max tokens.
+
+        Simple heuristic: if we generated many tokens but have very few sentences,
+        the model is likely stuck in a repetition loop.
+
+        Args:
+            text: Generated text to check
+            token_count: Number of tokens generated
+            min_tokens_for_check: Only check for repetition if token count exceeds this
+            min_sentences_per_1k_tokens: Expected minimum sentences per 1000 tokens
+
+        Returns:
+            Tuple of (truncated_text, was_truncated)
+        """
+        # First check for line-by-line repetitions (works even for short texts)
+        if self._detect_line_repetitions(text):
+            return text + "<end of response>", True
+
+        # Only check sentence-count heuristic if we generated many tokens
+        if token_count < min_tokens_for_check:
+            return text, False
+
+        # Count sentences (by newlines)
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        num_sentences = len(lines)
+
+        # Calculate expected minimum sentences based on token count
+        expected_min = (token_count / 1000) * min_sentences_per_1k_tokens
+
+        if num_sentences < expected_min:
+            # Too few sentences for this many tokens - likely repetition
+            # Append <end of response> to force trajectory completion
+            log.warning(
+                f"Detected repetition: only {num_sentences} sentences for "
+                f"{token_count} tokens (expected >= {expected_min:.0f}), "
+                f"forcing end of response"
+            )
+            return text + "<end of response>", True
+
+        return text, False
+
+    def _truncate_at_sentence_boundary(self, text: str) -> str:
+        """Truncate text at the last sentence boundary (period, newline, etc.).
+
+        Used when hitting max_step_tokens to avoid cutting mid-sentence.
+        """
+        # Find last sentence boundary
+        boundaries = [". ", ".\n", "?\n", "? ", "!\n", "! ", "\n\n"]
+        last_boundary_pos = -1
+        last_boundary = None
+
+        for boundary in boundaries:
+            pos = text.rfind(boundary)
+            if pos > last_boundary_pos:
+                last_boundary_pos = pos
+                last_boundary = boundary
+
+        if last_boundary_pos > 0:
+            # Include the boundary character (period, etc.) but not trailing space/newline
+            truncated = text[: last_boundary_pos + 1]
+            log.debug(
+                f"Truncated at sentence boundary '{repr(last_boundary)}' "
+                f"pos {last_boundary_pos}, kept {len(truncated)}/{len(text)} chars"
+            )
+            return truncated
+
+        # No sentence boundary found - return as-is
+        return text
+
     def _generate_structured_candidates(
         self,
         request,
@@ -779,6 +923,17 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             # Build full step text by prepending the step prefix we injected
             # Model generates \n before "- Step", so raw_text ends with \n - keep it
             step_text = step_prefix + raw_text
+
+            # Check if model hit max tokens (potential repetition loop)
+            hit_max_tokens = stop_reason is None or stop_reason == "length"
+            if hit_max_tokens:
+                token_count = len(generated_token_ids)
+                truncated_text, was_truncated = self._truncate_repetitions(
+                    raw_text, token_count
+                )
+                if was_truncated:
+                    raw_text = truncated_text
+                    step_text = step_prefix + raw_text
 
             # Check if stopped at end-of-response marker
             # vLLM strips stop tokens from output, so check stop_reason
@@ -900,9 +1055,99 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             self._record_generation(candidates, context_tokens=context_tokens)
             return candidates
         else:
-            return self._generate_structured_candidates(
+            # Structured mode: force generation of <Answer>: instead of another step
+            return self._generate_structured_answer(
                 request, candidates_per_step, trajectory
             )
+
+    def _generate_structured_answer(
+        self,
+        request: List[Dict[str, str]],
+        candidates_per_step: int = 1,
+        trajectory: Optional[List[StepCandidate]] = None,
+    ) -> List[StepCandidate]:
+        """Generate final answer in structured mode by injecting <Answer>: prefix.
+
+        Called when max_steps is reached without the model naturally generating <Answer>:.
+        Forces the model to provide a final answer.
+        """
+        candidates = []
+        trajectory = trajectory or []
+
+        # Build prompt with enable_thinking=False
+        prompt = self._apply_chat_template(request, enable_thinking=False)
+
+        # Append trajectory if present
+        if trajectory:
+            trajectory_text = convert_trajectory_to_string(trajectory)
+            prompt = prompt + trajectory_text
+
+        # Inject <Answer>: prefix to force answer generation
+        answer_prefix = "<Answer>:"
+        prompt_with_prefix = prompt + answer_prefix
+
+        # Only stop at <end of response>
+        answer_sampling_params = SamplingParams(
+            n=candidates_per_step,
+            max_tokens=512,  # Answer should be short
+            min_tokens=1,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            top_k=self.top_k,
+            logprobs=20,
+            stop=["<end of response>"],
+        )
+
+        log.info(
+            f"Structured mode: generating final answer with prefix '{answer_prefix}'"
+        )
+
+        outputs = self.model.generate(
+            prompt_with_prefix, sampling_params=answer_sampling_params
+        )
+        request_output = outputs[0]
+        answers = request_output.outputs
+
+        for i in range(candidates_per_step):
+            raw_text = answers[i].text
+            generated_token_ids = answers[i].token_ids
+            generated_logprobs = answers[i].logprobs
+            stop_reason = getattr(answers[i], "stop_reason", None)
+
+            # Build answer text with prefix
+            answer_text = answer_prefix + raw_text
+
+            # Append <end of response> if stopped there
+            if stop_reason == "<end of response>":
+                answer_text = answer_text + "<end of response>"
+
+            log.info(
+                f"Answer candidate [{i}]: stop={repr(stop_reason)}, "
+                f"text={repr(answer_text[:100])}"
+            )
+
+            # Compute uncertainty
+            uncertainty_score = self.model.score(
+                generated_token_ids, generated_logprobs
+            )
+
+            candidate = StepCandidate(
+                text=answer_text,
+                token_ids=generated_token_ids,
+                is_complete=True,
+                is_trajectory_complete=True,  # Answer is always trajectory complete
+                other_data={
+                    "uncertainty_score": uncertainty_score,
+                    "validity_score": 1.0 / (1.0 + uncertainty_score),
+                    "logprobs": self._extract_logprobs(
+                        generated_token_ids, generated_logprobs
+                    ),
+                },
+                raw_text=raw_text,
+            )
+            candidates.append(candidate)
+
+        return candidates
 
     def generate_answer(
         self, request, candidates_per_step: int, more_information=False
