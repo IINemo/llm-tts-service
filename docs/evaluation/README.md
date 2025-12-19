@@ -134,6 +134,37 @@ Before running any experiment, verify:
 
 ## Inference Backends
 
+### Recommended Backend: vLLM
+
+**vLLM is the recommended backend for all experiments.** It provides significantly higher throughput and better memory efficiency compared to HuggingFace.
+
+#### vLLM vs HuggingFace Comparison
+
+| Aspect | vLLM | HuggingFace |
+|--------|------|-------------|
+| **Throughput** | High (PagedAttention, batching) | Low |
+| **Memory** | Efficient (no OOM on long sequences) | OOM-prone on long sequences |
+| **Hidden states** | Not accessible | Full access |
+| **Attention scores** | Not accessible | Full access |
+| **Stopping criteria** | Stop tokens only | Custom callbacks |
+| **Prefix caching** | Native support | Not available |
+
+#### When to use each backend
+
+- **Use vLLM (recommended)** for most experiments:
+  - Self-Consistency, DeepConf, CoT
+  - Online/Offline Best-of-N
+  - Uncertainty estimators that use logprobs (MeanTokenEntropy, Perplexity, etc.)
+
+- **Use HuggingFace** only when you need:
+  - Hidden states access (required for UHead uncertainty quantification)
+  - Attention scores access
+  - Custom `StoppingCriteria` callbacks not achievable with stop tokens
+
+> **Note**: HuggingFace is significantly slower and prone to OOM errors on long sequences. Use it only when vLLM cannot provide the required model internals.
+
+---
+
 ### vLLM
 
 High-performance inference engine optimized for throughput.
@@ -150,11 +181,55 @@ model:
 
 | Pros | Cons |
 |------|------|
-| PagedAttention prevents OOM on long sequences | No custom stopping criteria callbacks |
-| Native batched generation for multiple traces | Stop tokens require post-validation |
-| Higher throughput than HuggingFace | May stop at false boundaries |
-| Prefix caching for repeated prompts | |
+| PagedAttention prevents OOM on long sequences | No access to hidden states (UHead UQ not supported) |
+| Native batched generation for multiple traces | No access to attention scores |
+| Higher throughput than HuggingFace | No custom stopping criteria callbacks |
+| Prefix caching for repeated prompts | Stop tokens require post-validation |
 | Thinking mode step detection via stop tokens | |
+
+#### vLLM Initialization in `run_tts_eval.py`
+
+The `create_model()` function (`scripts/run_tts_eval.py:252`) initializes vLLM with the following pipeline:
+
+1. **vLLM Engine**: Creates `vllm.LLM` with config parameters (gpu_memory_utilization, tensor_parallel_size, prefix_caching, max_model_len, seed)
+
+2. **SamplingParams**: Creates default sampling parameters from generation config (temperature, top_p, max_tokens, logprobs)
+
+3. **lm-polygraph Adapter**: Wraps vLLM with `WhiteboxModelvLLM` for compatibility with strategies that expect lm-polygraph model interface
+
+4. **Uncertainty Wrapper** (for step-based strategies): Creates `VLLMWithUncertainty` that computes uncertainty scores from vLLM logprobs:
+   - `scorer.type: entropy` → `MeanTokenEntropy` estimator (default)
+   - `scorer.type: perplexity` → `Perplexity` estimator
+
+5. **Step Generator** (for Online BoN, Beam Search, etc.): Creates `VLLMStepGenerator` with detector based on `strategy.detector_type`:
+   - `thinking_marker` → `ThinkingMarkerDetector` for semantic step boundaries in `<think>` content
+   - `structured` → `StructuredStepDetector` for explicit `- Step N` markers
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     run_tts_eval.py                         │
+├─────────────────────────────────────────────────────────────┤
+│  config.model.type == "vllm"                                │
+│  ┌─────────────┐                                            │
+│  │  vllm.LLM   │  ← GPU inference engine                    │
+│  └──────┬──────┘                                            │
+│         │                                                   │
+│  ┌──────▼──────────────┐                                    │
+│  │  WhiteboxModelvLLM  │  ← lm-polygraph adapter            │
+│  └──────┬──────────────┘                                    │
+│         │                                                   │
+│  ┌──────▼──────────────────┐                                │
+│  │  VLLMWithUncertainty    │  ← Uncertainty from logprobs   │
+│  │  (MeanTokenEntropy /    │                                │
+│  │   Perplexity)           │                                │
+│  └──────┬──────────────────┘                                │
+│         │                                                   │
+│  ┌──────▼──────────────┐                                    │
+│  │  VLLMStepGenerator  │  ← Step-by-step generation         │
+│  │  + Detector         │     (thinking_marker / structured) │
+│  └─────────────────────┘                                    │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ### HuggingFace
 
@@ -170,68 +245,13 @@ model:
 
 | Pros | Cons |
 |------|------|
-| Full `StoppingCriteria` callback support | Lower throughput than vLLM |
-| Custom step boundary detection during generation | Higher memory usage |
-| Works with thinking mode semantic markers | May OOM on very long sequences |
+| Access to hidden states (required for UHead UQ) | Lower throughput than vLLM |
+| Access to attention scores | Higher memory usage |
+| Full `StoppingCriteria` callback support | May OOM on very long sequences |
+| Custom step boundary detection during generation | |
 | Fine-grained control over generation | |
 
-### Framework Selection Guide
-
-| Use Case | Framework | Why |
-|----------|-----------|-----|
-| Self-Consistency / DeepConf | vLLM | Full trace generation, high throughput |
-| CoT (single trace) | vLLM | No step detection needed |
-| Online Best-of-N (non-thinking) | vLLM or HF | Explicit markers work with stop tokens |
-| Online Best-of-N (thinking mode) | vLLM or HF | Set `model.type: vllm` or `model.type: local` |
-| Offline Best-of-N (thinking mode) | vLLM | Generate full trajectories, split post-hoc |
-| Beam Search (thinking mode) | HuggingFace | Requires semantic step detection |
-| Phi Decoding (thinking mode) | HuggingFace | Requires semantic step detection |
-
-**Choosing between vLLM and HuggingFace:**
-
-The framework is selected via `model.type` in your config:
-
-```yaml
-# Use vLLM (stop tokens + post-validation)
-model:
-  type: vllm
-  model_path: "Qwen/Qwen3-8B"
-
-# Use HuggingFace (StoppingCriteria callbacks)
-model:
-  type: local
-  model_path: "Qwen/Qwen3-8B"
-```
-
-> **Note**: vLLM now supports thinking mode step detection using stop tokens derived from semantic markers (e.g., "wait", "so", "let me"). After each stop, the detector validates if it's a real step boundary based on `min_step_chars` and `max_step_chars` constraints. This is less precise than HuggingFace's `StoppingCriteria` but offers higher throughput.
-
-**Why HuggingFace for step detection?**
-
-HuggingFace's `StoppingCriteria` is more universal for step detection - it allows passing any custom detector that can inspect generated tokens and apply arbitrary logic (regex patterns, minimum character thresholds, lookbehind assertions, etc.):
-
-```python
-from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
-from llm_tts.generators.huggingface import ThinkingStepStoppingCriteria
-
-# Create detector with semantic markers
-detector = ThinkingMarkerDetector(min_step_chars=100)
-
-# Pass detector to stopping criteria - inspects tokens during generation
-stopping_criteria = ThinkingStepStoppingCriteria(
-    tokenizer=tokenizer,
-    detector=detector,  # ✅ Custom logic possible
-    start_length=input_length,
-    batch_size=batch_size,
-)
-
-# Generate with custom stopping
-outputs = model.generate(
-    input_ids,
-    stopping_criteria=[stopping_criteria],  # ✅ Works
-)
-```
-
-**vLLM Thinking Mode Step Detection**
+### vLLM Thinking Mode Step Detection
 
 vLLM now supports thinking mode step detection using a stop-and-validate approach:
 
@@ -263,19 +283,7 @@ generator = StepCandidateGeneratorThroughVLLM(
 4. If `len(text) > max_step_chars`, force accept as step boundary
 5. Include stop string in output with `include_stop_str_in_output=True`
 
-This approach is less precise than HuggingFace but works well for thinking mode and offers higher throughput.
-
-**Legacy vLLM (exact string matching only):**
-
-```python
-from vllm import SamplingParams
-
-params = SamplingParams(
-    stop=["- Step"],     # ✅ Exact strings only
-    stop_token_ids=[],   # ✅ Token IDs only
-    # stopping_criteria=  # ❌ Not supported
-)
-```
+This approach works well for thinking mode and offers higher throughput than HuggingFace.
 
 ### API-Based Models
 
