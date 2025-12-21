@@ -1,11 +1,7 @@
-# MATH-500 dataset configuration
-# 500 problems from MATH dataset, commonly used benchmark
+# @package dataset
 
-dataset_path: "HuggingFaceH4/MATH-500"
-dataset_config: "default"
-dataset_split: "test"
-subset: null  # Use all 500 problems
-question_field: "problem"
-answer_field: "answer"
-prompt_file: "./config/prompts/default.txt"
+dataset_path: "test-time-compute/test_MATH"
+dataset_split: "test"  # Dataset split to use
+subset: 500  # Only process first N samples from dataset (null for all)
+prompt_file: ./config/prompts/default.txt  # Path to prompt template file (optional)
 answer_format: "numeric"
