@@ -198,6 +198,82 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 result.append(-100.0)
         return result
 
+    def _log_step_scoring(
+        self,
+        token_ids: List[int],
+        stop_reason: Optional[str],
+        raw_text: Optional[str] = None,
+        step_text: Optional[str] = None,
+        scoring_token_count: Optional[int] = None,
+        path_idx: Optional[int] = None,
+        candidate_idx: Optional[int] = None,
+    ) -> None:
+        """Log scoring details for a generated step.
+
+        Handles both structured mode (raw_text + step_text) and thinking mode
+        (with optional token truncation) logging patterns.
+
+        Args:
+            token_ids: Full list of generated token IDs
+            stop_reason: vLLM stop reason (e.g., 'length', '<end of response>')
+            raw_text: Raw text from model output (structured mode)
+            step_text: Full step text with prefix (structured mode)
+            scoring_token_count: Number of tokens used for scoring (after truncation)
+            path_idx: Path index for batch generation (0-indexed, displayed as 1-indexed)
+            candidate_idx: Candidate index for single-path generation
+        """
+        original_token_count = len(token_ids)
+        full_decoded = self.tokenizer.decode(token_ids, skip_special_tokens=True)
+        effective_token_count = scoring_token_count or original_token_count
+        is_truncated = (
+            scoring_token_count is not None
+            and scoring_token_count < original_token_count
+        )
+
+        # Build prefix for log message
+        if path_idx is not None:
+            prefix = f"Scoring [path {path_idx + 1}]"
+        elif candidate_idx is not None:
+            prefix = f"Scoring [{candidate_idx}]"
+        else:
+            prefix = "Scoring"
+
+        # Build token count string
+        if is_truncated:
+            token_str = (
+                f"{effective_token_count}/{original_token_count} tokens "
+                f"(truncated {original_token_count - effective_token_count})"
+            )
+        else:
+            token_str = f"{effective_token_count} tokens"
+
+        # Structured mode: show raw_text and step_text
+        if raw_text is not None and step_text is not None:
+            log.info(
+                f"{prefix}: {token_str}, stop={repr(stop_reason)}\n"
+                f"  Full tokens decoded: {repr(full_decoded)}\n"
+                f"  Raw text (stripped): {repr(raw_text)}\n"
+                f"  Step text:           {repr(step_text)}"
+            )
+        # Thinking mode with truncation
+        elif is_truncated:
+            scoring_text = self.tokenizer.decode(
+                token_ids[:scoring_token_count], skip_special_tokens=True
+            )
+            log.info(
+                f"{prefix}: {token_str}\n"
+                f"  Stop reason: {repr(stop_reason)}\n"
+                f"  Full tokens decoded:      {repr(full_decoded)}\n"
+                f"  Truncated tokens decoded: {repr(scoring_text)}"
+            )
+        # Thinking mode without truncation
+        else:
+            log.info(
+                f"{prefix}: {token_str} (full, no truncation)\n"
+                f"  Stop reason: {repr(stop_reason)}\n"
+                f"  Text: {repr(full_decoded)}"
+            )
+
     def score_truncated_sequence(
         self,
         prompt: str,
@@ -564,24 +640,12 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                         break
 
             # Log scoring details
-            full_decoded = self.tokenizer.decode(token_ids, skip_special_tokens=True)
-            if best_prefix_len < original_token_count:
-                scoring_text = self.tokenizer.decode(
-                    token_ids[:best_prefix_len], skip_special_tokens=True
-                )
-                log.info(
-                    f"Scoring: {best_prefix_len}/{original_token_count} tokens "
-                    f"(truncated {original_token_count - best_prefix_len})\n"
-                    f"  Stop reason: {repr(stop_reason)}\n"
-                    f"  Full tokens decoded:      {repr(full_decoded)}\n"
-                    f"  Truncated tokens decoded: {repr(scoring_text)}"
-                )
-            else:
-                log.info(
-                    f"Scoring: {best_prefix_len} tokens (full, no truncation)\n"
-                    f"  Stop reason: {repr(stop_reason)}\n"
-                    f"  Text: {repr(full_decoded)}"
-                )
+            self._log_step_scoring(
+                token_ids=token_ids,
+                stop_reason=stop_reason,
+                scoring_token_count=best_prefix_len,
+                candidate_idx=idx,
+            )
 
             # Compute uncertainty on truncated tokens only
             uncertainty_score = self.model.score(
@@ -986,35 +1050,53 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 stopped_at_eos or self.detector.is_trajectory_complete(raw_text)
             )
 
-            # Log scoring details with full repr to see newlines
-            # Decode full token_ids to see what triggered the stop (includes stop token)
-            token_count = len(generated_token_ids)
-            full_decoded = self.tokenizer.decode(
-                generated_token_ids, skip_special_tokens=True
-            )
-            log.info(
-                f"Scoring [{i}]: {token_count} tokens, stop={repr(stop_reason)}\n"
-                f"  Full tokens decoded: {repr(full_decoded)}\n"
-                f"  Raw text (stripped): {repr(raw_text)}\n"
-                f"  Step text:           {repr(step_text)}"
+            # Find best token prefix matching raw_text (without stop token)
+            # vLLM includes stop token in token_ids but strips it from output.text
+            original_token_count = len(generated_token_ids)
+            best_prefix_len = original_token_count
+
+            if original_token_count > 0:
+                for prefix_len in range(original_token_count, 0, -1):
+                    prefix_tokens = generated_token_ids[:prefix_len]
+                    prefix_text = self.tokenizer.decode(
+                        prefix_tokens, skip_special_tokens=True
+                    )
+                    if (
+                        prefix_text.strip() == raw_text.strip()
+                        or raw_text.strip().startswith(prefix_text.strip())
+                    ):
+                        best_prefix_len = prefix_len
+                        break
+
+            # Log scoring details
+            self._log_step_scoring(
+                token_ids=generated_token_ids,
+                stop_reason=stop_reason,
+                raw_text=raw_text,
+                step_text=step_text,
+                scoring_token_count=best_prefix_len,
+                candidate_idx=i,
             )
 
-            # Compute uncertainty on generated tokens (no truncation needed)
+            # Compute uncertainty on content tokens only (excluding stop token)
             uncertainty_score = self.model.score(
-                generated_token_ids, generated_logprobs
+                generated_token_ids[:best_prefix_len],
+                generated_logprobs[:best_prefix_len],
             )
 
             candidate = StepCandidate(
                 text=step_text,
-                token_ids=generated_token_ids,
+                token_ids=generated_token_ids[:best_prefix_len],
                 is_complete=is_complete,
                 is_trajectory_complete=is_trajectory_complete,
                 other_data={
                     "uncertainty_score": uncertainty_score,
                     "validity_score": 1.0 / (1.0 + uncertainty_score),
                     "logprobs": self._extract_logprobs(
-                        generated_token_ids, generated_logprobs
+                        generated_token_ids[:best_prefix_len],
+                        generated_logprobs[:best_prefix_len],
                     ),
+                    "original_token_count": original_token_count,
                 },
                 raw_text=raw_text,
             )
@@ -1200,12 +1282,394 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         """Generate final answer (structured mode compatibility)."""
         return self.generate_step_candidates(request, None, candidates_per_step)
 
+    def generate_step_batch(
+        self,
+        request: List[Dict[str, str]],
+        trajectories: List[List[StepCandidate]],
+    ) -> List[StepCandidate]:
+        """Generate next step for multiple paths in parallel (one step per path).
+
+        This enables efficient parallel path generation for self-consistency:
+        instead of generating paths sequentially, we generate the next step
+        for ALL active paths in a single vLLM batch call.
+
+        Args:
+            request: Chat messages (same for all paths)
+            trajectories: List of trajectories, one per path. Each trajectory
+                         is a list of StepCandidates representing the path's
+                         generation history so far.
+
+        Returns:
+            List of StepCandidates, one per path (same order as input trajectories).
+            Each candidate represents the next step for that path.
+
+        Note:
+            - Uses structured mode (thinking_mode=False)
+            - Each path may be at a different step number
+            - Context truncation is handled per-path
+        """
+        if self.thinking_mode:
+            return self._generate_thinking_step_batch(request, trajectories)
+        else:
+            return self._generate_structured_step_batch(request, trajectories)
+
+    def _generate_structured_step_batch(
+        self,
+        request: List[Dict[str, str]],
+        trajectories: List[List[StepCandidate]],
+    ) -> List[StepCandidate]:
+        """Generate next step for multiple paths in parallel (structured mode).
+
+        Builds a prompt for each path with its trajectory, then calls vLLM
+        with all prompts in a single batch.
+        """
+        if not trajectories:
+            return []
+
+        # Build prompts for each path
+        prompts = []
+        step_prefixes = []
+        path_indices = []  # Track which paths are active (not context-limited)
+        context_limited_results = {}  # Store results for context-limited paths
+
+        for path_idx, trajectory in enumerate(trajectories):
+            # Check context limit for this path
+            truncated_traj, context_limit_reached = self._truncate_trajectory(
+                request, trajectory, reserved_tokens=self.max_new_tokens
+            )
+
+            if context_limit_reached:
+                # Force answer generation for this path
+                log.warning(f"Path {path_idx}: context limit reached, forcing answer")
+                # Generate answer immediately for this path (will be added later)
+                context_limited_results[path_idx] = (
+                    self._generate_structured_answer_candidates(
+                        request, 1, truncated_traj
+                    )[0]
+                )
+                continue
+
+            # Build prompt with trajectory
+            prompt = self._apply_chat_template(request, enable_thinking=False)
+            if truncated_traj:
+                trajectory_text = convert_trajectory_to_string(truncated_traj)
+                prompt = prompt + trajectory_text
+
+            # Calculate step number and create prefix
+            step_number = len(trajectory) + 1
+            if step_number == 1:
+                step_prefix = "<start of response>\nReasoning Steps:\n- Step 1:"
+            else:
+                step_prefix = f"- Step {step_number}:"
+
+            prompt_with_prefix = prompt + step_prefix
+            prompts.append(prompt_with_prefix)
+            step_prefixes.append(step_prefix)
+            path_indices.append(path_idx)
+
+        # If all paths hit context limit, return early
+        if not prompts:
+            return [context_limited_results[i] for i in range(len(trajectories))]
+
+        # Calculate total context tokens
+        total_context_tokens = sum(len(self.tokenizer.encode(p)) for p in prompts)
+
+        # Generate for all paths in single batch call
+        # Use n=1 since each prompt is for a different path
+        batch_sampling_params = SamplingParams(
+            n=1,
+            max_tokens=self.sampling_params.max_tokens,
+            min_tokens=self.sampling_params.min_tokens,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            top_k=self.top_k,
+            logprobs=20,
+            stop=self.sampling_params.stop,
+            repetition_penalty=1.05,
+        )
+
+        log.info(
+            f"Batch generating for {len(prompts)} paths, "
+            f"stop={batch_sampling_params.stop}"
+        )
+
+        outputs = self.model.generate(prompts, batch_sampling_params)
+
+        # Process outputs and build candidates
+        candidates_by_path = {}
+
+        for batch_idx, (path_idx, step_prefix, request_output) in enumerate(
+            zip(path_indices, step_prefixes, outputs)
+        ):
+            output = request_output.outputs[0]
+            raw_text = output.text
+            generated_token_ids = output.token_ids
+            generated_logprobs = output.logprobs
+            stop_reason = getattr(output, "stop_reason", None)
+
+            # Log raw vLLM output
+            log.debug(
+                f"vLLM output [path {path_idx + 1}]: {len(generated_token_ids)} tokens, "
+                f"stop={repr(stop_reason)}\n"
+                f"  Raw text: {repr(raw_text[-80:] if len(raw_text) > 80 else raw_text)}"
+            )
+
+            # Build full step text
+            step_text = step_prefix + raw_text
+
+            # Handle max tokens / repetition
+            hit_max_tokens = stop_reason is None or stop_reason == "length"
+            if hit_max_tokens:
+                token_count = len(generated_token_ids)
+                truncated_text, was_truncated = self._truncate_repetitions(
+                    raw_text, token_count
+                )
+                if was_truncated:
+                    raw_text = truncated_text
+                    step_text = step_prefix + raw_text
+
+            # Check for EOS marker
+            stopped_at_eos = stop_reason == "<end of response>"
+            if stopped_at_eos:
+                step_text = step_text + "<end of response>"
+
+            is_trajectory_complete = (
+                stopped_at_eos or self.detector.is_trajectory_complete(raw_text)
+            )
+
+            # Find best token prefix matching raw_text (without stop token)
+            # vLLM includes stop token in token_ids but strips it from output.text
+            original_token_count = len(generated_token_ids)
+            best_prefix_len = original_token_count
+
+            if original_token_count > 0:
+                for prefix_len in range(original_token_count, 0, -1):
+                    prefix_tokens = generated_token_ids[:prefix_len]
+                    prefix_text = self.tokenizer.decode(
+                        prefix_tokens, skip_special_tokens=True
+                    )
+                    if (
+                        prefix_text.strip() == raw_text.strip()
+                        or raw_text.strip().startswith(prefix_text.strip())
+                    ):
+                        best_prefix_len = prefix_len
+                        break
+
+            # Log scoring details
+            self._log_step_scoring(
+                token_ids=generated_token_ids,
+                stop_reason=stop_reason,
+                raw_text=raw_text,
+                step_text=step_text,
+                scoring_token_count=best_prefix_len,
+                path_idx=path_idx,
+            )
+
+            # Compute uncertainty on content tokens only (excluding stop token)
+            uncertainty_score = self.model.score(
+                generated_token_ids[:best_prefix_len],
+                generated_logprobs[:best_prefix_len],
+            )
+
+            candidate = StepCandidate(
+                text=step_text,
+                token_ids=generated_token_ids[:best_prefix_len],
+                is_complete=True,
+                is_trajectory_complete=is_trajectory_complete,
+                other_data={
+                    "uncertainty_score": uncertainty_score,
+                    "validity_score": 1.0 / (1.0 + uncertainty_score),
+                    "logprobs": self._extract_logprobs(
+                        generated_token_ids[:best_prefix_len],
+                        generated_logprobs[:best_prefix_len],
+                    ),
+                    "original_token_count": original_token_count,
+                },
+                raw_text=raw_text,
+            )
+            candidates_by_path[path_idx] = candidate
+
+        # Merge context-limited results with batch results
+        candidates_by_path.update(context_limited_results)
+
+        # Build result list in original order
+        result = [candidates_by_path[i] for i in range(len(trajectories))]
+
+        # Record token usage for FLOP calculation
+        self._record_generation(result, context_tokens=total_context_tokens)
+
+        return result
+
+    def _generate_thinking_step_batch(
+        self,
+        request: List[Dict[str, str]],
+        trajectories: List[List[StepCandidate]],
+    ) -> List[StepCandidate]:
+        """Generate next step for multiple paths in parallel (thinking mode).
+
+        Similar to structured mode batch, but uses thinking stop tokens
+        and handles </think> detection per path.
+        """
+        if not trajectories:
+            return []
+
+        # Build prompts for each path
+        prompts = []
+        path_indices = []
+        context_limited_results = {}
+
+        for path_idx, trajectory in enumerate(trajectories):
+            # Check if this path's thinking is already complete
+            if trajectory:
+                full_text = convert_trajectory_to_string(trajectory)
+                if "</think>" in full_text:
+                    # Generate response phase for this path
+                    answer_candidates = self._generate_thinking_answer_candidates(
+                        request, trajectory, candidates_per_step=1
+                    )
+                    context_limited_results[path_idx] = answer_candidates[0]
+                    continue
+
+            # Check context limit
+            truncated_traj, context_limit_reached = self._truncate_trajectory(
+                request, trajectory, reserved_tokens=self.max_new_tokens
+            )
+
+            if context_limit_reached:
+                log.warning(f"Path {path_idx}: context limit, closing thinking")
+                closing_step = StepCandidate(
+                    text="</think>",
+                    token_ids=[],
+                    is_complete=True,
+                    is_trajectory_complete=True,
+                    other_data={
+                        "uncertainty_score": 0.0,
+                        "validity_score": 1.0,
+                        "context_limit_reached": True,
+                    },
+                    raw_text="</think>",
+                )
+                context_limited_results[path_idx] = closing_step
+                continue
+
+            prompt = self._build_prompt(request, truncated_traj)
+            prompts.append(prompt)
+            path_indices.append(path_idx)
+
+        # If all paths are done, return early
+        if not prompts:
+            return [context_limited_results[i] for i in range(len(trajectories))]
+
+        # Calculate total context tokens
+        total_context_tokens = sum(len(self.tokenizer.encode(p)) for p in prompts)
+
+        # Generate for all paths in single batch call
+        batch_sampling_params = self._create_sampling_params(
+            stop_tokens=self.thinking_stop_tokens,
+            n=1,
+            max_tokens=self.max_step_tokens,
+            min_tokens=self.min_step_tokens,
+        )
+
+        log.info(f"Batch generating thinking for {len(prompts)} paths")
+
+        outputs = self.model.generate(prompts, batch_sampling_params)
+
+        # Process outputs
+        candidates_by_path = {}
+
+        for batch_idx, (path_idx, request_output) in enumerate(
+            zip(path_indices, outputs)
+        ):
+            output = request_output.outputs[0]
+            text = output.text
+            token_ids = output.token_ids
+            logprobs = output.logprobs
+            stop_reason = getattr(output, "stop_reason", None)
+
+            # Check if thinking phase is complete
+            thinking_complete = "</think>" in text
+            if thinking_complete:
+                think_pos = text.find("</think>")
+                text = text[: think_pos + len("</think>")]
+
+            # Handle max tokens truncation
+            hit_max_tokens = stop_reason is None or stop_reason == "length"
+            if hit_max_tokens and not thinking_complete:
+                text = self._truncate_at_sentence_boundary(text)
+
+            # Check for repetitions
+            repetition_detected = self._detect_line_repetitions(text)
+
+            # Find best token prefix for truncated text
+            truncated_text = text.strip()
+            original_token_count = len(token_ids)
+            best_prefix_len = original_token_count
+
+            if original_token_count > 0:
+                for prefix_len in range(original_token_count, 0, -1):
+                    prefix_tokens = token_ids[:prefix_len]
+                    prefix_text = self.tokenizer.decode(
+                        prefix_tokens, skip_special_tokens=True
+                    )
+                    if (
+                        prefix_text.strip() == truncated_text
+                        or truncated_text.startswith(prefix_text.strip())
+                    ):
+                        best_prefix_len = prefix_len
+                        break
+
+            # Log scoring details
+            self._log_step_scoring(
+                token_ids=token_ids,
+                stop_reason=stop_reason,
+                scoring_token_count=best_prefix_len,
+                path_idx=path_idx,
+            )
+
+            # Compute uncertainty on truncated tokens
+            uncertainty_score = self.model.score(
+                token_ids[:best_prefix_len],
+                logprobs[:best_prefix_len],
+            )
+
+            candidate = StepCandidate(
+                text=text.strip(),
+                token_ids=token_ids[:best_prefix_len],
+                is_complete=True,
+                is_trajectory_complete=thinking_complete or repetition_detected,
+                other_data={
+                    "uncertainty_score": uncertainty_score,
+                    "validity_score": 1.0 / (1.0 + uncertainty_score),
+                    "logprobs": self._extract_logprobs(
+                        token_ids[:best_prefix_len], logprobs[:best_prefix_len]
+                    ),
+                    "original_token_count": original_token_count,
+                },
+                raw_text=output.text,
+            )
+            candidates_by_path[path_idx] = candidate
+
+        # Merge results
+        candidates_by_path.update(context_limited_results)
+
+        # Build result in original order
+        result = [candidates_by_path[i] for i in range(len(trajectories))]
+
+        # Record token usage
+        self._record_generation(result, context_tokens=total_context_tokens)
+
+        return result
+
     def generate_batch(
         self, requests: List[str], candidates_per_step: int = 1
     ) -> List[StepCandidate]:
         """Generate batch of completions from requests (structured mode).
 
         Records token usage for FLOP calculation.
+
+        Note: This is the LEGACY batch method that takes raw string prompts.
+        For parallel path generation with trajectories, use generate_step_batch().
         """
         if self.thinking_mode:
             raise RuntimeError("generate_batch() requires thinking_mode=False")
