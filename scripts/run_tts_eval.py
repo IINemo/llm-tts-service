@@ -291,9 +291,9 @@ def create_model(config):
         log.info("vLLM model loaded successfully")
 
         # Create step generator for strategies that need it
-        # DeepConf and self_consistency have their own generation logic
+        # DeepConf has its own generation logic
         step_generator = None
-        if config.strategy.type not in ("deepconf", "self_consistency"):
+        if config.strategy.type not in ("deepconf",):
             if not VLLM_GENERATOR_AVAILABLE:
                 raise ImportError(
                     "vLLM step generator not available. "
@@ -380,11 +380,15 @@ def create_model(config):
                 )
 
                 # Create sampling params for step generation
-                # Stop at step boundaries (- Step) and end of response, but NOT at <Answer>:
-                # We want the model to generate the full answer: <Answer>: 49\n<end of response>
+                # Stop at:
+                # - step boundaries (- Step)
+                # - answer patterns (<Answer>:) - signals reasoning is done
+                # - end of response (<end of response>)
                 # Cast to list to avoid OmegaConf ListConfig issues with vLLM
-                stop_patterns = list(detector.step_patterns) + list(
-                    detector.eos_patterns
+                stop_patterns = (
+                    list(detector.step_patterns)
+                    + list(detector.answer_patterns)
+                    + list(detector.eos_patterns)
                 )
                 step_sampling_params = SamplingParams(
                     max_tokens=config.generation.max_new_tokens,
@@ -748,15 +752,17 @@ def create_tts_strategy(
             cluster_num=config.strategy.cluster_num,
         )
     elif config.strategy.type == "self_consistency":
+        if step_generator is None:
+            raise ValueError(
+                "Self-consistency strategy requires step_generator. "
+                "Ensure model.type is 'vllm' and step generator is created."
+            )
         strategy = StrategySelfConsistency(
-            model=model,
+            step_generator=step_generator,
             num_paths=config.strategy.get("num_paths", 10),
-            max_new_tokens=config.strategy.get("max_new_tokens", 512),
-            temperature=config.strategy.get("temperature", 0.7),
-            generation_batch_size=config.strategy.get("generation_batch_size", None),
+            max_steps=config.strategy.get("max_steps", 250),
             scorer=scorer,
-            n_threads=config.strategy.get("n_threads", None),
-            disable_thinking_mode=config.model.get("disable_thinking_mode", True),
+            parallel=config.strategy.get("parallel", True),
         )
     elif config.strategy.type == "tree_of_thoughts":
         # Tree-of-Thoughts requires API-based model for state evaluation
