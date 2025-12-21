@@ -297,14 +297,25 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         request: List[Dict[str, str]],
         trajectory: List[StepCandidate],
         reserved_tokens: int = 4096,
+        enable_thinking: Optional[bool] = None,
     ) -> tuple:
         """Truncate trajectory to fit within max_model_len.
+
+        Args:
+            request: Chat messages
+            trajectory: Current trajectory steps
+            reserved_tokens: Tokens to reserve for generation
+            enable_thinking: Whether thinking mode is enabled (None = use self.thinking_mode)
 
         Returns:
             Tuple of (truncated_trajectory, was_truncated)
         """
         if not trajectory:
             return trajectory, False
+
+        # Use instance thinking_mode if not specified
+        if enable_thinking is None:
+            enable_thinking = self.thinking_mode
 
         # Calculate base prompt tokens (without trajectory)
         tokenizer_signature = inspect.signature(self.tokenizer.apply_chat_template)
@@ -315,7 +326,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 request,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=True,
+                enable_thinking=enable_thinking,
             )
         else:
             base_prompt = self.tokenizer.apply_chat_template(
@@ -878,6 +889,21 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         """
         candidates = []
         trajectory = trajectory or []
+
+        # Check context limit before generation (like thinking mode does)
+        # Use max_new_tokens as reserved space for generation
+        trajectory, context_limit_reached = self._truncate_trajectory(
+            request, trajectory, reserved_tokens=self.max_new_tokens
+        )
+
+        # If context limit reached, force answer generation instead of another step
+        if context_limit_reached:
+            log.warning(
+                "Context limit reached in structured mode, forcing answer generation"
+            )
+            return self._generate_structured_answer_candidates(
+                request, candidates_per_step, trajectory
+            )
 
         # Build prompt with enable_thinking=False to disable thinking mode
         prompt = self._apply_chat_template(request, enable_thinking=False)
