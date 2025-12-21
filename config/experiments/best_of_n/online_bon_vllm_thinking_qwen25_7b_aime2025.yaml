@@ -1,0 +1,82 @@
+# @package _global_
+# Online Best-of-N with vLLM + Thinking Mode (Qwen2.5-7B)
+# Same as online_bon_vllm_thinking_aime2025.yaml but using Qwen2.5-7B
+
+defaults:
+  - /config
+  - /dataset/aime_2025
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - _self_
+
+# Run naming
+run_name: "aime2025_online_bon_vllm_qwen25_7b_thinking_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-aime2025
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen2.5-7B"
+  gpu_memory_utilization: 0.8
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
+  disable_thinking_mode: false  # ENABLE thinking mode
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (thinking mode settings)
+generation:
+  max_new_tokens: 4096
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 8192
+
+# Strategy - Online Best-of-N with thinking marker detector
+strategy:
+  type: online_best_of_n
+  candidates_per_step: 4
+  max_steps: 250
+  # Use VLLMStepGenerator in thinking mode
+  detector_type: thinking_marker
+  # Step boundary token limits
+  min_step_tokens: 50
+  max_step_tokens: 300
+  # Marker categories (for vLLM stop token generation)
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: false
+  use_reasoning: true
+  use_correction: false
+  # Custom words for stop tokens
+  custom_words:
+    - "for example"
+    - "given that"
+    - "similarly"
+  detector_answer_patterns:
+    - "<end of response>"
+
+# Dataset configuration
+dataset:
+  subset: 30  # Full AIME-2025 dataset
+  offset: 0
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default.txt"
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match
