@@ -220,6 +220,30 @@ class StrategySelfConsistency(StrategyBase):
                     f"  Step {step_num + 1}: {len(active_paths)} paths still active"
                 )
 
+        # Generate answers for paths that completed but don't have <Answer>: content
+        for path_idx in range(self.num_paths):
+            trajectory = trajectories[path_idx]
+            if not trajectory:
+                continue
+
+            last_step = trajectory[-1]
+            if not last_step.is_trajectory_complete:
+                continue
+
+            # Check if path needs answer generation
+            trace_text = convert_trajectory_to_string(trajectory)
+            if "<Answer>:" not in trace_text:
+                reason = last_step.other_data.get("completion_reason", "unknown")
+                log.info(
+                    f"  Path {path_idx + 1}: Generating answer (reason: {reason})..."
+                )
+                answer_candidates = self.step_generator.generate_answer_candidates(
+                    request, trajectory, candidates_per_step=1
+                )
+                if answer_candidates:
+                    trajectories[path_idx].append(answer_candidates[0])
+                    path_tokens[path_idx] += len(answer_candidates[0].token_ids)
+
         # Build result dicts for all paths
         paths = []
         for i in range(self.num_paths):
