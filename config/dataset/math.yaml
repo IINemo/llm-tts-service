@@ -1,7 +1,0 @@
-# @package dataset
-
-dataset_path: "test-time-compute/test_MATH"
-dataset_split: "test"  # Dataset split to use
-subset: 500  # Only process first N samples from dataset (null for all)
-prompt_file: ./config/prompts/default.txt  # Path to prompt template file (optional)
-answer_format: "numeric"
