@@ -28,8 +28,7 @@ Method naming convention:
 
 - PRIVATE IMPLEMENTATION (underscore prefix):
   - _generate_step_candidates_impl() - Unified step generation for both modes
-  - _generate_thinking_answer_candidates() - Answer generation for thinking mode
-  - _generate_structured_answer_candidates() - Answer generation for structured mode
+  - _generate_answer_candidates_impl() - Unified answer generation for both modes
   - _process_generation_output() - Common output processing helper
 
 Token tracking (_record_generation):
@@ -788,58 +787,99 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         return result
 
-    def _generate_thinking_answer_candidates(
+    def _generate_answer_candidates_impl(
         self,
         request: List[Dict[str, str]],
         trajectory: List[StepCandidate],
         candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
-        """Generate N answer candidates after thinking phase (after </think>).
+        """Unified answer candidate generation for both thinking and structured modes.
 
-        This is a leaf method that calls model.generate() directly using
-        vLLM's native batching (n=candidates_per_step).
-        Records token usage for FLOP calculation.
+        Generates N final answer candidates after reasoning is complete.
+        Uses self.thinking_mode to branch on mode-specific behavior.
+
+        Args:
+            request: Chat messages
+            trajectory: Current trajectory (reasoning steps so far)
+            candidates_per_step: Number of answer candidates to generate
+
+        Returns:
+            List of answer candidates
         """
-        if not self.thinking_mode:
-            raise RuntimeError(
-                "_generate_thinking_answer_candidates() requires thinking_mode=True"
-            )
-
+        trajectory = trajectory or []
         candidates = []
-        prompt = self._build_prompt(request, trajectory)
+
+        # Build prompt and sampling params (mode-specific)
+        if self.thinking_mode:
+            prompt = self._build_prompt(request, trajectory)
+            sampling_params = self._create_sampling_params(
+                stop_tokens=self.response_stop_tokens,
+                n=candidates_per_step,
+                max_tokens=self.max_new_tokens,
+                min_tokens=0,
+            )
+            answer_prefix = None
+        else:
+            # Structured mode: inject <Answer>: prefix
+            prompt = self._apply_chat_template(request, enable_thinking=False)
+            if trajectory:
+                trajectory_text = convert_trajectory_to_string(trajectory)
+                prompt = prompt + trajectory_text
+
+            answer_prefix = "<Answer>:"
+            prompt = prompt + answer_prefix
+
+            sampling_params = SamplingParams(
+                n=candidates_per_step,
+                max_tokens=self.max_answer_tokens,
+                min_tokens=1,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                top_k=self.top_k,
+                logprobs=20,
+                stop=["<end of response>"],
+            )
+            log.info(f"Generating final answer with prefix '{answer_prefix}'")
+
         context_tokens = len(self.tokenizer.encode(prompt))
 
-        sampling_params = self._create_sampling_params(
-            stop_tokens=self.response_stop_tokens,
-            n=candidates_per_step,
-            max_tokens=self.max_new_tokens,
-            min_tokens=0,
-        )
-
+        # Generate
         outputs = self.model.generate([prompt], sampling_params)
         request_output = outputs[0]
 
+        # Process outputs
         for idx, output in enumerate(request_output.outputs):
-            text = output.text
+            raw_text = output.text
+            stop_reason = getattr(output, "stop_reason", None)
 
-            # Append answer pattern if not present
-            for pattern in self.answer_patterns:
-                if pattern not in text:
-                    text = text + pattern
-                    break
+            if self.thinking_mode:
+                # Append answer pattern if not present
+                text = raw_text
+                for pattern in self.answer_patterns:
+                    if pattern not in text:
+                        text = text + pattern
+                        break
+                final_text = text.strip()
+                target_text = None
+            else:
+                # Structured mode: prepend <Answer>: prefix
+                final_text = answer_prefix + raw_text
+                if stop_reason == "<end of response>":
+                    final_text = final_text + "<end of response>"
+                target_text = raw_text
 
-            # Process output into candidate
             candidate = self._process_generation_output(
                 output=output,
-                final_text=text.strip(),
+                final_text=final_text,
                 is_trajectory_complete=True,
                 idx=idx,
+                target_text=target_text,
+                raw_text_for_log=raw_text if not self.thinking_mode else None,
+                step_text_for_log=final_text if not self.thinking_mode else None,
             )
             candidates.append(candidate)
 
-        # Record token usage for FLOP calculation
         self._record_generation(candidates, context_tokens=context_tokens)
-
         return candidates
 
     def generate_full_thinking(
@@ -1065,9 +1105,14 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         PUBLIC API - Force generation of final answer even if model hasn't
         naturally reached end-of-response marker.
+
+        In thinking mode, ensures </think> is present before generating answer.
+        In structured mode, injects <Answer>: prefix to force answer generation.
         """
+        trajectory = trajectory or []
+
+        # Thinking mode: ensure </think> is present
         if self.thinking_mode:
-            # Check if thinking phase is complete
             full_trajectory = convert_trajectory_to_string(trajectory)
             if "</think>" not in full_trajectory:
                 log.warning(
@@ -1080,98 +1125,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     is_complete=True,
                     is_trajectory_complete=True,
                 )
-                trajectory.append(close_thinking_step)
+                trajectory = trajectory + [close_thinking_step]
 
-            return self._generate_thinking_answer_candidates(
-                request, trajectory, candidates_per_step
-            )
-        else:
-            # Structured mode: force generation of <Answer>: instead of another step
-            return self._generate_structured_answer_candidates(
-                request, candidates_per_step, trajectory
-            )
-
-    def _generate_structured_answer_candidates(
-        self,
-        request: List[Dict[str, str]],
-        candidates_per_step: int = 1,
-        trajectory: Optional[List[StepCandidate]] = None,
-    ) -> List[StepCandidate]:
-        """Generate N final answer candidates in structured mode.
-
-        This is a leaf method that calls model.generate() directly using
-        vLLM's native batching (n=candidates_per_step).
-        Records token usage for FLOP calculation.
-
-        Called when max_steps is reached without the model naturally generating <Answer>:.
-        Forces the model to provide a final answer by injecting <Answer>: prefix.
-        """
-        candidates = []
-        trajectory = trajectory or []
-
-        # Build prompt with enable_thinking=False
-        prompt = self._apply_chat_template(request, enable_thinking=False)
-
-        # Append trajectory if present
-        if trajectory:
-            trajectory_text = convert_trajectory_to_string(trajectory)
-            prompt = prompt + trajectory_text
-
-        # Inject <Answer>: prefix to force answer generation
-        answer_prefix = "<Answer>:"
-        prompt_with_prefix = prompt + answer_prefix
-        context_tokens = len(self.tokenizer.encode(prompt_with_prefix))
-
-        # Only stop at <end of response>
-        answer_sampling_params = SamplingParams(
-            n=candidates_per_step,
-            max_tokens=self.max_answer_tokens,
-            min_tokens=1,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            top_k=self.top_k,
-            logprobs=20,
-            stop=["<end of response>"],
+        return self._generate_answer_candidates_impl(
+            request, trajectory, candidates_per_step
         )
-
-        log.info(
-            f"Structured mode: generating final answer with prefix '{answer_prefix}'"
-        )
-
-        outputs = self.model.generate(
-            prompt_with_prefix, sampling_params=answer_sampling_params
-        )
-        request_output = outputs[0]
-        answers = request_output.outputs
-
-        for i in range(candidates_per_step):
-            output = answers[i]
-            raw_text = output.text
-            stop_reason = getattr(output, "stop_reason", None)
-
-            # Build answer text with prefix
-            answer_text = answer_prefix + raw_text
-
-            # Append <end of response> if stopped there
-            if stop_reason == "<end of response>":
-                answer_text = answer_text + "<end of response>"
-
-            # Process output into candidate
-            candidate = self._process_generation_output(
-                output=output,
-                final_text=answer_text,
-                is_trajectory_complete=True,
-                idx=i,
-                target_text=raw_text,
-                raw_text_for_log=raw_text,
-                step_text_for_log=answer_text,
-            )
-            candidates.append(candidate)
-
-        # Record token usage for FLOP calculation
-        self._record_generation(candidates, context_tokens=context_tokens)
-
-        return candidates
 
     def generate_answer(
         self, request, candidates_per_step: int, more_information=False
