@@ -380,11 +380,15 @@ def create_model(config):
                 )
 
                 # Create sampling params for step generation
-                # Stop at step boundaries (- Step) and end of response, but NOT at <Answer>:
-                # We want the model to generate the full answer: <Answer>: 49\n<end of response>
+                # Stop at:
+                # - step boundaries (- Step)
+                # - answer patterns (<Answer>:) - signals reasoning is done
+                # - end of response (<end of response>)
                 # Cast to list to avoid OmegaConf ListConfig issues with vLLM
-                stop_patterns = list(detector.step_patterns) + list(
-                    detector.eos_patterns
+                stop_patterns = (
+                    list(detector.step_patterns)
+                    + list(detector.answer_patterns)
+                    + list(detector.eos_patterns)
                 )
                 step_sampling_params = SamplingParams(
                     max_tokens=config.generation.max_new_tokens,
