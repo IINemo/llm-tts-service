@@ -181,9 +181,11 @@ class StrategySelfConsistency(StrategyBase):
             active_trajectories = [trajectories[i] for i in active_indices]
 
             # Batch generate next step for all active paths
-            step_candidates = self.step_generator.generate_step_batch(
-                request, active_trajectories
+            step_candidates_nested = self.step_generator.generate_step_candidates(
+                request, active_trajectories, candidates_per_step=1
             )
+            # Flatten: each trajectory gets 1 candidate
+            step_candidates = [cands[0] for cands in step_candidates_nested]
 
             # Process results and update trajectories
             newly_completed = []

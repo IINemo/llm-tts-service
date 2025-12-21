@@ -537,41 +537,78 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     def _generate_step_candidates_impl(
         self,
         request: List[Dict[str, str]],
-        trajectory: Optional[List[StepCandidate]] = None,
+        trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
-    ) -> List[StepCandidate]:
+    ) -> List[List[StepCandidate]]:
         """Unified step candidate generation for both thinking and structured modes.
 
-        Uses self.thinking_mode flag to branch on mode-specific behavior:
-        - Stop tokens
-        - Prompt building
-        - Step prefix injection (structured only)
-        - Context limit handling
-        - Completion detection
-        - Text post-processing
+        Handles both single-trajectory (best-of-n) and multi-trajectory (self-consistency)
+        in a single method using vLLM's batch generation capabilities.
+
+        Args:
+            request: Chat messages (same for all trajectories)
+            trajectories: List of trajectories. Each trajectory is a list of StepCandidates.
+            candidates_per_step: Number of candidates to generate per trajectory.
+
+        Returns:
+            List of candidate lists, one per trajectory. Each inner list contains
+            candidates_per_step candidates.
         """
-        trajectory = trajectory or []
+        if not trajectories:
+            return []
 
-        # Build prompt (mode-specific)
-        if self.thinking_mode:
-            prompt = self._build_prompt(request, trajectory)
-            step_prefix = None
-        else:
-            prompt = self._apply_chat_template(request, enable_thinking=False)
-            if trajectory:
-                trajectory_text = convert_trajectory_to_string(trajectory)
-                prompt = prompt + trajectory_text
+        # Build prompts for all trajectories
+        prompts = []
+        step_prefixes = []  # Only used for structured mode
+        traj_indices = []  # Maps prompt index to trajectory index
+        already_complete = {}  # Trajectories that are already complete
 
-            # Calculate step number and create prefix
-            step_number = len(trajectory) + 1
-            if step_number == 1:
-                step_prefix = "<start of response>\nReasoning Steps:\n- Step 1:"
+        for traj_idx, trajectory in enumerate(trajectories):
+            # Check if trajectory is already complete
+            if trajectory and trajectory[-1].is_trajectory_complete:
+                log.warning(
+                    f"Path {traj_idx}: trajectory already complete, skipping. "
+                    "Strategy should not include completed trajectories."
+                )
+                already_complete[traj_idx] = [
+                    StepCandidate(
+                        text="",
+                        token_ids=[],
+                        is_complete=True,
+                        is_trajectory_complete=True,
+                        other_data={"uncertainty_score": 0.0, "validity_score": 1.0},
+                        raw_text="",
+                    )
+                    for _ in range(candidates_per_step)
+                ]
+                continue
+
+            # Build prompt (mode-specific)
+            if self.thinking_mode:
+                prompt = self._build_prompt(request, trajectory)
+                step_prefix = None
             else:
-                step_prefix = f"- Step {step_number}:"
+                prompt = self._apply_chat_template(request, enable_thinking=False)
+                if trajectory:
+                    trajectory_text = convert_trajectory_to_string(trajectory)
+                    prompt = prompt + trajectory_text
 
-            prompt = prompt + step_prefix
+                step_number = len(trajectory) + 1
+                if step_number == 1:
+                    step_prefix = "<start of response>\nReasoning Steps:\n- Step 1:"
+                else:
+                    step_prefix = f"- Step {step_number}:"
+                prompt = prompt + step_prefix
 
-        context_tokens = len(self.tokenizer.encode(prompt))
+            prompts.append(prompt)
+            step_prefixes.append(step_prefix)
+            traj_indices.append(traj_idx)
+
+        # If all trajectories complete, return early
+        if not prompts:
+            return [already_complete[i] for i in range(len(trajectories))]
+
+        total_context_tokens = sum(len(self.tokenizer.encode(p)) for p in prompts)
 
         # Create sampling params (mode-specific stop tokens)
         if self.thinking_mode:
@@ -582,161 +619,174 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 min_tokens=self.min_step_tokens,
             )
         else:
-            self.sampling_params.n = candidates_per_step
-            sampling_params = self.sampling_params
-            log.info(
-                f"Structured mode: step {len(trajectory) + 1}, "
-                f"stop={sampling_params.stop}, min_tokens={sampling_params.min_tokens}"
+            sampling_params = SamplingParams(
+                n=candidates_per_step,
+                max_tokens=self.sampling_params.max_tokens,
+                min_tokens=self.sampling_params.min_tokens,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                top_k=self.top_k,
+                logprobs=20,
+                stop=self.sampling_params.stop,
+                repetition_penalty=1.05,
             )
-
-        # Generate
-        outputs = self.model.generate([prompt], sampling_params)
-        request_output = outputs[0]
-
-        # Process outputs
-        candidates = []
-        for idx, output in enumerate(request_output.outputs):
-            raw_text = output.text
-            token_ids = output.token_ids
-            stop_reason = getattr(output, "stop_reason", None)
-
-            # Mode-specific text processing and completion detection
-            if self.thinking_mode:
-                text = raw_text
-
-                # Check if thinking phase is complete
-                thinking_complete = "</think>" in text
-                if thinking_complete:
-                    think_pos = text.find("</think>")
-                    text = text[: think_pos + len("</think>")]
-
-                # Handle max tokens
-                hit_max_tokens = stop_reason is None or stop_reason == "length"
-                if hit_max_tokens and not thinking_complete:
-                    text = self._truncate_at_sentence_boundary(text)
-
-                # Check for repetitions
-                repetition_detected = self._detect_line_repetitions(text)
-                if repetition_detected:
-                    log.warning(
-                        f"Repetition detected in thinking step [{idx}], "
-                        "marking trajectory complete"
-                    )
-
-                is_trajectory_complete = thinking_complete or repetition_detected
-                step_text = text.strip()
-                target_text = text.strip()
-
+            if len(trajectories) == 1:
+                log.info(
+                    f"Structured mode: step {len(trajectories[0]) + 1}, "
+                    f"stop={sampling_params.stop}, min_tokens={sampling_params.min_tokens}"
+                )
             else:
-                # Structured mode
-                log.debug(
-                    f"vLLM output [{idx}]: {len(token_ids)} tokens, "
-                    f"stop={repr(stop_reason)}\n"
-                    f"  Raw text: {repr(raw_text[-80:] if len(raw_text) > 80 else raw_text)}"
-                )
+                log.info(f"Batch generating for {len(prompts)} paths")
 
-                # Build full step text
-                step_text = step_prefix + raw_text
+        # Generate for all prompts
+        outputs = self.model.generate(prompts, sampling_params)
 
-                # Handle max tokens / repetition
-                hit_max_tokens = stop_reason is None or stop_reason == "length"
-                if hit_max_tokens:
-                    token_count = len(token_ids)
-                    truncated_text, was_truncated = self._truncate_repetitions(
-                        raw_text, token_count
+        # Process outputs and organize by trajectory
+        candidates_by_traj = {}
+
+        for prompt_idx, (traj_idx, step_prefix, request_output) in enumerate(
+            zip(traj_indices, step_prefixes, outputs)
+        ):
+            trajectory = trajectories[traj_idx]
+            candidates = []
+
+            for cand_idx, output in enumerate(request_output.outputs):
+                raw_text = output.text
+                token_ids = output.token_ids
+                stop_reason = getattr(output, "stop_reason", None)
+
+                # Mode-specific text processing and completion detection
+                if self.thinking_mode:
+                    text = raw_text
+
+                    # Check if thinking phase is complete
+                    thinking_complete = "</think>" in text
+                    if thinking_complete:
+                        think_pos = text.find("</think>")
+                        text = text[: think_pos + len("</think>")]
+
+                    # Handle max tokens
+                    hit_max_tokens = stop_reason is None or stop_reason == "length"
+                    if hit_max_tokens and not thinking_complete:
+                        text = self._truncate_at_sentence_boundary(text)
+
+                    # Check for repetitions
+                    repetition_detected = self._detect_line_repetitions(text)
+                    if repetition_detected:
+                        log.warning(
+                            f"Path {traj_idx} cand {cand_idx}: repetition detected"
+                        )
+
+                    is_trajectory_complete = thinking_complete or repetition_detected
+                    step_text = text.strip()
+                    target_text = text.strip()
+
+                else:
+                    # Structured mode
+                    log.debug(
+                        f"vLLM output [path {traj_idx}, cand {cand_idx}]: "
+                        f"{len(token_ids)} tokens, stop={repr(stop_reason)}"
                     )
-                    if was_truncated:
-                        raw_text = truncated_text
-                        step_text = step_prefix + raw_text
 
-                # Check for EOS marker
-                stopped_at_eos = stop_reason == "<end of response>"
-                if stopped_at_eos:
-                    step_text = step_text + "<end of response>"
-                    log.info(
-                        f"Candidate [{idx}] stopped at <end of response>, "
-                        "appending marker"
-                    )
+                    step_text = step_prefix + raw_text
 
-                # Check if stopped at answer pattern (reasoning complete)
-                stopped_at_answer = False
-                if hasattr(self.detector, "answer_patterns"):
-                    for pattern in self.detector.answer_patterns:
-                        # stop_reason contains the pattern that triggered stop
-                        if stop_reason and pattern in stop_reason:
-                            stopped_at_answer = True
-                            log.info(
-                                f"Candidate [{idx}] stopped at answer pattern "
-                                f"'{stop_reason}', reasoning complete"
-                            )
-                            break
+                    # Handle max tokens / repetition
+                    hit_max_tokens = stop_reason is None or stop_reason == "length"
+                    if hit_max_tokens:
+                        token_count = len(token_ids)
+                        truncated_text, was_truncated = self._truncate_repetitions(
+                            raw_text, token_count
+                        )
+                        if was_truncated:
+                            raw_text = truncated_text
+                            step_text = step_prefix + raw_text
 
-                is_trajectory_complete = (
-                    stopped_at_eos
-                    or stopped_at_answer
-                    or self.detector.is_trajectory_complete(raw_text)
-                )
-                target_text = raw_text
-
-            # Determine completion reason for logging
-            completion_reason = None
-            if is_trajectory_complete:
-                if self.thinking_mode and "</think>" in step_text:
-                    completion_reason = CompletionReason.THINKING_COMPLETE
-                elif not self.thinking_mode:
+                    # Check for EOS marker
+                    stopped_at_eos = stop_reason == "<end of response>"
                     if stopped_at_eos:
-                        completion_reason = CompletionReason.EOS_PATTERN
-                    elif stopped_at_answer:
-                        completion_reason = CompletionReason.ANSWER_PATTERN
+                        step_text = step_text + "<end of response>"
 
-            # Process output into candidate (shared logic)
-            candidate = self._process_generation_output(
-                output=output,
-                final_text=step_text,
-                is_trajectory_complete=is_trajectory_complete,
-                idx=idx,
-                target_text=target_text,
-                raw_text_for_log=raw_text if not self.thinking_mode else None,
-                step_text_for_log=step_text if not self.thinking_mode else None,
-            )
+                    # Check if stopped at answer pattern
+                    stopped_at_answer = False
+                    if hasattr(self.detector, "answer_patterns"):
+                        for pattern in self.detector.answer_patterns:
+                            if stop_reason and pattern in stop_reason:
+                                stopped_at_answer = True
+                                log.info(
+                                    f"Path {traj_idx}: stopped at answer pattern "
+                                    f"'{stop_reason}', reasoning complete"
+                                )
+                                break
 
-            # Add completion reason if trajectory is complete
-            if completion_reason:
-                candidate.other_data["completion_reason"] = completion_reason
-
-            candidates.append(candidate)
-
-        # Record token usage
-        self._record_generation(candidates, context_tokens=context_tokens)
-
-        # Post-generation context limit check
-        # If not enough context for another step + answer, mark candidates as complete
-        if candidates and not candidates[0].is_trajectory_complete:
-            # Estimate tokens used: context + generated tokens
-            max_generated_tokens = (
-                max(len(c.token_ids) for c in candidates) if candidates else 0
-            )
-            total_tokens = context_tokens + max_generated_tokens
-
-            # Need room for: next step + answer generation
-            max_step = getattr(self, "max_step_tokens", 300)
-            tokens_needed = max_step + self.max_answer_tokens
-            remaining_context = self.max_model_len - total_tokens
-
-            if remaining_context < tokens_needed:
-                log.warning(
-                    f"Context limit reached after generation: "
-                    f"{total_tokens}/{self.max_model_len} tokens used, "
-                    f"only {remaining_context} remaining "
-                    f"(need {tokens_needed} = {max_step} step + {self.max_answer_tokens} answer)"
-                )
-                for candidate in candidates:
-                    candidate.is_trajectory_complete = True
-                    candidate.other_data["completion_reason"] = (
-                        CompletionReason.CONTEXT_LIMIT
+                    is_trajectory_complete = (
+                        stopped_at_eos
+                        or stopped_at_answer
+                        or self.detector.is_trajectory_complete(raw_text)
                     )
+                    target_text = raw_text
 
-        return candidates
+                # Determine completion reason
+                completion_reason = None
+                if is_trajectory_complete:
+                    if self.thinking_mode and "</think>" in step_text:
+                        completion_reason = CompletionReason.THINKING_COMPLETE
+                    elif not self.thinking_mode:
+                        if stopped_at_eos:
+                            completion_reason = CompletionReason.EOS_PATTERN
+                        elif stopped_at_answer:
+                            completion_reason = CompletionReason.ANSWER_PATTERN
+
+                # Process output into candidate
+                candidate = self._process_generation_output(
+                    output=output,
+                    final_text=step_text,
+                    is_trajectory_complete=is_trajectory_complete,
+                    idx=cand_idx,
+                    target_text=target_text,
+                    raw_text_for_log=raw_text if not self.thinking_mode else None,
+                    step_text_for_log=step_text if not self.thinking_mode else None,
+                    path_idx=traj_idx if len(trajectories) > 1 else None,
+                )
+
+                if completion_reason:
+                    candidate.other_data["completion_reason"] = completion_reason
+
+                candidates.append(candidate)
+
+            # Post-generation context limit check for this trajectory
+            if candidates and not candidates[0].is_trajectory_complete:
+                context_tokens = len(self.tokenizer.encode(prompts[prompt_idx]))
+                max_gen = max(len(c.token_ids) for c in candidates)
+                total_tokens = context_tokens + max_gen
+
+                max_step = getattr(self, "max_step_tokens", 300)
+                tokens_needed = max_step + self.max_answer_tokens
+                remaining = self.max_model_len - total_tokens
+
+                if remaining < tokens_needed:
+                    log.warning(
+                        f"Path {traj_idx}: context limit, "
+                        f"only {remaining} remaining (need {tokens_needed})"
+                    )
+                    for c in candidates:
+                        c.is_trajectory_complete = True
+                        c.other_data["completion_reason"] = (
+                            CompletionReason.CONTEXT_LIMIT
+                        )
+
+            candidates_by_traj[traj_idx] = candidates
+
+        # Merge with already-complete results
+        candidates_by_traj.update(already_complete)
+
+        # Build result in original trajectory order
+        result = [candidates_by_traj[i] for i in range(len(trajectories))]
+
+        # Flatten for token recording
+        all_candidates = [c for cands in result for c in cands]
+        self._record_generation(all_candidates, context_tokens=total_context_tokens)
+
+        return result
 
     def _generate_thinking_answer_candidates(
         self,
@@ -981,28 +1031,28 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     def generate_step_candidates(
         self,
         request: List[Dict[str, str]],
-        trajectory: Optional[List[StepCandidate]] = None,
+        trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
-    ) -> List[StepCandidate]:
-        """Generate N candidate next steps from current trajectory.
+    ) -> List[List[StepCandidate]]:
+        """Generate N candidate next steps for each trajectory.
 
-        PUBLIC API - Main entry point for step generation.
-        Uses unified implementation that branches on self.thinking_mode internally.
+        PUBLIC API - Main entry point for step generation. Supports both:
+        - Single trajectory (best-of-n): pass [trajectory], get [[cand1, cand2, ...]]
+        - Multiple trajectories (self-consistency): pass [traj1, traj2, ...], get [[c1], [c2], ...]
+
+        Args:
+            request: Chat messages (same for all trajectories)
+            trajectories: List of trajectories. Each trajectory is a list of StepCandidates.
+            candidates_per_step: Number of candidates to generate per trajectory.
+
+        Returns:
+            List of candidate lists, one per trajectory.
 
         Note: Strategy should check is_trajectory_complete on returned candidates
         and call generate_answer_candidates() when reasoning phase is done.
         """
-        trajectory = trajectory or []
-
-        # Warn if reasoning is already complete - strategy should have checked this
-        if trajectory and trajectory[-1].is_trajectory_complete:
-            log.warning(
-                "generate_step_candidates called but last step has "
-                "is_trajectory_complete=True. Strategy should check this flag."
-            )
-
         return self._generate_step_candidates_impl(
-            request, trajectory, candidates_per_step
+            request, trajectories, candidates_per_step
         )
 
     def generate_answer_candidates(
@@ -1127,276 +1177,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self, request, candidates_per_step: int, more_information=False
     ) -> List[StepCandidate]:
         """Generate final answer (structured mode compatibility)."""
-        return self.generate_step_candidates(request, None, candidates_per_step)
-
-    def generate_step_batch(
-        self,
-        request: List[Dict[str, str]],
-        trajectories: List[List[StepCandidate]],
-    ) -> List[StepCandidate]:
-        """Generate next step for multiple paths in parallel (one step per path).
-
-        This enables efficient parallel path generation for self-consistency:
-        instead of generating paths sequentially, we generate the next step
-        for ALL active paths in a single vLLM batch call.
-
-        Args:
-            request: Chat messages (same for all paths)
-            trajectories: List of trajectories, one per path. Each trajectory
-                         is a list of StepCandidates representing the path's
-                         generation history so far.
-
-        Returns:
-            List of StepCandidates, one per path (same order as input trajectories).
-            Each candidate represents the next step for that path.
-
-        Note:
-            - Works for both thinking and structured modes
-            - Each path may be at a different step number
-            - Paths with is_trajectory_complete=True are skipped
-        """
-        return self._generate_step_batch_impl(request, trajectories)
-
-    def _generate_step_batch_impl(
-        self,
-        request: List[Dict[str, str]],
-        trajectories: List[List[StepCandidate]],
-    ) -> List[StepCandidate]:
-        """Unified batch step generation for both thinking and structured modes.
-
-        Uses self.thinking_mode flag to branch on mode-specific behavior.
-        """
-        if not trajectories:
-            return []
-
-        # Build prompts for each path
-        prompts = []
-        step_prefixes = []  # Only used for structured mode
-        path_indices = []
-        already_complete_results = {}  # Paths that are already complete
-
-        for path_idx, trajectory in enumerate(trajectories):
-            # Check if trajectory is already complete
-            if trajectory and trajectory[-1].is_trajectory_complete:
-                log.warning(
-                    f"Path {path_idx}: trajectory already complete, skipping. "
-                    "Strategy should not include completed trajectories in batch."
-                )
-                # Return empty candidate signaling completion
-                already_complete_results[path_idx] = StepCandidate(
-                    text="",
-                    token_ids=[],
-                    is_complete=True,
-                    is_trajectory_complete=True,
-                    other_data={
-                        "uncertainty_score": 0.0,
-                        "validity_score": 1.0,
-                    },
-                    raw_text="",
-                )
-                continue
-
-            # Build prompt (mode-specific)
-            if self.thinking_mode:
-                prompt = self._build_prompt(request, trajectory)
-                step_prefix = None
-            else:
-                prompt = self._apply_chat_template(request, enable_thinking=False)
-                if trajectory:
-                    trajectory_text = convert_trajectory_to_string(trajectory)
-                    prompt = prompt + trajectory_text
-
-                # Calculate step prefix
-                step_number = len(trajectory) + 1
-                if step_number == 1:
-                    step_prefix = "<start of response>\nReasoning Steps:\n- Step 1:"
-                else:
-                    step_prefix = f"- Step {step_number}:"
-
-                prompt = prompt + step_prefix
-
-            prompts.append(prompt)
-            step_prefixes.append(step_prefix)
-            path_indices.append(path_idx)
-
-        # If all paths are complete, return early
-        if not prompts:
-            return [already_complete_results[i] for i in range(len(trajectories))]
-
-        # Calculate total context tokens
-        total_context_tokens = sum(len(self.tokenizer.encode(p)) for p in prompts)
-
-        # Create sampling params (mode-specific)
-        if self.thinking_mode:
-            batch_sampling_params = self._create_sampling_params(
-                stop_tokens=self.thinking_stop_tokens,
-                n=1,
-                max_tokens=self.max_step_tokens,
-                min_tokens=self.min_step_tokens,
-            )
-        else:
-            batch_sampling_params = SamplingParams(
-                n=1,
-                max_tokens=self.sampling_params.max_tokens,
-                min_tokens=self.sampling_params.min_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k,
-                logprobs=20,
-                stop=self.sampling_params.stop,
-                repetition_penalty=1.05,
-            )
-
-        log.info(f"Batch generating for {len(prompts)} paths")
-
-        outputs = self.model.generate(prompts, batch_sampling_params)
-
-        # Process outputs
-        candidates_by_path = {}
-
-        for batch_idx, (path_idx, step_prefix, request_output) in enumerate(
-            zip(path_indices, step_prefixes, outputs)
-        ):
-            output = request_output.outputs[0]
-            raw_text = output.text
-            stop_reason = getattr(output, "stop_reason", None)
-
-            # Mode-specific processing
-            if self.thinking_mode:
-                text = raw_text
-
-                # Check if thinking phase is complete
-                thinking_complete = "</think>" in text
-                if thinking_complete:
-                    think_pos = text.find("</think>")
-                    text = text[: think_pos + len("</think>")]
-
-                # Handle max tokens
-                hit_max_tokens = stop_reason is None or stop_reason == "length"
-                if hit_max_tokens and not thinking_complete:
-                    text = self._truncate_at_sentence_boundary(text)
-
-                # Check for repetitions
-                repetition_detected = self._detect_line_repetitions(text)
-                if repetition_detected:
-                    log.warning(
-                        f"Path {path_idx}: repetition detected, marking complete"
-                    )
-
-                is_trajectory_complete = thinking_complete or repetition_detected
-                step_text = text.strip()
-                target_text = text.strip()
-
-                # Determine completion reason
-                completion_reason = None
-                if is_trajectory_complete:
-                    if thinking_complete:
-                        completion_reason = CompletionReason.THINKING_COMPLETE
-
-            else:
-                # Structured mode
-                log.debug(
-                    f"vLLM output [path {path_idx}]: {len(output.token_ids)} tokens, "
-                    f"stop={repr(stop_reason)}"
-                )
-
-                step_text = step_prefix + raw_text
-
-                # Handle max tokens / repetition
-                hit_max_tokens = stop_reason is None or stop_reason == "length"
-                if hit_max_tokens:
-                    token_count = len(output.token_ids)
-                    truncated_text, was_truncated = self._truncate_repetitions(
-                        raw_text, token_count
-                    )
-                    if was_truncated:
-                        raw_text = truncated_text
-                        step_text = step_prefix + raw_text
-
-                # Check for EOS marker
-                stopped_at_eos = stop_reason == "<end of response>"
-                if stopped_at_eos:
-                    step_text = step_text + "<end of response>"
-
-                # Check if stopped at answer pattern
-                stopped_at_answer = False
-                if hasattr(self.detector, "answer_patterns"):
-                    for pattern in self.detector.answer_patterns:
-                        if stop_reason and pattern in stop_reason:
-                            stopped_at_answer = True
-                            log.info(
-                                f"Path {path_idx}: stopped at answer pattern "
-                                f"'{stop_reason}', reasoning complete"
-                            )
-                            break
-
-                is_trajectory_complete = (
-                    stopped_at_eos
-                    or stopped_at_answer
-                    or self.detector.is_trajectory_complete(raw_text)
-                )
-                target_text = raw_text
-
-                # Determine completion reason
-                completion_reason = None
-                if is_trajectory_complete:
-                    if stopped_at_eos:
-                        completion_reason = CompletionReason.EOS_PATTERN
-                    elif stopped_at_answer:
-                        completion_reason = CompletionReason.ANSWER_PATTERN
-
-            # Process output into candidate
-            candidate = self._process_generation_output(
-                output=output,
-                final_text=step_text,
-                is_trajectory_complete=is_trajectory_complete,
-                idx=batch_idx,
-                target_text=target_text,
-                raw_text_for_log=raw_text if not self.thinking_mode else None,
-                step_text_for_log=step_text if not self.thinking_mode else None,
-                path_idx=path_idx,
-            )
-
-            # Add completion reason
-            if completion_reason:
-                candidate.other_data["completion_reason"] = completion_reason
-
-            candidates_by_path[path_idx] = candidate
-
-        # Merge results
-        candidates_by_path.update(already_complete_results)
-
-        # Build result in original order
-        result = [candidates_by_path[i] for i in range(len(trajectories))]
-
-        # Post-generation context limit check for non-complete paths
-        for path_idx, candidate in enumerate(result):
-            if not candidate.is_trajectory_complete:
-                trajectory = trajectories[path_idx]
-                # Estimate tokens for this path
-                traj_tokens = sum(len(c.token_ids) for c in trajectory)
-                step_tokens = len(candidate.token_ids)
-                total = traj_tokens + step_tokens
-
-                # Check if room for next step + answer
-                max_step = getattr(self, "max_step_tokens", 300)
-                tokens_needed = max_step + self.max_answer_tokens
-                remaining = self.max_model_len - total
-
-                if remaining < tokens_needed:
-                    log.warning(
-                        f"Path {path_idx}: context limit after generation, "
-                        f"only {remaining} remaining (need {tokens_needed})"
-                    )
-                    candidate.is_trajectory_complete = True
-                    candidate.other_data["completion_reason"] = (
-                        CompletionReason.CONTEXT_LIMIT
-                    )
-
-        # Record token usage
-        self._record_generation(result, context_tokens=total_context_tokens)
-
-        return result
+        result = self.generate_step_candidates(request, [[]], candidates_per_step)
+        return result[0] if result else []
 
     def __call__(
         self,
@@ -1406,7 +1188,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     ) -> List[StepCandidate]:
         """Callable interface for step generation.
 
-        Delegates to generate_step_candidates(). Token tracking is handled
-        at leaf method (_generate_step_candidates_impl).
+        Convenience wrapper that accepts a single trajectory and returns flat list.
+        Internally calls generate_step_candidates with [trajectory].
         """
-        return self.generate_step_candidates(request, trajectory, candidates_per_step)
+        trajectory = trajectory or []
+        result = self.generate_step_candidates(
+            request, [trajectory], candidates_per_step
+        )
+        return result[0] if result else []
