@@ -1,5 +1,5 @@
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/aime2025/offline_bon_vllm_thinking_qwen3_8b_aime2025
 # @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/aime2025/offline_bon_vllm_thinking_qwen3_8b_aime2025
 # Offline Best-of-N with Thinking Mode
 # Generates N complete trajectories (thinking + response), then selects the best one
 
@@ -13,7 +13,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "aime2025_offline_bon_qwen3_8b_thinking_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_thinking_qwen3_8b_aime2025_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
