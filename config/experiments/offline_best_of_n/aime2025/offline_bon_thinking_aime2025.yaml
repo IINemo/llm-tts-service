@@ -1,11 +1,12 @@
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/aime2025/offline_bon_thinking_aime2025
 # @package _global_
-# Offline Best-of-N with Thinking Mode
+# Offline Best-of-N with HuggingFace + Thinking Mode
 # Generates N complete trajectories (thinking + response), then selects the best one
 
 defaults:
   - /config
   - /dataset/aime_2025
-  - /model/vllm_qwen3
+  - /model/hf_qwen3
   - /generation/default
   - /system/default
   - /scorer/entropy
@@ -19,21 +20,17 @@ verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-aime2025
 
-# Model configuration (vLLM backend)
+# Model configuration (HuggingFace backend)
 model:
-  type: "vllm"
+  type: "local"
   model_path: "Qwen/Qwen3-8B"
-  gpu_memory_utilization: 0.8
-  tensor_parallel_size: 1
-  enable_prefix_caching: true
-  trust_remote_code: true
-  max_model_len: 32768
   disable_thinking_mode: false  # ENABLE native thinking mode
 
 # System configuration
 system:
   device: cuda
   seed: 42
+  torch_dtype: "bfloat16"
 
 # Generation configuration (thinking mode settings)
 generation:
@@ -67,7 +64,7 @@ strategy:
 
 # Dataset configuration
 dataset:
-  subset: 5  # Start with 5 samples for testing
+  subset: 30
   offset: 0
   prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
 

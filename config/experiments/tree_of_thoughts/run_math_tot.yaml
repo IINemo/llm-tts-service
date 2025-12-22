@@ -1,3 +1,4 @@
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/tree_of_thoughts/run_math_tot
 # @package _global_
 
 # Tree-of-Thoughts Configuration for MATH Dataset
