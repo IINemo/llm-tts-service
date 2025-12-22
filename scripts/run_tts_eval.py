@@ -229,9 +229,6 @@ def create_scorer(config):
         return None
     if config.scorer is None:
         return None
-    if config.scorer.type == "uncertainty_pd":
-        return None
-
     if config.scorer.type == "prm":
         scorer = StepScorerPRM(
             prm_model_path=config.scorer.model_path,
@@ -241,7 +238,7 @@ def create_scorer(config):
         )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
-    elif config.scorer.type == "perplexity" or config.scorer.type == "entropy":
+    elif config.scorer.type in ("perplexity", "entropy", "uncertainty_pd"):
         scorer = StepScorerConfidence()
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
@@ -312,10 +309,21 @@ def create_model(config):
             if scorer_type == "perplexity":
                 stat_calculators = [VLLMLogprobsCalculator()]
                 estimator = Perplexity()
-            else:
-                # Default to entropy-based scoring
+            elif scorer_type == "uncertainty_pd":
+                # PD-Gap scoring using top-k logprobs matrix
+                from llm_tts.scorers.estimator_uncertainty_pd import PDGap
+
+                stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
+                estimator = PDGap()
+            elif scorer_type == "entropy":
+                # Entropy-based scoring
                 stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                 estimator = MeanTokenEntropy()
+            else:
+                raise ValueError(
+                    f"Unsupported scorer type for vLLM: {scorer_type}. "
+                    f"Supported types: perplexity, uncertainty_pd, entropy"
+                )
 
             uncertainty_wrapper = VLLMWithUncertainty(
                 llm=llm,
