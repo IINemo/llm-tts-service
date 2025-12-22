@@ -90,7 +90,7 @@ class StrategyUncertaintyCoT:
                 # and if uncertainty is low, we keep it
                 elif self.uncertainty_sampling_mode == "sequence":
                     self.step_generator.max_new_tokens = self.max_new_tokens
-                    initial_candidate = self.step_generator.generate_step_candidates(
+                    initial_candidate = self.step_generator(
                         request_chat,
                         trajectory_steps,
                         candidates_per_step=1,
@@ -111,7 +111,7 @@ class StrategyUncertaintyCoT:
                 self.step_generator.max_new_tokens = self.max_new_tokens
                 if use_cot:
                     log.info("Using multi-path completion")
-                    cand_list = self.step_generator.generate_step_candidates(
+                    cand_list = self.step_generator(
                         request_chat,
                         trajectory_steps,
                         candidates_per_step=self.candidates_per_step,
@@ -149,13 +149,11 @@ class StrategyUncertaintyCoT:
                     # if we used the token level probe and uncertainty is low,
                     # we need to generate a sequence
                     if initial_candidate is None:
-                        initial_candidate = (
-                            self.step_generator.generate_step_candidates(
-                                request_chat,
-                                trajectory_steps,
-                                candidates_per_step=1,
-                            )[0]
-                        )
+                        initial_candidate = self.step_generator(
+                            request_chat,
+                            trajectory_steps,
+                            candidates_per_step=1,
+                        )[0]
                         if not initial_candidate:
                             raise RuntimeError(
                                 "No candidate returned for greedy completion"
@@ -272,7 +270,7 @@ class StrategyUncertaintyCoT:
         self, request_chat: List[Dict[str, str]], trajectory_steps: List[Any]
     ) -> Optional[float]:
         self.step_generator.max_new_tokens = 1
-        probe = self.step_generator.generate_step_candidates(
+        probe = self.step_generator(
             request_chat, trajectory_steps, candidates_per_step=1
         )
         if not probe:
