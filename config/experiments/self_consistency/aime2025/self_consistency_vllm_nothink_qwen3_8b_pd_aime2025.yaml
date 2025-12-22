@@ -1,5 +1,5 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/self_consistency_vllm_nothink_qwen3_8b_pd_aime2025
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/aime2025/self_consistency_vllm_nothink_qwen3_8b_pd_aime2025
 # Self-Consistency with vLLM + Non-Thinking Mode (Qwen3-8B) + PD Scorer
 # Uses step generator for step-by-step generation with majority voting
 
