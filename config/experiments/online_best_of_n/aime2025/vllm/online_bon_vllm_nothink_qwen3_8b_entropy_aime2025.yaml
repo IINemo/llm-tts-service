@@ -1,5 +1,5 @@
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/aime2025/vllm/online_bon_vllm_nothink_qwen3_8b_entropy_aime2025
 # @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/aime2025/vllm/online_bon_vllm_nothink_qwen3_8b_entropy_aime2025
 # Online Best-of-N with vLLM + Non-Thinking Mode
 # Uses standard generation without thinking markers
 
@@ -13,7 +13,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "aime2025_online_bon_vllm_qwen3_8b_nothink_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_nothink_qwen3_8b_entropy_aime2025_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true

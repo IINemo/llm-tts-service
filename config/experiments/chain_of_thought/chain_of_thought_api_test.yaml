@@ -1,5 +1,5 @@
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/chain_of_thought/chain_of_thought_api_test
 # @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/chain_of_thought/chain_of_thought_api_test
 
 defaults:
   - dataset: gsm8k
