@@ -1,6 +1,6 @@
 # @package _global_
-# Online Best-of-N with vLLM + Non-Thinking Mode
-# Uses standard generation without thinking markers
+# Self-Consistency with vLLM + Non-Thinking Mode (Qwen3-8B) + PD Scorer
+# Uses step generator for step-by-step generation with majority voting
 
 defaults:
   - /config
@@ -8,11 +8,11 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/uncertainty_pd
   - _self_
 
 # Run naming
-run_name: "aime2025_online_bon_vllm_nothink_${now:%H-%M-%S}"
+run_name: "aime2025_selfconsistency_vllm_qwen3_8b_nothink_pd_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -44,11 +44,12 @@ generation:
   batch_size: 1
   max_length: 8192
 
-# Strategy - Online Best-of-N with structured step detector
+# Strategy - Self-Consistency with structured step detector
 strategy:
-  type: online_best_of_n
-  candidates_per_step: 4
+  type: self_consistency
+  num_paths: 8  # Number of reasoning paths
   max_steps: 50
+  parallel: true  # Generate all paths in parallel (batch mode)
   # Use structured detector for non-thinking mode
   detector_type: structured
   # Step boundary token limits
@@ -82,7 +83,7 @@ strategy:
 dataset:
   subset: 30  # Full AIME-2025 dataset
   offset: 0
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/default.txt"
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
 
 # Evaluation configuration
 evaluation:

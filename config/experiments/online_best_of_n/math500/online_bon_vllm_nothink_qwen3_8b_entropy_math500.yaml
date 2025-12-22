@@ -1,10 +1,10 @@
 # @package _global_
-# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B)
+# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen3-8B) on MATH-500
 # Uses standard generation without thinking markers
 
 defaults:
   - /config
-  - /dataset/aime_2025
+  - /dataset/math_500
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
@@ -12,23 +12,23 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "aime2025_online_bon_vllm_qwen25_nothink_${now:%H-%M-%S}"
+run_name: "math500_online_bon_vllm_qwen3_8b_nothink_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-aime2025
+wandb_project: llm-tts-eval-math500
 
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen2.5-7B"
+  model_path: "Qwen/Qwen3-8B"
   gpu_memory_utilization: 0.8
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 32768
-  disable_thinking_mode: true  # No native thinking mode
+  disable_thinking_mode: true  # DISABLE native thinking mode
 
 # System configuration
 system:
@@ -80,9 +80,9 @@ strategy:
 
 # Dataset configuration
 dataset:
-  subset: 30  # Full AIME-2025 dataset
+  subset: 500  # Full MATH-500 dataset
   offset: 0
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed_qwen2.5.txt"
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
 
 # Evaluation configuration
 evaluation:

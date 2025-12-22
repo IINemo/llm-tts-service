@@ -1,0 +1,73 @@
+# @package _global_
+# Offline Best-of-N with HuggingFace + Thinking Mode
+# Generates N complete trajectories (thinking + response), then selects the best one
+
+defaults:
+  - /config
+  - /dataset/aime_2025
+  - /model/hf_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - _self_
+
+# Run naming
+run_name: "aime2025_offline_bon_thinking_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-aime2025
+
+# Model configuration (HuggingFace backend)
+model:
+  type: "local"
+  model_path: "Qwen/Qwen3-8B"
+  disable_thinking_mode: false  # ENABLE native thinking mode
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+  torch_dtype: "bfloat16"
+
+# Generation configuration (thinking mode settings)
+generation:
+  max_new_tokens: 4096
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 32768
+
+# Strategy - Offline Best-of-N
+strategy:
+  type: offline_best_of_n
+  num_trajectories: 4        # Number of complete trajectories to generate
+  max_thinking_tokens: 32768  # Max tokens for thinking phase
+  max_response_tokens: 1024   # Max tokens for response phase
+  detector_answer_patterns:
+    - "<end of response>"
+  # Step boundary detector settings - ONLY used for post-hoc step splitting (logging/analysis)
+  # Generation uses NO stop tokens (full thinking in one shot)
+  min_step_tokens: 125
+  max_step_tokens: 500
+  # These flags control how thinking is SPLIT into steps after generation (not during)
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: false
+  use_reasoning: true   # Include "Alternatively" etc in step splitting
+  use_correction: false
+
+# Dataset configuration
+dataset:
+  subset: 30
+  offset: 0
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match
