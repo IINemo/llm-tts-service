@@ -1,3 +1,4 @@
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/aime2025/online_bon_hybrid_entropy_aime2025
 # @package _global_
 # Online Best-of-N with Hybrid Generator (vLLM generation + HuggingFace scoring)
 # Uses vLLM for fast generation with PagedAttention, HuggingFace for uncertainty scoring

@@ -1,3 +1,4 @@
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/self_consistency_vllm_nothink_qwen25_7b_entropy_aime2025
 # @package _global_
 # Self-Consistency with vLLM + Non-Thinking Mode (Qwen2.5-7B)
 # Uses step generator for step-by-step generation with majority voting

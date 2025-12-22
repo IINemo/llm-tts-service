@@ -1,3 +1,4 @@
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/aime2025/hf/online_bon_hf_thinking_entropy_aime2025
 # @package _global_
 # Online Best-of-N with Thinking Mode + ThinkingMarkerDetector
 # Uses semantic marker detection for step boundaries in <think> content

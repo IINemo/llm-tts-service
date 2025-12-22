@@ -1,3 +1,4 @@
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/deepconf/run_gsm8k_deepconf_offline
 # @package _global_
 
 # DeepConf Offline Mode Configuration

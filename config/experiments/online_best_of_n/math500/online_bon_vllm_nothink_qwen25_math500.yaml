@@ -1,3 +1,4 @@
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen25_math500
 # @package _global_
 # Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
 # Uses standard generation without thinking markers
