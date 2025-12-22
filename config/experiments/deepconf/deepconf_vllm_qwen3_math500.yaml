@@ -1,5 +1,5 @@
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/deepconf/deepconf_vllm_qwen3_math500
 # @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/deepconf/deepconf_vllm_qwen3_math500
 # DeepConf Offline Mode: Qwen3-8B via vLLM on MATH-500
 
 defaults:
@@ -11,7 +11,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "math500_deepconf_vllm_b${strategy.budget}_${now:%H-%M-%S}"
+run_name: "deepconf_vllm_qwen3_math500_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
