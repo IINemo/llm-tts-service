@@ -315,7 +315,7 @@ def create_model(config):
 
                 stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
                 estimator = PDGap()
-            elif scorer_type == "entropy":
+            elif scorer_type == "entropy" or scorer_type == "uncertainty":
                 # Entropy-based scoring
                 stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                 estimator = MeanTokenEntropy()
