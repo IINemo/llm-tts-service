@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
+from llm_tts.utils import extract_answer
+
 log = logging.getLogger(__name__)
 
 
@@ -192,6 +194,35 @@ class StrategyUncertaintyCoT:
                     log.info(
                         f"Trajectory complete at step {step_num+1}; Generating answer candidates"
                     )
+                    # Generate answer candidates to extract final answer
+                    answer_cands = self.step_generator.generate_answer_candidates(
+                        request_chat,
+                        trajectory_steps,
+                        candidates_per_step=self.candidates_per_step,
+                    )
+                    if answer_cands:
+                        log.info(f"Generated {len(answer_cands)} answer candidates")
+                        answer_uncertainties = np.array(
+                            [
+                                candidate.other_data["uncertainty_score"]
+                                for candidate in answer_cands
+                            ]
+                        )
+                        chosen_answer = answer_cands[np.argmin(answer_uncertainties)]
+
+                        for cand_idx, cand in enumerate(answer_cands):
+                            log.info(
+                                f"[{cand_idx}] Uncertainty: {answer_uncertainties[cand_idx]:.3f} | Text: {cand.text}"
+                            )
+
+                        trajectory_steps.append(chosen_answer)
+                        trajectory_text += chosen_answer.text
+                        uncertainties.append(
+                            float(chosen_answer.other_data["uncertainty_score"])
+                        )
+                        validity_scores.append(
+                            float(chosen_answer.other_data["validity_score"])
+                        )
                     break
 
                 if step_num == self.max_steps and not chosen.is_trajectory_complete:
@@ -237,8 +268,12 @@ class StrategyUncertaintyCoT:
                 except Exception as e:
                     log.warning(f"Failed to get sample stats: {e}")
 
+            # Extract answer from trajectory
+            extracted = extract_answer(trajectory_text)
+
             return {
                 "trajectory": trajectory_text,
+                "extracted_answer": extracted,
                 "steps": trajectory_steps,
                 "uncertainties": uncertainties,
                 "validity_scores": validity_scores,
