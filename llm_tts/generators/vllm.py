@@ -179,8 +179,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     ):
         """Initialize structured mode specific components."""
         self.detector = detector or StructuredStepDetector()
+
+        # Get min/max step tokens from detector (like thinking mode)
+        self.min_step_tokens = getattr(self.detector, 'min_step_tokens', 0)
+        self.max_step_tokens = getattr(self.detector, 'max_step_tokens', 300)
+
         self.sampling_params = sampling_params or SamplingParams(
-            min_tokens=0,  # No minimum - stop tokens can trigger immediately
+            min_tokens=self.min_step_tokens,
             max_tokens=self.max_new_tokens,
             logprobs=20,
             temperature=self.temperature,
