@@ -181,8 +181,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.detector = detector or StructuredStepDetector()
 
         # Get min/max step tokens from detector (like thinking mode)
-        self.min_step_tokens = getattr(self.detector, 'min_step_tokens', 0)
-        self.max_step_tokens = getattr(self.detector, 'max_step_tokens', 300)
+        self.min_step_tokens = getattr(self.detector, "min_step_tokens", 0)
+        self.max_step_tokens = getattr(self.detector, "max_step_tokens", 300)
 
         self.sampling_params = sampling_params or SamplingParams(
             min_tokens=self.min_step_tokens,
