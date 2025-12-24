@@ -7,6 +7,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
     convert_trajectory_to_string,
 )
+from llm_tts.utils import extract_answer
 
 if TYPE_CHECKING:
     from llm_tts.generators import VLLMStepGenerator
@@ -49,7 +50,9 @@ class AdaptiveScalingBestOfN(StrategyBase):
             criterion=adaptive_scaling_method, **kwargs
         )
 
-    def generate_trajectory(self, request: List[Dict[str, str]]) -> Dict[str, any]:
+    def generate_trajectory(
+        self, request: List[Dict[str, str]], sample_idx: int = 0
+    ) -> Dict[str, any]:
         """
         Generate a trajectory step-by-step using specified criterion.
 
@@ -133,8 +136,13 @@ class AdaptiveScalingBestOfN(StrategyBase):
             validity_scores.append(final_validity)
         self.scale_discriminator.reset()
 
+        # Extract answer from trajectory
+        final_trajectory = convert_trajectory_to_string(trajectory)
+        extracted = extract_answer(final_trajectory)
+
         return {
-            "trajectory": convert_trajectory_to_string(trajectory),
+            "trajectory": final_trajectory,
+            "extracted_answer": extracted,
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,
