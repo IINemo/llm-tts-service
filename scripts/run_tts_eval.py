@@ -385,6 +385,8 @@ def create_model(config):
                         "detector_eos_patterns", ["<end of response>"]
                     ),
                     max_tokens_per_step=config.generation.max_new_tokens,
+                    min_step_tokens=config.strategy.get("min_step_tokens", 0),
+                    max_step_tokens=config.strategy.get("max_step_tokens", 300),
                 )
 
                 # Create sampling params for step generation

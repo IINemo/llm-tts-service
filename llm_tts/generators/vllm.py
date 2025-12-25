@@ -433,109 +433,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         return best_prefix_len
 
-    def _continue_generation_for_min_tokens(
-        self,
-        prompt: str,
-        token_ids: List[int],
-        logprobs: List[Dict],
-        text: str,
-        target_text: str,
-        min_tokens_required: int,
-        terminal_stops: List[str],
-        max_tokens: int,
-    ) -> Tuple[List[int], List[Dict], str, str, Optional[str]]:
-        """Continue generation until min_tokens_required is satisfied.
-
-        When generation stops at a step boundary before min_tokens, this method
-        continues generation using only terminal stops, then truncates at the
-        next step boundary.
-
-        Args:
-            prompt: Original prompt used for generation
-            token_ids: Current token IDs from generation
-            logprobs: Current logprobs from generation
-            text: Current output text (stripped of stop token)
-            target_text: Text used for token prefix finding
-            min_tokens_required: Minimum tokens needed
-            terminal_stops: Stop tokens that end generation completely
-            max_tokens: Maximum tokens allowed
-
-        Returns:
-            Tuple of (token_ids, logprobs, text, target_text, stop_reason)
-        """
-        # Find current truncated length
-        best_prefix_len = self._find_scoring_token_prefix(token_ids, target_text)
-
-        continuation_count = 0
-        max_continuations = 5
-        current_stop_reason = None
-
-        while (
-            best_prefix_len < min_tokens_required
-            and continuation_count < max_continuations
-        ):
-            log.info(
-                f"Continuation {continuation_count + 1} needed: "
-                f"{best_prefix_len}/{min_tokens_required} tokens"
-            )
-
-            # Build continuation prompt from truncated text
-            truncated_text = self.tokenizer.decode(
-                token_ids[:best_prefix_len], skip_special_tokens=True
-            )
-            continuation_prompt = prompt + truncated_text
-
-            remaining_tokens = max_tokens - best_prefix_len
-            if remaining_tokens <= 0:
-                log.warning("Reached max_tokens, stopping continuation")
-                break
-
-            # Generate continuation with only terminal stops
-            cont_params = SamplingParams(
-                n=1,
-                max_tokens=remaining_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k,
-                logprobs=20,
-                stop=terminal_stops,
-                repetition_penalty=1.05,
-            )
-
-            cont_outputs = self.model.generate([continuation_prompt], cont_params)
-            cont_output = cont_outputs[0].outputs[0]
-            current_stop_reason = getattr(cont_output, "stop_reason", None)
-
-            # Combine token_ids and logprobs
-            token_ids = list(token_ids[:best_prefix_len]) + list(cont_output.token_ids)
-            if logprobs and cont_output.logprobs:
-                logprobs = list(logprobs[:best_prefix_len]) + list(cont_output.logprobs)
-            elif cont_output.logprobs:
-                logprobs = list(cont_output.logprobs)
-
-            # Update text
-            text = truncated_text + cont_output.text
-            target_text = text
-
-            # Find new truncated length (will truncate at step boundaries)
-            best_prefix_len = self._find_scoring_token_prefix(token_ids, target_text)
-
-            log.info(
-                f"After continuation: {best_prefix_len} tokens, "
-                f"stopped at '{current_stop_reason}'"
-            )
-
-            # If we hit a terminal stop, we're done
-            if current_stop_reason in terminal_stops:
-                break
-
-            continuation_count += 1
-
-        if best_prefix_len >= min_tokens_required:
-            log.info(f"Min tokens satisfied: {best_prefix_len}/{min_tokens_required}")
-
-        return token_ids, logprobs, text, target_text, current_stop_reason
-
     def _create_step_candidate(
         self,
         text: str,
@@ -701,7 +598,15 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     prompt = prompt + trajectory_text
 
                 step_number = len(trajectory) + 1
-                if step_number == 1:
+
+                # Add instruction for longer steps if min_step_tokens is set
+                if self.min_step_tokens > 0 and step_number == 1:
+                    step_prefix = (
+                        f"<start of response>\n"
+                        f"(Generate detailed reasoning steps, each step should be at least {self.min_step_tokens} tokens)\n"
+                        f"Reasoning Steps:\n- Step 1:"
+                    )
+                elif step_number == 1:
                     step_prefix = "<start of response>\nReasoning Steps:\n- Step 1:"
                 else:
                     step_prefix = f"- Step {step_number}:"
@@ -831,70 +736,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                         or self.detector.is_trajectory_complete(raw_text)
                     )
                     target_text = raw_text
-
-                # Check if continuation is needed for min_step_tokens enforcement
-                # This applies to both thinking and structured modes
-                if not is_trajectory_complete and self.min_step_tokens > 0:
-                    # Determine terminal stops based on mode
-                    if self.thinking_mode:
-                        terminal_stops = ["</think>"]
-                    else:
-                        terminal_stops = ["<end of response>"]
-                        if hasattr(self.detector, "answer_patterns"):
-                            terminal_stops.extend(self.detector.answer_patterns)
-
-                    # Check current truncated length
-                    current_prefix_len = self._find_scoring_token_prefix(
-                        token_ids, target_text
-                    )
-
-                    # If below min_step_tokens and not at terminal, continue
-                    if current_prefix_len < self.min_step_tokens:
-                        log.info(
-                            f"Path {traj_idx} cand {cand_idx}: "
-                            f"Truncated to {current_prefix_len} tokens, "
-                            f"need {self.min_step_tokens}, continuing..."
-                        )
-
-                        # Continue generation
-                        (
-                            token_ids,
-                            logprobs,
-                            raw_text,
-                            target_text,
-                            new_stop_reason,
-                        ) = self._continue_generation_for_min_tokens(
-                            prompt=prompts[prompt_idx],
-                            token_ids=list(token_ids),
-                            logprobs=list(output.logprobs) if output.logprobs else [],
-                            text=raw_text,
-                            target_text=target_text,
-                            min_tokens_required=self.min_step_tokens,
-                            terminal_stops=terminal_stops,
-                            max_tokens=sampling_params.max_tokens,
-                        )
-
-                        # Update step_text based on mode
-                        if self.thinking_mode:
-                            step_text = raw_text.strip()
-                        else:
-                            step_text = step_prefix + raw_text
-
-                        # Re-check trajectory completion after continuation
-                        if new_stop_reason in terminal_stops:
-                            is_trajectory_complete = True
-                            if not self.thinking_mode:
-                                stopped_at_eos = new_stop_reason == "<end of response>"
-                                stopped_at_answer = (
-                                    new_stop_reason in self.detector.answer_patterns
-                                    if hasattr(self.detector, "answer_patterns")
-                                    else False
-                                )
-
-                        # Update output object for downstream processing
-                        output.token_ids = token_ids
-                        output.logprobs = logprobs
-                        output.text = raw_text
 
                 # Determine completion reason
                 completion_reason = None
