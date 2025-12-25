@@ -2,6 +2,8 @@ You will be presented with a <Question>. Before providing the [Answer], you shou
 
 IMPORTANT: Generate as many reasoning steps as you need. Do NOT rush to give an answer. Take your time to work through the problem thoroughly.
 
+Generate at least 10 reasoning steps before providing your answer. Break down complex calculations into smaller steps. Verify your logic and intermediate results as you go.
+
 Your response format:
 <start of response>
 Reasoning Steps:
