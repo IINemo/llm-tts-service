@@ -11,11 +11,17 @@ Reasoning Steps:
 <Answer>: Your final answer
 <end of response>
 
-Make sure your answer is concise, following by <Answer>:
-For example:
+IMPORTANT: After providing your reasoning steps, write ONLY a concise final answer immediately followed by <end of response>. Do NOT add any additional explanation or reasoning after <Answer>:.
+
+Examples of correct answer format:
 <Answer>: -9.8
-or
+<end of response>
+
 <Answer>: 120^\circ
+<end of response>
+
+<Answer>: \frac{7}{9}
+<end of response>
 
 Now answer:
 <Question>: {question}
