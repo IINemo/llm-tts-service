@@ -599,14 +599,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
                 step_number = len(trajectory) + 1
 
-                # Add instruction for longer steps if min_step_tokens is set
-                if self.min_step_tokens > 0 and step_number == 1:
-                    step_prefix = (
-                        f"<start of response>\n"
-                        f"(Generate detailed reasoning steps, each step should be at least {self.min_step_tokens} tokens)\n"
-                        f"Reasoning Steps:\n- Step 1:"
-                    )
-                elif step_number == 1:
+                if step_number == 1:
                     step_prefix = "<start of response>\nReasoning Steps:\n- Step 1:"
                 else:
                     step_prefix = f"- Step {step_number}:"

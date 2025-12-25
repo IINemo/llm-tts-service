@@ -1015,15 +1015,16 @@ def generate_trajectories(
         )
         running_total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
 
-        # Count correct samples using grade_answer
+        # Count correct samples using exact_match_evaluator (same as final evaluation)
         running_correct = sum(
             1
             for r in results
-            if grade_answer(
-                str(r.get("generated_answer", "")),
-                str(r.get("gold_answer", "")),
+            if exact_match_evaluator._score_single(
+                (r.get("question", ""), str(r.get("generated_answer", "")), str(r.get("gold_answer", "")))
             )
         )
+        running_accuracy = (running_correct / len(results)) if results else 0.0
+        log.info(f"Running accuracy: {running_correct}/{len(results)} = {running_accuracy:.3f}")
 
         sample_metrics = {
             "sample_index": i,
@@ -1034,7 +1035,7 @@ def generate_trajectories(
             "response_num_steps": result.get("response_num_steps", 0),
             "num_traces": num_traces,
             "running_correct": running_correct,
-            "running_accuracy": (running_correct / len(results)) if results else 0.0,
+            "running_accuracy": running_accuracy,
             "samples_completed": len(results),
             # Token statistics from generator
             "total_tokens_this_sample": token_stats.get("total_tokens_this_sample", 0),
