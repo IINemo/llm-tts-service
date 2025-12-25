@@ -20,7 +20,7 @@ Examples of correct answer format:
 <Answer>: 120^\circ
 <end of response>
 
-<Answer>: \frac{7}{9}
+<Answer>: \frac{{7}}{{9}}
 <end of response>
 
 Now answer:
