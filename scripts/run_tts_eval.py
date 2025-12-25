@@ -88,6 +88,7 @@ except ImportError:
 from llm_tts.strategies import (
     AdaptiveScalingBestOfN,
     PhiDecoding,
+    StrategyBaseline,
     StrategyBeamSearch,
     StrategyDeepConf,
     StrategyOfflineBestOfN,
@@ -667,7 +668,12 @@ def create_model(config):
 def create_tts_strategy(
     config, model, step_generator, scorer, output_dir=None, flop_calculator=None
 ):
-    if config.strategy.type == "online_best_of_n":
+    if config.strategy.type == "baseline":
+        strategy = StrategyBaseline(
+            step_generator=step_generator,
+            output_dir=output_dir,
+        )
+    elif config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
             scorer=scorer,
