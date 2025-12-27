@@ -392,9 +392,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 add_generation_prompt=True,
             )
 
-        # Force-close thinking when disabled but tokenizer doesn't support enable_thinking
-        if not enable_thinking and not has_enable_thinking:
-            result += "<think>\n\n</think>\n\n"
+        # NOTE: Previously added "<think>\n\n</think>\n\n" when enable_thinking=False
+        # and tokenizer doesn't support it. This was removed because it causes
+        # gibberish output on models like Qwen2.5-Math that don't expect thinking tags.
 
         return result
 
