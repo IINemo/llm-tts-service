@@ -669,9 +669,19 @@ def create_tts_strategy(
     config, model, step_generator, scorer, output_dir=None, flop_calculator=None
 ):
     if config.strategy.type == "baseline":
+        # Get eos_patterns from config, default to ["<end of response>"]
+        eos_patterns = getattr(config.strategy, "detector_eos_patterns", None)
+        if eos_patterns:
+            eos_patterns = list(eos_patterns)
+        # Get stop_token_ids from config (e.g., [151645, 151643] for Qwen2)
+        stop_token_ids = getattr(config.strategy, "stop_token_ids", None)
+        if stop_token_ids:
+            stop_token_ids = list(stop_token_ids)
         strategy = StrategyBaseline(
             step_generator=step_generator,
             output_dir=output_dir,
+            eos_patterns=eos_patterns,
+            stop_token_ids=stop_token_ids,
         )
     elif config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
@@ -849,6 +859,228 @@ def create_tts_strategy(
     return strategy
 
 
+def _generate_trajectories_batch(
+    results,
+    save_path,
+    strategy: "StrategyBaseline",
+    dataset: Dataset,
+    processed_indices: set,
+    prompt_template: str,
+    system_prompt: str,
+    question_field: str,
+    answer_field: str,
+    exact_match_evaluator,
+    save_path_file: Path,
+    sample_metrics_path: Path,
+):
+    """
+    Batch generation for baseline strategy - generates all samples in a single vLLM call.
+
+    This is significantly faster than sequential generation because vLLM can
+    process all prompts together with continuous batching.
+    """
+    log.info("Using batch generation mode for baseline strategy")
+
+    subset_size = len(dataset)
+
+    # Collect all requests that need to be processed
+    requests_to_process = []
+    indices_to_process = []
+    instances_to_process = []
+    gold_answers = []
+
+    for i in range(subset_size):
+        if i in processed_indices:
+            log.info(f"Skipping sample {i} (already processed)")
+            continue
+
+        instance = dataset[i]
+        question = instance[question_field]
+
+        # Handle answer with fallback for Game of 24
+        if answer_field and answer_field in instance and instance[answer_field]:
+            if "####" in instance[answer_field]:
+                from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
+
+                gold_answer_num = extract_answer_from_gsm8k(instance[answer_field])
+            else:
+                gold_answer_num = instance[answer_field]
+        else:
+            gold_answer_num = "24"
+
+        # Build request
+        request = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    prompt_template.format(question=question)
+                    if prompt_template and "{question}" in prompt_template
+                    else question
+                ),
+            },
+        ]
+
+        requests_to_process.append(request)
+        indices_to_process.append(i)
+        instances_to_process.append(instance)
+        gold_answers.append(gold_answer_num)
+
+    if not requests_to_process:
+        log.info("No new samples to process")
+        return results
+
+    log.info(f"Batch generating {len(requests_to_process)} samples...")
+
+    # Generate all responses in a single batch call
+    batch_results = strategy.generate_trajectories_batch(
+        requests_to_process, indices_to_process
+    )
+
+    # Process results and save
+    for idx, (i, instance, gold_answer_num, result) in enumerate(
+        zip(indices_to_process, instances_to_process, gold_answers, batch_results)
+    ):
+        question = instance[question_field]
+
+        # Extract generated answer
+        if "extracted_answer" in result and result["extracted_answer"]:
+            generated_text = result["extracted_answer"]
+        else:
+            generated_text = result["trajectory"]
+            if question in generated_text:
+                generated_text = generated_text.replace(question, "").strip()
+            if "<Answer>:" in generated_text:
+                generated_text = generated_text.split("<Answer>:")[-1].strip()
+
+        # Log result
+        log.info("\n" + "=" * 60)
+        log.info(f"Sample {i + 1}/{subset_size}")
+        log.info(f"Question: {question[:200]}...")
+        log.info(f"Gold answer: {gold_answer_num}")
+
+        log.info("\n" + "-" * 60)
+        log.info("GENERATED STEPS:")
+        log.info("-" * 60)
+
+        if result["steps"] and isinstance(result["steps"], list):
+            for step_idx, step in enumerate(result["steps"]):
+                validity = (
+                    result.get("validity_scores", [])[step_idx]
+                    if "validity_scores" in result
+                    and step_idx < len(result["validity_scores"])
+                    else "N/A"
+                )
+                confidence_str = (
+                    f"{validity:.3f}"
+                    if isinstance(validity, (int, float))
+                    else validity
+                )
+                log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
+                step_text = step.text if hasattr(step, "text") else str(step)
+                log.info(step_text)
+        else:
+            log.info(f"\nFull trajectory:\n{result['trajectory']}")
+
+        # Check correctness
+        is_correct = exact_match_evaluator._score_single(
+            (question, str(generated_text), str(gold_answer_num))
+        )
+
+        log.info("\n" + "=" * 60)
+        log.info(f"FINAL ANSWER: {generated_text}")
+        log.info(f"Gold answer:  {gold_answer_num}")
+        log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
+        log.info("-" * 60)
+        log.info(f"Num steps: {len(result['steps'])}")
+        if "validity_scores" in result and result["validity_scores"]:
+            scores = result["validity_scores"]
+            log.info(
+                f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
+            )
+        log.info("=" * 60)
+
+        # Store result (including is_correct to avoid O(n²) re-evaluation)
+        result_dict = {
+            "index": i,
+            "question": question,
+            "gold_answer": gold_answer_num,
+            "generated_trajectory": result["trajectory"],
+            "generated_answer": generated_text,
+            "steps": result["steps"],
+            "validity_scores": result.get("validity_scores", []),
+            "completed": result["completed"],
+            "is_correct": bool(is_correct),
+        }
+
+        if "token_stats" in result:
+            result_dict["token_stats"] = result["token_stats"]
+
+        results.append(result_dict)
+
+        # Compute running metrics
+        token_stats = result.get("token_stats") or {}
+        all_token_stats = [r.get("token_stats") or {} for r in results]
+
+        running_total_tokens = sum(
+            ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
+        )
+        running_total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
+
+        # Use cached is_correct values (O(n) instead of O(n²))
+        running_correct = sum(1 for r in results if r.get("is_correct", False))
+        running_accuracy = (running_correct / len(results)) if results else 0.0
+        log.info(
+            f"Running accuracy: {running_correct}/{len(results)} = {running_accuracy:.3f}"
+        )
+
+        sample_metrics = {
+            "sample_index": i,
+            "is_correct": bool(is_correct),
+            "thinking_num_steps": result.get(
+                "thinking_num_steps", len(result["steps"])
+            ),
+            "response_num_steps": result.get("response_num_steps", 0),
+            "running_correct": running_correct,
+            "running_accuracy": running_accuracy,
+            "samples_completed": len(results),
+            "total_tokens_this_sample": token_stats.get("total_tokens_this_sample", 0),
+            "input_tokens_this_sample": token_stats.get("input_tokens", 0),
+            "output_tokens_this_sample": token_stats.get("output_tokens", 0),
+            "generations_this_sample": token_stats.get("generation_count", 0),
+            "tflops_this_sample": token_stats.get("tflops") or 0,
+            "running_avg_tokens_per_sample": (
+                (running_total_tokens / len(results)) if results else 0.0
+            ),
+            "running_total_tokens": running_total_tokens,
+            "running_total_tflops": running_total_tflops,
+        }
+        if "validity_scores" in result and result["validity_scores"]:
+            sample_metrics["confidence"] = float(np.mean(result["validity_scores"]))
+
+        # Append metrics line
+        try:
+            with open(sample_metrics_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(sample_metrics, ensure_ascii=False) + "\n")
+        except Exception as e:
+            log.warning(f"Failed to append sample metrics: {e}")
+
+        # Log to wandb
+        try:
+            import wandb
+
+            if wandb.run is not None:
+                wandb.log(sample_metrics)
+        except Exception:
+            pass
+
+    # Save all results
+    save_results_json(results, save_path_file)
+    log.info(f"Saved {len(results)} results to {save_path_file}")
+
+    return results
+
+
 def generate_trajectories(
     results,
     save_path,
@@ -856,6 +1088,7 @@ def generate_trajectories(
     dataset: Dataset,
     processed_indices: set,
     prompt_template: str,
+    system_prompt: str = "",
     question_field: str = "question",
     answer_field: str = "answer",
     flop_calculator: FLOPCalculator = None,
@@ -873,6 +1106,26 @@ def generate_trajectories(
     )
 
     subset_size = len(dataset)
+
+    # Check if strategy supports batch generation (baseline strategy)
+    if isinstance(strategy, StrategyBaseline) and hasattr(
+        strategy, "generate_trajectories_batch"
+    ):
+        return _generate_trajectories_batch(
+            results=results,
+            save_path=save_path,
+            strategy=strategy,
+            dataset=dataset,
+            processed_indices=processed_indices,
+            prompt_template=prompt_template,
+            system_prompt=system_prompt,
+            question_field=question_field,
+            answer_field=answer_field,
+            exact_match_evaluator=exact_match_evaluator,
+            save_path_file=save_path_file,
+            sample_metrics_path=sample_metrics_path,
+        )
+
     for i in tqdm(range(subset_size), desc="Generating trajectories"):
         # Skip if already processed
         if i in processed_indices:
@@ -903,12 +1156,12 @@ def generate_trajectories(
 
         # Generate trajectory
         request = [
-            {"role": "system", "content": ""},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": (
                     prompt_template.format(question=question)
-                    if prompt_template
+                    if prompt_template and "{question}" in prompt_template
                     else question
                 ),
             },
@@ -973,7 +1226,7 @@ def generate_trajectories(
             )
         log.info("=" * 60)
 
-        # Store result WITHOUT correctness check
+        # Store result (including is_correct to avoid O(n²) re-evaluation)
         result_dict = {
             "index": i,
             "question": question,
@@ -983,6 +1236,7 @@ def generate_trajectories(
             "steps": result["steps"],
             "validity_scores": result.get("validity_scores", []),
             "completed": result["completed"],
+            "is_correct": bool(is_correct),
         }
 
         # Include all_traces if present (DeepConf generates multiple branches)
@@ -1021,16 +1275,12 @@ def generate_trajectories(
         )
         running_total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
 
-        # Count correct samples using exact_match_evaluator (same as final evaluation)
-        running_correct = sum(
-            1
-            for r in results
-            if exact_match_evaluator._score_single(
-                (r.get("question", ""), str(r.get("generated_answer", "")), str(r.get("gold_answer", "")))
-            )
-        )
+        # Use cached is_correct values (O(n) instead of O(n²))
+        running_correct = sum(1 for r in results if r.get("is_correct", False))
         running_accuracy = (running_correct / len(results)) if results else 0.0
-        log.info(f"Running accuracy: {running_correct}/{len(results)} = {running_accuracy:.3f}")
+        log.info(
+            f"Running accuracy: {running_correct}/{len(results)} = {running_accuracy:.3f}"
+        )
 
         sample_metrics = {
             "sample_index": i,
@@ -1409,12 +1659,23 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
-    dataset = load_dataset(
-        config.dataset.dataset_path,
-        config.dataset.get("dataset_config", None),
-        split=config.dataset.dataset_split,
-        cache_dir=config.system.hf_cache,
-    )
+    # Support loading local JSON/JSONL files via data_files parameter
+    data_files = config.dataset.get("data_files", None)
+    if data_files:
+        log.info(f"Loading from local file: {data_files}")
+        dataset = load_dataset(
+            config.dataset.dataset_path,
+            data_files=data_files,
+            split=config.dataset.dataset_split,
+            cache_dir=config.system.hf_cache,
+        )
+    else:
+        dataset = load_dataset(
+            config.dataset.dataset_path,
+            config.dataset.get("dataset_config", None),
+            split=config.dataset.dataset_split,
+            cache_dir=config.system.hf_cache,
+        )
     # Apply offset and subset
     offset = config.dataset.get("offset", 0) or 0
     subset = config.dataset.get("subset", None)
@@ -1433,6 +1694,9 @@ def main(config):
         if config.dataset.prompt_file
         else ""
     )
+
+    # Load system prompt if configured
+    system_prompt = getattr(config.dataset, "system_prompt", "") or ""
 
     # Load model
     model_name = config.model.get("model_name") or config.model.get("model_path")
@@ -1472,7 +1736,9 @@ def main(config):
     results_path = Path(output_dir) / "results.json"
     results, processed_indices = load_results_json(results_path)
 
-    dataset = dataset.shuffle(seed=config.system.seed)
+    # NOTE: Don't shuffle - keep original dataset order for reproducibility
+    # dataset = dataset.shuffle(seed=config.system.seed)
+
     # Generate trajectories
     results = generate_trajectories(
         results=results,
@@ -1481,6 +1747,7 @@ def main(config):
         dataset=dataset,
         processed_indices=processed_indices,
         prompt_template=prompt_template,
+        system_prompt=system_prompt,
         question_field=config.dataset.get("question_field", "question"),
         answer_field=config.dataset.get("answer_field", "answer"),
         flop_calculator=flop_calculator,
