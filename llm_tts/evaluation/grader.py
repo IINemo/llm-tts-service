@@ -2,15 +2,66 @@
 Answer checker API that uses sympy to simplify expressions and check for equality.
 
 Call grade_answer(given_answer: str, ground_truth: str).
+
+For official Qwen2.5-Math compatible grading, use grade_answer_qwen().
 """
 
 import re
+import sys
+from pathlib import Path
 
 import sympy
 from pylatexenc import latex2text
 from sympy.parsing import sympy_parser
 
 from . import math_normalize
+
+# Import official Qwen2.5-Math math_equal using importlib to avoid polluting sys.path
+# (Adding the folder to sys.path would shadow the 'evaluate' library with evaluate.py)
+_QWEN_GRADER_PATH = (
+    Path(__file__).parent.parent.parent / "Qwen2.5-Math" / "evaluation" / "grader.py"
+)
+
+try:
+    if _QWEN_GRADER_PATH.exists():
+        import importlib.util
+
+        _spec = importlib.util.spec_from_file_location("qwen_grader", _QWEN_GRADER_PATH)
+        _qwen_grader_module = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_qwen_grader_module)
+        _qwen_math_equal = _qwen_grader_module.math_equal
+        QWEN_GRADER_AVAILABLE = True
+    else:
+        QWEN_GRADER_AVAILABLE = False
+        _qwen_math_equal = None
+except Exception:
+    QWEN_GRADER_AVAILABLE = False
+    _qwen_math_equal = None
+
+
+def grade_answer_qwen(
+    given_answer: str, ground_truth: str, timeout: bool = True
+) -> bool:
+    """
+    Grade answer using official Qwen2.5-Math math_equal function.
+
+    This provides compatibility with official benchmark results.
+    Falls back to our grade_answer if Qwen grader is not available.
+    """
+    if given_answer is None:
+        return False
+
+    if QWEN_GRADER_AVAILABLE:
+        try:
+            return _qwen_math_equal(
+                str(given_answer), str(ground_truth), timeout=timeout
+            )
+        except Exception:
+            # Fall back to our grader on any error
+            return grade_answer(given_answer, ground_truth)
+    else:
+        return grade_answer(given_answer, ground_truth)
+
 
 # sympy might hang -- we don't care about trying to be lenient in these cases
 BAD_SUBSTRINGS = ["^{", "^("]
@@ -199,8 +250,40 @@ def should_allow_eval(expr: str):
     return True
 
 
+def _numeric_equal_with_percentage(
+    given: str, ground_truth: str, rel_tol: float = 1e-4
+) -> bool:
+    """
+    Check numeric equality including percentage equivalence.
+    E.g., 0.5 == 50% == 50 (when ground_truth could be percentage)
+    """
+    try:
+        # Try to parse both as floats
+        given_val = float(given.replace(",", "").replace("%", "").strip())
+        gt_val = float(ground_truth.replace(",", "").replace("%", "").strip())
+
+        # Check if given answer matches any percentage variant of ground truth
+        gt_variants = [gt_val, gt_val / 100, gt_val * 100]
+
+        for variant in gt_variants:
+            if abs(variant) < 1e-9:  # Handle zero
+                if abs(given_val) < 1e-9:
+                    return True
+            elif abs(given_val - variant) / abs(variant) <= rel_tol:
+                return True
+
+        return False
+    except (ValueError, TypeError):
+        return False
+
+
 def are_equal_under_sympy(ground_truth_normalized: str, given_normalized: str):
     are_equal = False
+
+    # First try percentage-aware numeric comparison
+    if _numeric_equal_with_percentage(given_normalized, ground_truth_normalized):
+        return True
+
     try:
         expr = f"({ground_truth_normalized})-({given_normalized})"
         if should_allow_eval(expr):

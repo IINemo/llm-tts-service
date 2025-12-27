@@ -23,6 +23,8 @@ class StructuredStepDetector(StepBoundaryDetectorBase):
         step_patterns: Optional[List[str]] = None,
         answer_patterns: Optional[List[str]] = None,
         max_tokens_per_step: int = 512,
+        min_step_tokens: int = 0,
+        max_step_tokens: int = 300,
         eos_patterns: Optional[List[str]] = None,
     ):
         """
@@ -32,6 +34,8 @@ class StructuredStepDetector(StepBoundaryDetectorBase):
             answer_patterns: Patterns that indicate final answer
                 (e.g., ["<Answer>:", "\n\nAnswer:"])
             max_tokens_per_step: Maximum tokens allowed per step
+            min_step_tokens: Minimum tokens required per step
+            max_step_tokens: Maximum tokens allowed per step
             eos_patterns: Patterns indicating end of sequence
         """
         self.step_patterns = step_patterns or [
@@ -59,6 +63,8 @@ class StructuredStepDetector(StepBoundaryDetectorBase):
             "<|im_end|>",
         ]
         self.max_tokens_per_step = max_tokens_per_step
+        self.min_step_tokens = min_step_tokens
+        self.max_step_tokens = max_step_tokens
 
     def detect_steps(self, text: str, **kwargs) -> List[str]:
         """
