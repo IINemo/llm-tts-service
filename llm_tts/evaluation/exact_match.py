@@ -4,7 +4,7 @@ import re
 import numpy as np
 from tqdm import tqdm
 
-from .grader import grade_answer
+from .grader import grade_answer_qwen
 
 log = logging.getLogger()
 
@@ -161,12 +161,15 @@ class EvaluatorExactMatch:
                     return 1.0 if candidate_norm == gold_norm else 0.0
 
         # Step 3: Try mathematical comparison (for numeric datasets)
+        # Uses official Qwen2.5-Math math_equal for benchmark compatibility
         if self.dataset_answer_format == "numeric":
             try:
-                if grade_answer(candidate, gold_candidate):
+                if grade_answer_qwen(candidate, gold_candidate):
                     return 1.0
                 # Fallback: if structured extraction failed, try raw solution
-                if candidate is not solution and grade_answer(solution, gold_candidate):
+                if candidate is not solution and grade_answer_qwen(
+                    solution, gold_candidate
+                ):
                     return 1.0
             except Exception as e:
                 log.warning(f"Robust grading failed: {e}")
