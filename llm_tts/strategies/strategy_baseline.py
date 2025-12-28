@@ -62,7 +62,7 @@ class StrategyBaseline(StrategyBase):
         Returns:
             Dictionary with trajectory, extracted answer, and metadata
         """
-        log.info(f"Baseline strategy: generating single-shot response")
+        log.info("Baseline strategy: generating single-shot response")
 
         # For baseline, we generate directly without step boundaries
         # Use the step generator's internal generation but with custom stop tokens
