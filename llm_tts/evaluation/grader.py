@@ -184,6 +184,17 @@ def call_with_timeout(func, *args, timeout=1, **kwargs):
         return False
 
 
+def _normalize_spaces(s: str) -> str:
+    """Remove all spaces for comparison."""
+    return re.sub(r"\s+", "", s)
+
+
+def _normalize_text_command(s: str) -> str:
+    """Normalize \\text{} commands by stripping internal spaces."""
+    # \text{ Navin} -> \text{Navin}
+    return re.sub(r"\\text\{\s*([^}]*?)\s*\}", r"\\text{\1}", s)
+
+
 def math_equal(
     prediction: Union[bool, float, str],
     reference: Union[float, str],
@@ -212,8 +223,21 @@ def math_equal(
     if prediction is None or reference is None:
         return False
 
+    pred_str = str(prediction).strip()
+    ref_str = str(reference).strip()
+
     # 0. Direct string match (case-insensitive)
-    if str(prediction).strip().lower() == str(reference).strip().lower():
+    if pred_str.lower() == ref_str.lower():
+        return True
+
+    # 0a. Match after removing all spaces (handles "x^3 + 3x - 6" vs "x^3+3x-6")
+    if _normalize_spaces(pred_str).lower() == _normalize_spaces(ref_str).lower():
+        return True
+
+    # 0b. Match after normalizing \text{} commands
+    pred_text_norm = _normalize_text_command(pred_str)
+    ref_text_norm = _normalize_text_command(ref_str)
+    if pred_text_norm.lower() == ref_text_norm.lower():
         return True
 
     # Multiple choice answer handling
@@ -279,14 +303,20 @@ def math_equal(
         return True
 
     # Element-wise comparison for tuples/intervals [a, b] vs [c, d]
-    if regex.match(r"(\(|\[).+(\)|\])", prediction) is not None and regex.match(
-        r"(\(|\[).+(\)|\])", reference
-    ) is not None:
+    if (
+        regex.match(r"(\(|\[).+(\)|\])", prediction) is not None
+        and regex.match(r"(\(|\[).+(\)|\])", reference) is not None
+    ):
         pred_parts = prediction[1:-1].split(",")
         ref_parts = reference[1:-1].split(",")
         if len(pred_parts) == len(ref_parts):
             if all(
-                math_equal(pred_parts[i].strip(), ref_parts[i].strip(), include_percentage, is_close)
+                math_equal(
+                    pred_parts[i].strip(),
+                    ref_parts[i].strip(),
+                    include_percentage,
+                    is_close,
+                )
                 for i in range(len(pred_parts))
             ):
                 return True
