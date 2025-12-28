@@ -114,6 +114,20 @@ def _normalize_latex(text: str) -> str:
     return text.strip()
 
 
+def _compare_comma_separated_sets(candidate: str, gold: str) -> bool:
+    """Compare comma-separated answers as unordered sets."""
+    if not candidate or not gold:
+        return False
+    if "," not in candidate or "," not in gold:
+        return False
+
+    # Split and normalize parts
+    candidate_parts = set(p.strip() for p in candidate.split(","))
+    gold_parts = set(p.strip() for p in gold.split(","))
+
+    return candidate_parts == gold_parts
+
+
 def _extract_answer_by_format(text: str, dataset_format: str) -> str | None:
     """Extract answer based on the specified dataset format."""
     if not text:
@@ -204,6 +218,10 @@ class EvaluatorExactMatch:
                     candidate
                 ) and self._is_single_letter_answer(gold_candidate):
                     return 1.0 if candidate_norm == gold_norm else 0.0
+
+            # Check set equivalence for comma-separated answers (order-independent)
+            if _compare_comma_separated_sets(candidate, gold_candidate):
+                return 1.0
 
         # Step 3: Try mathematical comparison (for numeric datasets)
         # Uses official Qwen2.5-Math math_equal for benchmark compatibility
