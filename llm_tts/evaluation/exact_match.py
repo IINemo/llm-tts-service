@@ -72,6 +72,48 @@ def _extract_single_letter_answer(text: str) -> str | None:
     return None
 
 
+def _strip_units(text: str) -> str:
+    """Strip common unit notations from answer text."""
+    if not text:
+        return text
+    # Remove \mbox{...} patterns with optional exponent (e.g., \mbox{ inches}^2)
+    text = re.sub(r"\\mbox\{[^}]*\}\s*(\^[0-9]+)?", "", text)
+    # Remove common unit suffixes with optional exponent
+    text = re.sub(r"\s*(inches?|cm|meters?|feet|yards?|miles?|seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*(\^[0-9]+)?", "", text, flags=re.IGNORECASE)
+    # Remove standalone ^2, ^3 etc. that might remain after unit removal
+    text = re.sub(r"\s*\^[0-9]+\s*$", "", text)
+    # Remove degree symbols
+    text = re.sub(r"\\?°|\\circ|\\degree", "", text)
+    return text.strip()
+
+
+def _strip_variable_prefix(text: str) -> str:
+    """Strip variable prefixes like 'x \\in', 'x=', 'y=' from answer text."""
+    if not text:
+        return text
+    # Remove "x \in " or "x\in " prefix (for set/interval notation)
+    text = re.sub(r"^[a-zA-Z]\s*\\in\s*", "", text)
+    # Remove "x = " or "x=" prefix
+    text = re.sub(r"^[a-zA-Z]\s*=\s*", "", text)
+    return text.strip()
+
+
+def _normalize_latex(text: str) -> str:
+    """Normalize LaTeX formatting for comparison."""
+    if not text:
+        return text
+    # Remove LaTeX spacing commands: \! (thin space), \, \: \; (various spaces)
+    text = re.sub(r"\\[!,;:]", "", text)
+    # Remove thousand separators with LaTeX spacing: ,\! -> empty (also handles ,\! with space after)
+    text = re.sub(r",\s*\\!", "", text)
+    # Normalize \frac xy to \frac{x}{y}
+    text = re.sub(r"\\frac\s+(\d)\s*(\d)", r"\\frac{\1}{\2}", text)
+    text = re.sub(r"\\frac\s+([a-zA-Z])\s*([a-zA-Z])", r"\\frac{\1}{\2}", text)
+    # Remove commas with optional spaces from numbers (thousand separators)
+    text = re.sub(r"(\d),\s*(\d)", r"\1\2", text)
+    return text.strip()
+
+
 def _extract_answer_by_format(text: str, dataset_format: str) -> str | None:
     """Extract answer based on the specified dataset format."""
     if not text:
@@ -121,8 +163,11 @@ class EvaluatorExactMatch:
     def _score_single(self, inp: tuple[str, str, str]) -> float:
         q, solution, gold_answer = inp
 
+        # Strip base notation (e.g., 52_8 -> 52) from both gold and solution
         if ("base" in q) and ("_" in gold_answer):
             gold_answer = gold_answer.split("_")[0]
+            if "_" in solution:
+                solution = solution.split("_")[0]
 
         if "<Answer>:" in solution:
             solution = solution.split("<Answer>:")[-1].strip()
@@ -164,11 +209,22 @@ class EvaluatorExactMatch:
         # Uses official Qwen2.5-Math math_equal for benchmark compatibility
         if self.dataset_answer_format == "numeric":
             try:
-                if grade_answer_qwen(candidate, gold_candidate):
+                # Normalize LaTeX, strip units and variable prefixes before comparison
+                candidate_clean = _normalize_latex(candidate) if candidate else candidate
+                candidate_clean = _strip_units(candidate_clean) if candidate_clean else candidate_clean
+                candidate_clean = _strip_variable_prefix(candidate_clean) if candidate_clean else candidate_clean
+                gold_clean = _normalize_latex(gold_candidate) if gold_candidate else gold_candidate
+                gold_clean = _strip_units(gold_clean) if gold_clean else gold_clean
+                gold_clean = _strip_variable_prefix(gold_clean) if gold_clean else gold_clean
+
+                if grade_answer_qwen(candidate_clean, gold_clean):
                     return 1.0
                 # Fallback: if structured extraction failed, try raw solution
+                solution_clean = _normalize_latex(solution) if solution else solution
+                solution_clean = _strip_units(solution_clean) if solution_clean else solution_clean
+                solution_clean = _strip_variable_prefix(solution_clean) if solution_clean else solution_clean
                 if candidate is not solution and grade_answer_qwen(
-                    solution, gold_candidate
+                    solution_clean, gold_clean
                 ):
                     return 1.0
             except Exception as e:

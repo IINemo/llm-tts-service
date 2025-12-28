@@ -415,6 +415,9 @@ def create_model(config):
                     thinking_mode=False,
                     detector=detector,
                     sampling_params=step_sampling_params,
+                    max_new_tokens=config.generation.max_new_tokens,
+                    temperature=config.generation.temperature,
+                    top_p=config.generation.top_p,
                 )
 
             log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
