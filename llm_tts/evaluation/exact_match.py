@@ -79,7 +79,12 @@ def _strip_units(text: str) -> str:
     # Remove \mbox{...} patterns with optional exponent (e.g., \mbox{ inches}^2)
     text = re.sub(r"\\mbox\{[^}]*\}\s*(\^[0-9]+)?", "", text)
     # Remove common unit suffixes with optional exponent
-    text = re.sub(r"\s*(inches?|cm|meters?|feet|yards?|miles?|seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*(\^[0-9]+)?", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\s*(inches?|cm|meters?|feet|yards?|miles?|seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*(\^[0-9]+)?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
     # Remove standalone ^2, ^3 etc. that might remain after unit removal
     text = re.sub(r"\s*\^[0-9]+\s*$", "", text)
     # Remove degree symbols
@@ -228,19 +233,41 @@ class EvaluatorExactMatch:
         if self.dataset_answer_format == "numeric":
             try:
                 # Normalize LaTeX, strip units and variable prefixes before comparison
-                candidate_clean = _normalize_latex(candidate) if candidate else candidate
-                candidate_clean = _strip_units(candidate_clean) if candidate_clean else candidate_clean
-                candidate_clean = _strip_variable_prefix(candidate_clean) if candidate_clean else candidate_clean
-                gold_clean = _normalize_latex(gold_candidate) if gold_candidate else gold_candidate
+                candidate_clean = (
+                    _normalize_latex(candidate) if candidate else candidate
+                )
+                candidate_clean = (
+                    _strip_units(candidate_clean)
+                    if candidate_clean
+                    else candidate_clean
+                )
+                candidate_clean = (
+                    _strip_variable_prefix(candidate_clean)
+                    if candidate_clean
+                    else candidate_clean
+                )
+                gold_clean = (
+                    _normalize_latex(gold_candidate)
+                    if gold_candidate
+                    else gold_candidate
+                )
                 gold_clean = _strip_units(gold_clean) if gold_clean else gold_clean
-                gold_clean = _strip_variable_prefix(gold_clean) if gold_clean else gold_clean
+                gold_clean = (
+                    _strip_variable_prefix(gold_clean) if gold_clean else gold_clean
+                )
 
                 if grade_answer_qwen(candidate_clean, gold_clean):
                     return 1.0
                 # Fallback: if structured extraction failed, try raw solution
                 solution_clean = _normalize_latex(solution) if solution else solution
-                solution_clean = _strip_units(solution_clean) if solution_clean else solution_clean
-                solution_clean = _strip_variable_prefix(solution_clean) if solution_clean else solution_clean
+                solution_clean = (
+                    _strip_units(solution_clean) if solution_clean else solution_clean
+                )
+                solution_clean = (
+                    _strip_variable_prefix(solution_clean)
+                    if solution_clean
+                    else solution_clean
+                )
                 if candidate is not solution and grade_answer_qwen(
                     solution_clean, gold_clean
                 ):

@@ -92,7 +92,7 @@ class StrategyBaseline(StrategyBase):
 
         # Get the raw vLLM LLM (bypass VLLMWithUncertainty wrapper entirely)
         # This matches official Qwen2.5-Math eval which uses llm.generate() directly
-        raw_llm = getattr(self.step_generator.model, 'llm', self.step_generator.model)
+        raw_llm = getattr(self.step_generator.model, "llm", self.step_generator.model)
 
         # Generate directly using raw vLLM (no wrapper)
         outputs = raw_llm.generate([prompt], sampling_params)
@@ -231,7 +231,7 @@ class StrategyBaseline(StrategyBase):
         )
 
         # Get the raw vLLM LLM (bypass VLLMWithUncertainty wrapper entirely)
-        raw_llm = getattr(self.step_generator.model, 'llm', self.step_generator.model)
+        raw_llm = getattr(self.step_generator.model, "llm", self.step_generator.model)
 
         # Generate all responses in a single call using raw vLLM
         outputs = raw_llm.generate(prompts, sampling_params)
