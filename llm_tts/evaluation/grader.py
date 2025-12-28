@@ -1,69 +1,415 @@
 """
 Answer checker API that uses sympy to simplify expressions and check for equality.
 
-Call grade_answer(given_answer: str, ground_truth: str).
+This is based on the Hendrycks' MATH release (math_equivalence), and incorporates
+logic from various sources:
+- https://github.com/microsoft/ProphetNet/tree/master/CRITIC
+- https://github.com/openai/prm800k
+- https://github.com/microsoft/ToRA/blob/main/src/eval/grader.py
+- https://github.com/deepseek-ai/DeepSeek-Math/blob/main/evaluation/eval/eval_utils.py
+- https://github.com/QwenLM/Qwen2.5-Math/blob/main/evaluation/grader.py
 
-For official Qwen2.5-Math compatible grading, use grade_answer_qwen().
+Call grade_answer(given_answer: str, ground_truth: str) for legacy grading.
+Call math_equal(prediction, reference) for comprehensive math grading.
 """
 
+import multiprocessing
 import re
-import sys
-from pathlib import Path
+from math import isclose
+from typing import Union
 
+import regex
 import sympy
 from pylatexenc import latex2text
+from sympy import N, simplify
 from sympy.parsing import sympy_parser
+from sympy.parsing.latex import parse_latex
 
 from . import math_normalize
 
-# Import official Qwen2.5-Math math_equal using importlib to avoid polluting sys.path
-# (Adding the folder to sys.path would shadow the 'evaluate' library with evaluate.py)
-_QWEN_GRADER_PATH = (
-    Path(__file__).parent.parent.parent / "Qwen2.5-Math" / "evaluation" / "grader.py"
-)
-
+# Try to import latex2sympy2 for better LaTeX parsing
 try:
-    if _QWEN_GRADER_PATH.exists():
-        import importlib.util
+    from latex2sympy2 import latex2sympy
 
-        _spec = importlib.util.spec_from_file_location("qwen_grader", _QWEN_GRADER_PATH)
-        _qwen_grader_module = importlib.util.module_from_spec(_spec)
-        _spec.loader.exec_module(_qwen_grader_module)
-        _qwen_math_equal = _qwen_grader_module.math_equal
-        QWEN_GRADER_AVAILABLE = True
+    LATEX2SYMPY_AVAILABLE = True
+except ImportError:
+    LATEX2SYMPY_AVAILABLE = False
+    latex2sympy = None
+
+
+# ============================================================================
+# Math Equal - comprehensive math answer comparison
+# ============================================================================
+
+
+def parse_digits(num):
+    """Parse a number string, handling commas and percentages."""
+    num = regex.sub(",", "", str(num))
+    try:
+        return float(num)
+    except Exception:
+        if num.endswith("%"):
+            num = num[:-1]
+            if num.endswith("\\"):
+                num = num[:-1]
+            try:
+                return float(num) / 100
+            except Exception:
+                pass
+    return None
+
+
+def is_digit(num):
+    """Check if a string can be parsed as a digit."""
+    return parse_digits(num) is not None
+
+
+def str_to_pmatrix(input_str):
+    """Convert {a,b} style vectors to LaTeX pmatrix format."""
+    input_str = input_str.strip()
+    matrix_str = re.findall(r"\{.*,.*\}", input_str)
+    pmatrix_list = []
+
+    for m in matrix_str:
+        m = m.strip("{}")
+        pmatrix = r"\begin{pmatrix}" + m.replace(",", "\\") + r"\end{pmatrix}"
+        pmatrix_list.append(pmatrix)
+
+    return ", ".join(pmatrix_list)
+
+
+def choice_answer_clean(pred: str):
+    """Clean up multiple choice answers."""
+    pred = pred.strip("\n").rstrip(".").rstrip("/").strip(" ").lstrip(":")
+    tmp = re.findall(r"\b(A|B|C|D|E)\b", pred.upper())
+    if tmp:
+        pred = tmp
     else:
-        QWEN_GRADER_AVAILABLE = False
-        _qwen_math_equal = None
-except Exception:
-    QWEN_GRADER_AVAILABLE = False
-    _qwen_math_equal = None
+        pred = [pred.strip().strip(".")]
+    pred = pred[-1]
+    pred = pred.rstrip(".").rstrip("/")
+    return pred
 
 
+def numeric_equal(prediction: float, reference: float) -> bool:
+    """Check if two numbers are equal within relative tolerance."""
+    return isclose(reference, prediction, rel_tol=1e-4)
+
+
+def symbolic_equal(a, b) -> bool:
+    """Check if two expressions are symbolically equal using sympy."""
+
+    def _parse(s):
+        """Try multiple parsers to convert string to sympy expression."""
+        parsers = [parse_latex, sympy_parser.parse_expr]
+        if LATEX2SYMPY_AVAILABLE:
+            parsers.append(latex2sympy)
+
+        for f in parsers:
+            try:
+                return f(s.replace("\\\\", "\\"))
+            except Exception:
+                try:
+                    return f(s)
+                except Exception:
+                    pass
+        return s
+
+    a = _parse(a)
+    b = _parse(b)
+
+    # Direct string/value equal
+    try:
+        if str(a) == str(b) or a == b:
+            return True
+    except Exception:
+        pass
+
+    # Simplify equal
+    try:
+        if a.equals(b) or simplify(a - b) == 0:
+            return True
+    except Exception:
+        pass
+
+    # Equation equal (for expressions like "x = 5")
+    try:
+        if (abs(a.lhs - a.rhs)).equals(abs(b.lhs - b.rhs)):
+            return True
+    except Exception:
+        pass
+
+    # Numeric evaluation
+    try:
+        if numeric_equal(float(N(a)), float(N(b))):
+            return True
+    except Exception:
+        pass
+
+    # Matrix comparison
+    try:
+        if a.shape == b.shape:
+            _a = a.applyfunc(lambda x: round(x, 3))
+            _b = b.applyfunc(lambda x: round(x, 3))
+            if _a.equals(_b):
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
+def symbolic_equal_process(a, b, output_queue):
+    """Wrapper for multiprocessing timeout."""
+    result = symbolic_equal(a, b)
+    output_queue.put(result)
+
+
+def call_with_timeout(func, *args, timeout=1, **kwargs):
+    """Call a function with a timeout using multiprocessing."""
+    output_queue = multiprocessing.Queue()
+    process_args = args + (output_queue,)
+    process = multiprocessing.Process(target=func, args=process_args, kwargs=kwargs)
+    process.start()
+    process.join(timeout)
+
+    if process.is_alive():
+        process.terminate()
+        process.join()
+        return False
+
+    try:
+        return output_queue.get_nowait()
+    except Exception:
+        return False
+
+
+def math_equal(
+    prediction: Union[bool, float, str],
+    reference: Union[float, str],
+    include_percentage: bool = True,
+    is_close: bool = True,
+    timeout: bool = False,
+) -> bool:
+    """
+    Comprehensive math answer comparison.
+
+    Exact match if and only if:
+    1. String equal (case-insensitive)
+    2. Numerical equal: both can convert to float and are equal
+    3. Symbolic equal: both can convert to sympy expression and are equal
+
+    Args:
+        prediction: The predicted answer
+        reference: The ground truth answer
+        include_percentage: Whether to check percentage equivalents (e.g., 0.5 == 50%)
+        is_close: Whether to use relative tolerance for numeric comparison
+        timeout: Whether to use timeout for symbolic comparison
+
+    Returns:
+        True if answers are mathematically equal
+    """
+    if prediction is None or reference is None:
+        return False
+
+    # 0. Direct string match (case-insensitive)
+    if str(prediction).strip().lower() == str(reference).strip().lower():
+        return True
+
+    # Multiple choice answer handling
+    if reference in ["A", "B", "C", "D", "E"]:
+        if choice_answer_clean(str(prediction)) == reference:
+            return True
+
+    # 1. Numerical equal
+    try:
+        if is_digit(prediction) and is_digit(reference):
+            pred_val = parse_digits(prediction)
+            ref_val = parse_digits(reference)
+
+            if include_percentage:
+                gt_variants = [ref_val / 100, ref_val, ref_val * 100]
+            else:
+                gt_variants = [ref_val]
+
+            for item in gt_variants:
+                try:
+                    if is_close:
+                        if numeric_equal(pred_val, item):
+                            return True
+                    else:
+                        if item == pred_val:
+                            return True
+                except Exception:
+                    continue
+            return False
+    except Exception:
+        pass
+
+    if not prediction and prediction not in [0, False]:
+        return False
+
+    # 2. Symbolic equal
+    reference = str(reference).strip()
+    prediction = str(prediction).strip()
+
+    # Handle pmatrix conversion
+    if "pmatrix" in prediction and "pmatrix" not in reference:
+        reference = str_to_pmatrix(reference)
+
+    # Handle bracket normalization [], (), {}
+    pred_str, ref_str = prediction, reference
+    if (
+        prediction.startswith("[")
+        and prediction.endswith("]")
+        and not reference.startswith("(")
+    ) or (
+        prediction.startswith("(")
+        and prediction.endswith(")")
+        and not reference.startswith("[")
+    ):
+        pred_str = pred_str.strip("[]()")
+        ref_str = ref_str.strip("[]()")
+
+    for s in ["{", "}", "(", ")"]:
+        ref_str = ref_str.replace(s, "")
+        pred_str = pred_str.replace(s, "")
+
+    if pred_str.lower() == ref_str.lower():
+        return True
+
+    # Element-wise comparison for tuples/intervals [a, b] vs [c, d]
+    if regex.match(r"(\(|\[).+(\)|\])", prediction) is not None and regex.match(
+        r"(\(|\[).+(\)|\])", reference
+    ) is not None:
+        pred_parts = prediction[1:-1].split(",")
+        ref_parts = reference[1:-1].split(",")
+        if len(pred_parts) == len(ref_parts):
+            if all(
+                math_equal(pred_parts[i].strip(), ref_parts[i].strip(), include_percentage, is_close)
+                for i in range(len(pred_parts))
+            ):
+                return True
+
+    # Matrix comparison (pmatrix/bmatrix)
+    if (
+        (
+            prediction.startswith("\\begin{pmatrix}")
+            or prediction.startswith("\\begin{bmatrix}")
+        )
+        and (
+            prediction.endswith("\\end{pmatrix}")
+            or prediction.endswith("\\end{bmatrix}")
+        )
+        and (
+            reference.startswith("\\begin{pmatrix}")
+            or reference.startswith("\\begin{bmatrix}")
+        )
+        and (
+            reference.endswith("\\end{pmatrix}") or reference.endswith("\\end{bmatrix}")
+        )
+    ):
+        pred_lines = [
+            line.strip()
+            for line in prediction[
+                len("\\begin{pmatrix}") : -len("\\end{pmatrix}")
+            ].split("\\\\")
+            if line.strip()
+        ]
+        ref_lines = [
+            line.strip()
+            for line in reference[
+                len("\\begin{pmatrix}") : -len("\\end{pmatrix}")
+            ].split("\\\\")
+            if line.strip()
+        ]
+        matched = True
+        if len(pred_lines) == len(ref_lines):
+            for pred_line, ref_line in zip(pred_lines, ref_lines):
+                pred_parts = pred_line.split("&")
+                ref_parts = ref_line.split("&")
+                if len(pred_parts) == len(ref_parts):
+                    if not all(
+                        math_equal(
+                            pred_parts[i].strip(),
+                            ref_parts[i].strip(),
+                            include_percentage,
+                            is_close,
+                        )
+                        for i in range(len(pred_parts))
+                    ):
+                        matched = False
+                        break
+                else:
+                    matched = False
+                if not matched:
+                    break
+        else:
+            matched = False
+        if matched:
+            return True
+
+    # Equation handling (x = 5 style)
+    if prediction.count("=") == 1 and reference.count("=") == 1:
+        pred = prediction.split("=")
+        pred = f"{pred[0].strip()} - ({pred[1].strip()})"
+        ref = reference.split("=")
+        ref = f"{ref[0].strip()} - ({ref[1].strip()})"
+        if symbolic_equal(pred, ref) or symbolic_equal(f"-({pred})", ref):
+            return True
+    elif (
+        prediction.count("=") == 1
+        and len(prediction.split("=")[0].strip()) <= 2
+        and "=" not in reference
+    ):
+        if math_equal(
+            prediction.split("=")[1], reference, include_percentage, is_close
+        ):
+            return True
+    elif (
+        reference.count("=") == 1
+        and len(reference.split("=")[0].strip()) <= 2
+        and "=" not in prediction
+    ):
+        if math_equal(
+            prediction, reference.split("=")[1], include_percentage, is_close
+        ):
+            return True
+
+    # Symbolic equal with optional timeout
+    if timeout:
+        if call_with_timeout(symbolic_equal_process, prediction, reference):
+            return True
+    else:
+        if symbolic_equal(prediction, reference):
+            return True
+
+    return False
+
+
+# Alias for backward compatibility
 def grade_answer_qwen(
     given_answer: str, ground_truth: str, timeout: bool = True
 ) -> bool:
     """
-    Grade answer using official Qwen2.5-Math math_equal function.
+    Grade answer using comprehensive math_equal function.
 
-    This provides compatibility with official benchmark results.
-    Falls back to our grade_answer if Qwen grader is not available.
+    This provides compatibility with Qwen2.5-Math benchmark grading.
     """
     if given_answer is None:
         return False
 
-    if QWEN_GRADER_AVAILABLE:
-        try:
-            return _qwen_math_equal(
-                str(given_answer), str(ground_truth), timeout=timeout
-            )
-        except Exception:
-            # Fall back to our grader on any error
-            return grade_answer(given_answer, ground_truth)
-    else:
+    try:
+        return math_equal(str(given_answer), str(ground_truth), timeout=timeout)
+    except Exception:
+        # Fall back to simpler grader on any error
         return grade_answer(given_answer, ground_truth)
 
 
-# sympy might hang -- we don't care about trying to be lenient in these cases
+# ============================================================================
+# Legacy grader (kept for backward compatibility)
+# ============================================================================
+
 BAD_SUBSTRINGS = ["^{", "^("]
 BAD_REGEXES = [r"\^[0-9]+\^", r"\^[0-9][0-9]+"]
 TUPLE_CHARS = "()[]"
@@ -81,14 +427,13 @@ def _sympy_parse(expr: str):
     )
 
 
-def _parse_latex(expr: str) -> str:
+def _parse_latex_legacy(expr: str) -> str:
     """Attempts to parse latex to an expression sympy can read."""
     expr = expr.replace("\\tfrac", "\\frac")
     expr = expr.replace("\\dfrac", "\\frac")
-    expr = expr.replace("\\frac", " \\frac")  # Play nice with mixed numbers.
+    expr = expr.replace("\\frac", " \\frac")
     expr = latex2text.LatexNodes2Text().latex_to_text(expr)
 
-    # Replace the specific characters that this parser uses.
     expr = expr.replace("√", "sqrt")
     expr = expr.replace("π", "pi")
     expr = expr.replace("∞", "inf")
@@ -139,12 +484,11 @@ def _inject_implicit_mixed_number(step: str):
     e.g. 7 3/4 => 7+3/4
     """
     p1 = re.compile("([0-9]) +([0-9])")
-    step = p1.sub("\\1+\\2", step)  # implicit mults
+    step = p1.sub("\\1+\\2", step)
     return step
 
 
 def _strip_properly_formatted_commas(expr: str):
-    # We want to be careful because we don't want to strip tuple commas
     p1 = re.compile(r"(\d)(,)(\d\d\d)($|\D)")
     while True:
         next_expr = p1.sub("\\1\\3\\4", expr)
@@ -159,7 +503,6 @@ def _normalize(expr: str) -> str:
     if expr is None:
         return None
 
-    # Remove enclosing `\text{}`.
     m = re.search(r"^\\\\text\{(?P<text>.+?)\}$", expr)
     if m is not None:
         expr = m.group("text")
@@ -204,21 +547,18 @@ def _normalize(expr: str) -> str:
         expr = str(int(round(float(expr))))
     if "\\" in expr:
         try:
-            expr = _parse_latex(expr)
+            expr = _parse_latex_legacy(expr)
         except Exception:
             pass
 
-    # edge case with mixed numbers and negative signs
     expr = re.sub("- *", "-", expr)
 
     expr = _inject_implicit_mixed_number(expr)
     expr = expr.replace(" ", "")
 
-    # if we somehow still have latex braces here, just drop them
     expr = expr.replace("{", "")
     expr = expr.replace("}", "")
 
-    # don't be case sensitive for text answers
     expr = expr.lower()
 
     if _str_is_int(expr):
@@ -235,7 +575,6 @@ def count_unknown_letters_in_expr(expr: str):
 
 
 def should_allow_eval(expr: str):
-    # we don't want to try parsing unknown text or functions of more than two variables
     if count_unknown_letters_in_expr(expr) > 2:
         return False
 
@@ -253,20 +592,15 @@ def should_allow_eval(expr: str):
 def _numeric_equal_with_percentage(
     given: str, ground_truth: str, rel_tol: float = 1e-4
 ) -> bool:
-    """
-    Check numeric equality including percentage equivalence.
-    E.g., 0.5 == 50% == 50 (when ground_truth could be percentage)
-    """
+    """Check numeric equality including percentage equivalence."""
     try:
-        # Try to parse both as floats
         given_val = float(given.replace(",", "").replace("%", "").strip())
         gt_val = float(ground_truth.replace(",", "").replace("%", "").strip())
 
-        # Check if given answer matches any percentage variant of ground truth
         gt_variants = [gt_val, gt_val / 100, gt_val * 100]
 
         for variant in gt_variants:
-            if abs(variant) < 1e-9:  # Handle zero
+            if abs(variant) < 1e-9:
                 if abs(given_val) < 1e-9:
                     return True
             elif abs(given_val - variant) / abs(variant) <= rel_tol:
@@ -280,7 +614,6 @@ def _numeric_equal_with_percentage(
 def are_equal_under_sympy(ground_truth_normalized: str, given_normalized: str):
     are_equal = False
 
-    # First try percentage-aware numeric comparison
     if _numeric_equal_with_percentage(given_normalized, ground_truth_normalized):
         return True
 
@@ -297,9 +630,7 @@ def are_equal_under_sympy(ground_truth_normalized: str, given_normalized: str):
 
 
 def split_tuple(expr: str):
-    """
-    Split the elements in a tuple/interval, while handling well-formatted commas in large numbers
-    """
+    """Split elements in a tuple/interval, handling well-formatted commas."""
     expr = _strip_properly_formatted_commas(expr)
     if len(expr) == 0:
         return []
@@ -317,7 +648,7 @@ def split_tuple(expr: str):
 
 def grade_answer(given_answer: str, ground_truth: str) -> bool:
     """
-    The answer will be considered correct if:
+    Legacy grader. The answer will be considered correct if:
     (a) it normalizes to the same string as the ground truth answer
     OR
     (b) sympy can simplify the difference between the expressions to 0
@@ -328,7 +659,6 @@ def grade_answer(given_answer: str, ground_truth: str) -> bool:
     ground_truth_normalized_mathd = math_normalize.normalize_answer(ground_truth)
     given_answer_normalized_mathd = math_normalize.normalize_answer(given_answer)
 
-    # be at least as lenient as mathd
     if ground_truth_normalized_mathd == given_answer_normalized_mathd:
         return True
 
@@ -357,11 +687,8 @@ def grade_answer(given_answer: str, ground_truth: str) -> bool:
     else:
         for ground_truth_elem, given_elem in zip(ground_truth_elems, given_elems):
             if _is_frac(ground_truth_elem) and _is_frac(given_elem):
-                # if fractions aren't reduced, then shouldn't be marked as correct
-                # so, we don't want to allow sympy.simplify in this case
                 is_correct = ground_truth_elem == given_elem
             elif _str_is_int(ground_truth_elem) != _str_is_int(given_elem):
-                # if the ground truth answer is an integer, we require the given answer to be a strict match (no sympy.simplify)
                 is_correct = False
             else:
                 is_correct = are_equal_under_sympy(ground_truth_elem, given_elem)
