@@ -78,17 +78,23 @@ def _strip_units(text: str) -> str:
         return text
     # Remove \mbox{...} patterns with optional exponent (e.g., \mbox{ inches}^2)
     text = re.sub(r"\\mbox\{[^}]*\}\s*(\^[0-9]+)?", "", text)
-    # Remove common unit suffixes with optional exponent
+    # Remove \text{...} patterns containing units (e.g., \text{ degrees})
     text = re.sub(
-        r"\s*(inches?|cm|meters?|feet|yards?|miles?|seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*(\^[0-9]+)?",
+        r"\\text\{\s*(inches?|cm|centimeters?|meters?|feet|foot|yards?|miles?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|degrees?)\s*\}",
         "",
         text,
         flags=re.IGNORECASE,
     )
-    # Remove standalone ^2, ^3 etc. that might remain after unit removal
-    text = re.sub(r"\s*\^[0-9]+\s*$", "", text)
+    # Remove common unit suffixes with optional exponent (only when preceded by space or number)
+    text = re.sub(
+        r"(?<=[\d\s])(inches?|cm|centimeters?|meters?|feet|foot|yards?|miles?|seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*(\^[0-9]+)?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
     # Remove degree symbols
     text = re.sub(r"\\?°|\\circ|\\degree", "", text)
+    # Note: We deliberately do NOT strip standalone ^n exponents as they may be part of the answer
     return text.strip()
 
 
@@ -107,11 +113,17 @@ def _normalize_latex(text: str) -> str:
     """Normalize LaTeX formatting for comparison."""
     if not text:
         return text
+    # Normalize \dfrac and \tfrac to \frac
+    text = re.sub(r"\\dfrac", r"\\frac", text)
+    text = re.sub(r"\\tfrac", r"\\frac", text)
     # Remove LaTeX spacing commands: \! (thin space), \, \: \; (various spaces)
     text = re.sub(r"\\[!,;:]", "", text)
     # Remove thousand separators with LaTeX spacing: ,\! -> empty (also handles ,\! with space after)
     text = re.sub(r",\s*\\!", "", text)
-    # Normalize \frac xy to \frac{x}{y}
+    # Normalize \frac{x}y to \frac{x}{y} (numerator in braces, denominator without)
+    text = re.sub(r"\\frac\{([^}]+)\}(\d+)", r"\\frac{\1}{\2}", text)
+    text = re.sub(r"\\frac\{([^}]+)\}([a-zA-Z])", r"\\frac{\1}{\2}", text)
+    # Normalize \frac xy to \frac{x}{y} (both without braces - single char/digit)
     text = re.sub(r"\\frac\s+(\d)\s*(\d)", r"\\frac{\1}{\2}", text)
     text = re.sub(r"\\frac\s+([a-zA-Z])\s*([a-zA-Z])", r"\\frac{\1}{\2}", text)
     # Remove commas with optional spaces from numbers (thousand separators)
@@ -276,6 +288,39 @@ class EvaluatorExactMatch:
                 log.warning(f"Robust grading failed: {e}")
 
             # Step 4: Fallback to simple numeric comparison
+            # ONLY use this fallback if gold answer is purely numeric (no LaTeX symbols)
+            # This prevents incorrect matches like "3" matching "-\sqrt{3}"
+            latex_symbols = [
+                r"\sqrt",
+                r"\frac",
+                r"\pi",
+                r"\infty",
+                r"\pm",
+                r"\mp",
+                r"\times",
+                r"\div",
+                r"\cdot",
+                r"\log",
+                r"\ln",
+                r"\sin",
+                r"\cos",
+                r"\tan",
+                r"\arcsin",
+                r"\arccos",
+                r"\arctan",
+                r"\sum",
+                r"\prod",
+                r"\int",
+                r"\lim",
+                r"^{",  # exponents like x^{2}
+            ]
+            has_latex_in_gold = any(sym in gold_answer for sym in latex_symbols)
+
+            if has_latex_in_gold:
+                # Gold answer contains LaTeX - don't use simple numeric fallback
+                # The grade_answer_qwen should have handled this already
+                return 0.0
+
             sol_num_str = _extract_numeric(solution)
             gold_num_str = _extract_numeric(gold_answer)
 
