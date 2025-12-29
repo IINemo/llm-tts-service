@@ -24,10 +24,11 @@ def _strip_boxed(text: str) -> str:
 
 
 def _strip_text_command(text: str) -> str:
-    """Strip \\text{} wrapper from text."""
+    """Strip \\text{} wrapper from text when it wraps the entire content."""
     if not text:
         return text
-    match = re.search(r"\\text\{([^}]*)\}", text)
+    # Only strip if the entire string is wrapped in \text{}
+    match = re.fullmatch(r"\\text\{([^}]*)\}", text.strip())
     if match:
         return match.group(1).strip()
     return text
@@ -230,8 +231,9 @@ class EvaluatorExactMatch:
         if "<end of response>" in solution:
             solution = solution.replace("<end of response>", "").strip()
 
-        # Strip \boxed{} and \text{} wrappers
+        # Strip \boxed{} and \text{} wrappers from both
         solution = _strip_boxed(solution)
+        solution = _strip_text_command(solution)
         gold_answer = _strip_boxed(gold_answer)
         gold_answer = _strip_text_command(gold_answer)
 
