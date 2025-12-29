@@ -1,56 +1,173 @@
 """
 Strategy Manager - Handles TTS strategy initialization and execution.
+
+Simplified for self-consistency strategy with external APIs (OpenAI/OpenRouter).
 """
 
 import logging
-from typing import Any, Dict, Optional
+import re
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, List, Optional
 
-from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers.tree_of_thoughts.value_scorer import TotValueScorer
-from llm_tts.strategies.tree_of_thoughts.strategy import StrategyTreeOfThoughts
+from openai import OpenAI
 
 from .config import settings
 
-# Optional imports for other strategies (may not be available on all branches)
-try:
-    from llm_tts.strategies.strategy_deepconf import StrategyDeepConf
-
-    HAS_DEEPCONF = True
-except ImportError:
-    HAS_DEEPCONF = False
-
-try:
-    from llm_tts.strategies.strategy_online_best_of_n import StrategyOnlineBestOfN
-
-    HAS_ONLINE_BEST_OF_N = True
-except ImportError:
-    HAS_ONLINE_BEST_OF_N = False
-
 log = logging.getLogger(__name__)
+
+
+class SelfConsistencyStrategy:
+    """
+    Self-consistency strategy using external APIs.
+
+    Generates multiple reasoning paths and selects the most consistent answer
+    via majority voting.
+    """
+
+    def __init__(
+        self,
+        client: OpenAI,
+        model: str,
+        num_paths: int = 5,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ):
+        self.client = client
+        self.model = model
+        self.num_paths = num_paths
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+
+    def _extract_answer(self, text: str) -> str:
+        """Extract answer from \\boxed{} format."""
+        # Try to find \boxed{...}
+        pattern = r'\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}'
+        matches = re.findall(pattern, text)
+        if matches:
+            return matches[-1].strip()
+
+        # Fallback: look for "answer is X" pattern
+        pattern = r'(?:answer|result)\s*(?:is|=|:)\s*([^\n.,]+)'
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+
+        return "no_answer"
+
+    def _generate_single_path(
+        self,
+        messages: List[Dict[str, str]],
+        path_idx: int,
+    ) -> Dict[str, Any]:
+        """Generate a single reasoning path."""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
+
+            content = response.choices[0].message.content or ""
+            answer = self._extract_answer(content)
+            tokens = response.usage.completion_tokens if response.usage else 0
+
+            log.info(f"  Path {path_idx + 1}: answer={answer}, tokens={tokens}")
+
+            return {
+                "text": content,
+                "answer": answer,
+                "tokens": tokens,
+                "path_idx": path_idx,
+            }
+        except Exception as e:
+            log.error(f"  Path {path_idx + 1}: Error - {e}")
+            return {
+                "text": "",
+                "answer": "error",
+                "tokens": 0,
+                "path_idx": path_idx,
+                "error": str(e),
+            }
+
+    def generate_trajectory(
+        self,
+        messages: List[Dict[str, str]],
+        sample_idx: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Generate multiple reasoning paths and select best via majority voting.
+        """
+        log.info(f"Generating {self.num_paths} reasoning paths...")
+
+        # Generate paths in parallel
+        paths = []
+        with ThreadPoolExecutor(max_workers=min(self.num_paths, 10)) as executor:
+            futures = {
+                executor.submit(self._generate_single_path, messages, i): i
+                for i in range(self.num_paths)
+            }
+            for future in as_completed(futures):
+                paths.append(future.result())
+
+        # Sort by path index
+        paths.sort(key=lambda x: x["path_idx"])
+
+        # Extract answers and do majority voting
+        answers = [p["answer"] for p in paths]
+        answer_counts = Counter(answers)
+
+        # Find most common answer
+        most_common = answer_counts.most_common(1)
+        if most_common:
+            best_answer, count = most_common[0]
+            consensus_score = count / len(answers)
+        else:
+            best_answer = "no_answer"
+            consensus_score = 0.0
+
+        # Find the best path (first one with the winning answer)
+        best_path = next(
+            (p for p in paths if p["answer"] == best_answer),
+            paths[0] if paths else {"text": "", "tokens": 0}
+        )
+
+        total_tokens = sum(p["tokens"] for p in paths)
+
+        uncertainty_score = 1.0 - consensus_score
+
+        log.info(f"Selected answer: {best_answer} (consensus: {consensus_score:.2f}, uncertainty: {uncertainty_score:.2f})")
+        log.info(f"Answer distribution: {dict(answer_counts)}")
+        log.info(f"Total tokens: {total_tokens}")
+
+        return {
+            "trajectory": best_path["text"],
+            "extracted_answer": best_answer,
+            "completed": True,
+            "metadata": {
+                "strategy": "self_consistency",
+                "num_paths": self.num_paths,
+                "consensus_score": consensus_score,
+                "uncertainty_score": uncertainty_score,
+                "answer_distribution": dict(answer_counts),
+                "all_answers": answers,
+                "total_tokens": total_tokens,
+            },
+        }
 
 
 class StrategyManager:
     """Manages TTS strategy instances and model loading."""
 
     def __init__(self):
-        self._model_cache: Dict[str, Any] = {}
+        self._client_cache: Dict[str, OpenAI] = {}
 
-    def _get_or_create_model(
-        self,
-        model_name: str,
-        provider: str = "openrouter",
-        supports_logprobs: bool = True,
-    ) -> BlackboxModelWithStreaming:
-        """Get cached model or create new one."""
-        cache_key = f"{provider}:{model_name}"
+    def _get_or_create_client(self, provider: str = "openrouter") -> OpenAI:
+        """Get cached OpenAI client or create new one."""
+        if provider in self._client_cache:
+            return self._client_cache[provider]
 
-        if cache_key in self._model_cache:
-            log.info(f"Using cached model: {cache_key}")
-            return self._model_cache[cache_key]
-
-        log.info(f"Creating new model: {cache_key}")
-
-        # Get API key based on provider
         if provider == "openrouter":
             api_key = settings.openrouter_api_key
             base_url = "https://openrouter.ai/api/v1"
@@ -63,15 +180,11 @@ class StrategyManager:
         if not api_key:
             raise ValueError(f"API key not set for provider: {provider}")
 
-        model = BlackboxModelWithStreaming(
-            openai_api_key=api_key,
-            model_path=model_name,
-            supports_logprobs=supports_logprobs,
-            base_url=base_url,
-        )
+        client = OpenAI(api_key=api_key, base_url=base_url)
+        self._client_cache[provider] = client
 
-        self._model_cache[cache_key] = model
-        return model
+        log.info(f"Created OpenAI client for provider: {provider}")
+        return client
 
     def create_strategy(
         self,
@@ -83,8 +196,8 @@ class StrategyManager:
         Create a TTS strategy instance.
 
         Args:
-            strategy_type: Type of strategy (e.g., "deepconf", "online_best_of_n")
-            model_name: Name of the model to use
+            strategy_type: Type of strategy (currently only "self_consistency")
+            model_name: Model name (e.g., "openai/gpt-4o-mini")
             strategy_config: Optional strategy-specific configuration
 
         Returns:
@@ -92,104 +205,40 @@ class StrategyManager:
         """
         strategy_config = strategy_config or {}
 
-        if strategy_type == "deepconf":
-            if not HAS_DEEPCONF:
-                raise ValueError(
-                    "DeepConf strategy is not available on this branch. Use 'tree_of_thoughts' or 'tot' instead."
-                )
-            return self._create_deepconf_strategy(model_name, strategy_config)
-        elif strategy_type == "online_best_of_n":
-            if not HAS_ONLINE_BEST_OF_N:
-                raise ValueError(
-                    "Online Best-of-N strategy is not available on this branch."
-                )
-            return self._create_online_best_of_n_strategy(model_name, strategy_config)
-        elif strategy_type == "tree_of_thoughts" or strategy_type == "tot":
-            return self._create_tree_of_thoughts_strategy(model_name, strategy_config)
+        if strategy_type == "self_consistency":
+            return self._create_self_consistency_strategy(model_name, strategy_config)
         else:
-            available = ["tree_of_thoughts", "tot"]
-            if HAS_DEEPCONF:
-                available.append("deepconf")
-            if HAS_ONLINE_BEST_OF_N:
-                available.append("online_best_of_n")
             raise ValueError(
-                f"Unknown strategy type: {strategy_type}. Available strategies: {', '.join(available)}"
+                f"Unknown strategy type: {strategy_type}. "
+                f"Available strategies: self_consistency"
             )
 
-    def _create_deepconf_strategy(
+    def _create_self_consistency_strategy(
         self, model_name: str, config: Dict[str, Any]
-    ) -> "StrategyDeepConf":
-        """Create DeepConf strategy instance."""
-        model = self._get_or_create_model(
-            model_name=model_name,
-            provider=config.get("provider", "openrouter"),
-            supports_logprobs=True,
-        )
+    ) -> SelfConsistencyStrategy:
+        """Create self-consistency strategy instance."""
+        provider = config.get("provider", "openrouter")
+        client = self._get_or_create_client(provider)
 
-        return StrategyDeepConf(
-            model=model,
-            budget=config.get("budget", settings.deepconf_budget),
-            window_size=config.get("window_size", settings.deepconf_window_size),
-            temperature=config.get("temperature", settings.deepconf_temperature),
-            top_p=config.get("top_p", 0.95),
-            max_tokens=config.get("max_tokens", 4096),
-            top_logprobs=config.get("top_logprobs", 20),
-            filter_method=config.get("filter_method", settings.deepconf_filter_method),
-            confidence_threshold=config.get("confidence_threshold", None),
-        )
-
-    def _create_online_best_of_n_strategy(
-        self, model_name: str, config: Dict[str, Any]
-    ) -> "StrategyOnlineBestOfN":
-        """Create Online Best-of-N strategy instance."""
-        # TODO: Implement when needed
-        raise NotImplementedError("Online Best-of-N strategy not yet implemented")
-
-    def _create_tree_of_thoughts_strategy(
-        self, model_name: str, config: Dict[str, Any]
-    ) -> StrategyTreeOfThoughts:
-        """Create Tree-of-Thoughts strategy instance."""
-        model = self._get_or_create_model(
-            model_name=model_name,
-            provider=config.get("provider", "openrouter"),
-            supports_logprobs=False,  # ToT doesn't require logprobs
-        )
-
-        # Create scorer if not provided
-        scorer_config = config.get("scorer", {})
-        scorer = TotValueScorer(
-            model=model,
-            n_evaluate_sample=scorer_config.get("n_evaluate_sample", 3),
-            temperature=scorer_config.get("temperature", 0.0),
-            max_tokens=scorer_config.get("max_tokens", 50),
-            timeout=scorer_config.get("timeout", 120),
-            value_prompt_path=scorer_config.get(
-                "value_prompt_path", "config/prompts/tree-of-thought/generic_value.txt"
-            ),
-        )
-
-        return StrategyTreeOfThoughts(
-            model=model,
-            scorer=scorer,
-            mode=config.get("mode", "generic"),
-            method_generate=config.get("method_generate", "propose"),
-            beam_width=config.get("beam_width", 3),
-            n_generate_sample=config.get("n_generate_sample", 5),
-            steps=config.get("steps", 4),
+        strategy = SelfConsistencyStrategy(
+            client=client,
+            model=model_name,
+            num_paths=config.get("num_paths", 5),
             temperature=config.get("temperature", 0.7),
-            max_tokens_per_step=config.get("max_tokens_per_step", 150),
-            n_threads=config.get("n_threads", 4),
-            scorer_timeout=scorer_config.get("timeout", 120),
-            propose_prompt_path=config.get(
-                "propose_prompt_path",
-                "config/prompts/tree-of-thought/generic_propose.txt",
-            ),
+            max_tokens=config.get("max_tokens", 4096),
         )
+
+        log.info(
+            f"Created self-consistency strategy: "
+            f"model={model_name}, num_paths={config.get('num_paths', 5)}"
+        )
+
+        return strategy
 
     def clear_cache(self):
-        """Clear model cache."""
-        self._model_cache.clear()
-        log.info("Model cache cleared")
+        """Clear client cache."""
+        self._client_cache.clear()
+        log.info("Client cache cleared")
 
 
 # Global strategy manager instance

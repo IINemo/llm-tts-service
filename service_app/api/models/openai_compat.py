@@ -22,72 +22,53 @@ class ChatCompletionRequest(BaseModel):
     """
     OpenAI-compatible chat completion request.
 
-    Supports TTS-specific parameters via additional fields:
-    - tts_strategy: Which TTS strategy to use (deepconf, online_best_of_n)
-    - tts_config: Strategy-specific configuration
+    Supports self-consistency strategy via OpenAI/OpenRouter APIs.
     """
 
     # Standard OpenAI parameters
-    model: str = Field(..., description="Model to use (e.g., openai/gpt-4o-mini)")
+    model: str = Field(
+        default="openai/gpt-4o-mini",
+        description="Model to use (OpenRouter format: provider/model)",
+    )
     messages: List[ChatMessage] = Field(..., description="Chat messages")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    max_tokens: Optional[int] = Field(default=512, ge=1)
+    max_tokens: Optional[int] = Field(default=4096, ge=1)
     stream: bool = Field(
         default=False, description="Stream responses (not yet supported)"
     )
 
-    # TTS-specific parameters (optional, for advanced usage)
+    # Strategy selection
     tts_strategy: Optional[str] = Field(
-        default="deepconf",
-        description="TTS strategy: deepconf, tree_of_thoughts, tot, online_best_of_n, etc.",
-    )
-    tts_mode: Optional[str] = Field(
-        default="offline", description="DeepConf mode: offline or online"
-    )
-    tts_budget: Optional[int] = Field(
-        default=8, description="Number of reasoning traces to generate", ge=1
-    )
-    tts_filter_method: Optional[str] = Field(
-        default="top5", description="Trace filtering method: top5, top10, etc."
+        default="self_consistency",
+        description="TTS strategy: self_consistency",
     )
 
-    # Tree-of-Thoughts specific parameters
-    tot_mode: Optional[str] = Field(
-        default="generic",
-        description="ToT mode: generic (any prompt) or game24 (benchmark)",
-    )
-    tot_method_generate: Optional[str] = Field(
-        default="propose", description="Generation method: propose or sample"
-    )
-    tot_beam_width: Optional[int] = Field(
-        default=3, description="Number of states to keep at each step", ge=1
-    )
-    tot_n_generate_sample: Optional[int] = Field(
-        default=5, description="Number of candidates per state", ge=1
-    )
-    tot_steps: Optional[int] = Field(
-        default=4, description="Maximum number of reasoning steps", ge=1
-    )
-    tot_max_tokens_per_step: Optional[int] = Field(
-        default=150, description="Maximum tokens per reasoning step", ge=1
+    # Self-consistency specific parameters
+    num_paths: Optional[int] = Field(
+        default=5, description="Number of reasoning paths to generate", ge=1, le=100
     )
 
-    # Visualization options
-    include_reasoning_tree: Optional[bool] = Field(
-        default=False,
-        description="Include full reasoning tree data for visualization (nodes, edges, timestamps)",
+    # Provider selection
+    provider: Optional[str] = Field(
+        default="openrouter",
+        description="API provider: openrouter or openai",
     )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "model": "openai/gpt-4o-mini",
-                "messages": [{"role": "user", "content": "Solve: 2+2=?"}],
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Please reason step by step, and put your final answer within \\boxed{}.",
+                    },
+                    {"role": "user", "content": "What is 2 + 2?"},
+                ],
                 "temperature": 0.7,
-                "tts_strategy": "deepconf",
-                "tts_mode": "offline",
-                "tts_budget": 8,
+                "tts_strategy": "self_consistency",
+                "num_paths": 5,
             }
         }
 
@@ -101,7 +82,7 @@ class ChatCompletionChoice(BaseModel):
 
     # TTS-specific metadata (optional)
     tts_metadata: Optional[Dict[str, Any]] = Field(
-        None, description="TTS strategy metadata (confidence, num_traces, etc.)"
+        None, description="TTS strategy metadata (consensus_score, answer_distribution, etc.)"
     )
 
 
@@ -135,21 +116,22 @@ class ChatCompletionResponse(BaseModel):
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": "The answer is 4. Let me explain step by step...",
+                            "content": "Let me solve this step by step...\n\n\\boxed{4}",
                         },
                         "finish_reason": "stop",
                         "tts_metadata": {
-                            "strategy": "deepconf",
-                            "num_traces": 8,
-                            "confidence": 16.2,
-                            "agreement": 1.0,
+                            "strategy": "self_consistency",
+                            "num_paths": 5,
+                            "consensus_score": 0.8,
+                            "answer_distribution": {"4": 4, "5": 1},
+                            "selected_answer": "4",
                         },
                     }
                 ],
                 "usage": {
-                    "prompt_tokens": 10,
-                    "completion_tokens": 50,
-                    "total_tokens": 60,
+                    "prompt_tokens": 50,
+                    "completion_tokens": 200,
+                    "total_tokens": 250,
                 },
             }
         }
