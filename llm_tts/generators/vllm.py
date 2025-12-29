@@ -179,8 +179,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     ):
         """Initialize structured mode specific components."""
         self.detector = detector or StructuredStepDetector()
+
+        # Get min/max step tokens from detector (like thinking mode)
+        self.min_step_tokens = getattr(self.detector, "min_step_tokens", 0)
+        self.max_step_tokens = getattr(self.detector, "max_step_tokens", 300)
+
         self.sampling_params = sampling_params or SamplingParams(
-            min_tokens=0,  # No minimum - stop tokens can trigger immediately
+            min_tokens=self.min_step_tokens,
             max_tokens=self.max_new_tokens,
             logprobs=20,
             temperature=self.temperature,
@@ -387,9 +392,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 add_generation_prompt=True,
             )
 
-        # Force-close thinking when disabled but tokenizer doesn't support enable_thinking
-        if not enable_thinking and not has_enable_thinking:
-            result += "<think>\n\n</think>\n\n"
+        # NOTE: Previously added "<think>\n\n</think>\n\n" when enable_thinking=False
+        # and tokenizer doesn't support it. This was removed because it causes
+        # gibberish output on models like Qwen2.5-Math that don't expect thinking tags.
 
         return result
 
@@ -593,6 +598,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     prompt = prompt + trajectory_text
 
                 step_number = len(trajectory) + 1
+
                 if step_number == 1:
                     step_prefix = "<start of response>\nReasoning Steps:\n- Step 1:"
                 else:
