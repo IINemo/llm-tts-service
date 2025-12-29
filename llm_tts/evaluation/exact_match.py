@@ -9,6 +9,30 @@ from .grader import grade_answer_qwen
 log = logging.getLogger()
 
 
+def _strip_boxed(text: str) -> str:
+    """Strip \\boxed{} wrapper from text."""
+    if not text:
+        return text
+    # Handle nested boxed: \boxed{\boxed{x}} -> x
+    while True:
+        match = re.search(r"\\boxed\{(.*)\}", text, re.DOTALL)
+        if match:
+            text = match.group(1).strip()
+        else:
+            break
+    return text
+
+
+def _strip_text_command(text: str) -> str:
+    """Strip \\text{} wrapper from text."""
+    if not text:
+        return text
+    match = re.search(r"\\text\{([^}]*)\}", text)
+    if match:
+        return match.group(1).strip()
+    return text
+
+
 def _extract_numeric(text: str) -> str | None:
     matches = re.findall(r"[-+]?\d[\d,]*\.?\d*", text)
     if not matches:
@@ -205,6 +229,11 @@ class EvaluatorExactMatch:
 
         if "<end of response>" in solution:
             solution = solution.replace("<end of response>", "").strip()
+
+        # Strip \boxed{} and \text{} wrappers
+        solution = _strip_boxed(solution)
+        gold_answer = _strip_boxed(gold_answer)
+        gold_answer = _strip_text_command(gold_answer)
 
         # Step 1: Extract the answers using format-specific approach
         candidate = _extract_answer_by_format(solution, self.dataset_answer_format)
