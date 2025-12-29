@@ -78,7 +78,7 @@ We selected **Qwen2.5-7B**, **Qwen3-8B**, and **Qwen3-32B** for our benchmark be
 >
 > **DO NOT use greedy decoding** (temperature=0), as it can lead to performance degradation and endless repetitions.
 
-**vLLM (Recommended)**
+**vLLM (Recommended for full-trace strategies)**
 
 For local evaluations, use vLLM to avoid OOM errors on long reasoning sequences:
 
@@ -99,7 +99,9 @@ generation:
   temperature: 0.7  # Standard for non-thinking mode
 ```
 
-**HuggingFace (Legacy)**
+> ⚠️ **Limitation**: vLLM does not support custom stopping criteria callbacks (only exact string matching via `stop` parameter). This means step-by-step strategies like Online Best-of-N cannot use dynamic step detection during generation with vLLM. Use HuggingFace inference for such strategies. See [evaluation README](README.md#vllm-recommended) for details.
+
+**HuggingFace (Required for step-by-step strategies)**
 
 ```yaml
 # config/model/hf_qwen3.yaml
@@ -109,7 +111,12 @@ model:
   torch_dtype: float16
 ```
 
-> **Note**: HuggingFace inference is prone to OOM errors on long reasoning sequences. Use vLLM for production evaluations.
+> **Note**: HuggingFace inference is prone to OOM errors on long reasoning sequences. Use vLLM for production evaluations when possible.
+
+**Advantages over vLLM:**
+- Supports custom `StoppingCriteria` callbacks for dynamic step boundary detection
+- Required for thinking mode TTS with semantic step detection (`ThinkingStepStoppingCriteria`)
+- Required for Online Best-of-N and Beam Search with non-explicit step markers
 
 ---
 

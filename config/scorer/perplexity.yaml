@@ -1,0 +1,5 @@
+type: perplexity
+uncertainty_model_creator: config.scorer.uncertainty_perplexity
+uncertainty: 
+  test: 1
+batch_size: 1

@@ -1,4 +1,5 @@
 # @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/deepconf/deepconf_api_test
 
 defaults:
   - dataset: small_gsm8k

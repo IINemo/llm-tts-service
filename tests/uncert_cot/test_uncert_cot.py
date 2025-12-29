@@ -4,7 +4,7 @@ import torch
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 
 from llm_tts.generators import StepCandidateGeneratorThroughHuggingface
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StructuredStepDetector
 from llm_tts.strategies.strategy_uncertainty_cot import StrategyUncertaintyCoT
 
 sys.path.insert(0, ".")
@@ -54,13 +54,16 @@ def test_uncertainty_guided_cot_with_whitebox():
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     model_path = "Qwen/Qwen3-0.6B"
     omega_config = OmegaConf.create(
-        {"model": {"model_path": model_path, "device": device}}
+        {
+            "model": {"model_path": model_path, "device": device},
+            "system": {"torch_dtype": "bfloat16"},
+        }
     )
     polygraph_model = create_uncertainty_model(omega_config)
     # Attach generation params for the whitebox generator
     polygraph_model.generation_parameters = GenerationParameters()
 
-    step_boundary_detector = StepBoundaryDetector(
+    step_boundary_detector = StructuredStepDetector(
         step_patterns=step_patterns,
         answer_patterns=answer_patterns,
         max_tokens_per_step=max_new_tokens,

@@ -127,6 +127,9 @@ class EvaluatorExactMatch:
         if "<Answer>:" in solution:
             solution = solution.split("<Answer>:")[-1].strip()
 
+        if "<end of response>" in solution:
+            solution = solution.replace("<end of response>", "").strip()
+
         # Step 1: Extract the answers using format-specific approach
         candidate = _extract_answer_by_format(solution, self.dataset_answer_format)
         gold_candidate = _extract_answer_by_format(

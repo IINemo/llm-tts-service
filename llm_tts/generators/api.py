@@ -5,42 +5,51 @@ Candidate step generation system for online best-of-n using API models
 import copy
 import logging
 import time
-from typing import Dict, List
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from lm_polygraph import BlackboxModel
 
 from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
-    covert_trajectory_to_string,
+    convert_trajectory_to_string,
 )
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import StructuredStepDetector
+
+if TYPE_CHECKING:
+    from llm_tts.utils.flops import FLOPCalculator
 
 log = logging.getLogger(__name__)
 
 
 class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
-    """Generates N candidate next steps for online best-of-n using API models"""
+    """Generates N candidate next steps for online best-of-n using API models.
+
+    Note: Token tracking is limited for API models since they don't provide
+    token IDs. FLOP calculations will be based on text length estimation.
+    """
 
     def __init__(
         self,
         model: BlackboxModel,
-        detector: StepBoundaryDetector,
+        detector: StructuredStepDetector,
         prefill_mode: bool,
+        flop_calculator: Optional["FLOPCalculator"] = None,
     ):
-        super().__init__(1)  # TODO:
+        # API calls are sequential, batch size = 1
+        super().__init__(generation_batch_size=1, flop_calculator=flop_calculator)
 
         self.model = model
-        self.detector = detector or StepBoundaryDetector()
+        self.detector = detector or StructuredStepDetector()
         self.prefill_mode = prefill_mode
 
-    def generate_candidates(
+    def generate_step_candidates(
         self,
         request: List[Dict[str, str]],
         trajectory: List[StepCandidate],
         candidates_per_step: int,
     ) -> List[StepCandidate]:
-        """Generate N candidate next steps from current trajectory"""
+        """Generate N candidate next steps from current trajectory."""
 
         log.info(f"Generating {candidates_per_step} candidates from trajectory")
 
@@ -137,7 +146,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 request_with_trajectory.append(
                     {
                         "role": "assistant",
-                        "content": covert_trajectory_to_string(trajectory),
+                        "content": convert_trajectory_to_string(trajectory),
                         "prefix": True,
                     }
                 )
@@ -148,7 +157,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
     ):
         continuation_request = request
-        prefix = covert_trajectory_to_string(trajectory)
+        prefix = convert_trajectory_to_string(trajectory)
         continuation_promt = (
             "Continue the assistant message from the EXACT prefix below. "
             "Begin immediately after the last character of the prefix. "

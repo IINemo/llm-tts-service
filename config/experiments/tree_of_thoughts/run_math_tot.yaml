@@ -1,4 +1,5 @@
 # @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/tree_of_thoughts/run_math_tot
 
 # Tree-of-Thoughts Configuration for MATH Dataset
 # Explores multiple reasoning paths via beam search with state evaluation
@@ -13,7 +14,7 @@ defaults:
   - _self_
 
 # Run naming for descriptive outputs
-run_name: "math_tot_gpt4omini_beam${strategy.beam_width}_${now:%H-%M-%S}"
+run_name: "run_math_tot_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: false

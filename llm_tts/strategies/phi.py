@@ -9,7 +9,7 @@ from llm_tts.generators import (
     StepCandidate,
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
-    covert_trajectory_to_string,
+    convert_trajectory_to_string,
 )
 
 from .strategy_base import StrategyBase
@@ -107,7 +107,17 @@ class PhiDecoding(StrategyBase):
 
             # Check if trajectory is complete
             if selected_candidate.is_trajectory_complete:
-                log.info("Answer pattern detected - generating final answer")
+                log.info("Answer pattern detected in step")
+                if not self._has_answer_content(selected_candidate):
+                    log.info("Answer content missing, generating final answer")
+                    trajectory.pop()
+                    selected_steps.pop()
+                    final_answer, final_validity = self._generate_final_answer(
+                        request, trajectory
+                    )
+                    trajectory.append(final_answer)
+                    selected_steps.append(final_answer)
+                    validity_scores.append(final_validity)
                 break
 
         if not selected_candidate.is_trajectory_complete:
@@ -119,7 +129,7 @@ class PhiDecoding(StrategyBase):
             validity_scores.append(final_validity)
 
         return {
-            "trajectory": covert_trajectory_to_string(trajectory),
+            "trajectory": convert_trajectory_to_string(trajectory),
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,
@@ -160,6 +170,12 @@ class PhiDecoding(StrategyBase):
             fallback_probs = compute_softmax(foresight_scores)
             best_idx = np.random.choice(range(len(foresight_scores)), p=fallback_probs)
             return best_idx, foresight_texts[best_idx]
+
+    def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
+        """Select the best candidate based on scores"""
+        # Higher validity is better
+        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        return best_idx, candidates[best_idx]
 
     def _generate_final_answer(
         self, chat: List[Dict[str, str]], trajectory: List[StepCandidate]

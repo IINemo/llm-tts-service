@@ -1,4 +1,5 @@
 # @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/deepconf/run_aime_2025_deepconf_offline
 
 # DeepConf Offline Mode Configuration for AIME 2025
 # Competition-level mathematics problems from American Invitational Mathematics Examination
@@ -12,7 +13,7 @@ defaults:
   - _self_
 
 # Run naming for descriptive outputs
-run_name: "aime2025_deepconf_gpt4omini_b${strategy.budget}_${now:%H-%M-%S}"
+run_name: "run_aime_2025_deepconf_offline_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: false

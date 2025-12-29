@@ -14,6 +14,7 @@ import multiprocessing
 if multiprocessing.get_start_method(allow_none=True) is None:
     multiprocessing.set_start_method("spawn")
 
+import json
 import logging
 import random
 import sys
@@ -41,6 +42,17 @@ try:
     VLLM_AVAILABLE = True
 except ImportError:
     VLLM_AVAILABLE = False
+
+# lm-polygraph uncertainty wrapper (for vLLM uncertainty scoring)
+try:
+    from lm_polygraph.estimators import MeanTokenEntropy, Perplexity
+    from lm_polygraph.stat_calculators import EntropyCalculator, VLLMLogprobsCalculator
+    from lm_polygraph.utils import VLLMWithUncertainty
+
+    POLYGRAPH_UNCERTAINTY_AVAILABLE = True
+except ImportError:
+    POLYGRAPH_UNCERTAINTY_AVAILABLE = False
+    VLLMWithUncertainty = None
 from utils.results import load_results_json, parse_resume_arguments, save_results_json
 
 from llm_tts.evaluation import (
@@ -55,29 +67,36 @@ from llm_tts.generators import (
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import (
+    StepScorerConfidence,
     StepScorerPRM,
     StepScorerUncertainty,
     TotValueScorer,
     TotVoteScorer,
 )
-from llm_tts.step_boundary_detector import StepBoundaryDetector
+from llm_tts.step_boundary_detectors import (
+    StructuredStepDetector,
+    ThinkingMarkerDetector,
+)
 
 # vLLM step generator (optional)
 try:
-    from llm_tts.generators import StepCandidateGeneratorThroughVLLM
+    from llm_tts.generators.vllm import VLLMStepGenerator
 
     VLLM_GENERATOR_AVAILABLE = True
 except ImportError:
     VLLM_GENERATOR_AVAILABLE = False
 from llm_tts.strategies import (
+    AdaptiveScalingBestOfN,
     PhiDecoding,
     StrategyBeamSearch,
     StrategyDeepConf,
+    StrategyOfflineBestOfN,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
     StrategyTreeOfThoughts,
     StrategyUncertaintyCoT,
 )
+from llm_tts.utils import get_torch_dtype
 from llm_tts.utils.flops import FLOPCalculator
 
 # Load environment variables from .env file
@@ -93,14 +112,30 @@ def load_tokenizer(model_path: str):
     return tokenizer
 
 
-def load_model(model_path: str, device_map: str):
+def load_model(
+    model_path: str,
+    device_map: str,
+    torch_dtype: str,
+    gpu_memory_utilization: float = None,
+):
+    dtype = get_torch_dtype(torch_dtype)
+
+    # Limit GPU memory if gpu_memory_utilization is specified
+    if gpu_memory_utilization is not None and gpu_memory_utilization < 1.0:
+        import torch
+
+        # Set memory fraction for all visible GPUs
+        for i in range(torch.cuda.device_count()):
+            torch.cuda.set_per_process_memory_fraction(gpu_memory_utilization, i)
+        log.info(f"Set GPU memory fraction to {gpu_memory_utilization}")
+
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         device_map=device_map,
         trust_remote_code=True,
-        torch_dtype=torch.float16,  # Use float16 for memory efficiency
+        torch_dtype=dtype,
     )
-    log.info("Loaded model with float16")
+    log.info(f"Loaded model with {torch_dtype}")
     return model
 
 
@@ -194,19 +229,17 @@ def create_scorer(config):
         return None
     if config.scorer is None:
         return None
-    if config.scorer.type == "uncertainty_pd":
-        return None
-
     if config.scorer.type == "prm":
         scorer = StepScorerPRM(
             prm_model_path=config.scorer.model_path,
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
+            torch_dtype=config.system.torch_dtype,
         )
-
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
-
+    elif config.scorer.type in ("perplexity", "entropy", "uncertainty_pd"):
+        scorer = StepScorerConfidence()
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
 
@@ -216,10 +249,10 @@ def create_scorer(config):
 def create_model(config):
     if config.model.type == "vllm":
         # vLLM backend - fast inference with PagedAttention
+        # Uncertainty scoring is done locally using lm-polygraph estimators
+        # (Perplexity, MeanTokenEntropy) computed from vLLM logprobs
         if not VLLM_AVAILABLE:
             raise ImportError("vLLM not installed. Run: pip install vllm")
-
-        log.info(f"Loading vLLM model: {config.model.model_path}")
 
         # Initialize vLLM engine with seed for reproducibility
         llm = LLM(
@@ -241,7 +274,7 @@ def create_model(config):
             seed=config.system.seed,  # Reproducibility
         )
 
-        # Wrap with lm-polygraph adapter
+        # Wrap with lm-polygraph adapter for compatibility with strategies
         model = WhiteboxModelvLLM(
             model=llm,
             sampling_params=sampling_params,
@@ -255,16 +288,188 @@ def create_model(config):
         log.info("vLLM model loaded successfully")
 
         # Create step generator for strategies that need it
-        # DeepConf and self_consistency have their own generation logic
+        # DeepConf has its own generation logic
         step_generator = None
-        if config.strategy.type not in ("deepconf", "self_consistency"):
+        if config.strategy.type not in ("deepconf",):
             if not VLLM_GENERATOR_AVAILABLE:
                 raise ImportError(
                     "vLLM step generator not available. "
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            detector = StepBoundaryDetector(
+            # Create uncertainty wrapper for vLLM scoring
+            if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
+                raise ImportError(
+                    "lm-polygraph uncertainty components not available. "
+                    "Ensure lm_polygraph_updates package is installed."
+                )
+
+            # Select estimator based on scorer config
+            scorer_type = config.scorer.type if config.scorer else "entropy"
+            if scorer_type == "perplexity":
+                stat_calculators = [VLLMLogprobsCalculator()]
+                estimator = Perplexity()
+            elif scorer_type == "uncertainty_pd":
+                # PD-Gap scoring using top-k logprobs matrix
+                from llm_tts.scorers.estimator_uncertainty_pd import PDGap
+
+                stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
+                estimator = PDGap()
+            elif scorer_type == "entropy":
+                # Entropy-based scoring
+                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                estimator = MeanTokenEntropy()
+            else:
+                raise ValueError(
+                    f"Unsupported scorer type for vLLM: {scorer_type}. "
+                    f"Supported types: perplexity, uncertainty_pd, entropy"
+                )
+
+            uncertainty_wrapper = VLLMWithUncertainty(
+                llm=llm,
+                stat_calculators=stat_calculators,
+                estimator=estimator,
+            )
+            log.info(
+                f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__}"
+            )
+
+            detector_type = config.strategy.get("detector_type", "structured")
+
+            if detector_type == "thinking_marker":
+                # Use VLLMStepGenerator in thinking mode
+                log.info("Creating VLLMStepGenerator for thinking mode")
+
+                # Create ThinkingMarkerDetector with config settings
+                # Stop tokens are automatically derived from detector
+                detector = ThinkingMarkerDetector(
+                    min_step_tokens=config.strategy.min_step_tokens,
+                    max_step_tokens=config.strategy.max_step_tokens,
+                    use_sequence=config.strategy.get("use_sequence", True),
+                    use_conclusion=config.strategy.get("use_conclusion", True),
+                    use_thinking=config.strategy.get("use_thinking", True),
+                    use_verification=config.strategy.get("use_verification", True),
+                    use_reasoning=config.strategy.get("use_reasoning", False),
+                    use_correction=config.strategy.get("use_correction", False),
+                    use_structure=config.strategy.get("use_structure", False),
+                    custom_markers=config.strategy.get("custom_words", None),
+                )
+
+                step_generator = VLLMStepGenerator(
+                    model=uncertainty_wrapper,
+                    thinking_mode=True,
+                    detector=detector,
+                    max_new_tokens=config.generation.max_new_tokens,
+                    temperature=config.generation.temperature,
+                    top_p=config.generation.top_p,
+                    top_k=config.generation.get("top_k", 20),
+                    answer_patterns=config.strategy.get(
+                        "detector_answer_patterns",
+                        ["</think>", "<Answer>:", "\\boxed{"],
+                    ),
+                    max_model_len=config.model.get("max_model_len", 32768),
+                )
+            else:
+                # Use VLLMStepGenerator in structured mode
+                # step_patterns: boundaries for step truncation (only step markers, not answer)
+                # answer_patterns: markers indicating the final answer
+                # eos_patterns: markers indicating end of response (used as stop tokens)
+                detector = StructuredStepDetector(
+                    step_patterns=config.strategy.get(
+                        "detector_step_patterns", ["- Step"]
+                    ),
+                    answer_patterns=config.strategy.get(
+                        "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+                    ),
+                    eos_patterns=config.strategy.get(
+                        "detector_eos_patterns", ["<end of response>"]
+                    ),
+                    max_tokens_per_step=config.generation.max_new_tokens,
+                )
+
+                # Create sampling params for step generation
+                # Stop at:
+                # - step boundaries (- Step)
+                # - answer patterns (<Answer>:) - signals reasoning is done
+                # - end of response (<end of response>)
+                # Cast to list to avoid OmegaConf ListConfig issues with vLLM
+                stop_patterns = (
+                    list(detector.step_patterns)
+                    + list(detector.answer_patterns)
+                    + list(detector.eos_patterns)
+                )
+                step_sampling_params = SamplingParams(
+                    max_tokens=config.generation.max_new_tokens,
+                    min_tokens=0,  # No minimum - with step prefix injection, stop tokens trigger immediately
+                    temperature=config.generation.temperature,
+                    top_p=config.generation.top_p,
+                    logprobs=config.strategy.get("top_logprobs", 20),
+                    stop=stop_patterns,
+                )
+
+                step_generator = VLLMStepGenerator(
+                    model=uncertainty_wrapper,
+                    thinking_mode=False,
+                    detector=detector,
+                    sampling_params=step_sampling_params,
+                )
+
+            log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
+
+        return model, step_generator
+
+    elif config.model.type == "hybrid":
+        # Hybrid backend: vLLM for generation, HuggingFace for uncertainty scoring
+        # This combines vLLM's fast generation with HF's full access to hidden states
+        if not VLLM_AVAILABLE:
+            raise ImportError("vLLM not installed. Run: pip install vllm")
+
+        from llm_tts.generators.hybrid import HybridStepGenerator
+
+        log.info("Initializing hybrid generator (vLLM generate + HuggingFace score)")
+
+        # Initialize vLLM engine for generation
+        vllm_gpu_util = config.model.get("vllm_gpu_memory_utilization", 0.45)
+        llm = LLM(
+            model=config.model.model_path,
+            gpu_memory_utilization=vllm_gpu_util,
+            tensor_parallel_size=config.model.get("tensor_parallel_size", 1),
+            enable_prefix_caching=config.model.get("enable_prefix_caching", True),
+            trust_remote_code=config.model.get("trust_remote_code", True),
+            max_model_len=config.model.get("max_model_len", 32768),
+            seed=config.system.seed,
+        )
+
+        # HuggingFace model will be loaded by HybridStepGenerator
+        # Configure HF options
+        hf_device = config.model.get("hf_device", "cuda")
+        hf_dtype_str = config.model.get("hf_dtype", "float16")
+        hf_dtype = getattr(torch, hf_dtype_str, torch.float16)
+
+        # Choose detector based on thinking mode
+        detector_type = config.strategy.get("detector_type", "structured")
+        use_thinking_mode = detector_type == "thinking_marker" or (
+            not config.model.disable_thinking_mode and detector_type == "auto"
+        )
+
+        if use_thinking_mode:
+            log.info("Using ThinkingMarkerDetector for hybrid generator")
+            detector = ThinkingMarkerDetector(
+                min_step_tokens=config.strategy.min_step_tokens,
+                max_step_tokens=config.strategy.max_step_tokens,
+                use_sequence=config.strategy.get("use_sequence", True),
+                use_conclusion=config.strategy.get("use_conclusion", True),
+                use_thinking=config.strategy.get("use_thinking", True),
+                use_verification=config.strategy.get("use_verification", True),
+                use_structure=config.strategy.get("use_structure", False),
+                use_reasoning=config.strategy.get("use_reasoning", False),
+                use_sentence_start=config.strategy.get("use_sentence_start", False),
+                use_correction=config.strategy.get("use_correction", False),
+                custom_markers=config.strategy.get("custom_markers"),
+            )
+        else:
+            log.info("Using StructuredStepDetector for hybrid generator")
+            detector = StructuredStepDetector(
                 step_patterns=config.strategy.get(
                     "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
                 ),
@@ -274,33 +479,44 @@ def create_model(config):
                 max_tokens_per_step=config.generation.max_new_tokens,
             )
 
-            # Create sampling params for step generation
-            step_sampling_params = SamplingParams(
-                max_tokens=config.generation.max_new_tokens,
-                temperature=config.generation.temperature,
-                top_p=config.generation.top_p,
-                logprobs=config.strategy.get("top_logprobs", 20),
-                stop=detector.step_patterns,
-            )
+        # Create hybrid step generator
+        step_generator = HybridStepGenerator(
+            vllm_model=llm,
+            model_name=config.model.model_path,
+            thinking_mode=use_thinking_mode,
+            detector=detector,
+            answer_patterns=config.strategy.get(
+                "detector_answer_patterns", ["<end of response>"]
+            ),
+            max_new_tokens=config.generation.max_new_tokens,
+            temperature=config.generation.temperature,
+            top_p=config.generation.top_p,
+            top_k=config.generation.get("top_k", 20),
+            max_model_len=config.model.get("max_model_len", 32768),
+            hf_device=hf_device,
+            hf_dtype=hf_dtype,
+            output_hidden_states=config.model.get("output_hidden_states", True),
+            output_attentions=config.model.get("output_attentions", False),
+        )
 
-            step_generator = StepCandidateGeneratorThroughVLLM(
-                model=llm,
-                detector=detector,
-                sampling_params=step_sampling_params,
-            )
+        log.info("Hybrid step generator created successfully")
 
-            log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
-
-        return model, step_generator
+        # Return None for model since hybrid generator handles both
+        return None, step_generator
 
     elif config.model.type == "local":
         scorer_type = config.scorer.type if config.scorer else None
-        if scorer_type == "uncertainty" or scorer_type == "uncertainty_pd":
+        if scorer_type in ["uncertainty", "uncertainty_pd", "entropy", "perplexity"]:
             log.info(
                 f"Loading uncertainty model: {config.scorer.uncertainty_model_creator}"
             )
 
             import importlib
+
+            # Add working directory to path for config module imports
+            cwd = os.getcwd()
+            if cwd not in sys.path:
+                sys.path.insert(0, cwd)
 
             mod = importlib.import_module(config.scorer.uncertainty_model_creator)
             model = mod.create_uncertainty_model(config)
@@ -315,19 +531,57 @@ def create_model(config):
         else:
             log.info(f"Loading model: {config.model.model_path}")
             tokenizer = load_tokenizer(config.model.model_path)
-            base_model = load_model(config.model.model_path, config.system.device)
+            base_model = load_model(
+                config.model.model_path,
+                config.system.device,
+                config.system.torch_dtype,
+                gpu_memory_utilization=config.model.get("gpu_memory_utilization"),
+            )
             base_model.eval()
             model = WhiteboxModel(base_model, tokenizer)
 
-        detector = StepBoundaryDetector(
-            step_patterns=config.strategy.get(
-                "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
-            ),
-            answer_patterns=config.strategy.get(
-                "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
-            ),
-            max_tokens_per_step=config.generation.max_new_tokens,
+        # Choose detector based on thinking mode
+        detector_type = config.strategy.get("detector_type", "structured")
+        use_thinking_detector = detector_type == "thinking_marker" or (
+            not config.model.disable_thinking_mode and detector_type == "auto"
         )
+
+        if use_thinking_detector:
+            log.info("Using ThinkingMarkerDetector for thinking mode")
+            # marker_semantic_v2 settings (see tests/boundary_detectors/)
+            detector = ThinkingMarkerDetector(
+                min_step_tokens=config.strategy.min_step_tokens,
+                max_step_tokens=config.strategy.max_step_tokens,
+                use_sequence=config.strategy.get("use_sequence", True),
+                use_conclusion=config.strategy.get("use_conclusion", True),
+                use_thinking=config.strategy.get("use_thinking", True),
+                use_verification=config.strategy.get("use_verification", True),
+                use_structure=config.strategy.get("use_structure", False),
+                use_reasoning=config.strategy.get(
+                    "use_reasoning", False
+                ),  # Default False to avoid over-splitting
+                use_sentence_start=config.strategy.get("use_sentence_start", False),
+                use_correction=config.strategy.get("use_correction", False),
+                custom_markers=config.strategy.get(
+                    "custom_markers"
+                ),  # marker_semantic_v2 additions
+            )
+            # Set answer patterns if provided
+            if config.strategy.get("detector_answer_patterns"):
+                detector.answer_patterns = config.strategy.get(
+                    "detector_answer_patterns"
+                )
+        else:
+            log.info("Using StructuredStepDetector")
+            detector = StructuredStepDetector(
+                step_patterns=config.strategy.get(
+                    "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
+                ),
+                answer_patterns=config.strategy.get(
+                    "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+                ),
+                max_tokens_per_step=config.generation.max_new_tokens,
+            )
         step_generator = StepCandidateGeneratorThroughHuggingface(
             model=model,
             detector=detector,
@@ -346,8 +600,6 @@ def create_model(config):
         log.info(f"Using OpenAI API model: {model_path}")
 
         # Check provider for API key and base URL (applies to all strategies)
-        import os
-
         if config.model.get("provider") == "openrouter":
             api_key = config.model.get("api_key") or os.getenv("OPENROUTER_API_KEY")
             base_url = "https://openrouter.ai/api/v1"
@@ -369,8 +621,14 @@ def create_model(config):
             # Other strategies use boundary detection via early stopping
             from llm_tts.early_stopping import BoundaryEarlyStopping
 
-            detector = StepBoundaryDetector(
-                step_patterns=["- Step", "<Answer>:", "\n<Answer>:"],
+            detector = StructuredStepDetector(
+                step_patterns=[
+                    "- Step",
+                    "<Answer>:",
+                    "\n<Answer>:",
+                    "### Step",
+                    "\nStep",
+                ],
                 answer_patterns=["<Answer>:", "\n<Answer>:"],
                 max_tokens_per_step=config.generation.max_new_tokens,
             )
@@ -404,13 +662,64 @@ def create_model(config):
     return model, step_generator
 
 
-def create_tts_strategy(config, model, step_generator, scorer):
+def create_tts_strategy(
+    config, model, step_generator, scorer, output_dir=None, flop_calculator=None
+):
     if config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
+            output_dir=output_dir,
+        )
+    elif config.strategy.type == "offline_best_of_n":
+        # Offline Best-of-N requires vLLM model directly (not step_generator)
+        # It generates N complete trajectories and selects the best
+        from vllm import LLM
+
+        # Get the underlying vLLM LLM object (may be wrapped in WhiteboxModelvLLM)
+        vllm_model = getattr(model, "vllm_engine", model)
+        if not isinstance(vllm_model, LLM):
+            raise ValueError(
+                f"Offline Best-of-N requires vLLM LLM model, got {type(model).__name__}"
+            )
+
+        strategy = StrategyOfflineBestOfN(
+            model=vllm_model,
+            scorer=scorer,
+            num_trajectories=config.strategy.get("num_trajectories", 4),
+            max_thinking_tokens=config.strategy.get("max_thinking_tokens", 4096),
+            max_response_tokens=config.strategy.get("max_response_tokens", 1024),
+            temperature=config.generation.get("temperature", 0.6),
+            top_p=config.generation.get("top_p", 0.95),
+            top_k=config.generation.get("top_k", 20),
+            answer_patterns=config.strategy.get(
+                "detector_answer_patterns", ["<end of response>"]
+            ),
+            disable_thinking_mode=config.model.get("disable_thinking_mode", False),
+            output_dir=output_dir,
+            # Step boundary detector settings (same as online mode)
+            min_step_tokens=config.strategy.min_step_tokens,
+            max_step_tokens=config.strategy.max_step_tokens,
+            use_sequence=config.strategy.get("use_sequence", True),
+            use_conclusion=config.strategy.get("use_conclusion", True),
+            use_thinking=config.strategy.get("use_thinking", True),
+            use_verification=config.strategy.get("use_verification", True),
+            use_reasoning=config.strategy.get("use_reasoning", False),
+            use_correction=config.strategy.get("use_correction", False),
+            use_structure=config.strategy.get("use_structure", False),
+            flop_calculator=flop_calculator,
+        )
+    elif config.strategy.type == "adaptive":
+        strategy = AdaptiveScalingBestOfN(
+            step_generator=step_generator,
+            scorer=scorer,
+            candidates_per_step=config.strategy.candidates_per_step,
+            max_steps=config.strategy.max_steps,
+            adaptive_scaling_method=config.strategy.adaptive_scaling_method,
+            scaling_rate=config.strategy.scaling_rate,
+            momentum_rate=config.strategy.momentum_rate,
         )
     elif config.strategy.type == "deepconf":
         # DeepConf supports both API models (with logprobs) and local HuggingFace models
@@ -451,15 +760,17 @@ def create_tts_strategy(config, model, step_generator, scorer):
             cluster_num=config.strategy.cluster_num,
         )
     elif config.strategy.type == "self_consistency":
+        if step_generator is None:
+            raise ValueError(
+                "Self-consistency strategy requires step_generator. "
+                "Ensure model.type is 'vllm' and step generator is created."
+            )
         strategy = StrategySelfConsistency(
-            model=model,
+            step_generator=step_generator,
             num_paths=config.strategy.get("num_paths", 10),
-            max_new_tokens=config.strategy.get("max_new_tokens", 512),
-            temperature=config.strategy.get("temperature", 0.7),
-            generation_batch_size=config.strategy.get("generation_batch_size", None),
+            max_steps=config.strategy.get("max_steps", 250),
             scorer=scorer,
-            n_threads=config.strategy.get("n_threads", None),
-            disable_thinking_mode=config.model.get("disable_thinking_mode", True),
+            parallel=config.strategy.get("parallel", True),
         )
     elif config.strategy.type == "tree_of_thoughts":
         # Tree-of-Thoughts requires API-based model for state evaluation
@@ -540,6 +851,7 @@ def generate_trajectories(
     question_field: str = "question",
     answer_field: str = "answer",
     flop_calculator: FLOPCalculator = None,
+    exact_match_dataset_answer_format: str = "numeric",
 ):
     # Phase 1: Generate trajectories (without checking correctness)
     log.info("\n" + "=" * 60)
@@ -547,6 +859,10 @@ def generate_trajectories(
     log.info("=" * 60)
 
     save_path_file = Path(save_path) / "results.json"
+    sample_metrics_path = Path(save_path) / "sample_metrics.jsonl"
+    exact_match_evaluator = EvaluatorExactMatch(
+        dataset_answer_format=exact_match_dataset_answer_format
+    )
 
     subset_size = len(dataset)
     for i in tqdm(range(subset_size), desc="Generating trajectories"):
@@ -590,7 +906,7 @@ def generate_trajectories(
             },
         ]
 
-        result = strategy.generate_trajectory(request)
+        result = strategy.generate_trajectory(request, sample_idx=i)
 
         # Extract generated answer (but don't check correctness yet)
         # Use extracted_answer if available (e.g., from DeepConf's \boxed{} extraction)
@@ -606,7 +922,7 @@ def generate_trajectories(
 
         # Log detailed traces
         log.info("\n" + "-" * 60)
-        log.info("GENERATED TRACES:")
+        log.info("GENERATED STEPS:")
         log.info("-" * 60)
 
         # For DeepConf, steps contain the individual traces
@@ -624,8 +940,10 @@ def generate_trajectories(
                     if isinstance(validity, (int, float))
                     else validity
                 )
-                log.info(f"\nTrace {step_idx + 1} (confidence: {confidence_str}):")
-                log.info(step)
+                log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
+                # Log full step text, not truncated repr
+                step_text = step.text if hasattr(step, "text") else str(step)
+                log.info(step_text)
         else:
             # Fallback: show full trajectory
             log.info(f"\nFull trajectory:\n{result['trajectory']}")
@@ -634,10 +952,12 @@ def generate_trajectories(
         log.info(f"FINAL ANSWER: {generated_text}")
         log.info(f"Gold answer:  {gold_answer_num}")
         # Use grade_answer for proper mathematical comparison (handles LaTeX normalization, sympy)
-        is_correct = grade_answer(str(generated_text), str(gold_answer_num))
+        is_correct = exact_match_evaluator._score_single(
+            (question, str(generated_text), str(gold_answer_num))
+        )
         log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
         log.info("-" * 60)
-        log.info(f"Num traces: {len(result['steps'])}")
+        log.info(f"Num steps: {len(result['steps'])}")
         if "validity_scores" in result and result["validity_scores"]:
             scores = result["validity_scores"]
             log.info(
@@ -665,103 +985,93 @@ def generate_trajectories(
         if "metadata" in result:
             result_dict["metadata"] = result["metadata"]
 
+        # Include token_stats if present (online BON with step generator tracking)
+        if "token_stats" in result:
+            result_dict["token_stats"] = result["token_stats"]
+
         results.append(result_dict)
 
         # Save after each sample (enables resuming with minimal data loss)
         save_results_json(results, save_path_file)
         log.info(f"Saved result for sample {i} to {save_path_file}")
 
+        # Compute + persist per-sample metrics locally (and optionally log to wandb)
+        token_stats = result.get("token_stats") or {}
+        all_token_stats = [r.get("token_stats") or {} for r in results]
+
+        # Count number of traces for this sample
+        num_traces = len(result.get("all_traces", result.get("steps", [])))
+
+        # Calculate running totals from all results
+        running_total_tokens = sum(
+            ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
+        )
+        running_total_input = sum(ts.get("input_tokens", 0) for ts in all_token_stats)
+        running_total_output = sum(ts.get("output_tokens", 0) for ts in all_token_stats)
+        running_total_gens = sum(
+            ts.get("generation_count", 0) for ts in all_token_stats
+        )
+        running_total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
+
+        # Count correct samples using grade_answer
+        running_correct = sum(
+            1
+            for r in results
+            if grade_answer(
+                str(r.get("generated_answer", "")),
+                str(r.get("gold_answer", "")),
+            )
+        )
+
+        sample_metrics = {
+            "sample_index": i,
+            "is_correct": bool(is_correct),
+            "thinking_num_steps": result.get(
+                "thinking_num_steps", len(result["steps"])
+            ),
+            "response_num_steps": result.get("response_num_steps", 0),
+            "num_traces": num_traces,
+            "running_correct": running_correct,
+            "running_accuracy": (running_correct / len(results)) if results else 0.0,
+            "samples_completed": len(results),
+            # Token statistics from generator
+            "total_tokens_this_sample": token_stats.get("total_tokens_this_sample", 0),
+            "input_tokens_this_sample": token_stats.get("input_tokens", 0),
+            "output_tokens_this_sample": token_stats.get("output_tokens", 0),
+            "generations_this_sample": token_stats.get("generation_count", 0),
+            "tflops_this_sample": token_stats.get("tflops") or 0,
+            # Running totals
+            "running_avg_tokens_per_sample": (
+                (running_total_tokens / len(results)) if results else 0.0
+            ),
+            "running_total_tokens": running_total_tokens,
+            "running_total_input_tokens": running_total_input,
+            "running_total_output_tokens": running_total_output,
+            "running_total_generations": running_total_gens,
+            "running_avg_tflops_per_sample": (
+                (running_total_tflops / len(results)) if results else 0.0
+            ),
+            "running_total_tflops": running_total_tflops,
+        }
+        if "validity_scores" in result and result["validity_scores"]:
+            sample_metrics["confidence"] = float(np.mean(result["validity_scores"]))
+        if "consensus_score" in result:
+            sample_metrics["consensus_score"] = result["consensus_score"]
+
+        # Append metrics line (JSONL) for easy streaming/plotting
+        try:
+            with open(sample_metrics_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(sample_metrics, ensure_ascii=False) + "\n")
+        except Exception as e:
+            log.warning(
+                f"Failed to append sample metrics to {sample_metrics_path}: {e}"
+            )
+
         # Log per-sample metrics to wandb if enabled
         try:
             import wandb
 
             if wandb.run is not None:
-                # Extract token count from metadata if available (DeepConf, self-consistency)
-                # Each trace in all_traces has "num_tokens" field
-                sample_tokens = 0
-                if "all_traces" in result:
-                    # DeepConf: sum tokens from all traces
-                    sample_tokens = sum(
-                        t.get("num_tokens", 0) for t in result["all_traces"]
-                    )
-                elif "metadata" in result:
-                    # Try to get from metadata
-                    metadata = result["metadata"]
-                    if (
-                        "generation" in metadata
-                        and "all_traces" in metadata["generation"]
-                    ):
-                        sample_tokens = sum(
-                            t.get("num_tokens", 0)
-                            for t in metadata["generation"]["all_traces"]
-                        )
-
-                # Calculate running token statistics from all results
-                all_sample_tokens = []
-                for r in results:
-                    tokens = 0
-                    if "all_traces" in r:
-                        tokens = sum(t.get("num_tokens", 0) for t in r["all_traces"])
-                    elif "metadata" in r:
-                        meta = r["metadata"]
-                        if "generation" in meta and "all_traces" in meta["generation"]:
-                            tokens = sum(
-                                t.get("num_tokens", 0)
-                                for t in meta["generation"]["all_traces"]
-                            )
-                    all_sample_tokens.append(tokens)
-
-                # Count number of traces for this sample
-                num_traces = len(result.get("all_traces", result.get("steps", [])))
-                avg_tokens_per_trace = (
-                    sample_tokens / num_traces if num_traces > 0 else 0
-                )
-
-                # Calculate FLOPs if calculator is available
-                sample_tflops = 0
-                running_total_tflops = 0
-                if flop_calculator and sample_tokens > 0:
-                    sample_tflops = flop_calculator.compute_tflops(sample_tokens)
-                    running_total_tflops = flop_calculator.compute_tflops(
-                        sum(all_sample_tokens)
-                    )
-
-                # Count correct samples using grade_answer
-                running_correct = sum(
-                    1
-                    for r in results
-                    if grade_answer(
-                        str(r.get("generated_answer", "")),
-                        str(r.get("gold_answer", "")),
-                    )
-                )
-                sample_metrics = {
-                    "sample_index": i,
-                    "is_correct": is_correct,
-                    "num_steps": len(result["steps"]),
-                    "num_traces": num_traces,
-                    "running_correct": running_correct,  # Number of correct samples so far
-                    "running_accuracy": running_correct / len(results),
-                    "samples_completed": len(results),
-                    # Token statistics (actual counts from model output)
-                    "tokens_this_sample": sample_tokens,  # Total tokens for this sample (all traces)
-                    "avg_tokens_per_trace": avg_tokens_per_trace,  # Avg tokens per trace this sample
-                    "running_avg_tokens_per_sample": (
-                        np.mean(all_sample_tokens) if all_sample_tokens else 0
-                    ),
-                    "running_total_tokens": sum(all_sample_tokens),
-                    # FLOP statistics (compute cost estimation)
-                    "tflops_this_sample": sample_tflops,  # TFLOPs for this sample
-                    "running_avg_tflops_per_sample": (
-                        running_total_tflops / len(results) if results else 0
-                    ),
-                    "running_total_tflops": running_total_tflops,
-                }
-                if "validity_scores" in result and result["validity_scores"]:
-                    sample_metrics["confidence"] = np.mean(result["validity_scores"])
-                # Log consensus_score for DeepConf (similar to self-consistency)
-                if "consensus_score" in result:
-                    sample_metrics["consensus_score"] = result["consensus_score"]
                 # Log individual confidence charts for each DeepConf trace
                 # Batch all charts into single log call to avoid incrementing step
                 trace_charts = {}
@@ -941,45 +1251,87 @@ def evaluate_results(
 
     # Average statistics
     all_validities = []
-    all_steps = []
+    all_thinking_steps = []
+    all_response_steps = []
     for r in results:
         if "validity_scores" in r and r["validity_scores"]:
             all_validities.extend(r["validity_scores"])
-            all_steps.append(len(r["steps"]))
+            all_thinking_steps.append(r.get("thinking_num_steps", len(r["steps"])))
+            all_response_steps.append(r.get("response_num_steps", 0))
 
     log.info("Step Statistics:")
-    log.info(f"Avg steps per trajectory: {np.mean(all_steps):.1f}")
+    log.info(f"Avg thinking steps per trajectory: {np.mean(all_thinking_steps):.1f}")
+    log.info(f"Avg response steps per trajectory: {np.mean(all_response_steps):.1f}")
     log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
+
+    # Build final metrics (also saved locally)
+    metrics = {
+        "total_samples": len(results),
+        "completed": completed,
+        "completed_pct": completed / len(results) if results else 0.0,
+        "errors": errors,
+        "errors_pct": errors / len(results) if results else 0.0,
+    }
+
+    # Add per-evaluator metrics
+    for name in evaluators.keys():
+        correct = summary_correct[name]
+        incorrect = summary_incorrect[name]
+        metrics[f"{name}/correct"] = correct
+        metrics[f"{name}/correct_pct"] = correct / len(results) if results else 0.0
+        metrics[f"{name}/incorrect"] = incorrect
+        metrics[f"{name}/incorrect_pct"] = incorrect / len(results) if results else 0.0
+        metrics[f"{name}/accuracy"] = correct / len(results) if results else 0.0
+
+    # Add step statistics
+    if all_thinking_steps:
+        metrics["avg_thinking_steps_per_trajectory"] = float(
+            np.mean(all_thinking_steps)
+        )
+    if all_response_steps:
+        metrics["avg_response_steps_per_trajectory"] = float(
+            np.mean(all_response_steps)
+        )
+    if all_validities:
+        metrics["avg_validity_score"] = float(np.mean(all_validities))
+
+    # Add token / FLOPs aggregates if available
+    all_token_stats = [r.get("token_stats") or {} for r in results]
+    total_tokens = sum(ts.get("total_tokens_this_sample", 0) for ts in all_token_stats)
+    total_input_tokens = sum(ts.get("input_tokens", 0) for ts in all_token_stats)
+    total_output_tokens = sum(ts.get("output_tokens", 0) for ts in all_token_stats)
+    total_generations = sum(ts.get("generation_count", 0) for ts in all_token_stats)
+    total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
+
+    metrics["total_tokens"] = int(total_tokens)
+    metrics["total_input_tokens"] = int(total_input_tokens)
+    metrics["total_output_tokens"] = int(total_output_tokens)
+    metrics["total_generations"] = int(total_generations)
+    metrics["total_tflops"] = float(total_tflops)
+    metrics["avg_tokens_per_sample"] = (
+        float(total_tokens / len(results)) if results else 0.0
+    )
+    metrics["avg_tflops_per_sample"] = (
+        float(total_tflops / len(results)) if results else 0.0
+    )
+    metrics["tflops_per_1k_tokens"] = (
+        float(total_tflops * 1000.0 / total_tokens) if total_tokens else 0.0
+    )
+
+    # Save metrics locally (so FLOPs metrics aren't only in W&B)
+    metrics_path = Path(save_path) / "metrics.json"
+    try:
+        with open(metrics_path, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=2, ensure_ascii=False, sort_keys=True)
+        log.info(f"Saved metrics to {metrics_path}")
+    except Exception as e:
+        log.warning(f"Failed to save metrics to {metrics_path}: {e}")
 
     # Log key metrics to wandb if enabled
     try:
         import wandb
 
         if wandb.run is not None:
-            metrics = {
-                "total_samples": len(results),
-                "completed": completed,
-                "completed_pct": completed / len(results),
-                "errors": errors,
-                "errors_pct": errors / len(results),
-            }
-
-            # Add per-evaluator metrics
-            for name in evaluators.keys():
-                correct = summary_correct[name]
-                incorrect = summary_incorrect[name]
-                metrics[f"{name}/correct"] = correct
-                metrics[f"{name}/correct_pct"] = correct / len(results)
-                metrics[f"{name}/incorrect"] = incorrect
-                metrics[f"{name}/incorrect_pct"] = incorrect / len(results)
-                metrics[f"{name}/accuracy"] = correct / len(results)
-
-            # Add step statistics
-            if all_steps:
-                metrics["avg_steps_per_trajectory"] = np.mean(all_steps)
-            if all_validities:
-                metrics["avg_validity_score"] = np.mean(all_validities)
-
             wandb.log(metrics)
             log.info("Logged metrics to wandb")
     except ImportError:
@@ -1089,18 +1441,29 @@ def main(config):
         except Exception as e:
             log.warning(f"Failed to initialize FLOP calculator: {e}")
 
+    # Set FLOP calculator on step generator for token/FLOP tracking
+    if step_generator is not None and flop_calculator is not None:
+        step_generator.flop_calculator = flop_calculator
+        log.info("FLOP calculator attached to step generator for token tracking")
+
     # Create scorer (skip for DeepConf)
     scorer = create_scorer(config)
 
     # Create tts strategy
     generator = create_tts_strategy(
-        config=config, model=model, step_generator=step_generator, scorer=scorer
+        config=config,
+        model=model,
+        step_generator=step_generator,
+        scorer=scorer,
+        output_dir=output_dir,
+        flop_calculator=flop_calculator,
     )
 
     # Load existing results if available (for resuming interrupted runs)
     results_path = Path(output_dir) / "results.json"
     results, processed_indices = load_results_json(results_path)
 
+    dataset = dataset.shuffle(seed=config.system.seed)
     # Generate trajectories
     results = generate_trajectories(
         results=results,
@@ -1112,6 +1475,7 @@ def main(config):
         question_field=config.dataset.get("question_field", "question"),
         answer_field=config.dataset.get("answer_field", "answer"),
         flop_calculator=flop_calculator,
+        exact_match_dataset_answer_format=config.dataset.answer_format,
     )
 
     # Evaluate results

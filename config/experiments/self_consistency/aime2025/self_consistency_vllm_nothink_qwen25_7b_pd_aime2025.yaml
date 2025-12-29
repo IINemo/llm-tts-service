@@ -1,0 +1,92 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/aime2025/self_consistency_vllm_nothink_qwen25_7b_pd_aime2025
+# Self-Consistency with vLLM + Non-Thinking Mode (Qwen2.5-7B) + PD Scorer
+# Uses step generator for step-by-step generation with majority voting
+
+defaults:
+  - /config
+  - /dataset/aime_2025
+  - /model/vllm_qwen25
+  - /generation/default
+  - /system/default
+  - /scorer/uncertainty_pd
+  - _self_
+
+# Run naming
+run_name: "self_consistency_vllm_nothink_qwen25_7b_pd_aime2025_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-aime2025
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen2.5-7B"
+  gpu_memory_utilization: 0.8
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
+  disable_thinking_mode: true  # DISABLE native thinking mode
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (non-thinking mode settings)
+generation:
+  max_new_tokens: 4096
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  batch_size: 1
+  max_length: 8192
+
+# Strategy - Self-Consistency with structured step detector
+strategy:
+  type: self_consistency
+  num_paths: 8  # Number of reasoning paths
+  max_steps: 50
+  parallel: true  # Generate all paths in parallel (batch mode)
+  # Use structured detector for non-thinking mode
+  detector_type: structured
+  # Step boundary token limits
+  min_step_tokens: 50
+  max_step_tokens: 300
+  # Marker categories (for vLLM stop token generation)
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: false  # No thinking markers in non-thinking mode
+  use_verification: true
+  use_structure: true
+  use_reasoning: true
+  use_correction: false
+  # Custom words for stop tokens
+  custom_words:
+    - "for example"
+    - "given that"
+    - "similarly"
+    - "step"
+    - "therefore"
+    - "thus"
+  # Answer patterns for checking if there's actual answer content
+  detector_answer_patterns:
+    - "<Answer>:"
+    - "\n<Answer>:"
+  # EOS patterns for checking trajectory completion (stop tokens)
+  detector_eos_patterns:
+    - "<end of response>"
+
+# Dataset configuration
+dataset:
+  subset: 30  # Full AIME-2025 dataset
+  offset: 0
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed_qwen2.5.txt"
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match

@@ -3,6 +3,7 @@ from lm_polygraph.utils.causal_lm_with_uncertainty import CausalLMWithUncertaint
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llm_tts.scorers.estimator_uncertainty_pd import PDGap
+from llm_tts.utils import get_torch_dtype
 
 
 def create_uncertainty_model(config):
@@ -13,7 +14,10 @@ def create_uncertainty_model(config):
     uncertainty_score computed by PDGap over greedy token logits.
     """
 
-    llm = AutoModelForCausalLM.from_pretrained(config.model.model_path)
+    torch_dtype = get_torch_dtype(config.system.torch_dtype)
+    llm = AutoModelForCausalLM.from_pretrained(
+        config.model.model_path, torch_dtype=torch_dtype
+    )
     tokenizer = AutoTokenizer.from_pretrained(config.model.model_path)
     tokenizer.pad_token = tokenizer.eos_token
     llm = llm.to(config.model.device)

@@ -25,7 +25,7 @@ classifiers = [
 
 dependencies = [
     "torch>=1.9.0",
-    "transformers>=4.20.0",
+    "transformers>=4.56.0",  # vLLM 0.12.0+ requires ALLOWED_LAYER_TYPES from transformers
     "numpy>=1.21.0",
     "tqdm>=4.64.0",
     "parse>=1.19.0",
@@ -66,7 +66,9 @@ service = [
 
 vllm = [
     # vLLM backend for fast inference with PagedAttention
-    "vllm>=0.6.0",
+    # Note: vLLM 0.12.0+ requires transformers>=4.52.0, which conflicts with lm-polygraph
+    # For hybrid mode (vLLM generate + HF score), this conflict is acceptable
+    "vllm>=0.12.0",
 ]
 
 [project.urls]

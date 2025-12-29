@@ -13,6 +13,8 @@ from lm_polygraph.stat_calculators.extract_claims import Claim
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
+from llm_tts.utils import get_torch_dtype
+
 from .step_scorer_reward_base import StepScorerRewardBase
 
 log = logging.getLogger(__name__)
@@ -151,10 +153,13 @@ class StepScorerPRM(StepScorerRewardBase):
     Much cleaner and more efficient than going through the full pipeline.
     """
 
-    def __init__(self, prm_model_path: str, device: str, batch_size: int):
+    def __init__(
+        self, prm_model_path: str, device: str, batch_size: int, torch_dtype: str
+    ):
         self.prm_model_path = prm_model_path
         self.device = device
         self.batch_size = batch_size
+        self.torch_dtype = torch_dtype
         self.prm_model = None
         self.prm_tokenizer = None
         self.steps_extractor = StepsExtractor(progress_bar=False)
@@ -171,7 +176,7 @@ class StepScorerPRM(StepScorerRewardBase):
         self.prm_model = AutoModel.from_pretrained(
             self.prm_model_path,
             device_map=self.device,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=get_torch_dtype(self.torch_dtype),
             trust_remote_code=True,
         ).eval()
 

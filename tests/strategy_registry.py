@@ -56,6 +56,16 @@ REGISTERED_STRATEGIES = [
         description="Step-by-step generation with PRM scoring",
     ),
     StrategyInfo(
+        name="adaptive_scaling_best_of_n",
+        class_name="AdaptiveScalingBestOfN",
+        module_path="llm_tts/strategies/adaptive_scaling_best_of_n.py",
+        test_dir="tests/adaptive_scaling_best_of_n",
+        required_tests=[
+            "test_adaptive_scaling.py",
+        ],
+        description="Adaptive scaling best-of-n strategy",
+    ),
+    StrategyInfo(
         name="uncert_cot",
         class_name="StrategyUncertaintyCoT",
         module_path="llm_tts/strategies/strategy_uncertainty_cot.py",
@@ -84,7 +94,7 @@ REGISTERED_STRATEGIES = [
             "test_tree_of_thoughts.py",  # Strategy logic and integration tests
         ],
         description="Beam search with LLM-based state evaluation",
-    ),
+    )
     # TODO: Add tests for self_consistency strategy
     # StrategyInfo(
     #     name="self_consistency",

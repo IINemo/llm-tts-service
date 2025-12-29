@@ -4,35 +4,61 @@ Step candidate generators for test-time scaling strategies.
 This module provides generators that produce candidate next steps
 for various reasoning strategies (beam search, best-of-n, etc.).
 
-Available generators:
-- StepCandidateGeneratorThroughHuggingface: Local HuggingFace models
-- StepCandidateGeneratorThroughAPI: OpenAI-compatible APIs
-- StepCandidateGeneratorThroughVLLM: vLLM for fast batched inference
-
-Also includes:
-- StepBoundaryDetector: Detects step and answer boundaries in generated text
-- StepCandidate: Data class representing a candidate step
+Structure:
+- api.py: API-based generators (OpenAI-compatible)
+- huggingface.py: HuggingFace transformers generators
+- vllm.py: Unified vLLM generator with thinking_mode parameter
 """
 
+# Backend submodules (vllm is optional)
+from llm_tts.generators import api, huggingface
+
+# Re-export commonly used classes
 from llm_tts.generators.api import StepCandidateGeneratorThroughAPI
 from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
-    covert_trajectory_to_string,
+    convert_trajectory_to_string,
 )
-from llm_tts.generators.huggingface import StepCandidateGeneratorThroughHuggingface
+from llm_tts.generators.huggingface import (
+    BatchStepStoppingCriteria,
+    StepCandidateGeneratorThroughHuggingface,
+    ThinkingStepStoppingCriteria,
+)
 
-# vLLM generators (optional)
+# vLLM generator (optional - requires vllm package)
 try:
-    from llm_tts.generators.vllm import StepCandidateGeneratorThroughVLLM
+    from llm_tts.generators.vllm import VLLMStepGenerator
+
+    VLLM_AVAILABLE = True
 except ImportError:
-    pass
+    VLLMStepGenerator = None
+    VLLM_AVAILABLE = False
+
+# Hybrid generator (vLLM + HuggingFace, optional - requires vllm package)
+try:
+    from llm_tts.generators.hybrid import HybridStepGenerator
+
+    HYBRID_AVAILABLE = True
+except ImportError:
+    HybridStepGenerator = None
+    HYBRID_AVAILABLE = False
 
 __all__ = [
+    # Base classes
     "StepCandidate",
     "StepCandidateGeneratorBase",
+    "convert_trajectory_to_string",
+    # Submodules
+    "api",
+    "huggingface",
+    "VLLM_AVAILABLE",
+    "HYBRID_AVAILABLE",
+    # Exports
     "StepCandidateGeneratorThroughAPI",
     "StepCandidateGeneratorThroughHuggingface",
-    "StepCandidateGeneratorThroughVLLM",
-    "covert_trajectory_to_string",
+    "VLLMStepGenerator",
+    "HybridStepGenerator",
+    "BatchStepStoppingCriteria",
+    "ThinkingStepStoppingCriteria",
 ]
