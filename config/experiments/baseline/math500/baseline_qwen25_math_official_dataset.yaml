@@ -1,0 +1,77 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/math500/baseline_qwen25_math_official_dataset
+# Baseline using official Qwen2.5-Math evaluation setup with their EXACT dataset
+# Uses the official MATH test.jsonl from Qwen2.5-Math repo (first 500 = all Prealgebra)
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - _self_
+
+# Run naming
+run_name: "baseline_qwen25_math_official_dataset_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-math500
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true  # Match official setting
+  trust_remote_code: true
+  max_model_len: 4096  # Model's native limit
+  disable_thinking_mode: true
+
+# System configuration
+system:
+  device: cuda
+  seed: 0
+
+# Generation configuration - matches official Qwen2.5-Math eval exactly
+generation:
+  max_new_tokens: 2048
+  temperature: 0.0
+  top_p: 1.0
+  batch_size: 1
+
+# Strategy - Baseline single-shot
+strategy:
+  type: baseline
+  detector_type: structured
+  detector_answer_patterns:
+    - "\\boxed{"
+  detector_eos_patterns:
+    - "</s>"
+    - "<|im_end|>"
+    - "<|endoftext|>"
+  stop_token_ids:
+    - 151645
+    - 151643
+
+# Dataset configuration - use official MATH test.jsonl
+dataset:
+  dataset_path: "json"
+  dataset_config: null
+  dataset_split: "train"  # JSONL loads as "train" split
+  data_files: "Qwen2.5-Math/evaluation/data/math/test.jsonl"
+  subset: 5000  # Full MATH test set
+  offset: 0
+  question_field: "problem"  # Official uses "problem" not "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"  # Official uses just the raw question
+  prompt_file: null
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match
