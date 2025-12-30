@@ -165,7 +165,7 @@ def symbolic_equal_process(a, b, output_queue):
     output_queue.put(result)
 
 
-def call_with_timeout(func, *args, timeout=1, **kwargs):
+def call_with_timeout(func, *args, timeout=5, **kwargs):
     """Call a function with a timeout using multiprocessing."""
     output_queue = multiprocessing.Queue()
     process_args = args + (output_queue,)
