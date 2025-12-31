@@ -165,31 +165,23 @@ def symbolic_equal_process(a, b, output_queue):
     output_queue.put(result)
 
 
-def call_with_timeout(func, *args, timeout=5, **kwargs):
-    """Call a function with a timeout using multiprocessing.
+def call_with_timeout(func, *args, timeout=1, **kwargs):
+    """Call a function with a timeout using multiprocessing."""
+    output_queue = multiprocessing.Queue()
+    process_args = args + (output_queue,)
+    process = multiprocessing.Process(target=func, args=process_args, kwargs=kwargs)
+    process.start()
+    process.join(timeout)
 
-    Returns the function result, or None if timeout/error occurred.
-    Note: Returns None (not False) on failure to distinguish from actual False results.
-    """
+    if process.is_alive():
+        process.terminate()
+        process.join()
+        return False
+
     try:
-        output_queue = multiprocessing.Queue()
-        process_args = args + (output_queue,)
-        process = multiprocessing.Process(target=func, args=process_args, kwargs=kwargs)
-        process.start()
-        process.join(timeout)
-
-        if process.is_alive():
-            process.terminate()
-            process.join()
-            return None  # Timeout - return None to indicate failure
-
-        try:
-            return output_queue.get_nowait()
-        except Exception:
-            return None  # Queue error - return None to indicate failure
+        return output_queue.get_nowait()
     except Exception:
-        # Multiprocessing can fail after tokenizer fork in CI - return None to trigger fallback
-        return None
+        return False
 
 
 def _normalize_spaces(s: str) -> str:
@@ -416,13 +408,8 @@ def math_equal(
 
     # Symbolic equal with optional timeout
     if timeout:
-        result = call_with_timeout(symbolic_equal_process, prediction, reference)
-        if result is True:
+        if call_with_timeout(symbolic_equal_process, prediction, reference):
             return True
-        elif result is None:
-            # Multiprocessing failed (timeout/fork issue) - fall back to direct call
-            if symbolic_equal(prediction, reference):
-                return True
     else:
         if symbolic_equal(prediction, reference):
             return True
