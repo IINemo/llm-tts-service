@@ -27,9 +27,10 @@ from sympy.parsing.latex import parse_latex
 
 from . import math_normalize
 
-# Try to import latex2sympy2 for better LaTeX parsing
+# Import bundled latex2sympy for better LaTeX parsing
+# This is a fork from Qwen2.5-Math that avoids antlr4 version conflicts
 try:
-    from latex2sympy2 import latex2sympy
+    from .latex2sympy import latex2sympy
 
     LATEX2SYMPY_AVAILABLE = True
 except ImportError:
