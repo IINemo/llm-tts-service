@@ -35,6 +35,8 @@ dependencies = [
     # "lm-polygraph>=0.0.1",  # Installed separately via setup.sh (dev branch)
     "pylatexenc>=2.10",
     "sympy>=1.12",  # For Game of 24 answer validation
+    "latex2sympy2>=1.9.0",  # For LaTeX to sympy parsing in grader
+    "regex>=2023.0.0",  # For advanced regex in grader
     "plotly>=5.0.0",  # For interactive reasoning visualization
 ]
 
