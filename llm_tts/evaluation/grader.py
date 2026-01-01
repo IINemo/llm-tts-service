@@ -166,38 +166,22 @@ def symbolic_equal_process(a, b, output_queue):
 
 
 def call_with_timeout(func, *args, timeout=1, **kwargs):
-    """Call a function with a timeout using multiprocessing.
+    """Call a function with a timeout using multiprocessing."""
+    output_queue = multiprocessing.Queue()
+    process_args = args + (output_queue,)
+    process = multiprocessing.Process(target=func, args=process_args, kwargs=kwargs)
+    process.start()
+    process.join(timeout)
 
-    Uses fork by default, falls back to spawn if fork fails (CI after tokenizer init).
-    """
-    for method in ["fork", "spawn"]:
-        try:
-            ctx = multiprocessing.get_context(method)
-            output_queue = ctx.Queue()
-            process_args = args + (output_queue,)
-            process = ctx.Process(target=func, args=process_args, kwargs=kwargs)
-            process.start()
-            # Use longer timeout for spawn since it's slower to start
-            actual_timeout = timeout if method == "fork" else timeout + 5
-            process.join(actual_timeout)
+    if process.is_alive():
+        process.terminate()
+        process.join()
+        return False
 
-            if process.is_alive():
-                process.terminate()
-                process.join()
-                return False
-
-            try:
-                return output_queue.get_nowait()
-            except Exception:
-                continue  # Try next method
-
-        except Exception:
-            continue  # Try next method
-
-    # All methods failed, fall back to direct call
-    if len(args) >= 2:
-        return symbolic_equal(args[0], args[1])
-    return False
+    try:
+        return output_queue.get_nowait()
+    except Exception:
+        return False
 
 
 def _normalize_spaces(s: str) -> str:
