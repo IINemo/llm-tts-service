@@ -364,11 +364,15 @@ def create_model(config):
                     temperature=config.generation.temperature,
                     top_p=config.generation.top_p,
                     top_k=config.generation.get("top_k", 20),
+                    presence_penalty=config.generation.get("presence_penalty", 0.0),
                     answer_patterns=config.strategy.get(
                         "detector_answer_patterns",
                         ["</think>", "<Answer>:", "\\boxed{"],
                     ),
                     max_model_len=config.model.get("max_model_len", 32768),
+                    disable_thinking_mode=config.model.get(
+                        "disable_thinking_mode", None
+                    ),
                 )
             else:
                 # Use VLLMStepGenerator in structured mode
@@ -418,6 +422,10 @@ def create_model(config):
                     max_new_tokens=config.generation.max_new_tokens,
                     temperature=config.generation.temperature,
                     top_p=config.generation.top_p,
+                    presence_penalty=config.generation.get("presence_penalty", 0.0),
+                    disable_thinking_mode=config.model.get(
+                        "disable_thinking_mode", None
+                    ),
                 )
 
             log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
@@ -680,11 +688,15 @@ def create_tts_strategy(
         stop_token_ids = getattr(config.strategy, "stop_token_ids", None)
         if stop_token_ids:
             stop_token_ids = list(stop_token_ids)
+        # Get batch_generation flag (default True for backwards compatibility)
+        # Set to False to enable uncertainty scoring via VLLMWithUncertainty wrapper
+        batch_generation = config.strategy.get("batch_generation", True)
         strategy = StrategyBaseline(
             step_generator=step_generator,
             output_dir=output_dir,
             eos_patterns=eos_patterns,
             stop_token_ids=stop_token_ids,
+            batch_generation=batch_generation,
         )
     elif config.strategy.type == "online_best_of_n":
         strategy = StrategyOnlineBestOfN(
@@ -940,6 +952,28 @@ def _generate_trajectories_batch(
         requests_to_process, indices_to_process
     )
 
+    # Save batch results immediately to avoid data loss
+    batch_results_path = save_path_file.parent / "batch_results.jsonl"
+    log.info(f"Saving batch results to {batch_results_path}")
+    with open(batch_results_path, "w") as f:
+        for idx, (i, instance, gold_answer, result) in enumerate(
+            zip(indices_to_process, instances_to_process, gold_answers, batch_results)
+        ):
+            record = {
+                "index": i,
+                "question": instance[question_field],
+                "gold_answer": gold_answer,
+                "trajectory": result.get("trajectory", ""),
+                "extracted_answer": result.get("extracted_answer", ""),
+                "steps": [
+                    s.text if hasattr(s, "text") else str(s)
+                    for s in result.get("steps", [])
+                ],
+                "validity_scores": result.get("validity_scores", []),
+            }
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    log.info(f"Saved {len(batch_results)} batch results")
+
     # Process results and save
     for idx, (i, instance, gold_answer_num, result) in enumerate(
         zip(indices_to_process, instances_to_process, gold_answers, batch_results)
@@ -985,9 +1019,9 @@ def _generate_trajectories_batch(
         else:
             log.info(f"\nFull trajectory:\n{result['trajectory']}")
 
-        # Check correctness
+        # Check correctness (use full trajectory for grading)
         is_correct = exact_match_evaluator._score_single(
-            (question, str(generated_text), str(gold_answer_num))
+            (question, result["trajectory"], str(gold_answer_num))
         )
 
         log.info("\n" + "=" * 60)
@@ -1110,9 +1144,12 @@ def generate_trajectories(
 
     subset_size = len(dataset)
 
-    # Check if strategy supports batch generation (baseline strategy)
-    if isinstance(strategy, StrategyBaseline) and hasattr(
-        strategy, "generate_trajectories_batch"
+    # Check if strategy supports batch generation (baseline strategy with batch_generation=True)
+    # When batch_generation=False, use per-sample loop for running accuracy during generation
+    if (
+        isinstance(strategy, StrategyBaseline)
+        and hasattr(strategy, "generate_trajectories_batch")
+        and getattr(strategy, "batch_generation", True)
     ):
         return _generate_trajectories_batch(
             results=results,
@@ -1215,9 +1252,9 @@ def generate_trajectories(
         log.info("\n" + "=" * 60)
         log.info(f"FINAL ANSWER: {generated_text}")
         log.info(f"Gold answer:  {gold_answer_num}")
-        # Use grade_answer for proper mathematical comparison (handles LaTeX normalization, sympy)
+        # Use full trajectory for grading (evaluator will extract answer using official logic)
         is_correct = exact_match_evaluator._score_single(
-            (question, str(generated_text), str(gold_answer_num))
+            (question, result["trajectory"], str(gold_answer_num))
         )
         log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
         log.info("-" * 60)
@@ -1419,9 +1456,15 @@ def evaluate_results(
 
             try:
                 # Evaluate single sample
+                # Use generated_trajectory (full model output) for exact_match evaluator
+                # because it needs to run extract_answer() on the raw output.
+                # Other evaluators can use generated_answer (pre-extracted).
+                solution = result.get(
+                    "generated_trajectory", result["generated_answer"]
+                )
                 eval_result = evaluator_fn(
                     [result["question"]],
-                    [result["generated_answer"]],
+                    [solution],
                     [result["gold_answer"]],
                 )
 

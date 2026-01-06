@@ -93,8 +93,12 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         answer_patterns: Patterns marking end of response
         max_new_tokens: Maximum tokens per generation
         temperature, top_p, top_k: Sampling parameters
+        presence_penalty: Penalty for tokens that have already appeared (default 0.0)
         max_model_len: Maximum context length for truncation
         flop_calculator: Optional FLOP calculator for token tracking
+        disable_thinking_mode: If set (not None), controls whether to pass enable_thinking
+                               to the chat template. True = enable_thinking=False, False = enable_thinking=True.
+                               If None, enable_thinking is not passed at all.
     """
 
     def __init__(
@@ -111,13 +115,16 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         temperature: float = 0.6,
         top_p: float = 0.95,
         top_k: int = 20,
+        presence_penalty: float = 0.0,
         max_model_len: int = 32768,
         flop_calculator: Optional["FLOPCalculator"] = None,
+        disable_thinking_mode: Optional[bool] = None,
     ):
         super().__init__(generation_batch_size=1024, flop_calculator=flop_calculator)
 
         self.model = model  # VLLMWithUncertainty wrapper
         self.thinking_mode = thinking_mode
+        self.disable_thinking_mode = disable_thinking_mode
         self.tokenizer = model.get_tokenizer()
 
         # Store common parameters
@@ -126,6 +133,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
+        self.presence_penalty = presence_penalty
         self.max_model_len = max_model_len
 
         # Answer patterns for response phase (default: <end of response>)
@@ -191,6 +199,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             temperature=self.temperature,
             top_p=self.top_p,
             top_k=self.top_k,
+            presence_penalty=self.presence_penalty,
         )
 
     # =========================================================================
@@ -305,7 +314,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             top_k=self.top_k,
             logprobs=20,
             stop=stop_tokens,
-            repetition_penalty=1.05,  # Penalize repetitive text
+            presence_penalty=self.presence_penalty,
         )
 
     # =========================================================================
@@ -375,26 +384,23 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         Returns:
             Formatted prompt string
         """
-        tokenizer_signature = inspect.signature(self.tokenizer.apply_chat_template)
-        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
-
-        if has_enable_thinking:
+        # Only pass enable_thinking if disable_thinking_mode is explicitly set (not None)
+        # This avoids issues with models that don't expect this parameter
+        if self.disable_thinking_mode is not None:
+            # Pass enable_thinking = not disable_thinking_mode
             result = self.tokenizer.apply_chat_template(
                 request,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=enable_thinking,
+                enable_thinking=not self.disable_thinking_mode,
             )
         else:
+            # Default: don't pass enable_thinking parameter
             result = self.tokenizer.apply_chat_template(
                 request,
                 tokenize=False,
                 add_generation_prompt=True,
             )
-
-        # NOTE: Previously added "<think>\n\n</think>\n\n" when enable_thinking=False
-        # and tokenizer doesn't support it. This was removed because it causes
-        # gibberish output on models like Qwen2.5-Math that don't expect thinking tags.
 
         return result
 
@@ -590,21 +596,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             # Build prompt (mode-specific)
             if self.thinking_mode:
                 prompt = self._build_prompt(request, trajectory)
-                step_prefix = None
             else:
                 prompt = self._apply_chat_template(request, enable_thinking=False)
                 if trajectory:
                     trajectory_text = convert_trajectory_to_string(trajectory)
                     prompt = prompt + trajectory_text
 
-                step_number = len(trajectory) + 1
-
-                if step_number == 1:
-                    step_prefix = "<start of response>\nReasoning Steps:\n- Step 1:"
-                else:
-                    step_prefix = f"- Step {step_number}:"
-                prompt = prompt + step_prefix
-
+            step_prefix = None
             prompts.append(prompt)
             step_prefixes.append(step_prefix)
             traj_indices.append(traj_idx)
@@ -633,7 +631,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 top_k=self.top_k,
                 logprobs=20,
                 stop=self.sampling_params.stop,
-                repetition_penalty=1.05,
+                presence_penalty=self.presence_penalty,
             )
             if len(trajectories) == 1:
                 log.info(
@@ -693,7 +691,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                         f"{len(token_ids)} tokens, stop={repr(stop_reason)}"
                     )
 
-                    step_text = step_prefix + raw_text
+                    step_text = raw_text
 
                     # Handle max tokens / repetition
                     hit_max_tokens = stop_reason is None or stop_reason == "length"
@@ -704,7 +702,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                         )
                         if was_truncated:
                             raw_text = truncated_text
-                            step_text = step_prefix + raw_text
+                            step_text = raw_text
 
                     # Check for EOS marker
                     stopped_at_eos = stop_reason == "<end of response>"
@@ -844,6 +842,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 top_k=self.top_k,
                 logprobs=20,
                 stop=["<end of response>"],
+                presence_penalty=self.presence_penalty,
             )
             log.info(f"Generating final answer with prefix '{answer_prefix}'")
 

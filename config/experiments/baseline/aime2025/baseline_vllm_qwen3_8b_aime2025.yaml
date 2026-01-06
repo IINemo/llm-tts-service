@@ -1,7 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/math500/baseline_qwen25_math_official_dataset
-# Baseline using official Qwen2.5-Math evaluation setup with their EXACT dataset
-# Uses the official MATH test.jsonl from Qwen2.5-Math repo (first 500 = all Prealgebra)
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/aime2025/baseline_vllm_qwen3_8b_aime2025
+# Baseline evaluation for Qwen3-8B on AIME 2025
 
 defaults:
   - /config
@@ -12,33 +11,36 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "baseline_qwen25_math_official_dataset_${now:%H-%M-%S}"
+run_name: "baseline_qwen3_8b_aime2025_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-aime2025
 
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_path: "Qwen/Qwen3-8B"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
-  enable_prefix_caching: true  # Match official setting
+  enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 4096  # Model's native limit
+  max_model_len: 32768
+  disable_thinking_mode: true  # Disable thinking mode for baseline
 
 # System configuration
 system:
   device: cuda
   seed: 0
 
-# Generation configuration - matches official Qwen2.5-Math eval exactly
+# Generation configuration - match official Qwen3 eval parameters
 generation:
-  max_new_tokens: 2048
-  temperature: 0.0
-  top_p: 1.0
+  max_new_tokens: 32768
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  presence_penalty: 1.5  # Official Qwen3 non-thinking mode parameter
   batch_size: 1
 
 # Strategy - Baseline single-shot
@@ -55,12 +57,12 @@ strategy:
     - 151645
     - 151643
 
-# Dataset configuration - use HuggingFace MATH-500 dataset
+# Dataset configuration - use AIME 2025 dataset (30 problems)
 dataset:
-  dataset_path: "test-time-compute/test_MATH"
+  dataset_path: "test-time-compute/aime_2025"
   dataset_config: null
   dataset_split: "test"
-  subset: 500
+  subset: 30
   offset: 0
   question_field: "question"
   answer_field: "answer"
