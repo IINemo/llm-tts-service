@@ -1,7 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/math500/baseline_qwen25_math_official_dataset
-# Baseline using official Qwen2.5-Math evaluation setup with their EXACT dataset
-# Uses the official MATH test.jsonl from Qwen2.5-Math repo (first 500 = all Prealgebra)
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/math500/baseline_vllm_qwen3_8b_math500
+# Baseline evaluation for Qwen3-8B on MATH-500
 
 defaults:
   - /config
@@ -12,7 +11,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "baseline_qwen25_math_official_dataset_${now:%H-%M-%S}"
+run_name: "baseline_qwen3_8b_math500_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -22,23 +21,26 @@ wandb_project: llm-tts-eval-math500
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_path: "Qwen/Qwen3-8B"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
-  enable_prefix_caching: true  # Match official setting
+  enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 4096  # Model's native limit
+  max_model_len: 32768
+  disable_thinking_mode: true  # Disable thinking mode for baseline
 
 # System configuration
 system:
   device: cuda
   seed: 0
 
-# Generation configuration - matches official Qwen2.5-Math eval exactly
+# Generation configuration - match official Qwen3 eval parameters
 generation:
-  max_new_tokens: 2048
-  temperature: 0.0
-  top_p: 1.0
+  max_new_tokens: 32768
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  presence_penalty: 1.5  # Official Qwen3 non-thinking mode parameter
   batch_size: 1
 
 # Strategy - Baseline single-shot

@@ -53,6 +53,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         temperature: float = 0.6,
         top_p: float = 0.95,
         top_k: int = 20,
+        presence_penalty: float = 0.0,
         answer_patterns: Optional[List[str]] = None,
         disable_thinking_mode: bool = False,
         output_dir: Optional[str] = None,
@@ -98,6 +99,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
+        self.presence_penalty = presence_penalty
         self.answer_patterns = (
             list(answer_patterns) if answer_patterns else ["<end of response>"]
         )
@@ -142,6 +144,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
+            presence_penalty=presence_penalty,
             answer_patterns=self.answer_patterns,
             flop_calculator=flop_calculator,
         )

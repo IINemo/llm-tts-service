@@ -34,9 +34,11 @@ dependencies = [
     "python-dotenv>=0.19.0",
     # "lm-polygraph>=0.0.1",  # Installed separately via setup.sh (dev branch)
     "pylatexenc>=2.10",
-    "sympy>=1.12",  # For Game of 24 answer validation
+    "sympy>=1.12",  # For Game of 24 answer validation and LaTeX parsing
+    # latex2sympy2 installed separately with --no-deps due to antlr4 version conflict with hydra
     "regex>=2023.0.0",  # For advanced regex in grader
     "plotly>=5.0.0",  # For interactive reasoning visualization
+    "word2number>=1.1",  # For converting word numbers to digits in math normalization
 ]
 
 [project.optional-dependencies]

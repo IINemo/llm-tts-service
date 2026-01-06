@@ -22,13 +22,12 @@ wandb_project: llm-tts-eval-math500
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_path: "Qwen/Qwen2.5-Math-1.5B-Instruct"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true  # Match official setting
   trust_remote_code: true
   max_model_len: 4096  # Model's native limit
-  disable_thinking_mode: true
 
 # System configuration
 system:
@@ -56,19 +55,18 @@ strategy:
     - 151645
     - 151643
 
-# Dataset configuration - use official MATH test.jsonl
+# Dataset configuration - use HuggingFace MATH-500 dataset
 dataset:
-  dataset_path: "json"
+  dataset_path: "test-time-compute/test_MATH"
   dataset_config: null
-  dataset_split: "train"  # JSONL loads as "train" split
-  data_files: "Qwen2.5-Math/evaluation/data/math/test.jsonl"
-  subset: 5000  # Full MATH test set
+  dataset_split: "test"
+  subset: 500
   offset: 0
-  question_field: "problem"  # Official uses "problem" not "question"
+  question_field: "question"
   answer_field: "answer"
   answer_format: "numeric"
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
-  prompt_template: "{question}"  # Official uses just the raw question
+  prompt_template: "{question}"
   prompt_file: null
 
 # Evaluation configuration
