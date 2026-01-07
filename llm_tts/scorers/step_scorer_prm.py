@@ -225,14 +225,14 @@ class StepScorerPRM(StepScorerRewardBase):
         """Score a single candidate using PRM"""
 
         # Extract claims from candidate
-        candidate_tokens = self.prm_tokenizer(candidate.text, return_tensors="pt")
+        candidate_tokens = self.prm_tokenizer(candidate, return_tensors="pt")
 
         claims = self.steps_extractor.split_to_steps(
-            candidate.text, candidate_tokens["input_ids"][0], self.prm_tokenizer
+            candidate, candidate_tokens["input_ids"][0], self.prm_tokenizer
         )
 
         if not claims:
-            log.debug(f"No claims extracted from candidate: {candidate.text[:50]}...")
+            log.debug(f"No claims extracted from candidate: {candidate[:50]}...")
             return [0.0]
 
         # Get PRM rewards
