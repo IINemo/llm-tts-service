@@ -799,16 +799,12 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 max_tokens=self.max_new_tokens,
                 min_tokens=0,
             )
-            answer_prefix = None
         else:
-            # non-thinking mode: inject <Answer>: prefix
+            # non-thinking mode: generate answer directly
             prompt = self._apply_chat_template(request, enable_thinking=False)
             if trajectory:
                 trajectory_text = convert_trajectory_to_string(trajectory)
                 prompt = prompt + trajectory_text
-
-            answer_prefix = "<Answer>:"
-            prompt = prompt + answer_prefix
 
             sampling_params = SamplingParams(
                 n=candidates_per_step,
@@ -818,10 +814,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 top_p=self.top_p,
                 top_k=self.top_k,
                 logprobs=20,
-                stop=["<end of response>"],
+                stop=self.response_stop_tokens,
                 presence_penalty=self.presence_penalty,
             )
-            log.info(f"Generating final answer with prefix '{answer_prefix}'")
+            log.info("Generating final answer")
 
         context_tokens = len(self.tokenizer.encode(prompt))
 
@@ -844,10 +840,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 final_text = text.strip()
                 target_text = None
             else:
-                # non-thinking mode: prepend <Answer>: prefix
-                final_text = answer_prefix + raw_text
-                if stop_reason == "<end of response>":
-                    final_text = final_text + "<end of response>"
+                # non-thinking mode: use raw text directly
+                final_text = raw_text.strip()
                 target_text = raw_text
 
             candidate = self._process_generation_output(
