@@ -87,32 +87,21 @@ class StrategyBaseline(StrategyBase):
         Generate response using uncertainty wrapper (like online BoN).
 
         Uses step_generator which goes through VLLMWithUncertainty for
-        proper uncertainty scoring with the same stop tokens as batch mode.
+        proper uncertainty scoring. Stop tokens are configured via config,
+        not overridden at runtime.
         """
         log.info("Baseline strategy: generating with uncertainty wrapper")
 
         # Reset token tracking for this sample
         self.step_generator.reset_sample_stats()
 
-        # Override step_generator's stop tokens to use baseline's eos_patterns
-        # This ensures full response generation (not step-by-step)
-        original_stop = self.step_generator.sampling_params.stop
-        original_stop_token_ids = self.step_generator.sampling_params.stop_token_ids
-        self.step_generator.sampling_params.stop = self.eos_patterns
-        self.step_generator.sampling_params.stop_token_ids = self.stop_token_ids
-
-        try:
-            # Use step_generator to generate candidates (goes through VLLMWithUncertainty)
-            # This computes uncertainty scores during generation
-            candidates = self.step_generator(
-                request,
-                trajectory=[],
-                candidates_per_step=1,
-            )
-        finally:
-            # Restore original stop tokens
-            self.step_generator.sampling_params.stop = original_stop
-            self.step_generator.sampling_params.stop_token_ids = original_stop_token_ids
+        # Use step_generator to generate candidates (goes through VLLMWithUncertainty)
+        # Stop tokens are already configured from config (no runtime override needed)
+        candidates = self.step_generator(
+            request,
+            trajectory=[],
+            candidates_per_step=1,
+        )
 
         if not candidates:
             log.error("No candidates generated")

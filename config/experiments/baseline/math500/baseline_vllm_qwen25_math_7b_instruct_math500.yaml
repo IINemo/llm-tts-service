@@ -44,16 +44,24 @@ generation:
 # Strategy - Baseline single-shot
 strategy:
   type: baseline
-  detector_type: structured
-  detector_answer_patterns:
-    - "\\boxed{"
-  detector_eos_patterns:
-    - "</s>"
-    - "<|im_end|>"
-    - "<|endoftext|>"
+  # No semantic stop tokens for baseline (full response generation)
+  # Only EOS token IDs stop generation
   stop_token_ids:
-    - 151645
-    - 151643
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  # Step token limits (required by ThinkingMarkerDetector)
+  min_step_tokens: 0
+  max_step_tokens: 2048  # Match generation.max_new_tokens
+  # Disable all semantic markers for baseline
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  # No answer pattern stop tokens for baseline - only used for evaluation
+  detector_answer_patterns: []
 
 # Dataset configuration - use HuggingFace MATH-500 dataset
 dataset:

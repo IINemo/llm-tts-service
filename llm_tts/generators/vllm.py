@@ -1,35 +1,24 @@
 """
-Unified vLLM step candidate generator supporting both structured and thinking modes.
+Unified vLLM step candidate generator with ThinkingMarkerDetector.
 
-Two modes:
-1. thinking_mode=True (default): Two-phase generation with <think>...</think>
-   - Uses semantic stop tokens for step boundaries (e.g., "Wait,", "Hmm,", etc.)
+Modes:
+1. thinking_mode=True: Two-phase generation with <think>...</think>
+   - For models with thinking support (e.g., Qwen3)
    - Phase 1: Generate thinking content inside <think>...</think>
    - Phase 2: Generate response after thinking
 
-2. thinking_mode=False: Simple structured generation
-   - Uses StructuredStepDetector with explicit step patterns
-   - Single-phase generation
+2. thinking_mode=False: Single-phase generation
+   - For models without thinking support (e.g., Qwen2.5-Math)
+   - Uses same semantic stop tokens for step boundaries
 
-Uncertainty scoring:
-- Uses VLLMWithUncertainty wrapper from lm-polygraph for scoring
-- Pass VLLMWithUncertainty as the model parameter
+Both modes use ThinkingMarkerDetector for step boundary detection via semantic
+stop tokens (e.g., "Wait,", "Thus,", "First,", etc.).
 
 Architecture Notes:
 -------------------
-
-Both modes use vLLM's native batch generation (n=candidates_per_step) for efficiency.
-Step boundaries are enforced via stop tokens and min_tokens parameter.
-
-Method naming convention:
-- PUBLIC API (no underscore prefix):
-  - generate_step_candidates()   - Generate N candidate next steps
-  - generate_answer_candidates() - Generate N final answer candidates
-
-- PRIVATE IMPLEMENTATION (underscore prefix):
-  - _generate_step_candidates_impl() - Unified step generation for both modes
-  - _generate_answer_candidates_impl() - Unified answer generation for both modes
-  - _process_generation_output() - Common output processing helper
+- Uses vLLM's native batch generation (n=candidates_per_step) for efficiency
+- Step boundaries enforced via stop tokens and min_tokens parameter
+- Uses VLLMWithUncertainty wrapper from lm-polygraph for uncertainty scoring
 
 Token tracking (_record_generation):
 - Called at LEAF methods that invoke model.generate() to ensure accurate FLOP calculation
@@ -39,7 +28,7 @@ Token tracking (_record_generation):
 import inspect
 import logging
 from enum import Enum
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from vllm import SamplingParams
 
@@ -57,7 +46,6 @@ from llm_tts.generators.base import (
     StepCandidateGeneratorBase,
     convert_trajectory_to_string,
 )
-from llm_tts.step_boundary_detectors import StructuredStepDetector
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
 
 if TYPE_CHECKING:
@@ -77,7 +65,7 @@ class CompletionReason(str, Enum):
 
 class VLLMStepGenerator(StepCandidateGeneratorBase):
     """
-    Unified vLLM step generator supporting both thinking and structured modes.
+    Unified vLLM step generator supporting both thinking and non-thinking modes.
 
     Uses VLLMWithUncertainty wrapper from lm-polygraph for both generation and
     uncertainty scoring. The wrapper's score() method computes uncertainty on
@@ -85,11 +73,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
     Args:
         model: VLLMWithUncertainty wrapper instance (wraps vLLM LLM with scoring)
-        thinking_mode: If True, use two-phase thinking generation (default).
-                      If False, use simple structured generation.
-        detector: Step boundary detector (StructuredStepDetector or ThinkingMarkerDetector).
-                 If None, creates default based on thinking_mode.
-        sampling_params: SamplingParams for generation (structured mode only)
+        thinking_mode: If True, use two-phase thinking generation (for models like Qwen3).
+                      If False, use single-phase generation (for models like Qwen2.5-Math).
+        detector: ThinkingMarkerDetector for step boundary detection. If None, creates default.
         answer_patterns: Patterns marking end of response
         max_new_tokens: Maximum tokens per generation
         temperature, top_p, top_k: Sampling parameters
@@ -105,11 +91,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self,
         model: "VLLMWithUncertainty",
         thinking_mode: bool = True,
-        detector: Optional[
-            Union[StructuredStepDetector, ThinkingMarkerDetector]
-        ] = None,
-        sampling_params: Optional[SamplingParams] = None,
+        detector: Optional[ThinkingMarkerDetector] = None,
         answer_patterns: Optional[List[str]] = None,
+        stop_token_ids: Optional[List[int]] = None,
         max_new_tokens: int = 4096,
         max_answer_tokens: int = 512,
         temperature: float = 0.6,
@@ -136,24 +120,28 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.presence_penalty = presence_penalty
         self.max_model_len = max_model_len
 
+        # Stop token IDs (e.g., [151645, 151643] for Qwen EOS)
+        self.stop_token_ids = list(stop_token_ids) if stop_token_ids else None
+
         # Answer patterns for response phase (default: <end of response>)
         self.answer_patterns = (
             list(answer_patterns) if answer_patterns else ["<end of response>"]
         )
 
-        if thinking_mode:
-            self._init_thinking_mode(detector)
-        else:
-            self._init_structured_mode(detector, sampling_params)
+        self._init_detector(detector)
 
-        mode_str = "thinking" if thinking_mode else "structured"
-        log.info(f"VLLMStepGenerator initialized in {mode_str} mode")
+        log.info(
+            f"VLLMStepGenerator initialized: thinking_mode={thinking_mode}, "
+            f"{len(self.stop_tokens)} stop tokens"
+        )
 
-    def _init_thinking_mode(
-        self,
-        detector: Optional[ThinkingMarkerDetector],
-    ):
-        """Initialize thinking mode specific components."""
+    def _init_detector(self, detector: Optional[ThinkingMarkerDetector]):
+        """Initialize detector and derive stop tokens from it.
+
+        Args:
+            detector: ThinkingMarkerDetector for step boundary detection.
+                     Stop tokens are derived from detector's use_* flags.
+        """
         # Create default detector if not provided
         if detector is None:
             detector = ThinkingMarkerDetector()
@@ -161,46 +149,19 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.detector = detector
         self.detector.answer_patterns = self.answer_patterns
 
-        # Get min/max step tokens from detector (required)
-        self.min_step_tokens = detector.min_step_tokens
-        self.max_step_tokens = detector.max_step_tokens
+        # Get min/max step tokens from detector
+        self.min_step_tokens = getattr(detector, "min_step_tokens", 0)
+        self.max_step_tokens = getattr(detector, "max_step_tokens", 300)
 
-        # Derive stop tokens from detector's configuration
-        self.thinking_stop_tokens = detector.get_vllm_stop_tokens()
+        # Derive stop tokens from detector's use_* flags
+        self.stop_tokens = detector.get_vllm_stop_tokens()
 
-        # Add </think> to stop thinking phase
-        if "</think>" not in self.thinking_stop_tokens:
-            self.thinking_stop_tokens.append("</think>")
+        # Add </think> for thinking mode
+        if self.thinking_mode and "</think>" not in self.stop_tokens:
+            self.stop_tokens.append("</think>")
 
-        # Stop tokens for RESPONSE phase (answer patterns only)
+        # Response stop tokens for answer phase (thinking mode only)
         self.response_stop_tokens = self.answer_patterns.copy()
-
-        log.info(
-            f"Thinking mode: {len(self.thinking_stop_tokens)} thinking stops, "
-            f"{len(self.response_stop_tokens)} response stops"
-        )
-
-    def _init_structured_mode(
-        self,
-        detector: Optional[StructuredStepDetector],
-        sampling_params: Optional[SamplingParams],
-    ):
-        """Initialize structured mode specific components."""
-        self.detector = detector or StructuredStepDetector()
-
-        # Get min/max step tokens from detector (like thinking mode)
-        self.min_step_tokens = getattr(self.detector, "min_step_tokens", 0)
-        self.max_step_tokens = getattr(self.detector, "max_step_tokens", 300)
-
-        self.sampling_params = sampling_params or SamplingParams(
-            min_tokens=self.min_step_tokens,
-            max_tokens=self.max_new_tokens,
-            logprobs=20,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            top_k=self.top_k,
-            presence_penalty=self.presence_penalty,
-        )
 
     # =========================================================================
     # Common utility methods
@@ -233,14 +194,14 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     ) -> None:
         """Log scoring details for a generated step.
 
-        Handles both structured mode (raw_text + step_text) and thinking mode
+        Handles both non-thinking mode (raw_text + step_text) and thinking mode
         (with optional token truncation) logging patterns.
 
         Args:
             token_ids: Full list of generated token IDs
             stop_reason: vLLM stop reason (e.g., 'length', '<end of response>')
-            raw_text: Raw text from model output (structured mode)
-            step_text: Full step text with prefix (structured mode)
+            raw_text: Raw text from model output (non-thinking mode)
+            step_text: Full step text with prefix (non-thinking mode)
             scoring_token_count: Number of tokens used for scoring (after truncation)
             path_idx: Path index for batch generation (0-indexed, displayed as 1-indexed)
             candidate_idx: Candidate index for single-path generation
@@ -270,7 +231,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         else:
             token_str = f"{effective_token_count} tokens"
 
-        # Structured mode: show raw_text and step_text
+        # non-thinking mode: show raw_text and step_text
         if raw_text is not None and step_text is not None:
             log.info(
                 f"{prefix}: {token_str}, stop={repr(stop_reason)}\n"
@@ -314,6 +275,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             top_k=self.top_k,
             logprobs=20,
             stop=stop_tokens,
+            stop_token_ids=self.stop_token_ids,
             presence_penalty=self.presence_penalty,
         )
 
@@ -414,6 +376,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         vLLM includes stop tokens in token_ids but strips them from output.text.
         This finds the longest token prefix that decodes to match the target text.
 
+        The algorithm scans from full length down, looking for either:
+        1. Exact match: decoded prefix == target
+        2. Prefix contains target: decoded prefix starts with target (has extra stop tokens)
+
         Args:
             token_ids: Full list of generated token IDs
             target_text: The text to match (without stop tokens)
@@ -431,8 +397,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 prefix_text = self.tokenizer.decode(
                     prefix_tokens, skip_special_tokens=True
                 )
-                if prefix_text.strip() == target_stripped or target_stripped.startswith(
-                    prefix_text.strip()
+                prefix_stripped = prefix_text.strip()
+                # Check: exact match OR prefix contains target (has stop tokens at end)
+                if prefix_stripped == target_stripped or prefix_stripped.startswith(
+                    target_stripped
                 ):
                     best_prefix_len = prefix_len
                     break
@@ -451,7 +419,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         """Create a StepCandidate with uncertainty scoring.
 
         Args:
-            text: Final step text (with prefix for structured mode)
+            text: Final step text (with prefix for non-thinking mode)
             token_ids: Full list of generated token IDs
             logprobs: Logprobs for generated tokens
             best_prefix_len: Number of tokens to use for scoring
@@ -508,8 +476,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             is_trajectory_complete: Whether this completes the trajectory
             idx: Candidate index for logging
             target_text: Text to match for token prefix finding (default: output.text)
-            raw_text_for_log: Raw text for structured mode logging
-            step_text_for_log: Step text for structured mode logging
+            raw_text_for_log: Raw text for non-thinking mode logging
+            step_text_for_log: Step text for non-thinking mode logging
             path_idx: Path index for batch generation logging
 
         Returns:
@@ -550,7 +518,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
     ) -> List[List[StepCandidate]]:
-        """Unified step candidate generation for both thinking and structured modes.
+        """Unified step candidate generation for both thinking and non-thinking modes.
 
         Handles both single-trajectory (best-of-n) and multi-trajectory (self-consistency)
         in a single method using vLLM's batch generation capabilities.
@@ -569,7 +537,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         # Build prompts for all trajectories
         prompts = []
-        step_prefixes = []  # Only used for structured mode
+        step_prefixes = []  # Only used for non-thinking mode
         traj_indices = []  # Maps prompt index to trajectory index
         already_complete = {}  # Trajectories that are already complete
 
@@ -613,33 +581,19 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         total_context_tokens = sum(len(self.tokenizer.encode(p)) for p in prompts)
 
-        # Create sampling params (mode-specific stop tokens)
-        if self.thinking_mode:
-            sampling_params = self._create_sampling_params(
-                stop_tokens=self.thinking_stop_tokens,
-                n=candidates_per_step,
-                max_tokens=self.max_step_tokens,
-                min_tokens=self.min_step_tokens,
+        # Create sampling params with stop tokens
+        sampling_params = self._create_sampling_params(
+            stop_tokens=self.stop_tokens,
+            n=candidates_per_step,
+            max_tokens=self.max_step_tokens,
+            min_tokens=self.min_step_tokens,
+        )
+
+        if len(trajectories) == 1:
+            log.info(
+                f"Step {len(trajectories[0]) + 1}, "
+                f"stop={len(self.stop_tokens)} tokens, min={self.min_step_tokens}"
             )
-        else:
-            sampling_params = SamplingParams(
-                n=candidates_per_step,
-                max_tokens=self.sampling_params.max_tokens,
-                min_tokens=self.sampling_params.min_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k,
-                logprobs=20,
-                stop=self.sampling_params.stop,
-                presence_penalty=self.presence_penalty,
-            )
-            if len(trajectories) == 1:
-                log.info(
-                    f"Structured mode: step {len(trajectories[0]) + 1}, "
-                    f"stop={sampling_params.stop}, min_tokens={sampling_params.min_tokens}"
-                )
-            else:
-                log.info(f"Batch generating for {len(prompts)} paths")
 
         # Generate for all prompts
         outputs = self.model.generate(prompts, sampling_params)
@@ -668,9 +622,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                         think_pos = text.find("</think>")
                         text = text[: think_pos + len("</think>")]
 
-                    # Handle max tokens
-                    hit_max_tokens = stop_reason is None or stop_reason == "length"
-                    if hit_max_tokens and not thinking_complete:
+                    # Handle max tokens - only truncate if we actually hit the limit
+                    # stop_reason=None can mean EOS token ID stop (complete) or max tokens
+                    # Check token count to distinguish
+                    actual_hit_max_tokens = stop_reason == "length" or (
+                        stop_reason is None and len(token_ids) >= self.max_step_tokens
+                    )
+                    if actual_hit_max_tokens and not thinking_complete:
                         text = self._truncate_at_sentence_boundary(text)
 
                     # Check for repetitions
@@ -680,12 +638,19 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                             f"Path {traj_idx} cand {cand_idx}: repetition detected"
                         )
 
-                    is_trajectory_complete = thinking_complete or repetition_detected
+                    # Stopped at EOS token ID (stop_reason=None but didn't hit max)
+                    stopped_at_eos = (
+                        stop_reason is None and len(token_ids) < self.max_step_tokens
+                    )
+
+                    is_trajectory_complete = (
+                        thinking_complete or repetition_detected or stopped_at_eos
+                    )
                     step_text = text.strip()
                     target_text = text.strip()
 
                 else:
-                    # Structured mode
+                    # non-thinking mode
                     log.debug(
                         f"vLLM output [path {traj_idx}, cand {cand_idx}]: "
                         f"{len(token_ids)} tokens, stop={repr(stop_reason)}"
@@ -797,7 +762,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         trajectory: List[StepCandidate],
         candidates_per_step: int = 1,
     ) -> List[StepCandidate]:
-        """Unified answer candidate generation for both thinking and structured modes.
+        """Unified answer candidate generation for both thinking and non-thinking modes.
 
         Generates N final answer candidates after reasoning is complete.
         Uses self.thinking_mode to branch on mode-specific behavior.
@@ -824,7 +789,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             )
             answer_prefix = None
         else:
-            # Structured mode: inject <Answer>: prefix
+            # non-thinking mode: inject <Answer>: prefix
             prompt = self._apply_chat_template(request, enable_thinking=False)
             if trajectory:
                 trajectory_text = convert_trajectory_to_string(trajectory)
@@ -867,7 +832,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 final_text = text.strip()
                 target_text = None
             else:
-                # Structured mode: prepend <Answer>: prefix
+                # non-thinking mode: prepend <Answer>: prefix
                 final_text = answer_prefix + raw_text
                 if stop_reason == "<end of response>":
                     final_text = final_text + "<end of response>"
@@ -936,7 +901,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         return candidates
 
     # =========================================================================
-    # Structured mode methods
+    # non-thinking mode methods
     # =========================================================================
 
     def _truncate_at_step_boundary(self, text: str) -> str:
@@ -1112,12 +1077,16 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         naturally reached end-of-response marker.
 
         In thinking mode, ensures </think> is present before generating answer.
-        In structured mode, injects <Answer>: prefix to force answer generation.
+        In non-thinking mode, injects <Answer>: prefix to force answer generation.
         """
         trajectory = trajectory or []
 
-        # Thinking mode: ensure </think> is present
-        if self.thinking_mode:
+        # Only add </think> when model explicitly supports thinking mode
+        # disable_thinking_mode=None means model doesn't support thinking (e.g., Qwen2.5-Math)
+        # disable_thinking_mode=False means thinking is enabled, expect </think>
+        # disable_thinking_mode=True means thinking is disabled
+        model_supports_thinking = self.disable_thinking_mode is False
+        if self.thinking_mode and model_supports_thinking:
             full_trajectory = convert_trajectory_to_string(trajectory)
             if "</think>" not in full_trajectory:
                 log.warning(
@@ -1139,7 +1108,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     def generate_answer(
         self, request, candidates_per_step: int, more_information=False
     ) -> List[StepCandidate]:
-        """Generate final answer (structured mode compatibility)."""
+        """Generate final answer (non-thinking mode compatibility)."""
         result = self.generate_step_candidates(request, [[]], candidates_per_step)
         return result[0] if result else []
 

@@ -506,7 +506,6 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
                 "</think>",
                 "<Answer>:",
                 "\n<Answer>:",
-                "\\boxed{",
             ]
         return self._answer_patterns
 

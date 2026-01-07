@@ -73,10 +73,7 @@ from llm_tts.scorers import (
     TotValueScorer,
     TotVoteScorer,
 )
-from llm_tts.step_boundary_detectors import (
-    StructuredStepDetector,
-    ThinkingMarkerDetector,
-)
+from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 
 # vLLM step generator (optional)
 try:
@@ -335,139 +332,20 @@ def create_model(config):
                 f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__}"
             )
 
-            detector_type = config.strategy.get("detector_type", "structured")
+            # Always use ThinkingMarkerDetector for step boundary detection
+            # Stop tokens are derived from detector's semantic markers
+            # thinking_mode controls two-phase generation (<think>...</think>)
+            # Logic for disable_thinking_mode:
+            #   None  = model doesn't support thinking (e.g., Qwen2.5-Math) -> thinking_mode=False
+            #   False = model supports thinking, enabled (e.g., Qwen3) -> thinking_mode=True
+            #   True  = model supports thinking, disabled -> thinking_mode=False
+            disable_thinking_mode = config.model.get("disable_thinking_mode", None)
+            thinking_mode = disable_thinking_mode is False
+            log.info(
+                f"Creating VLLMStepGenerator with ThinkingMarkerDetector "
+                f"(thinking_mode={thinking_mode})"
+            )
 
-            if detector_type == "thinking_marker":
-                # Use VLLMStepGenerator in thinking mode
-                log.info("Creating VLLMStepGenerator for thinking mode")
-
-                # Create ThinkingMarkerDetector with config settings
-                # Stop tokens are automatically derived from detector
-                detector = ThinkingMarkerDetector(
-                    min_step_tokens=config.strategy.min_step_tokens,
-                    max_step_tokens=config.strategy.max_step_tokens,
-                    use_sequence=config.strategy.get("use_sequence", True),
-                    use_conclusion=config.strategy.get("use_conclusion", True),
-                    use_thinking=config.strategy.get("use_thinking", True),
-                    use_verification=config.strategy.get("use_verification", True),
-                    use_reasoning=config.strategy.get("use_reasoning", False),
-                    use_correction=config.strategy.get("use_correction", False),
-                    use_structure=config.strategy.get("use_structure", False),
-                    custom_markers=config.strategy.get("custom_words", None),
-                )
-
-                step_generator = VLLMStepGenerator(
-                    model=uncertainty_wrapper,
-                    thinking_mode=True,
-                    detector=detector,
-                    max_new_tokens=config.generation.max_new_tokens,
-                    temperature=config.generation.temperature,
-                    top_p=config.generation.top_p,
-                    top_k=config.generation.get("top_k", 20),
-                    presence_penalty=config.generation.get("presence_penalty", 0.0),
-                    answer_patterns=config.strategy.get(
-                        "detector_answer_patterns",
-                        ["</think>", "<Answer>:", "\\boxed{"],
-                    ),
-                    max_model_len=config.model.get("max_model_len", 32768),
-                    disable_thinking_mode=config.model.get(
-                        "disable_thinking_mode", None
-                    ),
-                )
-            else:
-                # Use VLLMStepGenerator in structured mode
-                # step_patterns: boundaries for step truncation (only step markers, not answer)
-                # answer_patterns: markers indicating the final answer
-                # eos_patterns: markers indicating end of response (used as stop tokens)
-                detector = StructuredStepDetector(
-                    step_patterns=config.strategy.get(
-                        "detector_step_patterns", ["- Step"]
-                    ),
-                    answer_patterns=config.strategy.get(
-                        "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
-                    ),
-                    eos_patterns=config.strategy.get(
-                        "detector_eos_patterns", ["<end of response>"]
-                    ),
-                    max_tokens_per_step=config.generation.max_new_tokens,
-                    min_step_tokens=config.strategy.get("min_step_tokens", 0),
-                    max_step_tokens=config.strategy.get("max_step_tokens", 300),
-                )
-
-                # Create sampling params for step generation
-                # Stop at:
-                # - step boundaries (- Step)
-                # - answer patterns (<Answer>:) - signals reasoning is done
-                # - end of response (<end of response>)
-                # Cast to list to avoid OmegaConf ListConfig issues with vLLM
-                stop_patterns = (
-                    list(detector.step_patterns)
-                    + list(detector.answer_patterns)
-                    + list(detector.eos_patterns)
-                )
-                step_sampling_params = SamplingParams(
-                    max_tokens=config.generation.max_new_tokens,
-                    min_tokens=0,  # No minimum - with step prefix injection, stop tokens trigger immediately
-                    temperature=config.generation.temperature,
-                    top_p=config.generation.top_p,
-                    logprobs=config.strategy.get("top_logprobs", 20),
-                    stop=stop_patterns,
-                )
-
-                step_generator = VLLMStepGenerator(
-                    model=uncertainty_wrapper,
-                    thinking_mode=False,
-                    detector=detector,
-                    sampling_params=step_sampling_params,
-                    max_new_tokens=config.generation.max_new_tokens,
-                    temperature=config.generation.temperature,
-                    top_p=config.generation.top_p,
-                    presence_penalty=config.generation.get("presence_penalty", 0.0),
-                    disable_thinking_mode=config.model.get(
-                        "disable_thinking_mode", None
-                    ),
-                )
-
-            log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
-
-        return model, step_generator
-
-    elif config.model.type == "hybrid":
-        # Hybrid backend: vLLM for generation, HuggingFace for uncertainty scoring
-        # This combines vLLM's fast generation with HF's full access to hidden states
-        if not VLLM_AVAILABLE:
-            raise ImportError("vLLM not installed. Run: pip install vllm")
-
-        from llm_tts.generators.hybrid import HybridStepGenerator
-
-        log.info("Initializing hybrid generator (vLLM generate + HuggingFace score)")
-
-        # Initialize vLLM engine for generation
-        vllm_gpu_util = config.model.get("vllm_gpu_memory_utilization", 0.45)
-        llm = LLM(
-            model=config.model.model_path,
-            gpu_memory_utilization=vllm_gpu_util,
-            tensor_parallel_size=config.model.get("tensor_parallel_size", 1),
-            enable_prefix_caching=config.model.get("enable_prefix_caching", True),
-            trust_remote_code=config.model.get("trust_remote_code", True),
-            max_model_len=config.model.get("max_model_len", 32768),
-            seed=config.system.seed,
-        )
-
-        # HuggingFace model will be loaded by HybridStepGenerator
-        # Configure HF options
-        hf_device = config.model.get("hf_device", "cuda")
-        hf_dtype_str = config.model.get("hf_dtype", "float16")
-        hf_dtype = getattr(torch, hf_dtype_str, torch.float16)
-
-        # Choose detector based on thinking mode
-        detector_type = config.strategy.get("detector_type", "structured")
-        use_thinking_mode = detector_type == "thinking_marker" or (
-            not config.model.disable_thinking_mode and detector_type == "auto"
-        )
-
-        if use_thinking_mode:
-            log.info("Using ThinkingMarkerDetector for hybrid generator")
             detector = ThinkingMarkerDetector(
                 min_step_tokens=config.strategy.min_step_tokens,
                 max_step_tokens=config.strategy.max_step_tokens,
@@ -475,48 +353,39 @@ def create_model(config):
                 use_conclusion=config.strategy.get("use_conclusion", True),
                 use_thinking=config.strategy.get("use_thinking", True),
                 use_verification=config.strategy.get("use_verification", True),
-                use_structure=config.strategy.get("use_structure", False),
                 use_reasoning=config.strategy.get("use_reasoning", False),
-                use_sentence_start=config.strategy.get("use_sentence_start", False),
                 use_correction=config.strategy.get("use_correction", False),
-                custom_markers=config.strategy.get("custom_markers"),
+                use_structure=config.strategy.get("use_structure", False),
+                custom_markers=config.strategy.get("custom_words", None),
             )
-        else:
-            log.info("Using StructuredStepDetector for hybrid generator")
-            detector = StructuredStepDetector(
-                step_patterns=config.strategy.get(
-                    "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
-                ),
+
+            # Stop token IDs (e.g., [151645, 151643] for Qwen EOS)
+            # Stop tokens are derived from detector's use_* flags automatically
+            stop_token_ids = config.strategy.get("stop_token_ids", None)
+            if stop_token_ids is not None:
+                stop_token_ids = list(stop_token_ids)
+
+            step_generator = VLLMStepGenerator(
+                model=uncertainty_wrapper,
+                thinking_mode=thinking_mode,
+                detector=detector,
+                stop_token_ids=stop_token_ids,
+                max_new_tokens=config.generation.max_new_tokens,
+                temperature=config.generation.temperature,
+                top_p=config.generation.top_p,
+                top_k=config.generation.get("top_k", 20),
+                presence_penalty=config.generation.get("presence_penalty", 0.0),
                 answer_patterns=config.strategy.get(
-                    "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
+                    "detector_answer_patterns",
+                    [],  # Empty by default - rely on EOS token IDs
                 ),
-                max_tokens_per_step=config.generation.max_new_tokens,
+                max_model_len=config.model.get("max_model_len", 32768),
+                disable_thinking_mode=config.model.get("disable_thinking_mode", None),
             )
 
-        # Create hybrid step generator
-        step_generator = HybridStepGenerator(
-            vllm_model=llm,
-            model_name=config.model.model_path,
-            thinking_mode=use_thinking_mode,
-            detector=detector,
-            answer_patterns=config.strategy.get(
-                "detector_answer_patterns", ["<end of response>"]
-            ),
-            max_new_tokens=config.generation.max_new_tokens,
-            temperature=config.generation.temperature,
-            top_p=config.generation.top_p,
-            top_k=config.generation.get("top_k", 20),
-            max_model_len=config.model.get("max_model_len", 32768),
-            hf_device=hf_device,
-            hf_dtype=hf_dtype,
-            output_hidden_states=config.model.get("output_hidden_states", True),
-            output_attentions=config.model.get("output_attentions", False),
-        )
+            log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
 
-        log.info("Hybrid step generator created successfully")
-
-        # Return None for model since hybrid generator handles both
-        return None, step_generator
+        return model, step_generator
 
     elif config.model.type == "local":
         scorer_type = config.scorer.type if config.scorer else None
@@ -554,48 +423,24 @@ def create_model(config):
             base_model.eval()
             model = WhiteboxModel(base_model, tokenizer)
 
-        # Choose detector based on thinking mode
-        detector_type = config.strategy.get("detector_type", "structured")
-        use_thinking_detector = detector_type == "thinking_marker" or (
-            not config.model.disable_thinking_mode and detector_type == "auto"
+        # Always use ThinkingMarkerDetector for step boundary detection
+        log.info("Using ThinkingMarkerDetector for local model")
+        detector = ThinkingMarkerDetector(
+            min_step_tokens=config.strategy.min_step_tokens,
+            max_step_tokens=config.strategy.max_step_tokens,
+            use_sequence=config.strategy.get("use_sequence", True),
+            use_conclusion=config.strategy.get("use_conclusion", True),
+            use_thinking=config.strategy.get("use_thinking", True),
+            use_verification=config.strategy.get("use_verification", True),
+            use_structure=config.strategy.get("use_structure", False),
+            use_reasoning=config.strategy.get("use_reasoning", False),
+            use_sentence_start=config.strategy.get("use_sentence_start", False),
+            use_correction=config.strategy.get("use_correction", False),
+            custom_markers=config.strategy.get("custom_markers"),
         )
-
-        if use_thinking_detector:
-            log.info("Using ThinkingMarkerDetector for thinking mode")
-            # marker_semantic_v2 settings (see tests/boundary_detectors/)
-            detector = ThinkingMarkerDetector(
-                min_step_tokens=config.strategy.min_step_tokens,
-                max_step_tokens=config.strategy.max_step_tokens,
-                use_sequence=config.strategy.get("use_sequence", True),
-                use_conclusion=config.strategy.get("use_conclusion", True),
-                use_thinking=config.strategy.get("use_thinking", True),
-                use_verification=config.strategy.get("use_verification", True),
-                use_structure=config.strategy.get("use_structure", False),
-                use_reasoning=config.strategy.get(
-                    "use_reasoning", False
-                ),  # Default False to avoid over-splitting
-                use_sentence_start=config.strategy.get("use_sentence_start", False),
-                use_correction=config.strategy.get("use_correction", False),
-                custom_markers=config.strategy.get(
-                    "custom_markers"
-                ),  # marker_semantic_v2 additions
-            )
-            # Set answer patterns if provided
-            if config.strategy.get("detector_answer_patterns"):
-                detector.answer_patterns = config.strategy.get(
-                    "detector_answer_patterns"
-                )
-        else:
-            log.info("Using StructuredStepDetector")
-            detector = StructuredStepDetector(
-                step_patterns=config.strategy.get(
-                    "detector_step_patterns", ["- Step", "<Answer>:", "\n<Answer>:"]
-                ),
-                answer_patterns=config.strategy.get(
-                    "detector_answer_patterns", ["<Answer>:", "\n<Answer>:"]
-                ),
-                max_tokens_per_step=config.generation.max_new_tokens,
-            )
+        # Set answer patterns if provided
+        if config.strategy.get("detector_answer_patterns"):
+            detector.answer_patterns = config.strategy.get("detector_answer_patterns")
         step_generator = StepCandidateGeneratorThroughHuggingface(
             model=model,
             detector=detector,
@@ -635,16 +480,18 @@ def create_model(config):
             # Other strategies use boundary detection via early stopping
             from llm_tts.early_stopping import BoundaryEarlyStopping
 
-            detector = StructuredStepDetector(
-                step_patterns=[
-                    "- Step",
-                    "<Answer>:",
-                    "\n<Answer>:",
-                    "### Step",
-                    "\nStep",
-                ],
-                answer_patterns=["<Answer>:", "\n<Answer>:"],
-                max_tokens_per_step=config.generation.max_new_tokens,
+            # Always use ThinkingMarkerDetector for step boundary detection
+            detector = ThinkingMarkerDetector(
+                min_step_tokens=config.strategy.get("min_step_tokens", 0),
+                max_step_tokens=config.strategy.get("max_step_tokens", 300),
+                use_sequence=config.strategy.get("use_sequence", True),
+                use_conclusion=config.strategy.get("use_conclusion", True),
+                use_thinking=config.strategy.get("use_thinking", True),
+                use_verification=config.strategy.get("use_verification", True),
+                use_structure=config.strategy.get("use_structure", False),
+                use_reasoning=config.strategy.get("use_reasoning", False),
+                use_correction=config.strategy.get("use_correction", False),
+                custom_markers=config.strategy.get("custom_markers"),
             )
 
             generation_parameters = GenerationParameters()

@@ -10,6 +10,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorBase,
     convert_trajectory_to_string,
 )
+from llm_tts.generators.vllm import CompletionReason
 from llm_tts.strategies.deepconf.utils import extract_answer
 
 from .strategy_base import StrategyBase, count_thinking_and_response_steps
@@ -146,6 +147,19 @@ class StrategyOnlineBestOfN(StrategyBase):
 
             # Check if trajectory is complete
             if selected_candidate.is_trajectory_complete:
+                # Get completion reason from candidate
+                completion_reason = None
+                if selected_candidate.other_data:
+                    completion_reason = selected_candidate.other_data.get(
+                        "completion_reason"
+                    )
+
+                # If stopped at EOS, response is already complete (e.g., Qwen2.5-Math with \boxed{})
+                # No need to generate final answer
+                if completion_reason == CompletionReason.EOS_PATTERN:
+                    log.info("\nStopped at EOS, response already complete")
+                    break
+
                 log.info("\nAnswer pattern detected in step")
                 # Check if answer content is present after the pattern
                 # When using HuggingFace/vLLM with stopping criteria, generation
