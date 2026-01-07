@@ -1,6 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen25_7b_entropy_math500
-# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen3_8b_pd_math500
+# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen3-8B) + PD Scorer on MATH-500
 # Uses standard generation without thinking markers
 
 defaults:
@@ -9,11 +9,11 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/uncertainty_pd
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_nothink_qwen25_7b_entropy_math500_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_nothink_qwen3_8b_pd_math500_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -23,13 +23,13 @@ wandb_project: llm-tts-eval-math500
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
-  gpu_memory_utilization: 0.9
+  model_path: "Qwen/Qwen3-8B"
+  gpu_memory_utilization: 0.8
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 4096
-  # disable_thinking_mode not set (None) = model doesn't support thinking
+  max_model_len: 32768
+  disable_thinking_mode: true  # DISABLE native thinking mode
 
 # System configuration
 system:
@@ -45,22 +45,20 @@ generation:
   batch_size: 1
   max_length: 8192
 
-# Strategy - Online Best-of-N (always uses ThinkingMarkerDetector)
+# Strategy - Online Best-of-N with structured step detector
 strategy:
   type: online_best_of_n
   candidates_per_step: 4
   max_steps: 50
-  # Stop tokens derived from detector config (use_* flags below)
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
+  # Use structured detector for non-thinking mode
+  detector_type: structured
   # Step boundary token limits
   min_step_tokens: 50
-  max_step_tokens: 2048
-  # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
+  max_step_tokens: 300
+  # Marker categories (for vLLM stop token generation)
   use_sequence: true
   use_conclusion: true
-  use_thinking: true  # Include thinking markers for step boundaries
+  use_thinking: false  # No thinking markers in non-thinking mode
   use_verification: true
   use_structure: true
   use_reasoning: true
@@ -73,11 +71,19 @@ strategy:
     - "step"
     - "therefore"
     - "thus"
+  # Answer patterns for checking if there's actual answer content
+  detector_answer_patterns:
+    - "<Answer>:"
+    - "\n<Answer>:"
+  # EOS patterns for checking trajectory completion (stop tokens)
+  detector_eos_patterns:
+    - "<end of response>"
+
 # Dataset configuration
 dataset:
   subset: 500  # Full MATH-500 dataset
   offset: 0
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
 
 # Evaluation configuration
 evaluation:

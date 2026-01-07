@@ -183,7 +183,6 @@ ANSWER_TOKENS = [
     "</think>",
     "<Answer>:",
     "\n<Answer>:",
-    "\\boxed{",
 ]
 
 

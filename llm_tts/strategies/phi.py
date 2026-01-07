@@ -11,6 +11,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
     convert_trajectory_to_string,
 )
+from llm_tts.generators.vllm import CompletionReason
 
 from .strategy_base import StrategyBase
 
@@ -107,6 +108,18 @@ class PhiDecoding(StrategyBase):
 
             # Check if trajectory is complete
             if selected_candidate.is_trajectory_complete:
+                # Get completion reason from candidate
+                completion_reason = None
+                if selected_candidate.other_data:
+                    completion_reason = selected_candidate.other_data.get(
+                        "completion_reason"
+                    )
+
+                # If stopped at EOS, response is already complete (e.g., Qwen2.5-Math with \boxed{})
+                if completion_reason == CompletionReason.EOS_PATTERN:
+                    log.info("Stopped at EOS, response already complete")
+                    break
+
                 log.info("Answer pattern detected in step")
                 if not self._has_answer_content(selected_candidate):
                     log.info("Answer content missing, generating final answer")

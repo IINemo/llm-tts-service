@@ -185,3 +185,7 @@ workdir/
 # deepconf/
 # tree-of-thought-llm/
 lm-polygraph/
+
+# External Qwen repositories
+Qwen2.5-Math/
+Qwen3/

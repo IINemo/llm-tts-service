@@ -46,16 +46,24 @@ generation:
 # Strategy - Baseline single-shot
 strategy:
   type: baseline
-  detector_type: structured
+  # No semantic stop tokens for baseline (full response generation)
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  # Step token limits (required by ThinkingMarkerDetector)
+  min_step_tokens: 0
+  max_step_tokens: 32768
+  # Disable all semantic markers for baseline
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  # Answer patterns for evaluation
   detector_answer_patterns:
     - "\\boxed{"
-  detector_eos_patterns:
-    - "</s>"
-    - "<|im_end|>"
-    - "<|endoftext|>"
-  stop_token_ids:
-    - 151645
-    - 151643
 
 # Dataset configuration - use AIME 2024 dataset (30 problems)
 dataset:
