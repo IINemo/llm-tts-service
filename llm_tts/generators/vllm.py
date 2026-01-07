@@ -826,7 +826,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         # Process outputs
         for idx, output in enumerate(request_output.outputs):
             raw_text = output.text
-            stop_reason = getattr(output, "stop_reason", None)
 
             if self.thinking_mode:
                 # Append answer pattern if not present
