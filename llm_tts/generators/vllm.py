@@ -30,7 +30,14 @@ import logging
 from enum import Enum
 from typing import TYPE_CHECKING, Dict, List, Optional
 
-from vllm import SamplingParams
+# Optional vLLM import (not available in CI)
+try:
+    from vllm import SamplingParams
+
+    VLLM_AVAILABLE = True
+except ImportError:
+    VLLM_AVAILABLE = False
+    SamplingParams = None
 
 # Optional lm-polygraph imports for uncertainty computation
 try:
@@ -105,6 +112,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         disable_thinking_mode: Optional[bool] = None,
     ):
         super().__init__(generation_batch_size=1024, flop_calculator=flop_calculator)
+
+        if not VLLM_AVAILABLE:
+            raise ImportError(
+                "vLLM is required but not installed. Install it with: pip install vllm"
+            )
 
         self.model = model  # VLLMWithUncertainty wrapper
         self.thinking_mode = thinking_mode
