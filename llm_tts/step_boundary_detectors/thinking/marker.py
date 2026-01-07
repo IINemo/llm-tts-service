@@ -461,6 +461,25 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
                 self._trajectory_complete = True
                 return True
 
+        # Check for \boxed{} pattern (complete box with balanced braces)
+        if "\\boxed{" in generated_text:
+            # Find complete boxed patterns
+            idx = generated_text.find("\\boxed{")
+            while idx != -1:
+                stack = 1
+                pos = idx + 7  # len("\\boxed{")
+                while pos < len(generated_text) and stack > 0:
+                    if generated_text[pos] == "{":
+                        stack += 1
+                    elif generated_text[pos] == "}":
+                        stack -= 1
+                    pos += 1
+                if stack == 0:
+                    # Found complete \boxed{}
+                    self._trajectory_complete = True
+                    return True
+                idx = generated_text.find("\\boxed{", idx + 1)
+
         # Check EOS
         if reached_eos:
             self._trajectory_complete = True
