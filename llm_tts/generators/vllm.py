@@ -681,10 +681,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                             raw_text = truncated_text
                             step_text = raw_text
 
-                    # Check for EOS marker
-                    stopped_at_eos = stop_reason == "<end of response>"
-                    if stopped_at_eos:
-                        step_text = step_text + "<end of response>"
+                    # Check for natural EOS (stop_reason is None means generation finished)
+                    stopped_at_eos = stop_reason is None
 
                     # Check if stopped at answer pattern
                     stopped_at_answer = False
