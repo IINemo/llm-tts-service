@@ -25,7 +25,7 @@ from vllm import LLM
 from llm_tts.generators import StepCandidate
 from llm_tts.generators.vllm import VLLMStepGenerator
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
-from llm_tts.strategies.deepconf.utils import extract_answer
+from llm_tts.utils.answer_extraction import extract_answer
 
 from .strategy_base import StrategyBase, count_thinking_and_response_steps
 
