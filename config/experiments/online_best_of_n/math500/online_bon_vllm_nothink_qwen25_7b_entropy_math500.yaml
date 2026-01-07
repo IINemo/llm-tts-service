@@ -56,7 +56,7 @@ strategy:
     - 151643  # <|endoftext|>
   # Step boundary token limits
   min_step_tokens: 50
-  max_step_tokens: 300
+  max_step_tokens: 2048
   # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
   use_sequence: true
   use_conclusion: true
