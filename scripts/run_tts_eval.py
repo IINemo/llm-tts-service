@@ -347,8 +347,8 @@ def create_model(config):
             )
 
             detector = ThinkingMarkerDetector(
-                min_step_tokens=config.strategy.min_step_tokens,
-                max_step_tokens=config.strategy.max_step_tokens,
+                min_step_tokens=config.strategy.get("min_step_tokens", 0),
+                max_step_tokens=config.strategy.get("max_step_tokens", 300),
                 use_sequence=config.strategy.get("use_sequence", True),
                 use_conclusion=config.strategy.get("use_conclusion", True),
                 use_thinking=config.strategy.get("use_thinking", True),
@@ -426,8 +426,8 @@ def create_model(config):
         # Always use ThinkingMarkerDetector for step boundary detection
         log.info("Using ThinkingMarkerDetector for local model")
         detector = ThinkingMarkerDetector(
-            min_step_tokens=config.strategy.min_step_tokens,
-            max_step_tokens=config.strategy.max_step_tokens,
+            min_step_tokens=config.strategy.get("min_step_tokens", 0),
+            max_step_tokens=config.strategy.get("max_step_tokens", 300),
             use_sequence=config.strategy.get("use_sequence", True),
             use_conclusion=config.strategy.get("use_conclusion", True),
             use_thinking=config.strategy.get("use_thinking", True),
@@ -580,8 +580,8 @@ def create_tts_strategy(
             disable_thinking_mode=config.model.get("disable_thinking_mode", False),
             output_dir=output_dir,
             # Step boundary detector settings (same as online mode)
-            min_step_tokens=config.strategy.min_step_tokens,
-            max_step_tokens=config.strategy.max_step_tokens,
+            min_step_tokens=config.strategy.get("min_step_tokens", 0),
+            max_step_tokens=config.strategy.get("max_step_tokens", 300),
             use_sequence=config.strategy.get("use_sequence", True),
             use_conclusion=config.strategy.get("use_conclusion", True),
             use_thinking=config.strategy.get("use_thinking", True),
