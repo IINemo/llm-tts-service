@@ -1,386 +1,179 @@
 """
-Offline Best-of-N strategy for vLLM thinking mode.
+Offline Best-of-N strategy - Stepwise generation.
 
-Generates N complete trajectories, then selects the best one based on scoring.
-Each trajectory includes:
-1. Thinking phase: <think>...</think>
-2. Response phase: <start of response>...<end of response>
+Generates N complete trajectories step-by-step, scores each step,
+then selects the best trajectory based on aggregated step scores.
 
-Unlike online best-of-n which selects at each step, this generates full
-trajectories first, then picks the best complete solution.
-
-Uses VLLMStepGenerator with no intermediate stop tokens for unified
-token tracking and FLOP calculation.
+Key difference from online best-of-n:
+- Online: greedy step selection at each iteration (selects best step, continues)
+- Offline: generates all N trajectories independently, then picks best complete solution
 """
 
 import json
 import logging
 import os
-import re
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
-from vllm import LLM
 
-from llm_tts.generators import StepCandidate
-from llm_tts.generators.vllm import VLLMStepGenerator
-from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
+from llm_tts.generators import StepCandidate, StepCandidateGeneratorBase
 from llm_tts.utils.answer_extraction import extract_answer
 
 from .strategy_base import StrategyBase, count_thinking_and_response_steps
-
-if TYPE_CHECKING:
-    from llm_tts.utils.flops import FLOPCalculator
 
 log = logging.getLogger(__name__)
 
 
 class StrategyOfflineBestOfN(StrategyBase):
     """
-    Offline Best-of-N strategy for thinking mode.
+    Offline Best-of-N strategy with stepwise generation.
 
-    Generates N complete trajectories in batches, scores them,
-    and returns the best one.
+    Generates N complete trajectories step-by-step, scores each step,
+    then selects the best trajectory based on aggregated step scores.
     """
 
     def __init__(
         self,
-        model: LLM,
         scorer,
-        num_trajectories: int = 4,
-        max_thinking_tokens: int = 4096,
-        max_response_tokens: int = 1024,
-        temperature: float = 0.6,
-        top_p: float = 0.95,
-        top_k: int = 20,
-        presence_penalty: float = 0.0,
-        answer_patterns: Optional[List[str]] = None,
-        disable_thinking_mode: bool = False,
+        num_trajectories: int,
+        max_steps: int,
+        step_generator: StepCandidateGeneratorBase,
+        score_aggregation: str = "mean",
         output_dir: Optional[str] = None,
-        # Step boundary detector settings (same as online mode)
-        min_step_tokens: int = 50,
-        max_step_tokens: int = 300,
-        use_sequence: bool = True,
-        use_conclusion: bool = True,
-        use_thinking: bool = True,
-        use_verification: bool = True,
-        use_reasoning: bool = False,
-        use_correction: bool = False,
-        use_structure: bool = False,
-        # FLOP calculator for token tracking
-        flop_calculator: Optional["FLOPCalculator"] = None,
     ):
         """
         Initialize offline best-of-n strategy.
 
         Args:
-            model: vLLM model instance
-            scorer: Scorer for ranking trajectories
+            scorer: Scorer for evaluating steps (PRM, entropy, etc.)
             num_trajectories: Number of complete trajectories to generate
-            max_thinking_tokens: Max tokens for thinking phase
-            max_response_tokens: Max tokens for response phase
-            temperature: Sampling temperature
-            top_p: Top-p sampling
-            top_k: Top-k sampling
-            answer_patterns: Patterns that mark end of response (default: ["<end of response>"])
-            disable_thinking_mode: If True, skip thinking phase
+            max_steps: Maximum steps per trajectory
+            step_generator: Generator for step candidates
+            score_aggregation: How to aggregate step scores ('mean', 'min', 'max', 'product', 'last')
             output_dir: Directory for saving logs
-            min_step_tokens: Minimum tokens per step (for detector)
-            max_step_tokens: Maximum tokens per step (for detector)
-            use_*: Marker categories for step boundary detection
-            flop_calculator: Optional FLOP calculator for token tracking
         """
-        self.model = model
-        self.tokenizer = model.get_tokenizer()
         self.scorer = scorer
         self.num_trajectories = num_trajectories
-        self.max_thinking_tokens = max_thinking_tokens
-        self.max_response_tokens = max_response_tokens
-        self.temperature = temperature
-        self.top_p = top_p
-        self.top_k = top_k
-        self.presence_penalty = presence_penalty
-        self.answer_patterns = (
-            list(answer_patterns) if answer_patterns else ["<end of response>"]
-        )
-        self.disable_thinking_mode = disable_thinking_mode
+        self.max_steps = max_steps
+        self.step_generator = step_generator
+        self.score_aggregation = score_aggregation
         self.output_dir = output_dir
         self._current_sample_idx = 0
 
-        # Create detector for post-hoc splitting of thinking into steps
-        self.detector = ThinkingMarkerDetector(
-            min_step_tokens=min_step_tokens,
-            max_step_tokens=max_step_tokens,
-            use_sequence=use_sequence,
-            use_conclusion=use_conclusion,
-            use_thinking=use_thinking,
-            use_verification=use_verification,
-            use_reasoning=use_reasoning,
-            use_correction=use_correction,
-            use_structure=use_structure,
-        )
-
-        # Create detector for generator with no intermediate stop tokens
-        # All use_* flags disabled so only </think> stops generation
-        generator_detector = ThinkingMarkerDetector(
-            min_step_tokens=1,  # No min - generate full thinking
-            max_step_tokens=max_thinking_tokens,  # Limited by config
-            use_sequence=False,
-            use_conclusion=False,
-            use_thinking=False,
-            use_verification=False,
-            use_reasoning=False,
-            use_correction=False,
-            use_structure=False,
-        )
-
-        # Create step generator with NO intermediate stop tokens
-        # This generates full thinking in one shot (stops only at </think>)
-        self.generator = VLLMStepGenerator(
-            model=model,
-            thinking_mode=True,
-            detector=generator_detector,
-            max_new_tokens=max_thinking_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            presence_penalty=presence_penalty,
-            answer_patterns=self.answer_patterns,
-            flop_calculator=flop_calculator,
-        )
-
         log.info(
             f"StrategyOfflineBestOfN initialized: "
-            f"{num_trajectories} trajectories, "
-            f"answer_patterns={self.answer_patterns}, "
-            f"using step generator for token tracking"
+            f"{num_trajectories} trajectories, max_steps={max_steps}, "
+            f"aggregation={score_aggregation}"
         )
 
-    def _split_thinking_into_steps(self, thinking_text: str) -> List[str]:
+    def _get_uncertainty_score(self, candidate: StepCandidate) -> float:
+        """Get uncertainty score from candidate's other_data."""
+        if candidate.other_data and "uncertainty_score" in candidate.other_data:
+            return candidate.other_data["uncertainty_score"]
+        return 0.0
+
+    def _aggregate_scores(self, step_scores: List[float]) -> float:
         """
-        Split thinking content into steps using the marker detector.
+        Aggregate step scores into a single trajectory score.
 
         Args:
-            thinking_text: The thinking text (may include <think>...</think> tags)
+            step_scores: List of scores for each step
 
         Returns:
-            List of step strings
+            Aggregated score (higher = better)
         """
-        # Extract raw content for comparison
-        think_match = re.search(r"<think>(.*?)</think>", thinking_text, re.DOTALL)
-        raw_content = (
-            think_match.group(1).strip() if think_match else thinking_text.strip()
-        )
+        if not step_scores:
+            return 0.0
 
-        steps = self.detector.detect_steps(thinking_text)
-        if not steps:
-            # Return with tags if single step
-            return [f"<think>{thinking_text}</think>"]
-
-        # Verify no text is lost
-        steps_combined = "\n".join(steps)
-        original_len = len(raw_content)
-        steps_len = len(steps_combined)
-
-        if steps_len < original_len * 0.95:  # Allow 5% tolerance for whitespace
-            log.warning(
-                f"Possible text loss in step splitting: "
-                f"original={original_len} chars, steps={steps_len} chars "
-                f"({100*steps_len/original_len:.1f}%)"
-            )
-
-        # Add <think> to first step and </think> to last step
-        if len(steps) > 0:
-            steps[0] = f"<think>{steps[0]}"
-            steps[-1] = f"{steps[-1]}</think>"
-
-        return steps
-
-    def _build_prompt(self, request: List[Dict[str, str]]) -> str:
-        """Build prompt from request using tokenizer's chat template."""
-        import inspect
-
-        tokenizer_signature = inspect.signature(self.tokenizer.apply_chat_template)
-        has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
-
-        if has_enable_thinking:
-            prompt = self.tokenizer.apply_chat_template(
-                request,
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=(not self.disable_thinking_mode),
-            )
+        if self.score_aggregation == "mean":
+            return float(np.mean(step_scores))
+        elif self.score_aggregation == "min":
+            # Conservative: trajectory is only as good as its weakest step
+            return float(np.min(step_scores))
+        elif self.score_aggregation == "max":
+            # Optimistic: best step determines trajectory score
+            return float(np.max(step_scores))
+        elif self.score_aggregation == "product":
+            return float(np.prod(step_scores))
+        elif self.score_aggregation == "last":
+            return step_scores[-1]
         else:
-            prompt = self.tokenizer.apply_chat_template(
-                request,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-            if self.disable_thinking_mode:
-                prompt += "<think>\n\n</think>\n\n"
+            log.warning(f"Unknown aggregation '{self.score_aggregation}', using mean")
+            return float(np.mean(step_scores))
 
-        return prompt
-
-    def _get_validity_score(self, candidate: "StepCandidate") -> float:
-        """Get validity_score from candidate, logging error if missing."""
-        if candidate.other_data is None:
-            log.error(f"Candidate has no other_data! Text: {candidate.text[:100]}...")
-            return 1.0
-        if "validity_score" not in candidate.other_data:
-            log.error(
-                f"validity_score missing from candidate.other_data! "
-                f"Keys: {list(candidate.other_data.keys())}, "
-                f"Text: {candidate.text[:100]}..."
-            )
-            return 1.0
-        return candidate.other_data["validity_score"]
-
-    def _generate_thinking_phase(
-        self, request: List[Dict[str, str]], n: int
-    ) -> List[Dict[str, any]]:
-        """
-        Generate N thinking phases in parallel using step generator.
-
-        Uses generator.generate_full_thinking() for efficient batched generation.
-        Stops at </think> token.
-
-        Returns list of dicts with:
-            - text: Generated thinking text (including </think>)
-            - token_ids: Token IDs
-            - logprobs: Log probabilities
-            - generation_scores: Perplexity and entropy scores
-        """
-        # Use step generator's batched full thinking method
-        candidates = self.generator.generate_full_thinking(
-            request=request,
-            num_candidates=n,
-            max_tokens=self.max_thinking_tokens,
-        )
-
-        # Calculate context tokens for FLOP tracking
-        prompt = self.generator._build_prompt(request, [])
-        context_tokens = len(self.tokenizer.encode(prompt))
-
-        # Record generation for FLOP tracking
-        self.generator._record_generation(candidates, context_tokens=context_tokens)
-
-        results = []
-        for i, candidate in enumerate(candidates):
-            num_tokens = len(candidate.token_ids) if candidate.token_ids else 0
-
-            # Check if truncated at max_tokens
-            if num_tokens >= self.max_thinking_tokens - 10:
-                log.warning(
-                    f"Thinking {i+1} likely truncated: {num_tokens} tokens "
-                    f"(max={self.max_thinking_tokens})"
-                )
-
-            # Check for </think> token
-            has_think_close = "</think>" in candidate.text
-            if has_think_close:
-                log.info(
-                    f"Thinking {i+1}: {num_tokens} tokens (</think>=True, complete)"
-                )
-            else:
-                log.info(
-                    f"Thinking {i+1}: {num_tokens} tokens (</think>=False, appended)"
-                )
-
-            results.append(
-                {
-                    "text": candidate.text,
-                    "token_ids": candidate.token_ids,
-                    "logprobs": candidate.other_data.get("logprobs", []),
-                    "validity_score": self._get_validity_score(candidate),
-                    "generation_scores": candidate.generation_scores,
-                }
-            )
-
-        return results
-
-    def _generate_response_phase(
+    def _generate_single_trajectory(
         self,
         request: List[Dict[str, str]],
-        thinking_results: List[Dict[str, any]],
-    ) -> List[Dict[str, any]]:
+        trajectory_idx: int,
+    ) -> Dict[str, any]:
         """
-        Generate response phase for each thinking trajectory using step generator.
-
-        Uses step generator's generate_response for each trajectory.
-        Responses are generated with proper token tracking.
+        Generate a single complete trajectory step-by-step.
 
         Args:
-            request: Original request messages
-            thinking_results: List of thinking phase results
+            request: Chat messages for the request
+            trajectory_idx: Index of this trajectory (for logging)
 
         Returns:
-            List of dicts with response text, token_ids, generation_scores
+            Dictionary with trajectory info, steps, and scores
         """
-        results = []
-        total_context_tokens = 0
-        all_candidates = []
+        trajectory = []  # List of StepCandidate
+        step_scores = []
+        step_texts = []
 
-        for i, thinking in enumerate(thinking_results):
-            # Create trajectory from thinking text
-            thinking_candidate = StepCandidate(
-                text=thinking["text"],
-                token_ids=thinking.get("token_ids", []),
-                is_complete=True,
-                is_trajectory_complete=True,
+        log.info(f"\n--- Trajectory {trajectory_idx + 1}/{self.num_trajectories} ---")
+
+        for step_num in range(self.max_steps):
+            # Generate single candidate for this step
+            candidates = self.step_generator(
+                request,
+                trajectory=trajectory,
+                candidates_per_step=1,  # One candidate per step for each trajectory
             )
 
-            # Generate response using step generator
-            response_candidates = self.generator.generate_response(
-                request=request,
-                trajectory=[thinking_candidate],
-                candidates_per_step=1,
+            if not candidates:
+                log.info(f"  Step {step_num + 1}: No candidates, stopping")
+                break
+
+            candidate = candidates[0]
+            step_texts.append(candidate.text)
+
+            # Score this step
+            scores = self.scorer.score_candidates(request, [candidate])
+            step_score = scores[0] if scores else 0.0
+            step_scores.append(step_score)
+
+            # Get token count
+            num_tokens = len(candidate.token_ids) if candidate.token_ids else 0
+
+            log.info(
+                f"  Step {step_num + 1}: score={step_score:.3f}, "
+                f"tokens={num_tokens}, complete={candidate.is_trajectory_complete}"
             )
 
-            if not response_candidates:
-                log.warning(f"Response {i+1}: No candidates generated")
-                results.append(
-                    {
-                        "text": self.answer_patterns[0],
-                        "token_ids": [],
-                        "generation_scores": {},
-                    }
-                )
-                continue
+            # Add to trajectory
+            trajectory.append(candidate)
 
-            candidate = response_candidates[0]
-            all_candidates.append(candidate)
+            # Check if trajectory is complete
+            if candidate.is_trajectory_complete:
+                log.info(f"  Trajectory complete at step {step_num + 1}")
+                break
 
-            # Calculate context tokens for this response
-            prompt = self.generator._build_prompt(request, [thinking_candidate])
-            total_context_tokens += len(self.tokenizer.encode(prompt))
+        # Aggregate step scores
+        aggregated_score = self._aggregate_scores(step_scores)
 
-            text = candidate.text
-            # Ensure answer pattern is included
-            has_pattern = any(p in text for p in self.answer_patterns)
-            if not has_pattern:
-                text = text + self.answer_patterns[0]
+        # Build full trajectory text
+        full_text = "".join(step_texts)
 
-            results.append(
-                {
-                    "text": text,
-                    "token_ids": candidate.token_ids,
-                    "logprobs": candidate.other_data.get("logprobs", []),
-                    "validity_score": self._get_validity_score(candidate),
-                    "generation_scores": candidate.generation_scores,
-                }
-            )
-
-        # Record generation for FLOP tracking
-        if all_candidates:
-            self.generator._record_generation(
-                all_candidates, context_tokens=total_context_tokens
-            )
-
-        return results
-
-    def get_token_stats(self) -> Dict[str, any]:
-        """Get token statistics from the generator."""
-        return self.generator.get_sample_stats()
+        return {
+            "trajectory": trajectory,
+            "step_scores": step_scores,
+            "aggregated_score": aggregated_score,
+            "full_text": full_text,
+            "num_steps": len(trajectory),
+            "is_complete": (
+                trajectory[-1].is_trajectory_complete if trajectory else False
+            ),
+        }
 
     def generate_trajectory(
         self, request: List[Dict[str, str]], sample_idx: int = 0
@@ -393,212 +186,82 @@ class StrategyOfflineBestOfN(StrategyBase):
             sample_idx: Index of current sample (for logging)
 
         Returns:
-            Dictionary with:
-                - trajectory: Best trajectory text
-                - extracted_answer: Extracted answer from trajectory
-                - steps: List containing the trajectory as single step
-                - validity_scores: Scores for all trajectories
-                - all_trajectories: All generated trajectories (for analysis)
-                - completed: Whether generation completed successfully
+            Dictionary with best trajectory and metadata
         """
         self._current_sample_idx = sample_idx
 
-        # Reset generator stats for this sample
-        self.generator.reset_sample_stats()
+        # Reset token tracking
+        self.step_generator.reset_sample_stats()
 
         log.info(f"\n{'='*60}")
-        log.info(f"Generating {self.num_trajectories} trajectories (offline best-of-n)")
+        log.info(f"Generating {self.num_trajectories} trajectories (stepwise offline)")
+        log.info(f"Score aggregation: {self.score_aggregation}")
         log.info(f"{'='*60}")
 
-        # Phase 1: Generate N thinking phases using step generator
-        log.info("\n--- Phase 1: Generating thinking ---")
-        thinking_results = self._generate_thinking_phase(request, self.num_trajectories)
-        log.info(f"Generated {len(thinking_results)} thinking phases")
+        # Generate all trajectories
+        all_trajectory_results = []
+        for i in range(self.num_trajectories):
+            result = self._generate_single_trajectory(request, i)
+            all_trajectory_results.append(result)
 
-        # Split each thinking phase into steps and log
-        all_thinking_steps = []
-        for i, thinking in enumerate(thinking_results):
-            steps = self._split_thinking_into_steps(thinking["text"])
-            all_thinking_steps.append(steps)
-            log.info(f"\n[Thinking {i+1}] ({len(steps)} steps):")
-            for j, step in enumerate(steps):
-                log.info(f"\n  Step {j+1}: {step}")
-
-        # Phase 2: Generate response for each thinking using step generator
-        log.info("\n--- Phase 2: Generating responses ---")
-        response_results = self._generate_response_phase(request, thinking_results)
-        log.info(f"Generated {len(response_results)} responses")
-
-        # Log each response
-        for i, response in enumerate(response_results):
-            log.info(f"\n[Response {i+1}]: {response['text']}")
-
-        # Combine into complete trajectories
-        all_trajectories = []
-        all_scores = []
-        all_token_counts = []
-
-        # Score trajectories
-        log.info("\n--- Phase 3: Scoring trajectories ---")
-        for i, (thinking, response) in enumerate(
-            zip(thinking_results, response_results)
-        ):
-            full_text = thinking["text"] + "\n\n" + response["text"]
-            all_trajectories.append(full_text)
-
-            # Get token counts
-            thinking_tokens = len(thinking.get("token_ids", []))
-            response_tokens = len(response.get("token_ids", []))
-            total_tokens = thinking_tokens + response_tokens
-            all_token_counts.append(total_tokens)
-
-            # Use validity_score from step generator output
-            # These are already computed by the wrapper (VLLMWithUncertainty or CausalLMWithUncertainty)
-            if "validity_score" not in thinking:
-                log.error(
-                    f"validity_score missing from thinking dict! "
-                    f"Keys: {list(thinking.keys())}"
-                )
-            if "validity_score" not in response:
-                log.error(
-                    f"validity_score missing from response dict! "
-                    f"Keys: {list(response.keys())}"
-                )
-            thinking_uncertainty = thinking.get("validity_score", 1.0)
-            response_uncertainty = response.get("validity_score", 1.0)
-            # Average uncertainty scores (lower = more confident)
-            avg_uncertainty = (thinking_uncertainty + response_uncertainty) / 2
-
-            # Create a StepCandidate for scoring
-            candidate = StepCandidate(
-                text=full_text,
-                token_ids=thinking.get("token_ids", []) + response.get("token_ids", []),
-                is_complete=True,
-                is_trajectory_complete=True,
-                other_data={
-                    "validity_score": avg_uncertainty,
-                },
-            )
-
-            # Use scorer to get validity/quality score
-            scores = self.scorer.score_candidates(request, [candidate])
-            score = scores[0] if scores else 0.0
-            all_scores.append(score)
-
+        # Log summary
+        log.info("\n--- Trajectory Scores Summary ---")
+        for i, result in enumerate(all_trajectory_results):
             log.info(
-                f"[Trajectory {i+1}] Score: {score:.4f}, "
-                f"tokens: {total_tokens} (thinking: {thinking_tokens}, response: {response_tokens})"
+                f"Trajectory {i + 1}: "
+                f"aggregated={result['aggregated_score']:.4f}, "
+                f"steps={result['num_steps']}, "
+                f"complete={result['is_complete']}, "
+                f"step_scores={[f'{s:.3f}' for s in result['step_scores']]}"
             )
 
         # Select best trajectory
-        best_idx = int(
-            np.argmax(all_scores)
-        )  # Convert to Python int for JSON serialization
-        best_trajectory = all_trajectories[best_idx]
-        best_score = float(all_scores[best_idx])  # Convert to Python float
+        aggregated_scores = [r["aggregated_score"] for r in all_trajectory_results]
+        best_idx = int(np.argmax(aggregated_scores))
+        best_result = all_trajectory_results[best_idx]
 
         log.info(f"\n{'='*60}")
-        log.info(f"Selected trajectory {best_idx + 1} with score {best_score:.4f}")
+        log.info(
+            f"Selected trajectory {best_idx + 1} "
+            f"with aggregated score {best_result['aggregated_score']:.4f}"
+        )
         log.info(f"{'='*60}")
 
-        # Extract answer
-        extracted = extract_answer(best_trajectory)
+        # Extract answer from best trajectory
+        extracted = extract_answer(best_result["full_text"])
 
-        # Create StepCandidate objects preserving token_ids and logprobs
-        best_thinking = thinking_results[best_idx]
-        best_response = response_results[best_idx]
+        # Get token stats
+        token_stats = self.step_generator.get_sample_stats()
 
-        # Build step candidates with full token_ids and logprobs
-        # First: thinking phase (full, with token_ids)
-        if "validity_score" not in best_thinking:
-            log.error(
-                f"validity_score missing from best_thinking dict! "
-                f"Keys: {list(best_thinking.keys())}"
-            )
-        thinking_candidate = StepCandidate(
-            text=best_thinking["text"],
-            token_ids=best_thinking.get("token_ids", []),
-            is_complete=True,
-            is_trajectory_complete=False,
-            other_data={
-                "logprobs": best_thinking.get("logprobs", []),
-                "validity_score": best_thinking.get("validity_score", 1.0),
-                "phase": "thinking",
-            },
+        # Count thinking and response steps
+        thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
+            best_result["trajectory"]
         )
-
-        # Second: response phase (with token_ids)
-        if "validity_score" not in best_response:
-            log.error(
-                f"validity_score missing from best_response dict! "
-                f"Keys: {list(best_response.keys())}"
-            )
-        response_candidate = StepCandidate(
-            text=best_response["text"],
-            token_ids=best_response.get("token_ids", []),
-            is_complete=True,
-            is_trajectory_complete=True,
-            other_data={
-                "logprobs": best_response.get("logprobs", []),
-                "validity_score": best_response.get("validity_score", 1.0),
-                "phase": "response",
-                "validity": best_score,
-            },
-        )
-
-        step_candidates = [thinking_candidate, response_candidate]
-
-        # Log steps from best trajectory
-        log.info(f"\n--- Best trajectory steps ({len(step_candidates)}) ---")
-        for i, step in enumerate(step_candidates):
-            log.info(f"\nStep {i+1}: {step.text}")
-
-        # Log token stats from generator
-        token_stats = self.generator.get_sample_stats()
-        total_tokens = sum(all_token_counts)
-        log.info(
-            f"\nToken stats: {total_tokens} total tokens across {len(all_trajectories)} trajectories"
-        )
-        log.info(
-            f"  Generator stats: input={token_stats.get('input_tokens', 0)}, "
-            f"output={token_stats.get('output_tokens', 0)}, "
-            f"generations={token_stats.get('generation_count', 0)}"
-        )
-        if token_stats.get("tflops"):
-            log.info(f"  TFLOPs: {token_stats['tflops']:.3f}")
 
         # Save logs if output_dir provided
         if self.output_dir:
-            self._save_trajectories_log(
-                all_trajectories, all_scores, best_idx, all_thinking_steps
-            )
-
-        # Count thinking and response steps separately
-        thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-            step_candidates
-        )
+            self._save_trajectories_log(all_trajectory_results, best_idx)
 
         return {
-            "trajectory": best_trajectory,
+            "trajectory": best_result["full_text"],
             "extracted_answer": extracted,
-            "steps": step_candidates,
+            "steps": best_result["trajectory"],
             "thinking_num_steps": thinking_num_steps,
             "response_num_steps": response_num_steps,
-            "validity_scores": [best_score] * len(step_candidates),
-            "all_trajectories": all_trajectories,
-            "all_scores": all_scores,
-            "all_token_counts": all_token_counts,
+            "validity_scores": best_result["step_scores"],
+            "aggregated_score": best_result["aggregated_score"],
+            "all_trajectories": [r["full_text"] for r in all_trajectory_results],
+            "all_scores": aggregated_scores,
+            "all_step_scores": [r["step_scores"] for r in all_trajectory_results],
             "best_idx": best_idx,
-            "completed": True,
+            "completed": best_result["is_complete"],
             "token_stats": token_stats,
         }
 
     def _save_trajectories_log(
         self,
-        trajectories: List[str],
-        scores: List[float],
+        all_results: List[Dict[str, any]],
         best_idx: int,
-        all_thinking_steps: Optional[List[List[str]]] = None,
     ):
         """Save all trajectories to JSON for analysis."""
         if not self.output_dir:
@@ -611,21 +274,21 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         log_data = {
             "sample_idx": self._current_sample_idx,
-            "num_trajectories": len(trajectories),
+            "num_trajectories": len(all_results),
+            "score_aggregation": self.score_aggregation,
             "best_idx": best_idx,
-            "best_score": scores[best_idx],
+            "best_score": all_results[best_idx]["aggregated_score"],
             "trajectories": [
                 {
                     "idx": i,
-                    "score": scores[i],
-                    "text": traj,
+                    "aggregated_score": r["aggregated_score"],
+                    "step_scores": r["step_scores"],
+                    "num_steps": r["num_steps"],
+                    "is_complete": r["is_complete"],
+                    "text": r["full_text"],
                     "is_best": i == best_idx,
-                    "thinking_num_steps": (
-                        len(all_thinking_steps[i]) if all_thinking_steps else 1
-                    ),
-                    "steps": all_thinking_steps[i] if all_thinking_steps else [traj],
                 }
-                for i, traj in enumerate(trajectories)
+                for i, r in enumerate(all_results)
             ],
         }
 
@@ -633,6 +296,10 @@ class StrategyOfflineBestOfN(StrategyBase):
             json.dump(log_data, f, indent=2)
 
         log.info(f"Saved trajectories log to {log_path}")
+
+    def get_token_stats(self) -> Dict[str, any]:
+        """Get token statistics from the generator."""
+        return self.step_generator.get_sample_stats()
 
     def cleanup(self):
         """Clean up resources."""

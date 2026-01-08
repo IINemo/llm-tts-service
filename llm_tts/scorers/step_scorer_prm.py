@@ -211,7 +211,9 @@ class StepScorerPRM(StepScorerRewardBase):
         all_rewards = []
 
         for candidate in candidates:
-            rewards = self._score_single_candidate(chat, candidate)
+            # Handle both StepCandidate objects and plain strings
+            candidate_text = candidate.text if hasattr(candidate, "text") else candidate
+            rewards = self._score_single_candidate(chat, candidate_text)
             all_rewards.append(rewards)
 
             # Clean up memory after each candidate
@@ -225,18 +227,19 @@ class StepScorerPRM(StepScorerRewardBase):
         """Score a single candidate using PRM"""
 
         # Extract claims from candidate
-        candidate_tokens = self.prm_tokenizer(candidate.text, return_tensors="pt")
+        candidate_tokens = self.prm_tokenizer(candidate, return_tensors="pt")
 
         claims = self.steps_extractor.split_to_steps(
-            candidate.text, candidate_tokens["input_ids"][0], self.prm_tokenizer
+            candidate, candidate_tokens["input_ids"][0], self.prm_tokenizer
         )
 
         if not claims:
-            log.debug(f"No claims extracted from candidate: {candidate.text[:50]}...")
+            log.debug(f"No claims extracted from candidate: {candidate[:50]}...")
             return [0.0]
 
         # Get PRM rewards
         rewards = self._compute_prm_rewards(chat, claims)
+        log.info(f"PRM rewards for {len(claims)} claims: {rewards}")
         return rewards if rewards else [0.0]
 
     def _compute_prm_rewards(
@@ -274,9 +277,9 @@ class StepScorerPRM(StepScorerRewardBase):
             self.prm_model.device
         )
 
-        # Get model outputs
+        # Get model outputs (disable cache to avoid version compatibility issues)
         with torch.no_grad():
-            outputs = self.prm_model(input_ids=input_ids)
+            outputs = self.prm_model(input_ids=input_ids, use_cache=False)
 
         # Extract step rewards
         step_sep_id = self.prm_tokenizer.encode("<extra_0>")[0]

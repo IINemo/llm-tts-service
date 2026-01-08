@@ -317,10 +317,15 @@ def create_model(config):
                 # Entropy-based scoring
                 stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                 estimator = MeanTokenEntropy()
+            elif scorer_type == "prm":
+                # PRM scorer uses its own model for scoring
+                # Use entropy wrapper for generation (scores not used for selection)
+                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                estimator = MeanTokenEntropy()
             else:
                 raise ValueError(
                     f"Unsupported scorer type for vLLM: {scorer_type}. "
-                    f"Supported types: perplexity, uncertainty_pd, entropy"
+                    f"Supported types: perplexity, uncertainty_pd, entropy, prm"
                 )
 
             uncertainty_wrapper = VLLMWithUncertainty(
@@ -554,42 +559,14 @@ def create_tts_strategy(
             output_dir=output_dir,
         )
     elif config.strategy.type == "offline_best_of_n":
-        # Offline Best-of-N requires vLLM model directly (not step_generator)
-        # It generates N complete trajectories and selects the best
-        from vllm import LLM
-
-        # Get the underlying vLLM LLM object (may be wrapped in WhiteboxModelvLLM)
-        vllm_model = getattr(model, "vllm_engine", model)
-        if not isinstance(vllm_model, LLM):
-            raise ValueError(
-                f"Offline Best-of-N requires vLLM LLM model, got {type(model).__name__}"
-            )
-
+        # Offline Best-of-N generates N trajectories step-by-step, selects best
         strategy = StrategyOfflineBestOfN(
-            model=vllm_model,
             scorer=scorer,
             num_trajectories=config.strategy.get("num_trajectories", 4),
-            max_thinking_tokens=config.strategy.get("max_thinking_tokens", 4096),
-            max_response_tokens=config.strategy.get("max_response_tokens", 1024),
-            temperature=config.generation.get("temperature", 0.6),
-            top_p=config.generation.get("top_p", 0.95),
-            top_k=config.generation.get("top_k", 20),
-            answer_patterns=config.strategy.get(
-                "detector_answer_patterns", ["<end of response>"]
-            ),
-            disable_thinking_mode=config.model.get("disable_thinking_mode", False),
+            max_steps=config.strategy.max_steps,
+            step_generator=step_generator,
+            score_aggregation=config.strategy.get("score_aggregation", "mean"),
             output_dir=output_dir,
-            # Step boundary detector settings (same as online mode)
-            min_step_tokens=config.strategy.get("min_step_tokens", 0),
-            max_step_tokens=config.strategy.get("max_step_tokens", 300),
-            use_sequence=config.strategy.get("use_sequence", True),
-            use_conclusion=config.strategy.get("use_conclusion", True),
-            use_thinking=config.strategy.get("use_thinking", True),
-            use_verification=config.strategy.get("use_verification", True),
-            use_reasoning=config.strategy.get("use_reasoning", False),
-            use_correction=config.strategy.get("use_correction", False),
-            use_structure=config.strategy.get("use_structure", False),
-            flop_calculator=flop_calculator,
         )
     elif config.strategy.type == "adaptive":
         strategy = AdaptiveScalingBestOfN(
