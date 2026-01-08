@@ -1,0 +1,94 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/math500/offline_bon_vllm_nothink_qwen25_7b_prm_math500
+# Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
+# Uses PRM scorer (Qwen2.5-Math-PRM-7B) for step evaluation
+# Generates N trajectories step-by-step, selects best based on min step score
+
+defaults:
+  - /config
+  - /dataset/math_500
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/prm
+  - _self_
+
+# Run naming
+run_name: "offline_bon_vllm_nothink_qwen25_7b_prm_math500_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-math500
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  gpu_memory_utilization: 0.7
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 4096
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (non-thinking mode settings)
+generation:
+  max_new_tokens: 4096
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  batch_size: 1
+  max_length: 8192
+
+# Strategy - Offline Best-of-N (stepwise generation)
+strategy:
+  type: offline_best_of_n
+  num_trajectories: 4
+  max_steps: 50
+  score_aggregation: min  # Conservative: trajectory is only as good as its weakest step
+  # Stop tokens derived from detector config (use_* flags below)
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  # Step boundary token limits
+  min_step_tokens: 50
+  max_step_tokens: 2048
+  # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: true
+  use_reasoning: true
+  use_correction: false
+  # Custom words for stop tokens
+  custom_words:
+    - "for example"
+    - "given that"
+    - "similarly"
+    - "step"
+    - "therefore"
+    - "thus"
+
+# PRM scorer configuration
+scorer:
+  type: prm
+  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+  device: cuda:1
+  batch_size: 1
+
+# Dataset configuration
+dataset:
+  subset: 500  # Full MATH-500 dataset
+  offset: 0
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match
