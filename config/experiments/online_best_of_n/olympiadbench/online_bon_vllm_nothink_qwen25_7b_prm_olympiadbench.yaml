@@ -85,7 +85,7 @@ scorer:
 dataset:
   subset: 675  # Full OlympiadBench dataset
   offset: 0
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
+  # system_prompt set in base config (matches official Qwen2.5-Math eval)
 
 # Evaluation configuration
 evaluation:
