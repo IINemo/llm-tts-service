@@ -89,9 +89,60 @@ def convert_aime_2025(split: str) -> List[Dict]:
     return unified_data
 
 
+def convert_olympiadbench(split: str, data_path: str = None) -> List[Dict]:
+    """
+    Convert OlympiadBench dataset to unified format.
+
+    OlympiadBench contains 675 olympiad-level math problems from IMO, USAMO, etc.
+    Source: https://github.com/OpenBMB/OlympiadBench
+
+    Args:
+        split: Dataset split (only 'test' available)
+        data_path: Path to local test.json file (optional, for local conversion)
+    """
+    print(f"Loading OlympiadBench {split} split...")
+
+    if data_path:
+        # Load from local file
+        with open(data_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    else:
+        # Try to load from HuggingFace or raise error
+        raise ValueError(
+            "OlympiadBench requires local data_path. "
+            "Use --data_path to specify path to test.json"
+        )
+
+    unified_data = []
+    for idx, example in enumerate(tqdm(data, desc="Converting OlympiadBench")):
+        # Extract answer - final_answer is a list, take first element
+        answer = example["final_answer"][0] if example["final_answer"] else ""
+        # Clean answer: remove $ signs
+        answer = answer.strip("$").strip()
+
+        unified_example = {
+            "question": example["question"],
+            "answer": answer,
+            "metadata": {
+                "dataset": "olympiadbench",
+                "problem_idx": example.get("id", idx),
+                "problem_type": example.get("subfield", "unknown"),
+                "answer_type": example.get("answer_type", "unknown"),
+                "difficulty": "olympiad",
+                "unit": example.get("unit"),
+                "is_multiple_answer": example.get("is_multiple_answer", False),
+            },
+        }
+        unified_data.append(unified_example)
+
+    print(f"Converted {len(unified_data)} OlympiadBench examples")
+    return unified_data
+
+
 DATASET_CONVERTERS = {
     "gsm8k": convert_gsm8k,
     "aime_2025": convert_aime_2025,
+    "olympiadbench": convert_olympiadbench,
 }
 
 
@@ -151,6 +202,12 @@ def main():
         default=Path("data/unified"),
         help="Output directory for converted datasets",
     )
+    parser.add_argument(
+        "--data_path",
+        type=str,
+        default=None,
+        help="Path to local data file (required for some datasets like olympiadbench)",
+    )
 
     args = parser.parse_args()
 
@@ -164,6 +221,8 @@ def main():
             splits = ["test"]
         elif args.dataset == "aime_2025":
             splits = ["train"]
+        elif args.dataset == "olympiadbench":
+            splits = ["test"]
 
     # Convert each split
     converter_fn = DATASET_CONVERTERS[args.dataset]
@@ -173,7 +232,11 @@ def main():
         print(f"{'=' * 80}\n")
 
         try:
-            unified_data = converter_fn(split)
+            # Pass data_path for datasets that need it (e.g., olympiadbench)
+            if args.dataset == "olympiadbench":
+                unified_data = converter_fn(split, data_path=args.data_path)
+            else:
+                unified_data = converter_fn(split)
             save_unified_dataset(unified_data, args.dataset, split, args.output_dir)
             print(f"\n✓ Successfully converted {args.dataset} ({split})")
         except Exception as e:

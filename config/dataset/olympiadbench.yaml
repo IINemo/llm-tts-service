@@ -1,0 +1,7 @@
+# @package dataset
+
+dataset_path: "karantonis/test_olympiadbench"
+dataset_split: "test"  # Dataset split to use
+subset: 675  # Full OlympiadBench dataset (675 samples)
+prompt_file: ./config/prompts/default.txt  # Path to prompt template file (optional)
+answer_format: "symbolic"  # Olympiad problems often have symbolic answers
