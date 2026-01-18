@@ -1,5 +1,7 @@
 """
-Direct PRM scorer that bypasses the stat calculator pipeline for efficient stepwise scoring
+Direct PRM scorer that bypasses the stat calculator pipeline for efficient stepwise scoring.
+
+Supports both HuggingFace and vLLM backends for the PRM model.
 """
 
 import logging
@@ -11,11 +13,23 @@ from lm_polygraph import WhiteboxModel
 from lm_polygraph.stat_calculators import StatCalculator
 from lm_polygraph.stat_calculators.extract_claims import Claim
 from tqdm import tqdm
-from transformers import AutoModel, AutoTokenizer
 
 from llm_tts.utils import get_torch_dtype
 
 from .step_scorer_reward_base import StepScorerRewardBase
+
+# Optional vLLM import
+try:
+    from vllm import LLM, SamplingParams
+
+    VLLM_AVAILABLE = True
+except ImportError:
+    VLLM_AVAILABLE = False
+    LLM = None
+    SamplingParams = None
+
+# HuggingFace imports (always available as fallback)
+from transformers import AutoModel, AutoTokenizer
 
 log = logging.getLogger(__name__)
 
@@ -150,26 +164,106 @@ class StepScorerPRM(StepScorerRewardBase):
     3. Computes step rewards directly
     4. Returns reward scores (higher = better)
 
-    Much cleaner and more efficient than going through the full pipeline.
+    Supports both vLLM (preferred for efficiency) and HuggingFace backends.
+
+    Args:
+        prm_model_path: Path to the PRM model (e.g., "Qwen/Qwen2.5-Math-PRM-7B")
+        device: Device for HuggingFace backend (e.g., "cuda:1")
+        batch_size: Batch size for scoring
+        torch_dtype: Torch dtype string (e.g., "bfloat16")
+        use_vllm: If True, use vLLM backend (default: True if available)
+        gpu_memory_utilization: GPU memory fraction for vLLM (default: 0.9)
     """
 
     def __init__(
-        self, prm_model_path: str, device: str, batch_size: int, torch_dtype: str
+        self,
+        prm_model_path: str,
+        device: str,
+        batch_size: int,
+        torch_dtype: str,
+        use_vllm: bool = True,
+        gpu_memory_utilization: float = 0.9,
     ):
         self.prm_model_path = prm_model_path
         self.device = device
         self.batch_size = batch_size
         self.torch_dtype = torch_dtype
+        self.gpu_memory_utilization = gpu_memory_utilization
+        self.use_vllm = use_vllm and VLLM_AVAILABLE
         self.prm_model = None
         self.prm_tokenizer = None
         self.steps_extractor = StepsExtractor(progress_bar=False)
 
+        if use_vllm and not VLLM_AVAILABLE:
+            log.warning("vLLM requested but not available, falling back to HuggingFace")
+
         self.prepare_model()
 
     def prepare_model(self):
-        """Load PRM model and tokenizer"""
+        """Load PRM model and tokenizer using selected backend."""
+        if self.use_vllm:
+            self._prepare_vllm_model()
+        else:
+            self._prepare_hf_model()
 
-        log.info(f"Loading PRM model from {self.prm_model_path}")
+    def _prepare_vllm_model(self):
+        """Load PRM model using vLLM backend."""
+        import os
+
+        # Parse device to get GPU ID
+        if "cuda:" in self.device:
+            gpu_id = int(self.device.split(":")[1])
+        else:
+            gpu_id = 0
+
+        # Get current CUDA_VISIBLE_DEVICES
+        cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        visible_gpus = [int(x) for x in cuda_visible.split(",") if x.strip()]
+
+        # Determine the actual physical GPU ID
+        if visible_gpus:
+            # gpu_id is relative to visible GPUs, map to physical GPU
+            if gpu_id < len(visible_gpus):
+                physical_gpu = visible_gpus[gpu_id]
+            else:
+                physical_gpu = visible_gpus[0]
+                log.warning(
+                    f"Requested GPU {gpu_id} not in CUDA_VISIBLE_DEVICES={cuda_visible}, "
+                    f"using GPU {physical_gpu}"
+                )
+        else:
+            physical_gpu = gpu_id
+
+        log.info(
+            f"Loading PRM model from {self.prm_model_path} (vLLM backend) on GPU {physical_gpu}"
+        )
+
+        # Temporarily set CUDA_VISIBLE_DEVICES to only the target GPU
+        original_cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(physical_gpu)
+
+        try:
+            self.prm_model = LLM(
+                model=self.prm_model_path,
+                task="reward",
+                trust_remote_code=True,
+                dtype=self.torch_dtype,
+                gpu_memory_utilization=self.gpu_memory_utilization,
+                enforce_eager=True,  # More stable for reward models
+                max_model_len=4096,
+            )
+            self.prm_tokenizer = self.prm_model.get_tokenizer()
+            log.info("vLLM PRM model loaded successfully")
+        finally:
+            # Restore original CUDA_VISIBLE_DEVICES
+            if original_cuda_visible is not None:
+                os.environ["CUDA_VISIBLE_DEVICES"] = original_cuda_visible
+            elif "CUDA_VISIBLE_DEVICES" in os.environ:
+                del os.environ["CUDA_VISIBLE_DEVICES"]
+
+    def _prepare_hf_model(self):
+        """Load PRM model using HuggingFace backend."""
+        log.info(f"Loading PRM model from {self.prm_model_path} (HuggingFace backend)")
         self.prm_tokenizer = AutoTokenizer.from_pretrained(
             self.prm_model_path, trust_remote_code=True
         )
@@ -181,14 +275,14 @@ class StepScorerPRM(StepScorerRewardBase):
         ).eval()
 
     def cleanup(self):
-        """Free PRM model memory"""
-
+        """Free PRM model memory."""
         if self.prm_model is not None:
             del self.prm_model
             self.prm_model = None
+        if self.prm_tokenizer is not None:
             del self.prm_tokenizer
             self.prm_tokenizer = None
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
 
     def compute_claim_rewards(
         self, chat: List[Dict[str, str]], candidates: List[str], **kwargs
@@ -199,21 +293,31 @@ class StepScorerPRM(StepScorerRewardBase):
         Args:
             chat: Current chat
             candidates: List of candidate next steps
+            trajectory: List of previous selected steps (StepCandidate objects)
 
         Returns:
             List of claim reward lists (one per candidate)
         """
-
         if not candidates:
             return []
 
-        # Score all candidates
+        trajectory = kwargs.get("trajectory", None)
+
+        if self.use_vllm:
+            return self._compute_rewards_vllm(chat, candidates, trajectory=trajectory)
+        else:
+            return self._compute_rewards_hf(chat, candidates)
+
+    def _compute_rewards_hf(
+        self, chat: List[Dict[str, str]], candidates: List[str]
+    ) -> List[List[float]]:
+        """Compute rewards using HuggingFace backend (original implementation)."""
         all_rewards = []
 
         for candidate in candidates:
             # Handle both StepCandidate objects and plain strings
             candidate_text = candidate.text if hasattr(candidate, "text") else candidate
-            rewards = self._score_single_candidate(chat, candidate_text)
+            rewards = self._score_single_candidate_hf(chat, candidate_text)
             all_rewards.append(rewards)
 
             # Clean up memory after each candidate
@@ -221,11 +325,132 @@ class StepScorerPRM(StepScorerRewardBase):
 
         return all_rewards
 
-    def _score_single_candidate(
+    def _compute_rewards_vllm(
+        self, chat: List[Dict[str, str]], candidates: List[str], trajectory: List = None
+    ) -> List[List[float]]:
+        """
+        Compute rewards using vLLM backend with batched scoring.
+
+        Each candidate is treated as a single step. The PRM prompt includes:
+        - Previous trajectory steps (passed directly, not split)
+        - The candidate as the new step to score
+
+        Returns single reward per candidate (positive class probability).
+        """
+        if not candidates:
+            return []
+
+        # Extract question from chat
+        question = None
+        for msg in chat:
+            if msg["role"] == "user":
+                question = msg["content"]
+                break
+
+        if question is None:
+            question = chat[-1]["content"]
+
+        # Get trajectory steps directly (each step.text is one PRM step)
+        trajectory_steps = []
+        if trajectory:
+            trajectory_steps = [
+                step.text if hasattr(step, "text") else str(step) for step in trajectory
+            ]
+
+        # Build prompts: trajectory steps + candidate as single new step
+        all_prompts = []
+        for candidate in candidates:
+            candidate_text = candidate.text if hasattr(candidate, "text") else candidate
+            # Each trajectory step is one PRM step, candidate is one PRM step
+            all_steps = trajectory_steps + [candidate_text]
+            prompt = self._format_prm_prompt(question, all_steps)
+            all_prompts.append(prompt)
+
+        # Truncate prompts that exceed max length
+        max_tokens = 4000
+        truncated_prompts = []
+        for prompt in all_prompts:
+            tokens = self.prm_tokenizer.encode(prompt)
+            if len(tokens) > max_tokens:
+                log.warning(
+                    f"Truncating PRM prompt from {len(tokens)} to {max_tokens} tokens"
+                )
+                tokens = tokens[:max_tokens]
+                prompt = self.prm_tokenizer.decode(tokens)
+            truncated_prompts.append(prompt)
+
+        # Batch score all prompts
+        num_traj_steps = len(trajectory_steps)
+        log.info(
+            f"PRM scoring {len(truncated_prompts)} candidates (trajectory has {num_traj_steps} steps)"
+        )
+        outputs = self.prm_model.reward(truncated_prompts, use_tqdm=False)
+
+        # Extract reward for the last step (the candidate) from each output
+        all_rewards = []
+        for cand_idx, output in enumerate(outputs):
+            reward = 0.0
+            all_step_rewards = []
+            if hasattr(output, "outputs") and hasattr(output.outputs, "data"):
+                data = output.outputs.data
+                if hasattr(data, "tolist"):
+                    step_scores = data.tolist()
+                elif isinstance(data, list):
+                    step_scores = data
+                else:
+                    step_scores = [data]
+
+                # Extract positive probability from each [neg, pos] pair
+                for score in step_scores:
+                    if isinstance(score, (list, tuple)) and len(score) == 2:
+                        all_step_rewards.append(score[1])
+                    else:
+                        all_step_rewards.append(float(score))
+
+                # Last score is the candidate's score
+                if all_step_rewards:
+                    reward = all_step_rewards[-1]
+
+            all_rewards.append([reward])
+            # Log all step scores: trajectory steps + candidate step
+            traj_scores = (
+                all_step_rewards[:num_traj_steps] if num_traj_steps > 0 else []
+            )
+            cand_score = (
+                all_step_rewards[num_traj_steps:]
+                if len(all_step_rewards) > num_traj_steps
+                else all_step_rewards
+            )
+            log.info(
+                f"Candidate {cand_idx}: traj_scores={[f'{s:.3f}' for s in traj_scores]}, cand_score={[f'{s:.3f}' for s in cand_score]}"
+            )
+
+        return all_rewards
+
+    def _format_prm_prompt(self, question: str, step_texts: List[str]) -> str:
+        """Format a prompt for PRM scoring with <extra_0> step separators."""
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Please reason step by step, and put your final "
+                    "answer within \\boxed{}."
+                ),
+            },
+            {"role": "user", "content": question},
+            {
+                "role": "assistant",
+                "content": "<extra_0>".join(step_texts) + "<extra_0>",
+            },
+        ]
+        return self.prm_tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=False
+        )
+
+    def _score_single_candidate_hf(
         self, chat: List[Dict[str, str]], candidate: str
     ) -> List[float]:
-        """Score a single candidate using PRM"""
-
+        """Score a single candidate using HuggingFace PRM backend."""
         # Extract claims from candidate
         candidate_tokens = self.prm_tokenizer(candidate, return_tensors="pt")
 
@@ -238,21 +463,20 @@ class StepScorerPRM(StepScorerRewardBase):
             return [0.0]
 
         # Get PRM rewards
-        rewards = self._compute_prm_rewards(chat, claims)
+        rewards = self._compute_prm_rewards_hf(chat, claims)
         log.info(f"PRM rewards for {len(claims)} claims: {rewards}")
         return rewards if rewards else [0.0]
 
-    def _compute_prm_rewards(
+    def _compute_prm_rewards_hf(
         self, chat: List[Dict[str, str]], claims: List[Any]
     ) -> List[float]:
-        """Compute PRM rewards for claims"""
-
+        """Compute PRM rewards for claims using HuggingFace backend."""
         if not claims:
             return []
 
         # Format conversation for PRM
         question = chat[-1]["content"]
-        log.info(f"Question: {question}")
+        log.debug(f"Question: {question[:100]}...")
         messages = [
             {
                 "role": "system",
@@ -286,13 +510,12 @@ class StepScorerPRM(StepScorerRewardBase):
         token_masks = input_ids == step_sep_id
 
         # Compute rewards
-        rewards = self._extract_step_rewards(outputs[0], token_masks)
+        rewards = self._extract_step_rewards_hf(outputs[0], token_masks)
 
         return rewards[0] if rewards else []
 
-    def _extract_step_rewards(self, logits, token_masks):
-        """Extract reward scores from PRM logits"""
-
+    def _extract_step_rewards_hf(self, logits, token_masks):
+        """Extract reward scores from PRM logits (HuggingFace backend)."""
         probabilities = F.softmax(logits, dim=-1)
         probabilities = probabilities * token_masks.unsqueeze(-1)
 

@@ -80,9 +80,10 @@ class StrategyOnlineBestOfN(StrategyBase):
                 log.info("\nNo candidates generated, stopping")
                 break
 
-            # Score candidates
+            # Score candidates - pass trajectory directly for PRM
+            # Each trajectory step is one PRM step (not split by newlines)
             candidate_validity_scores = self.scorer.score_candidates(
-                request, candidates
+                request, candidates, trajectory=trajectory
             )
 
             # Log all candidates with token stats

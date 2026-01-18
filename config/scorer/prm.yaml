@@ -1,4 +1,7 @@
 type: prm
-model_path: "Qwen/Qwen2.5-Math-7B-PRM800K"
+model_path: "Qwen/Qwen2.5-Math-PRM-7B"
 device: cuda:1
 batch_size: 1
+# vLLM backend options (default: use vLLM if available)
+use_vllm: true
+gpu_memory_utilization: 0.9

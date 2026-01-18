@@ -410,10 +410,8 @@ class StrategyDeepConf(StrategyBase):
                     if potential_tokens > 0
                     else 0
                 )
-                log.info(
-                    f"   Avg tokens: warmup={avg_warmup_tokens:.1f}, \
-                        adaptive={avg_adaptive_tokens:.1f}"
-                )
+                log.info(f"   Avg tokens: warmup={avg_warmup_tokens:.1f}, \
+                        adaptive={avg_adaptive_tokens:.1f}")
                 log.info(f"   Early stop avg: {avg_early_stop_tokens:.1f} tokens")
                 log.info(f"   Token savings: {saved_tokens:.0f} ({savings_pct:.1f}%)")
 
