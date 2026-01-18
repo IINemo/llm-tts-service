@@ -233,6 +233,10 @@ def create_scorer(config):
             device=config.scorer.device,
             batch_size=config.scorer.batch_size,
             torch_dtype=config.system.torch_dtype,
+            use_vllm=getattr(config.scorer, "use_vllm", True),
+            gpu_memory_utilization=getattr(
+                config.scorer, "gpu_memory_utilization", 0.9
+            ),
         )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
