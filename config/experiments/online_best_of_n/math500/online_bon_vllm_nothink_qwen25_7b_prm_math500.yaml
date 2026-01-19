@@ -1,5 +1,5 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen25_7b_prm_math500
+# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen25_7b_prm_math500
 # Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
 # Uses PRM scorer (Qwen2.5-Math-PRM800K) for step evaluation
 
@@ -85,7 +85,8 @@ scorer:
 dataset:
   subset: 500  # Full MATH-500 dataset
   offset: 0
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
+  prompt_file: null  # Not used - using system_prompt instead
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
 
 # Evaluation configuration
 evaluation:
