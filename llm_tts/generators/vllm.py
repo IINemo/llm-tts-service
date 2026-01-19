@@ -707,7 +707,12 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     stopped_at_answer = False
                     if hasattr(self.detector, "answer_patterns"):
                         for pattern in self.detector.answer_patterns:
-                            if stop_reason and pattern in stop_reason:
+                            # stop_reason can be string or int (token ID)
+                            if (
+                                stop_reason
+                                and isinstance(stop_reason, str)
+                                and pattern in stop_reason
+                            ):
                                 stopped_at_answer = True
                                 log.info(
                                     f"Path {traj_idx}: stopped at answer pattern "
