@@ -79,9 +79,11 @@ class StrategySelfConsistency(StrategyBase):
         )
 
         # Single vLLM call generates all N trajectories
+        # Skip step splitting - self-consistency only needs full text for majority voting
         raw_results = self.step_generator.generate_full_trajectories(
             request=request,
             num_trajectories=self.num_paths,
+            split_steps=False,
         )
 
         # Convert to expected format
@@ -99,8 +101,7 @@ class StrategySelfConsistency(StrategyBase):
 
             log.info(
                 f"  Path {i + 1}/{self.num_paths}: "
-                f"tokens={num_tokens}, steps={len(raw['steps'])}, "
-                f"complete={raw['is_complete']}, answer={answer}"
+                f"tokens={num_tokens}, complete={raw['is_complete']}, answer={answer}"
             )
 
             paths.append(

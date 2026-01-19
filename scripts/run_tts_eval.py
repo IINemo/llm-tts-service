@@ -299,47 +299,54 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            # Create uncertainty wrapper for vLLM scoring
-            if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
-                raise ImportError(
-                    "lm-polygraph uncertainty components not available. "
-                    "Ensure lm_polygraph_updates package is installed."
+            # Self-consistency and baseline don't need uncertainty wrapper
+            # (self-consistency uses majority voting, baseline uses raw vLLM batch generation)
+            if config.strategy.type in ("self_consistency", "baseline"):
+                vllm_model = llm
+                log.info(
+                    f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
                 )
-
-            # Select estimator based on scorer config
-            scorer_type = config.scorer.type if config.scorer else "entropy"
-            if scorer_type == "perplexity":
-                stat_calculators = [VLLMLogprobsCalculator()]
-                estimator = Perplexity()
-            elif scorer_type == "uncertainty_pd":
-                # PD-Gap scoring using top-k logprobs matrix
-                from llm_tts.scorers.estimator_uncertainty_pd import PDGap
-
-                stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
-                estimator = PDGap()
-            elif scorer_type == "entropy":
-                # Entropy-based scoring
-                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
-                estimator = MeanTokenEntropy()
-            elif scorer_type == "prm":
-                # PRM scorer uses its own model for scoring
-                # Use entropy wrapper for generation (scores not used for selection)
-                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
-                estimator = MeanTokenEntropy()
             else:
-                raise ValueError(
-                    f"Unsupported scorer type for vLLM: {scorer_type}. "
-                    f"Supported types: perplexity, uncertainty_pd, entropy, prm"
-                )
+                if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
+                    raise ImportError(
+                        "lm-polygraph uncertainty components not available. "
+                        "Ensure lm_polygraph_updates package is installed."
+                    )
 
-            uncertainty_wrapper = VLLMWithUncertainty(
-                llm=llm,
-                stat_calculators=stat_calculators,
-                estimator=estimator,
-            )
-            log.info(
-                f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__}"
-            )
+                # Select estimator based on scorer config
+                scorer_type = config.scorer.type if config.scorer else "entropy"
+                if scorer_type == "perplexity":
+                    stat_calculators = [VLLMLogprobsCalculator()]
+                    estimator = Perplexity()
+                elif scorer_type == "uncertainty_pd":
+                    # PD-Gap scoring using top-k logprobs matrix
+                    from llm_tts.scorers.estimator_uncertainty_pd import PDGap
+
+                    stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
+                    estimator = PDGap()
+                elif scorer_type == "entropy":
+                    # Entropy-based scoring
+                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                    estimator = MeanTokenEntropy()
+                elif scorer_type == "prm":
+                    # PRM scorer uses its own model for scoring
+                    # Use entropy wrapper for generation (scores not used for selection)
+                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                    estimator = MeanTokenEntropy()
+                else:
+                    raise ValueError(
+                        f"Unsupported scorer type for vLLM: {scorer_type}. "
+                        f"Supported types: perplexity, uncertainty_pd, entropy, prm"
+                    )
+
+                vllm_model = VLLMWithUncertainty(
+                    llm=llm,
+                    stat_calculators=stat_calculators,
+                    estimator=estimator,
+                )
+                log.info(
+                    f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__}"
+                )
 
             # Always use ThinkingMarkerDetector for step boundary detection
             # Stop tokens are derived from detector's semantic markers
@@ -375,7 +382,7 @@ def create_model(config):
                 stop_token_ids = list(stop_token_ids)
 
             step_generator = VLLMStepGenerator(
-                model=uncertainty_wrapper,
+                model=vllm_model,
                 thinking_mode=thinking_mode,
                 detector=detector,
                 stop_token_ids=stop_token_ids,
