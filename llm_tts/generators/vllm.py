@@ -444,10 +444,15 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         original_token_count = len(token_ids)
 
         # Compute uncertainty on content tokens only (excluding stop token)
-        uncertainty_score = self.model.score(
-            token_ids[:best_prefix_len],
-            logprobs[:best_prefix_len],
-        )
+        # Check for VLLMWithUncertainty wrapper by looking for 'estimator' attribute
+        # (raw vLLM has a different score() method for pooling models)
+        if hasattr(self.model, "estimator"):
+            uncertainty_score = self.model.score(
+                token_ids[:best_prefix_len],
+                logprobs[:best_prefix_len],
+            )
+        else:
+            uncertainty_score = 0.0
 
         return StepCandidate(
             text=text,
@@ -976,12 +981,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         request: List[Dict[str, str]],
         num_trajectories: int,
         max_tokens: Optional[int] = None,
+        split_steps: bool = True,
     ) -> List[Dict[str, any]]:
         """Generate N complete trajectories in a single batch call.
 
         This is optimized for offline best-of-n: instead of generating step-by-step
         with stop tokens, we generate complete trajectories (stopping only at EOS)
-        and split them post-hoc using the same stop tokens for consistency.
+        and optionally split them post-hoc using the same stop tokens for consistency.
 
         Uses _generate_step_candidates_impl with:
         - Empty stop_tokens (only EOS token IDs stop generation)
@@ -991,11 +997,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             request: Chat messages for the request
             num_trajectories: Number of trajectories to generate (vLLM n parameter)
             max_tokens: Maximum tokens per trajectory (default: self.max_new_tokens)
+            split_steps: If True, split trajectories into steps post-hoc (for offline BoN).
+                        If False, skip step splitting (for self-consistency).
 
         Returns:
             List of dictionaries, each containing:
                 - "full_text": Complete trajectory text
-                - "steps": List of step texts (split using stop tokens)
+                - "steps": List of step texts (split using stop tokens), or [full_text] if split_steps=False
                 - "token_ids": Token IDs for the full trajectory
                 - "is_complete": Whether trajectory ended naturally (EOS/answer pattern)
         """
@@ -1030,13 +1038,17 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             token_ids = list(candidate.token_ids) if candidate.token_ids else []
 
             # Split into steps using the real stop tokens (step boundaries)
-            steps = self._split_trajectory_into_steps(text)
+            # Skip for self-consistency which only needs full text
+            if split_steps:
+                steps = self._split_trajectory_into_steps(text)
+            else:
+                steps = [text]  # Single step = full trajectory
 
             total_output_tokens += len(token_ids)
 
             log.info(
                 f"  Trajectory {idx + 1}: {len(token_ids)} tokens, "
-                f"{len(steps)} steps, complete={candidate.is_trajectory_complete}"
+                f"complete={candidate.is_trajectory_complete}"
             )
 
             results.append(
