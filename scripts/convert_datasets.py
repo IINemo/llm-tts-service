@@ -43,6 +43,19 @@ def extract_answer_gsm8k(answer_text: str) -> str:
     return numbers[-1] if numbers else answer_text.strip()
 
 
+def extract_answer_boxed(solution_text: str) -> str:
+    """
+    Extract final answer from \\boxed{} format.
+    Used by Minerva Math and other datasets.
+    """
+    # Find \boxed{...} pattern, handling nested braces
+    match = re.search(r"\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}", solution_text)
+    if match:
+        return match.group(1).strip()
+    # Fallback: return empty string
+    return ""
+
+
 def convert_gsm8k(split: str) -> List[Dict]:
     """Convert GSM8K dataset to unified format."""
     print(f"Loading GSM8K {split} split...")
@@ -139,10 +152,59 @@ def convert_olympiadbench(split: str, data_path: str = None) -> List[Dict]:
     return unified_data
 
 
+def convert_minerva_math(split: str, data_path: str = None) -> List[Dict]:
+    """
+    Convert Minerva Math dataset to unified format.
+
+    Minerva Math contains 272 STEM problems from MIT OpenCourseWare.
+    Source: "Solving Quantitative Reasoning Problems with Language Models"
+
+    Args:
+        split: Dataset split (only 'test' available)
+        data_path: Path to local test.jsonl file
+    """
+    print(f"Loading Minerva Math {split} split...")
+
+    if not data_path:
+        raise ValueError(
+            "Minerva Math requires local data_path. "
+            "Use --data_path to specify path to test.jsonl"
+        )
+
+    # Load from local JSONL file
+    data = []
+    with open(data_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                data.append(json.loads(line))
+
+    unified_data = []
+    for idx, example in enumerate(tqdm(data, desc="Converting Minerva Math")):
+        # Extract answer from \boxed{} in solution
+        answer = extract_answer_boxed(example["solution"])
+
+        unified_example = {
+            "question": example["problem"],
+            "answer": answer,
+            "metadata": {
+                "dataset": "minerva_math",
+                "problem_idx": example.get("idx", idx),
+                "problem_type": example.get("type", "unknown"),
+                "difficulty": "college",
+                "original_solution": example["solution"],
+            },
+        }
+        unified_data.append(unified_example)
+
+    print(f"Converted {len(unified_data)} Minerva Math examples")
+    return unified_data
+
+
 DATASET_CONVERTERS = {
     "gsm8k": convert_gsm8k,
     "aime_2025": convert_aime_2025,
     "olympiadbench": convert_olympiadbench,
+    "minerva_math": convert_minerva_math,
 }
 
 
@@ -223,6 +285,8 @@ def main():
             splits = ["train"]
         elif args.dataset == "olympiadbench":
             splits = ["test"]
+        elif args.dataset == "minerva_math":
+            splits = ["test"]
 
     # Convert each split
     converter_fn = DATASET_CONVERTERS[args.dataset]
@@ -232,8 +296,8 @@ def main():
         print(f"{'=' * 80}\n")
 
         try:
-            # Pass data_path for datasets that need it (e.g., olympiadbench)
-            if args.dataset == "olympiadbench":
+            # Pass data_path for datasets that need it
+            if args.dataset in ["olympiadbench", "minerva_math"]:
                 unified_data = converter_fn(split, data_path=args.data_path)
             else:
                 unified_data = converter_fn(split)

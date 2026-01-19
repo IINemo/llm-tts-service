@@ -1,8 +1,8 @@
 # @package dataset
 
-dataset_path: "test-time-compute/test_olympiadbench"
+dataset_path: "test-time-compute/test_minerva_math"
 dataset_split: "test"  # Dataset split to use
-subset: 675  # Full OlympiadBench dataset (675 samples)
+subset: 272  # Full Minerva Math dataset (272 samples)
 prompt_file: null  # Not used - using system_prompt instead
 system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
 answer_format: "numeric"  # Uses math_equal() for symbolic comparison
