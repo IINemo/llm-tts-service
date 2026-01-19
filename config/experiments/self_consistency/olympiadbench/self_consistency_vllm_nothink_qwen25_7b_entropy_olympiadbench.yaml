@@ -1,11 +1,11 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/math500/self_consistency_vllm_nothink_qwen25_7b_entropy_math500
-# Self-Consistency with vLLM + Non-Thinking Mode (Qwen2.5-7B)
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/olympiadbench/self_consistency_vllm_nothink_qwen25_7b_entropy_olympiadbench
+# Self-Consistency with vLLM + Non-Thinking Mode (Qwen2.5-7B) on OlympiadBench
 # Uses step generator for step-by-step generation with majority voting
 
 defaults:
   - /config
-  - /dataset/math_500
+  - /dataset/olympiadbench
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
@@ -13,12 +13,12 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "self_consistency_vllm_nothink_qwen25_7b_entropy_math500_${now:%H-%M-%S}"
+run_name: "self_consistency_vllm_nothink_qwen25_7b_entropy_olympiadbench_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-olympiadbench
 
 # Model configuration (vLLM backend)
 model:
@@ -52,7 +52,7 @@ strategy:
 
 # Dataset configuration
 dataset:
-  subset: 500  # Full MATH-500 dataset
+  subset: 675  # Full OlympiadBench dataset
   offset: 0
   # Use official Qwen2.5-Math prompt with \boxed{} format for proper grading
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."

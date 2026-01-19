@@ -5,8 +5,9 @@ Based on "Self-Consistency Improves Chain of Thought Reasoning in Language Model
 by Wang et al. (2022). Generates multiple diverse reasoning paths and selects
 the most consistent answer via majority voting.
 
-Uses VLLMStepGenerator for step-by-step generation with uncertainty scoring
-and FLOP tracking.
+Key feature: Generates ALL trajectories in a SINGLE vLLM call using n=num_paths,
+then does majority voting on the final answers. This is much faster than
+step-by-step generation.
 """
 
 import logging
@@ -15,12 +16,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 
-from llm_tts.generators.base import convert_trajectory_to_string
 from llm_tts.scorers.majority_voting import ChainMajorityVotingScorer
 from llm_tts.utils import extract_answer
 
 from .metadata_builder import StrategyMetadataBuilder
-from .strategy_base import StrategyBase, count_thinking_and_response_steps
+from .strategy_base import StrategyBase
 
 if TYPE_CHECKING:
     from llm_tts.generators import StepCandidateGeneratorBase
@@ -33,254 +33,90 @@ class StrategySelfConsistency(StrategyBase):
     Self-consistency strategy that generates multiple reasoning paths
     and selects the most consistent answer via majority voting.
 
-    Uses step generator for step-by-step generation with uncertainty scoring.
+    Uses single-call batch generation for maximum efficiency - all N trajectories
+    are generated in ONE vLLM call with n=num_paths parameter.
     """
 
     def __init__(
         self,
         step_generator: "StepCandidateGeneratorBase",
         num_paths: int = 10,
-        max_steps: int = 250,
         scorer: Optional[Any] = None,
-        parallel: bool = True,
     ):
         """
         Initialize self-consistency strategy.
 
         Args:
-            step_generator: Step generator (VLLMStepGenerator) for step-by-step
-                           generation with uncertainty scoring.
+            step_generator: Step generator (VLLMStepGenerator) for generation.
             num_paths: Number of reasoning paths to generate
-            max_steps: Maximum steps per trace (default 250)
             scorer: Custom scorer for answer selection (defaults to majority voting)
-            parallel: If True (default), generate all paths in parallel using batch
-                     generation. This is ~num_paths times faster than sequential.
         """
         self.step_generator = step_generator
         self.num_paths = num_paths
-        self.max_steps = max_steps
-        self.parallel = parallel
 
         # Use majority voting scorer by default
         self.scorer = scorer or ChainMajorityVotingScorer()
         if hasattr(self.scorer, "prepare_model"):
             self.scorer.prepare_model()
 
-    def _generate_single_trace(
-        self,
-        request: List[Dict[str, str]],
-        path_idx: int,
-    ) -> Dict[str, Any]:
-        """
-        Generate a single complete trace step-by-step using the step generator.
-
-        Args:
-            request: Chat messages for the request
-            path_idx: Index of this path (for logging)
-
-        Returns:
-            Dictionary with:
-                - text: Complete trace text
-                - num_tokens: Total tokens generated
-                - steps: List of step texts
-                - validity_scores: Validity score per step
-        """
-        trajectory = []
-        total_tokens = 0
-        validity_scores = []
-
-        for step_num in range(self.max_steps):
-            # Generate single candidate (no selection in self-consistency)
-            candidates = self.step_generator(
-                request,
-                trajectory=trajectory,
-                candidates_per_step=1,
-            )
-
-            if not candidates:
-                log.warning(f"  Path {path_idx + 1}: No candidates at step {step_num}")
-                break
-
-            candidate = candidates[0]
-            trajectory.append(candidate)
-
-            # Track tokens
-            step_tokens = len(candidate.token_ids) if candidate.token_ids else 0
-            total_tokens += step_tokens
-
-            # Get validity score from other_data
-            validity = 1.0
-            if candidate.other_data and "validity_score" in candidate.other_data:
-                validity = candidate.other_data["validity_score"]
-            validity_scores.append(validity)
-
-            # Check if trajectory is complete
-            if candidate.is_trajectory_complete:
-                log.info(
-                    f"  Path {path_idx + 1}: Completed at step {step_num + 1}, "
-                    f"tokens={total_tokens}"
-                )
-                break
-
-        # Convert trajectory to text
-        trace_text = convert_trajectory_to_string(trajectory)
-
-        # Count thinking vs response steps
-        thinking_steps, response_steps = count_thinking_and_response_steps(trajectory)
-
-        return {
-            "text": trace_text,
-            "num_tokens": total_tokens,
-            "steps": [s.text for s in trajectory],
-            "validity_scores": validity_scores,
-            "thinking_steps": thinking_steps,
-            "response_steps": response_steps,
-            "avg_validity": (
-                sum(validity_scores) / len(validity_scores) if validity_scores else 0
-            ),
-        }
-
-    def _generate_paths_parallel(
+    def _generate_paths_batch(
         self, request: List[Dict[str, str]]
     ) -> List[Dict[str, Any]]:
         """
-        Generate multiple reasoning paths in parallel using batch generation.
+        Generate all N trajectories in a SINGLE vLLM call.
 
-        Instead of generating paths sequentially (path1 complete, then path2, etc.),
-        this generates the next step for ALL active paths in a single vLLM batch call.
-        This is ~num_paths times faster.
-
-        Architecture:
-            Step 1: [path1_step1, path2_step1, ..., pathN_step1]  ← single batch
-            Step 2: [path1_step2, path2_step2, ..., pathN_step2]  ← single batch
-            ...
-            (paths complete at different times, batch shrinks)
+        Uses generate_full_trajectories() which generates N complete trajectories
+        with n=num_paths in one call. This is much faster than step-by-step.
 
         Args:
-            request: Chat messages in OpenAI format
+            request: Chat messages for the request
 
         Returns:
-            List of dicts with text, num_tokens, steps, validity_scores per path
+            List of path dictionaries with text, tokens, steps info
         """
         log.info(
-            f"Generating {self.num_paths} reasoning paths in PARALLEL (batch mode)..."
+            f"Generating {self.num_paths} trajectories in SINGLE vLLM call (batch mode)..."
         )
 
-        # Initialize all paths
-        trajectories = [[] for _ in range(self.num_paths)]
-        path_tokens = [0 for _ in range(self.num_paths)]
-        path_validity_scores = [[] for _ in range(self.num_paths)]
-        active_paths = set(range(self.num_paths))
+        # Single vLLM call generates all N trajectories
+        raw_results = self.step_generator.generate_full_trajectories(
+            request=request,
+            num_trajectories=self.num_paths,
+        )
 
-        for step_num in range(self.max_steps):
-            if not active_paths:
-                break
-
-            # Get trajectories for active paths only
-            active_indices = sorted(active_paths)
-            active_trajectories = [trajectories[i] for i in active_indices]
-
-            # Batch generate next step for all active paths
-            step_candidates_nested = self.step_generator.generate_step_candidates(
-                request, active_trajectories, candidates_per_step=1
-            )
-            # Flatten: each trajectory gets 1 candidate
-            step_candidates = [cands[0] for cands in step_candidates_nested]
-
-            # Process results and update trajectories
-            newly_completed = []
-            for idx, path_idx in enumerate(active_indices):
-                candidate = step_candidates[idx]
-                trajectories[path_idx].append(candidate)
-
-                # Track tokens and validity
-                step_tokens = len(candidate.token_ids) if candidate.token_ids else 0
-                path_tokens[path_idx] += step_tokens
-
-                validity = 1.0
-                if candidate.other_data and "validity_score" in candidate.other_data:
-                    validity = candidate.other_data["validity_score"]
-                path_validity_scores[path_idx].append(validity)
-
-                # Check if path is complete
-                if candidate.is_trajectory_complete:
-                    newly_completed.append(path_idx)
-
-            # Remove completed paths from active set
-            for path_idx in newly_completed:
-                active_paths.discard(path_idx)
-                log.info(
-                    f"  Path {path_idx + 1}: Completed at step {len(trajectories[path_idx])}, "
-                    f"tokens={path_tokens[path_idx]}"
-                )
-
-            # Log progress every 10 steps
-            if (step_num + 1) % 10 == 0:
-                log.info(
-                    f"  Step {step_num + 1}: {len(active_paths)} paths still active"
-                )
-
-        # Generate answers for paths that completed but don't have <Answer>: content
-        for path_idx in range(self.num_paths):
-            trajectory = trajectories[path_idx]
-            if not trajectory:
-                continue
-
-            last_step = trajectory[-1]
-            if not last_step.is_trajectory_complete:
-                continue
-
-            # Check if path needs answer generation
-            trace_text = convert_trajectory_to_string(trajectory)
-            if "<Answer>:" not in trace_text:
-                reason = last_step.other_data.get("completion_reason", "unknown")
-                log.info(
-                    f"  Path {path_idx + 1}: Generating answer (reason: {reason})..."
-                )
-                answer_candidates = self.step_generator.generate_answer_candidates(
-                    request, trajectory, candidates_per_step=1
-                )
-                if answer_candidates:
-                    trajectories[path_idx].append(answer_candidates[0])
-                    path_tokens[path_idx] += len(answer_candidates[0].token_ids)
-
-        # Build result dicts for all paths
+        # Convert to expected format
         paths = []
-        for i in range(self.num_paths):
-            trajectory = trajectories[i]
-            trace_text = convert_trajectory_to_string(trajectory)
-            thinking_steps, response_steps = count_thinking_and_response_steps(
-                trajectory
-            )
-            validity_scores = path_validity_scores[i]
+        total_tokens = 0
 
-            answer = extract_answer(trace_text, answer_format="auto") or "no_answer"
-            avg_validity = (
-                sum(validity_scores) / len(validity_scores) if validity_scores else 0
+        for i, raw in enumerate(raw_results):
+            num_tokens = len(raw.get("token_ids", []))
+            total_tokens += num_tokens
+
+            # Extract answer for logging
+            answer = (
+                extract_answer(raw["full_text"], answer_format="auto") or "no_answer"
             )
 
             log.info(
                 f"  Path {i + 1}/{self.num_paths}: "
-                f"steps={len(trajectory)}, tokens={path_tokens[i]}, "
-                f"avg_validity={avg_validity:.3f}, answer={answer}"
+                f"tokens={num_tokens}, steps={len(raw['steps'])}, "
+                f"complete={raw['is_complete']}, answer={answer}"
             )
 
             paths.append(
                 {
-                    "text": trace_text,
-                    "num_tokens": path_tokens[i],
-                    "steps": [s.text for s in trajectory],
-                    "validity_scores": validity_scores,
-                    "thinking_steps": thinking_steps,
-                    "response_steps": response_steps,
-                    "avg_validity": avg_validity,
+                    "text": raw["full_text"],
+                    "num_tokens": num_tokens,
+                    "steps": raw["steps"],
+                    "is_complete": raw["is_complete"],
+                    "thinking_steps": 0,
+                    "response_steps": len(raw["steps"]),
+                    "validity_scores": [],
+                    "avg_validity": 0.0,
                 }
             )
 
-        total_tokens = sum(path_tokens)
-        log.info(
-            f"Generated {self.num_paths} paths in parallel, total tokens: {total_tokens}"
-        )
+        log.info(f"Generated {self.num_paths} paths, total tokens: {total_tokens}")
 
         return paths
 
@@ -288,45 +124,19 @@ class StrategySelfConsistency(StrategyBase):
         self, request: List[Dict[str, str]]
     ) -> List[Dict[str, Any]]:
         """
-        Generate multiple reasoning paths using step-by-step generation.
-
-        Each path is generated independently using the step generator.
-        This provides uncertainty scores per step and accurate FLOP tracking.
+        Generate multiple reasoning paths using batch generation.
 
         Args:
             request: Chat messages in OpenAI format
 
         Returns:
-            List of dicts with text, num_tokens, steps, validity_scores per path
+            List of dicts with text, num_tokens, steps per path
         """
         # Reset stats for this sample
         self.step_generator.reset_sample_stats()
 
-        # Use parallel or sequential generation based on config
-        if self.parallel:
-            paths = self._generate_paths_parallel(request)
-        else:
-            log.info(f"Generating {self.num_paths} reasoning paths SEQUENTIALLY...")
-            paths = []
-            total_tokens = 0
-
-            for i in range(self.num_paths):
-                trace = self._generate_single_trace(request, i)
-                paths.append(trace)
-                total_tokens += trace["num_tokens"]
-
-                # Extract answer for logging
-                answer = (
-                    extract_answer(trace["text"], answer_format="auto") or "no_answer"
-                )
-                log.info(
-                    f"  Path {i + 1}/{self.num_paths}: "
-                    f"steps={len(trace['steps'])}, tokens={trace['num_tokens']}, "
-                    f"avg_validity={trace['avg_validity']:.3f}, answer={answer}"
-                )
-
-            log.info(f"Generated {len(paths)}/{self.num_paths} paths sequentially")
-            log.info(f"  Total tokens: {total_tokens}")
+        # Use batch generation (single vLLM call)
+        paths = self._generate_paths_batch(request)
 
         # Finalize stats
         self.step_generator.finalize_sample_stats()
@@ -350,7 +160,6 @@ class StrategySelfConsistency(StrategyBase):
                 - consensus_score: Confidence based on answer frequency
                 - all_answers: All extracted answers for debugging
                 - answer_distribution: Answer frequency distribution
-                - all_traces: List of dicts with text, num_tokens, answer for each path
         """
         if not reasoning_paths:
             return {
@@ -385,7 +194,7 @@ class StrategySelfConsistency(StrategyBase):
         answer_counts = Counter(all_answers)
 
         log.info(
-            f"Selected reasoning path {best_idx} with consensus score {best_score:.3f}"
+            f"Selected reasoning path {best_idx + 1} with consensus score {best_score:.3f}"
         )
         log.info(f"Best answer: {best_answer}")
         log.info(f"Answer distribution: {dict(answer_counts)}")
@@ -438,7 +247,7 @@ class StrategySelfConsistency(StrategyBase):
         prompt_preview = request[0]["content"][:100] if request else ""
         log.info(f"Starting self-consistency reasoning for: {prompt_preview}...")
 
-        # Generate multiple reasoning paths
+        # Generate multiple reasoning paths (single vLLM call)
         reasoning_paths = self.generate_reasoning_paths(request)
 
         # Select best answer via majority voting
@@ -453,7 +262,6 @@ class StrategySelfConsistency(StrategyBase):
         # Add configuration
         builder.add_config(
             num_paths=len(reasoning_paths),
-            max_steps=self.max_steps,
         )
 
         # Add results
@@ -463,7 +271,7 @@ class StrategySelfConsistency(StrategyBase):
             answer_distribution=result["answer_distribution"],
         )
 
-        # Check if we have valid paths (generation might have failed)
+        # Check if we have valid paths
         if reasoning_paths and "all_paths" in result and "all_scores" in result:
             # Create path summaries for detailed analysis
             best_idx = result["all_scores"].index(max(result["all_scores"]))
@@ -482,7 +290,6 @@ class StrategySelfConsistency(StrategyBase):
                 path_summaries=path_summaries,
             )
         else:
-            # No valid paths generated - log error
             log.error(
                 f"Failed to generate any valid reasoning paths "
                 f"({len(reasoning_paths)} successful out of {self.num_paths})"
