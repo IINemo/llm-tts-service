@@ -26,6 +26,7 @@ classifiers = [
 dependencies = [
     "torch>=1.9.0",
     "transformers>=4.56.0",  # vLLM 0.12.0+ requires ALLOWED_LAYER_TYPES from transformers
+    "datasets>=2.14.0",  # HuggingFace datasets for loading benchmarks
     "numpy>=1.21.0,<2.0.0",  # numpy 2.x breaks thinc/spacy compatibility
     "tqdm>=4.64.0",
     "parse>=1.19.0",
@@ -39,6 +40,7 @@ dependencies = [
     "regex>=2023.0.0",  # For advanced regex in grader
     "plotly>=5.0.0",  # For interactive reasoning visualization
     "word2number>=1.1",  # For converting word numbers to digits in math normalization
+    "wandb>=0.15.0",  # Weights & Biases for experiment tracking
 ]
 
 [project.optional-dependencies]

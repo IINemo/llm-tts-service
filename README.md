@@ -14,14 +14,24 @@ A research framework for implementing and evaluating test-time scaling strategie
 ### For Users (Run Experiments)
 
 ```bash
-# 1. Install
+# 1. Create and activate conda environment
+conda create -n lm-polygraph-env python=3.11 -y
+conda activate lm-polygraph-env
+
+# 2. Install base dependencies and lm-polygraph
 ./setup.sh
 
-# 2. Configure API keys
+# 3. Install latex2sympy2 (must be installed separately due to antlr4 conflict)
+pip install latex2sympy2 --no-deps
+
+# 4. Install vLLM for fast local inference
+pip install ".[vllm]"
+
+# 5. Configure API keys
 cp .env.example .env
 # Edit .env and add your OPENROUTER_API_KEY
 
-# 3. Run DeepConf on GSM8K
+# 6. Run DeepConf on GSM8K
 python scripts/run_tts_eval.py \
   --config-name experiments/deepconf/run_gsm8k_deepconf_offline \
   dataset.subset=10
@@ -61,8 +71,18 @@ tests/                  → Test suite with strategy registry
 git clone https://github.com/IINemo/llm-tts-service.git
 cd llm-tts-service
 
+# Create and activate conda environment
+conda create -n lm-polygraph-env python=3.11 -y
+conda activate lm-polygraph-env
+
 # Install dependencies and lm-polygraph
 ./setup.sh
+
+# Install latex2sympy2 (must be installed separately due to antlr4 conflict)
+pip install latex2sympy2 --no-deps
+
+# Install vLLM for fast local inference
+pip install ".[vllm]"
 
 # Install dev dependencies and git hooks
 pip install -e ".[dev]"
@@ -70,8 +90,11 @@ make hooks
 ```
 
 **What this does:**
+- Creates isolated conda environment with Python 3.11
 - Installs package in editable mode (`-e`)
-- Installs lm-polygraph dev branch (submodule)
+- Installs lm-polygraph dev branch (for uncertainty estimation)
+- Installs latex2sympy2 for math evaluation (--no-deps avoids antlr4 conflict with Hydra)
+- Installs vLLM for fast local model inference
 - Sets up pre-commit hooks (black, isort, flake8)
 
 ### Step 3: Configure API Keys

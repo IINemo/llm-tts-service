@@ -529,6 +529,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         request: List[Dict[str, str]],
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
+        stop_tokens_override: Optional[List[str]] = None,
+        max_tokens_override: Optional[int] = None,
     ) -> List[List[StepCandidate]]:
         """Unified step candidate generation for both thinking and non-thinking modes.
 
@@ -539,6 +541,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             request: Chat messages (same for all trajectories)
             trajectories: List of trajectories. Each trajectory is a list of StepCandidates.
             candidates_per_step: Number of candidates to generate per trajectory.
+            stop_tokens_override: Override stop tokens (for full trajectory generation).
+                                  If None, uses self.stop_tokens.
+            max_tokens_override: Override max tokens. If None, uses self.max_step_tokens.
 
         Returns:
             List of candidate lists, one per trajectory. Each inner list contains
@@ -593,18 +598,30 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         total_context_tokens = sum(len(self.tokenizer.encode(p)) for p in prompts)
 
+        # Use override parameters if provided, otherwise use defaults
+        effective_stop_tokens = (
+            stop_tokens_override
+            if stop_tokens_override is not None
+            else self.stop_tokens
+        )
+        effective_max_tokens = (
+            max_tokens_override
+            if max_tokens_override is not None
+            else self.max_step_tokens
+        )
+
         # Create sampling params with stop tokens
         sampling_params = self._create_sampling_params(
-            stop_tokens=self.stop_tokens,
+            stop_tokens=effective_stop_tokens,
             n=candidates_per_step,
-            max_tokens=self.max_step_tokens,
+            max_tokens=effective_max_tokens,
             min_tokens=self.min_step_tokens,
         )
 
         if len(trajectories) == 1:
             log.info(
                 f"Step {len(trajectories[0]) + 1}, "
-                f"stop={len(self.stop_tokens)} tokens, min={self.min_step_tokens}"
+                f"stop={len(effective_stop_tokens)} tokens, min={self.min_step_tokens}"
             )
 
         # Generate for all prompts
@@ -904,6 +921,134 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self._record_generation(candidates, context_tokens=context_tokens)
 
         return candidates
+
+    # =========================================================================
+    # Full trajectory generation (for offline best-of-n)
+    # =========================================================================
+
+    def _split_trajectory_into_steps(self, text: str) -> List[str]:
+        """Split a complete trajectory into steps using stop tokens.
+
+        Uses the same stop tokens that would be used during step-by-step generation,
+        ensuring consistent step boundaries whether generating incrementally or
+        splitting post-hoc.
+
+        Stop tokens mark the START of a new step, so we split BEFORE them.
+
+        Args:
+            text: Complete trajectory text
+
+        Returns:
+            List of step texts
+        """
+        import re
+
+        if not self.stop_tokens:
+            # No stop tokens defined, return whole text as single step
+            return [text] if text.strip() else []
+
+        # Escape special regex characters in stop tokens
+        escaped_tokens = [re.escape(tok) for tok in self.stop_tokens]
+
+        # Build pattern that splits BEFORE each stop token (positive lookahead)
+        # This keeps the stop token at the start of the next step
+        pattern = r"(?=" + "|".join(escaped_tokens) + ")"
+
+        # Split the text
+        steps = re.split(pattern, text)
+
+        # Filter empty steps and strip whitespace
+        steps = [s for s in steps if s.strip()]
+
+        log.debug(
+            f"Split trajectory into {len(steps)} steps using {len(self.stop_tokens)} stop tokens"
+        )
+
+        return steps
+
+    def generate_full_trajectories(
+        self,
+        request: List[Dict[str, str]],
+        num_trajectories: int,
+        max_tokens: Optional[int] = None,
+    ) -> List[Dict[str, any]]:
+        """Generate N complete trajectories in a single batch call.
+
+        This is optimized for offline best-of-n: instead of generating step-by-step
+        with stop tokens, we generate complete trajectories (stopping only at EOS)
+        and split them post-hoc using the same stop tokens for consistency.
+
+        Uses _generate_step_candidates_impl with:
+        - Empty stop_tokens (only EOS token IDs stop generation)
+        - Single empty trajectory, N candidates (uses vLLM's n parameter)
+
+        Args:
+            request: Chat messages for the request
+            num_trajectories: Number of trajectories to generate (vLLM n parameter)
+            max_tokens: Maximum tokens per trajectory (default: self.max_new_tokens)
+
+        Returns:
+            List of dictionaries, each containing:
+                - "full_text": Complete trajectory text
+                - "steps": List of step texts (split using stop tokens)
+                - "token_ids": Token IDs for the full trajectory
+                - "is_complete": Whether trajectory ended naturally (EOS/answer pattern)
+        """
+        max_tokens = max_tokens or self.max_new_tokens
+
+        log.info(
+            f"Generating {num_trajectories} full trajectories "
+            f"(max_tokens={max_tokens}, stop_tokens=[] (EOS only))"
+        )
+
+        # Call _generate_step_candidates_impl with:
+        # - Single empty trajectory (start from scratch)
+        # - N candidates (num_trajectories)
+        # - Empty stop tokens (only EOS token IDs stop generation)
+        # - Override max_tokens for full trajectory
+        raw_results = self._generate_step_candidates_impl(
+            request=request,
+            trajectories=[[]],  # Single empty trajectory
+            candidates_per_step=num_trajectories,  # N candidates from one prompt
+            stop_tokens_override=[],  # No step boundary tokens, only EOS
+            max_tokens_override=max_tokens,
+        )
+
+        # raw_results is [[cand1, cand2, ..., candN]] - extract the inner list
+        candidates = raw_results[0] if raw_results else []
+
+        results = []
+        total_output_tokens = 0
+
+        for idx, candidate in enumerate(candidates):
+            text = candidate.text
+            token_ids = list(candidate.token_ids) if candidate.token_ids else []
+
+            # Split into steps using the real stop tokens (step boundaries)
+            steps = self._split_trajectory_into_steps(text)
+
+            total_output_tokens += len(token_ids)
+
+            log.info(
+                f"  Trajectory {idx + 1}: {len(token_ids)} tokens, "
+                f"{len(steps)} steps, complete={candidate.is_trajectory_complete}"
+            )
+
+            results.append(
+                {
+                    "full_text": text,
+                    "steps": steps,
+                    "token_ids": token_ids,
+                    "is_complete": candidate.is_trajectory_complete,
+                }
+            )
+
+        log.info(
+            f"Generated {num_trajectories} trajectories, "
+            f"total_output={total_output_tokens} tokens"
+        )
+
+        return results
 
     # =========================================================================
     # non-thinking mode methods
