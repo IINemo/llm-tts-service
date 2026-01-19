@@ -1,8 +1,14 @@
 """
-Offline Best-of-N strategy - Stepwise generation.
+Offline Best-of-N strategy - Single-call trajectory generation with post-hoc step splitting.
 
-Generates N complete trajectories step-by-step, scores each step,
-then selects the best trajectory based on aggregated step scores.
+Generates N complete trajectories in ONE vLLM call, splits them into steps post-hoc
+using the same stop tokens, then scores each trajectory with PRM.
+
+Key features:
+- Single vLLM call: All N trajectories generated in parallel (n=num_trajectories)
+- Post-hoc step detection: Splits trajectories using same stop tokens as step-by-step
+- Efficient PRM scoring: Each trajectory scored once after generation
+- Maximum throughput: No stopping at step boundaries during generation
 
 Key difference from online best-of-n:
 - Online: greedy step selection at each iteration (selects best step, continues)
@@ -16,20 +22,21 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from llm_tts.generators import StepCandidate, StepCandidateGeneratorBase
+from llm_tts.generators.base import StepCandidate, StepCandidateGeneratorBase
 from llm_tts.utils.answer_extraction import extract_answer
 
-from .strategy_base import StrategyBase, count_thinking_and_response_steps
+from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 
 
 class StrategyOfflineBestOfN(StrategyBase):
     """
-    Offline Best-of-N strategy with stepwise generation.
+    Offline Best-of-N strategy with single-call trajectory generation.
 
-    Generates N complete trajectories step-by-step, scores each step,
-    then selects the best trajectory based on aggregated step scores.
+    Generates N complete trajectories in ONE vLLM call (n=num_trajectories),
+    splits them into steps post-hoc using the same stop tokens,
+    then scores each trajectory with PRM and selects the best one.
     """
 
     def __init__(
@@ -101,85 +108,60 @@ class StrategyOfflineBestOfN(StrategyBase):
             log.warning(f"Unknown aggregation '{self.score_aggregation}', using mean")
             return float(np.mean(step_scores))
 
-    def _generate_single_trajectory(
+    def _generate_all_trajectories_single_call(
         self,
         request: List[Dict[str, str]],
-        trajectory_idx: int,
-    ) -> Dict[str, any]:
+    ) -> List[Dict[str, any]]:
         """
-        Generate a single complete trajectory step-by-step.
+        Generate all N trajectories in a SINGLE vLLM call.
+
+        Uses generate_full_trajectories() which:
+        1. Generates N complete trajectories with n=num_trajectories
+        2. Splits each into steps post-hoc using the same stop tokens
+
+        This is much faster than step-by-step generation because there's
+        no stopping at step boundaries during generation.
 
         Args:
             request: Chat messages for the request
-            trajectory_idx: Index of this trajectory (for logging)
 
         Returns:
-            Dictionary with trajectory info, steps, and scores
+            List of trajectory dictionaries (scores added later)
         """
-        trajectory = []  # List of StepCandidate
-        step_scores = []
-        step_texts = []
+        log.info(
+            f"\n--- Generating {self.num_trajectories} trajectories (single call) ---"
+        )
 
-        log.info(f"\n--- Trajectory {trajectory_idx + 1}/{self.num_trajectories} ---")
+        # Single vLLM call generates all N trajectories
+        raw_results = self.step_generator.generate_full_trajectories(
+            request=request,
+            num_trajectories=self.num_trajectories,
+        )
 
-        for step_num in range(self.max_steps):
-            # Generate single candidate for this step
-            candidates = self.step_generator(
-                request,
-                trajectory=trajectory,
-                candidates_per_step=1,  # One candidate per step for each trajectory
+        # Convert to expected format
+        results = []
+        for i, raw in enumerate(raw_results):
+            results.append(
+                {
+                    "steps": raw["steps"],  # List of step strings
+                    "step_scores": [],  # Will be filled after scoring
+                    "aggregated_score": 0.0,  # Will be filled after scoring
+                    "full_text": raw["full_text"],
+                    "num_steps": len(raw["steps"]),
+                    "is_complete": raw["is_complete"],
+                }
             )
 
-            if not candidates:
-                log.info(f"  Step {step_num + 1}: No candidates, stopping")
-                break
-
-            candidate = candidates[0]
-            step_texts.append(candidate.text)
-
-            # Score this step
-            scores = self.scorer.score_candidates(request, [candidate])
-            step_score = scores[0] if scores else 0.0
-            step_scores.append(step_score)
-
-            # Get token count
-            num_tokens = len(candidate.token_ids) if candidate.token_ids else 0
-
-            log.info(
-                f"  Step {step_num + 1}: score={step_score:.3f}, "
-                f"tokens={num_tokens}, complete={candidate.is_trajectory_complete}"
-            )
-
-            # Add to trajectory
-            trajectory.append(candidate)
-
-            # Check if trajectory is complete
-            if candidate.is_trajectory_complete:
-                log.info(f"  Trajectory complete at step {step_num + 1}")
-                break
-
-        # Aggregate step scores
-        aggregated_score = self._aggregate_scores(step_scores)
-
-        # Build full trajectory text
-        full_text = "".join(step_texts)
-
-        return {
-            "trajectory": trajectory,
-            "step_scores": step_scores,
-            "aggregated_score": aggregated_score,
-            "full_text": full_text,
-            "num_steps": len(trajectory),
-            "is_complete": (
-                trajectory[-1].is_trajectory_complete if trajectory else False
-            ),
-        }
+        return results
 
     def generate_trajectory(
         self, request: List[Dict[str, str]], sample_idx: int = 0
     ) -> Dict[str, any]:
         """
         Generate N complete trajectories and return the best one.
+
+        Uses single-call vLLM generation for maximum throughput - all N trajectories
+        are generated in ONE vLLM call with n=num_trajectories.
 
         Args:
             request: Chat messages for the request
@@ -194,15 +176,30 @@ class StrategyOfflineBestOfN(StrategyBase):
         self.step_generator.reset_sample_stats()
 
         log.info(f"\n{'='*60}")
-        log.info(f"Generating {self.num_trajectories} trajectories (stepwise offline)")
+        log.info(
+            f"Generating {self.num_trajectories} trajectories (single-call offline)"
+        )
         log.info(f"Score aggregation: {self.score_aggregation}")
         log.info(f"{'='*60}")
 
-        # Generate all trajectories
-        all_trajectory_results = []
-        for i in range(self.num_trajectories):
-            result = self._generate_single_trajectory(request, i)
-            all_trajectory_results.append(result)
+        # Step 1: Generate all trajectories in ONE vLLM call
+        all_trajectory_results = self._generate_all_trajectories_single_call(request)
+
+        # Step 2: Score all trajectories efficiently (one PRM call per trajectory)
+        log.info(f"\n{'='*60}")
+        log.info(f"Scoring {self.num_trajectories} trajectories")
+        log.info(f"{'='*60}")
+
+        for i, result in enumerate(all_trajectory_results):
+            if result["steps"]:
+                # Score entire trajectory in single forward pass
+                # steps is List[str] - PRM scorer handles this via hasattr check
+                step_scores = self.scorer.score_trajectory(request, result["steps"])
+                result["step_scores"] = step_scores
+                result["aggregated_score"] = self._aggregate_scores(step_scores)
+            else:
+                result["step_scores"] = []
+                result["aggregated_score"] = 0.0
 
         # Log summary
         log.info("\n--- Trajectory Scores Summary ---")
@@ -233,11 +230,6 @@ class StrategyOfflineBestOfN(StrategyBase):
         # Get token stats
         token_stats = self.step_generator.get_sample_stats()
 
-        # Count thinking and response steps
-        thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-            best_result["trajectory"]
-        )
-
         # Save logs if output_dir provided
         if self.output_dir:
             self._save_trajectories_log(all_trajectory_results, best_idx)
@@ -245,9 +237,9 @@ class StrategyOfflineBestOfN(StrategyBase):
         return {
             "trajectory": best_result["full_text"],
             "extracted_answer": extracted,
-            "steps": best_result["trajectory"],
-            "thinking_num_steps": thinking_num_steps,
-            "response_num_steps": response_num_steps,
+            "steps": best_result["steps"],  # List of step strings
+            "thinking_num_steps": 0,  # Not tracked in single-call mode
+            "response_num_steps": best_result["num_steps"],
             "validity_scores": best_result["step_scores"],
             "aggregated_score": best_result["aggregated_score"],
             "all_trajectories": [r["full_text"] for r in all_trajectory_results],
@@ -286,6 +278,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "num_steps": r["num_steps"],
                     "is_complete": r["is_complete"],
                     "text": r["full_text"],
+                    "steps": r["steps"],  # Individual step texts
                     "is_best": i == best_idx,
                 }
                 for i, r in enumerate(all_results)

@@ -411,7 +411,7 @@ class StepScorerPRM(StepScorerRewardBase):
                 if all_step_rewards:
                     reward = all_step_rewards[-1]
 
-            all_rewards.append([reward])
+            all_rewards.append((reward, all_step_rewards))
             # Log all step scores: trajectory steps + candidate step
             traj_scores = (
                 all_step_rewards[:num_traj_steps] if num_traj_steps > 0 else []
@@ -425,7 +425,84 @@ class StepScorerPRM(StepScorerRewardBase):
                 f"Candidate {cand_idx}: traj_scores={[f'{s:.3f}' for s in traj_scores]}, cand_score={[f'{s:.3f}' for s in cand_score]}"
             )
 
-        return all_rewards
+        # Return only last step scores for backward compatibility
+        return [[r[0]] for r in all_rewards]
+
+    def score_trajectory(
+        self, chat: List[Dict[str, str]], trajectory: List, **kwargs
+    ) -> List[float]:
+        """
+        Score a complete trajectory and return scores for ALL steps in a single forward pass.
+
+        Args:
+            chat: Chat messages (contains the question)
+            trajectory: List of StepCandidate objects representing the full trajectory
+
+        Returns:
+            List of scores, one per step in the trajectory
+        """
+        if not trajectory:
+            return []
+
+        # Extract question from chat
+        question = None
+        for msg in chat:
+            if msg["role"] == "user":
+                question = msg["content"]
+                break
+        if question is None:
+            question = chat[-1]["content"]
+
+        # Get all step texts
+        step_texts = [
+            step.text if hasattr(step, "text") else str(step) for step in trajectory
+        ]
+
+        # Build single prompt with all steps
+        prompt = self._format_prm_prompt(question, step_texts)
+
+        # Truncate if needed
+        max_tokens = 4000
+        tokens = self.prm_tokenizer.encode(prompt)
+        if len(tokens) > max_tokens:
+            log.warning(
+                f"Truncating PRM prompt from {len(tokens)} to {max_tokens} tokens"
+            )
+            tokens = tokens[:max_tokens]
+            prompt = self.prm_tokenizer.decode(tokens)
+
+        log.info(f"PRM scoring trajectory with {len(step_texts)} steps")
+
+        # Single forward pass
+        outputs = self.prm_model.reward([prompt], use_tqdm=False)
+
+        # Extract all step scores
+        all_step_scores = []
+        if (
+            outputs
+            and hasattr(outputs[0], "outputs")
+            and hasattr(outputs[0].outputs, "data")
+        ):
+            data = outputs[0].outputs.data
+            if hasattr(data, "tolist"):
+                step_scores = data.tolist()
+            elif isinstance(data, list):
+                step_scores = data
+            else:
+                step_scores = [data]
+
+            for score in step_scores:
+                if isinstance(score, (list, tuple)) and len(score) == 2:
+                    all_step_scores.append(score[1])
+                else:
+                    all_step_scores.append(float(score))
+
+        log.info(f"PRM trajectory scores: {[f'{s:.3f}' for s in all_step_scores]}")
+
+        while len(all_step_scores) < len(step_texts):
+            all_step_scores.append(0.0)
+
+        return all_step_scores[: len(step_texts)]
 
     def _format_prm_prompt(self, question: str, step_texts: List[str]) -> str:
         """Format a prompt for PRM scoring with <extra_0> step separators."""

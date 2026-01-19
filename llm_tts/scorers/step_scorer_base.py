@@ -99,5 +99,26 @@ class StepScorerBase(ABC):
         detailed_scores = self.score_candidates_detailed(chat, candidates, **kwargs)
         return [score.get_score(aggregation) for score in detailed_scores]
 
+    def score_trajectory(
+        self,
+        chat: List[Dict[str, str]],
+        trajectory: List,
+        **kwargs,
+    ) -> List[float]:
+        """
+        Score a complete trajectory and return scores for all steps.
+
+        Must be implemented by subclasses that support trajectory scoring
+        (e.g., PRM scorer for offline Best-of-N).
+
+        Args:
+            chat: Chat messages (contains the question)
+            trajectory: List of step candidates
+
+        Returns:
+            List of scores, one per step
+        """
+        raise NotImplementedError("score_trajectory must be implemented by subclass")
+
     def __str__(self):
         return f"{self.__class__.__name__}({self.name})"
