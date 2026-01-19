@@ -629,9 +629,7 @@ def create_tts_strategy(
         strategy = StrategySelfConsistency(
             step_generator=step_generator,
             num_paths=config.strategy.get("num_paths", 10),
-            max_steps=config.strategy.get("max_steps", 250),
             scorer=scorer,
-            parallel=config.strategy.get("parallel", True),
         )
     elif config.strategy.type == "tree_of_thoughts":
         # Tree-of-Thoughts requires API-based model for state evaluation

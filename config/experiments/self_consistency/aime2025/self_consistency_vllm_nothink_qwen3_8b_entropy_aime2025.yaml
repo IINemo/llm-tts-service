@@ -45,46 +45,17 @@ generation:
   batch_size: 1
   max_length: 8192
 
-# Strategy - Self-Consistency with structured step detector
+# Strategy - Self-Consistency (batch generation with majority voting)
 strategy:
   type: self_consistency
-  num_paths: 8  # Number of reasoning paths
-  max_steps: 50
-  parallel: true  # Generate all paths in parallel (batch mode)
-  # Use structured detector for non-thinking mode
-  detector_type: structured
-  # Step boundary token limits
-  min_step_tokens: 50
-  max_step_tokens: 300
-  # Marker categories (for vLLM stop token generation)
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: false  # No thinking markers in non-thinking mode
-  use_verification: true
-  use_structure: true
-  use_reasoning: true
-  use_correction: false
-  # Custom words for stop tokens
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
-    - "step"
-    - "therefore"
-    - "thus"
-  # Answer patterns for checking if there's actual answer content
-  detector_answer_patterns:
-    - "<Answer>:"
-    - "\n<Answer>:"
-  # EOS patterns for checking trajectory completion (stop tokens)
-  detector_eos_patterns:
-    - "<end of response>"
+  num_paths: 8  # Number of reasoning paths (generated in single vLLM call)
 
 # Dataset configuration
 dataset:
   subset: 30  # Full AIME-2025 dataset
   offset: 0
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
+  # Use official prompt with \boxed{} format for proper grading
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
 
 # Evaluation configuration
 evaluation:
