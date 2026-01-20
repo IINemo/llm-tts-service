@@ -1,0 +1,8 @@
+# @package dataset
+
+dataset_path: "test-time-compute/test_gaokao2023en"
+dataset_split: "test"  # Dataset split to use
+subset: 385  # Full GaoKao 2023 En dataset (385 samples)
+prompt_file: null  # Not used - using system_prompt instead
+system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+answer_format: "numeric"  # Uses math_equal() for symbolic comparison

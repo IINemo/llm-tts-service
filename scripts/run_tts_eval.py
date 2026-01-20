@@ -143,10 +143,14 @@ def load_prompt_template(prompt_file: str) -> str:
         return f.read().strip()
 
 
-def build_evaluators(config):
+def build_evaluators(config, llm=None):
     """
     Create evaluators from config.
     The list of evaluator names in config.evaluation.evaluators
+
+    Args:
+        config: Hydra config
+        llm: Optional vLLM instance to reuse for local judge
     """
     evaluators = {}
 
@@ -728,7 +732,7 @@ def _generate_trajectories_batch(
     system_prompt: str,
     question_field: str,
     answer_field: str,
-    exact_match_evaluator,
+    phase1_evaluators: dict,  # Dict of evaluator_name -> evaluator
     save_path_file: Path,
     sample_metrics_path: Path,
 ):
@@ -865,15 +869,53 @@ def _generate_trajectories_batch(
         else:
             log.info(f"\nFull trajectory:\n{result['trajectory']}")
 
-        # Check correctness (use full trajectory for grading)
-        is_correct = exact_match_evaluator._score_single(
-            (question, result["trajectory"], str(gold_answer_num))
-        )
+        # Check correctness with all evaluators
+        eval_results = {}
+        for eval_name, evaluator in phase1_evaluators.items():
+            try:
+                if isinstance(evaluator, EvaluatorExactMatch):
+                    # EvaluatorExactMatch._score_single takes 3-tuple, returns float
+                    score = evaluator._score_single(
+                        (question, result["trajectory"], str(gold_answer_num))
+                    )
+                    is_correct_eval = bool(score)
+                elif isinstance(evaluator, EvaluatorLLMAsAJudge):
+                    # LLM judges: __call__ takes lists, returns (labels, responses)
+                    labels, responses = evaluator(
+                        [question], [result["trajectory"]], [str(gold_answer_num)]
+                    )
+                    is_correct_eval = labels[0] == 1 if labels else False
+                    eval_results[eval_name] = {
+                        "is_correct": is_correct_eval,
+                        "response": responses[0] if responses else ""
+                    }
+                    continue
+                else:
+                    # Fallback: try __call__ with lists
+                    result_output = evaluator(
+                        [question], [result["trajectory"]], [str(gold_answer_num)]
+                    )
+                    if isinstance(result_output, tuple) and len(result_output) == 2:
+                        labels, responses = result_output
+                        is_correct_eval = labels[0] == 1 if labels else False
+                    elif isinstance(result_output, list):
+                        is_correct_eval = bool(result_output[0]) if result_output else False
+                    else:
+                        is_correct_eval = False
+                eval_results[eval_name] = {"is_correct": is_correct_eval}
+            except Exception as e:
+                log.warning(f"Evaluator {eval_name} failed: {e}")
+                eval_results[eval_name] = {"is_correct": False, "error": str(e)}
+
+        # Use exact_match as primary for logging (if available)
+        is_correct = eval_results.get("exact_match", {}).get("is_correct", False)
 
         log.info("\n" + "=" * 60)
         log.info(f"FINAL ANSWER: {generated_text}")
         log.info(f"Gold answer:  {gold_answer_num}")
-        log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
+        for eval_name, eval_result in eval_results.items():
+            status = '✓ YES' if eval_result.get('is_correct') else '✗ NO'
+            log.info(f"[{eval_name}]: {status}")
         log.info("-" * 60)
         log.info(f"Num steps: {len(result['steps'])}")
         if "validity_scores" in result and result["validity_scores"]:
@@ -883,7 +925,7 @@ def _generate_trajectories_batch(
             )
         log.info("=" * 60)
 
-        # Store result (including is_correct to avoid O(n²) re-evaluation)
+        # Store result with per-evaluator results
         result_dict = {
             "index": i,
             "question": question,
@@ -893,7 +935,8 @@ def _generate_trajectories_batch(
             "steps": result["steps"],
             "validity_scores": result.get("validity_scores", []),
             "completed": result["completed"],
-            "is_correct": bool(is_correct),
+            "is_correct": bool(is_correct),  # Primary (exact_match)
+            "eval": eval_results,  # Per-evaluator results
         }
 
         if "token_stats" in result:
@@ -910,12 +953,19 @@ def _generate_trajectories_batch(
         )
         running_total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
 
-        # Use cached is_correct values (O(n) instead of O(n²))
-        running_correct = sum(1 for r in results if r.get("is_correct", False))
-        running_accuracy = (running_correct / len(results)) if results else 0.0
-        log.info(
-            f"Running accuracy: {running_correct}/{len(results)} = {running_accuracy:.3f}"
-        )
+        # Compute running accuracy per evaluator
+        running_stats = {}
+        for eval_name in phase1_evaluators.keys():
+            correct_count = sum(
+                1 for r in results
+                if r.get("eval", {}).get(eval_name, {}).get("is_correct", False)
+            )
+            accuracy = (correct_count / len(results)) if results else 0.0
+            running_stats[eval_name] = {
+                "correct": correct_count,
+                "accuracy": accuracy
+            }
+            log.info(f"Running accuracy [{eval_name}]: {correct_count}/{len(results)} = {accuracy:.3f}")
 
         sample_metrics = {
             "sample_index": i,
@@ -924,8 +974,6 @@ def _generate_trajectories_batch(
                 "thinking_num_steps", len(result["steps"])
             ),
             "response_num_steps": result.get("response_num_steps", 0),
-            "running_correct": running_correct,
-            "running_accuracy": running_accuracy,
             "samples_completed": len(results),
             "total_tokens_this_sample": token_stats.get("total_tokens_this_sample", 0),
             "input_tokens_this_sample": token_stats.get("input_tokens", 0),
@@ -938,6 +986,12 @@ def _generate_trajectories_batch(
             "running_total_tokens": running_total_tokens,
             "running_total_tflops": running_total_tflops,
         }
+        # Add per-evaluator running accuracy to metrics
+        for eval_name, stats in running_stats.items():
+            safe_name = eval_name.replace("-", "_").replace(".", "_")
+            sample_metrics[f"running_correct_{safe_name}"] = stats["correct"]
+            sample_metrics[f"running_accuracy_{safe_name}"] = stats["accuracy"]
+
         if "validity_scores" in result and result["validity_scores"]:
             sample_metrics["confidence"] = float(np.mean(result["validity_scores"]))
 
@@ -977,6 +1031,8 @@ def generate_trajectories(
     flop_calculator: FLOPCalculator = None,
     exact_match_dataset_answer_format: str = "numeric",
     data_name: str = None,  # Required - must be passed explicitly
+    config = None,  # Optional - needed for multi-evaluator support
+    llm = None,  # Optional - vLLM instance to reuse for local judge
 ):
     if not data_name:
         raise ValueError("data_name is required for generate_trajectories()")
@@ -988,11 +1044,18 @@ def generate_trajectories(
 
     save_path_file = Path(save_path) / "results.json"
     sample_metrics_path = Path(save_path) / "sample_metrics.jsonl"
-    exact_match_evaluator = EvaluatorExactMatch(
-        dataset_answer_format=exact_match_dataset_answer_format,
-        data_name=data_name,
-    )
-    log.info(f"Phase 1 evaluator: data_name={exact_match_evaluator.data_name}")
+
+    # Build all evaluators if config is provided, otherwise use just exact_match
+    if config is not None:
+        phase1_evaluators = build_evaluators(config, llm=llm)
+        log.info(f"Phase 1 evaluators: {list(phase1_evaluators.keys())}")
+    else:
+        exact_match_evaluator = EvaluatorExactMatch(
+            dataset_answer_format=exact_match_dataset_answer_format,
+            data_name=data_name,
+        )
+        phase1_evaluators = {"exact_match": exact_match_evaluator}
+        log.info(f"Phase 1 evaluator: data_name={exact_match_evaluator.data_name}")
 
     subset_size = len(dataset)
 
@@ -1013,7 +1076,7 @@ def generate_trajectories(
             system_prompt=system_prompt,
             question_field=question_field,
             answer_field=answer_field,
-            exact_match_evaluator=exact_match_evaluator,
+            phase1_evaluators=phase1_evaluators,
             save_path_file=save_path_file,
             sample_metrics_path=sample_metrics_path,
         )
@@ -1275,15 +1338,56 @@ def evaluate_results(
     config,
     results,
     save_path: str,
+    llm=None,  # Optional - vLLM instance to reuse for local judge
 ):
     # Phase 2: Check correctness for all results
     log.info("\n" + "=" * 60)
     log.info("Phase 2: Checking correctness")
     log.info("=" * 60)
 
-    # Build evaluators dynamically
-    evaluators = build_evaluators(config)
+    # Build evaluators dynamically (regular evaluators from config.evaluation.evaluators)
+    evaluators = build_evaluators(config, llm=llm)
     log.info(f"Using evaluators: {list(evaluators.keys())}")
+
+    # Build batch evaluators (from config.evaluation.batch_evaluators)
+    batch_evaluator_names = config.evaluation.get("batch_evaluators", [])
+    batch_evaluators = {}
+    for eval_name in batch_evaluator_names:
+        if eval_name == "llm_judge":
+            # API-based LLM judge for batch evaluation
+            llm_cfg = OmegaConf.to_container(config.evaluation.llm_judge, resolve=True)
+            prompt_template = (
+                load_prompt_template(llm_cfg.get("prompt_file"))
+                if llm_cfg.get("prompt_file")
+                else ""
+            )
+            if "{question}" in prompt_template:
+                prompt_template = prompt_template.replace("{question}", "{q}")
+
+            # Set API key in environment based on provider
+            provider = llm_cfg.get("provider")
+            if provider == "openrouter":
+                api_key = os.getenv("OPENROUTER_API_KEY")
+            elif provider == "deepseek":
+                api_key = os.getenv("DEEPSEEK_API_KEY")
+            else:
+                api_key = os.getenv("OPENAI_API_KEY")
+
+            if api_key:
+                os.environ["OPENAI_API_KEY"] = api_key
+
+            # Remove config-only params not needed by evaluator
+            llm_cfg.pop("prompt_file", None)
+            llm_cfg.pop("provider", None)
+            llm_cfg["prompt"] = prompt_template
+
+            # Include model name in evaluator key
+            model_name = llm_cfg.get("model", "unknown")
+            sanitized_model = model_name.replace("/", "_").replace(":", "_")
+            eval_key = f"llm_judge_{sanitized_model}"
+            batch_evaluators[eval_key] = EvaluatorLLMAsAJudge(**llm_cfg)
+    if batch_evaluators:
+        log.info(f"Batch evaluators: {list(batch_evaluators.keys())}")
 
     save_path_file = Path(save_path) / "results.json"
 
@@ -1332,10 +1436,11 @@ def evaluate_results(
                         log.warning(f"MISMATCH sample {result['index']}: phase1={phase1_correct}, phase2={is_correct}")
                         log.warning(f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}")
                 else:
-                    # Other evaluators use __call__
+                    # Other evaluators use __call__ with extracted answer
+                    extracted_answer = result.get("generated_answer", result.get("extracted_answer", ""))
                     eval_result = evaluator_fn(
                         [result["question"]],
-                        [solution],
+                        [extracted_answer],
                         [result["gold_answer"]],
                     )
                     if isinstance(eval_result, tuple):
@@ -1387,15 +1492,83 @@ def evaluate_results(
                 f"Completed evaluation with {eval_name} ({samples_evaluated} samples evaluated)"
             )
 
+    # Batch evaluation for batch_evaluators (more efficient)
+    for eval_name, evaluator_fn in batch_evaluators.items():
+        log.info(f"\n--- Batch Evaluator: {eval_name} ---")
+
+        # Collect samples that need evaluation
+        samples_to_eval = []
+        indices_to_eval = []
+        for i, result in enumerate(results):
+            if "error" in result:
+                continue
+            if "eval" in result and eval_name in result["eval"]:
+                log.info(f"Skipping sample {result['index']} (already evaluated by {eval_name})")
+                continue
+            samples_to_eval.append(result)
+            indices_to_eval.append(i)
+
+        if not samples_to_eval:
+            log.info(f"All samples already evaluated by {eval_name}, skipping")
+            continue
+
+        log.info(f"Batch evaluating {len(samples_to_eval)} samples with {eval_name}...")
+
+        # Prepare batch inputs
+        problems = [r["question"] for r in samples_to_eval]
+        gold_answers = [str(r["gold_answer"]) for r in samples_to_eval]
+
+        # API judge expects full solutions
+        solutions = [r.get("generated_trajectory", r.get("trajectory", "")) for r in samples_to_eval]
+
+        try:
+            # Batch evaluate
+            eval_result = evaluator_fn(problems, solutions, gold_answers)
+            if isinstance(eval_result, tuple):
+                annotations, responses = eval_result
+            else:
+                annotations = eval_result
+                responses = [None] * len(annotations)
+
+            # Store results
+            for idx, (i, annotation, response) in enumerate(zip(indices_to_eval, annotations, responses)):
+                is_correct = annotation == 1
+                eval_data = {
+                    "label": int(annotation) if not np.isnan(annotation) else None,
+                    "is_correct": bool(is_correct),
+                }
+                if response:
+                    eval_data["response"] = response
+                results[i].setdefault("eval", {})[eval_name] = eval_data
+
+            # Save after batch
+            save_results_json(results, save_path_file)
+            log.info(f"Completed batch evaluation with {eval_name} ({len(samples_to_eval)} samples)")
+
+        except Exception as e:
+            traceback.print_exc()
+            log.error(f"Error during batch {eval_name} evaluation: {e}")
+            # Mark all as failed
+            for i in indices_to_eval:
+                results[i].setdefault("eval", {})[eval_name] = {
+                    "label": None,
+                    "is_correct": False,
+                    "error": str(e),
+                }
+            save_results_json(results, save_path_file)
+
+    # Combine all evaluator names for summary
+    all_evaluator_names = list(evaluators.keys()) + list(batch_evaluators.keys())
+
     completed = sum(r.get("completed", False) for r in results)
     errors = sum("error" in r for r in results)
 
     # Compute per-evaluator correctness
-    summary_correct = {name: 0 for name in evaluators.keys()}
-    summary_incorrect = {name: 0 for name in evaluators.keys()}
+    summary_correct = {name: 0 for name in all_evaluator_names}
+    summary_incorrect = {name: 0 for name in all_evaluator_names}
 
     for r in results:
-        for name in evaluators.keys():
+        for name in all_evaluator_names:
             # Check if this result has been evaluated by this evaluator
             if "eval" in r and name in r["eval"]:
                 if r["eval"][name].get("is_correct"):
@@ -1407,7 +1580,7 @@ def evaluate_results(
     log.info(f"Total samples: {len(results)}")
     log.info(f"Completed: {completed} ({completed/len(results):.1%})")
     log.info(f"Errors: {errors} ({errors/len(results):.1%})")
-    for name in sorted(list(evaluators.keys())):
+    for name in sorted(all_evaluator_names):
         correct = summary_correct[name]
         incorrect = summary_incorrect[name]
         log.info(f"[{name}]")
@@ -1439,7 +1612,7 @@ def evaluate_results(
     }
 
     # Add per-evaluator metrics
-    for name in evaluators.keys():
+    for name in all_evaluator_names:
         correct = summary_correct[name]
         incorrect = summary_incorrect[name]
         metrics[f"{name}/correct"] = correct
@@ -1650,6 +1823,9 @@ def main(config):
     data_name = config.dataset.get("data_name", None) or config.strategy.get("data_name", None)
     if not data_name:
         raise ValueError("data_name must be set in config.dataset or config.strategy")
+    # Get vLLM instance for local judge (if using vLLM backend)
+    vllm_instance = getattr(model, "vllm_engine", None)
+
     results = generate_trajectories(
         results=results,
         save_path=output_dir,
@@ -1663,6 +1839,8 @@ def main(config):
         flop_calculator=flop_calculator,
         exact_match_dataset_answer_format=config.dataset.answer_format,
         data_name=data_name,
+        config=config,  # Pass config for multi-evaluator support
+        llm=vllm_instance,  # Pass vLLM instance for local judge
     )
 
     # Evaluate results
@@ -1670,6 +1848,7 @@ def main(config):
         config=config,
         results=results,
         save_path=output_dir,
+        llm=vllm_instance,  # Pass vLLM instance for local judge
     )
 
     # Shutdown model resources (executor, client)

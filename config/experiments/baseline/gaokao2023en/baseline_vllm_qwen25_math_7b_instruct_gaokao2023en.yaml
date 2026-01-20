@@ -1,7 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/math500/baseline_qwen25_math_official_dataset
-# Baseline using official Qwen2.5-Math evaluation setup with their EXACT dataset
-# Uses the official MATH test.jsonl from Qwen2.5-Math repo (first 500 = all Prealgebra)
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/gaokao2023en/baseline_vllm_qwen25_math_7b_instruct_gaokao2023en
+# Baseline using Qwen2.5-Math-7B-Instruct on GaoKao 2023 En dataset
 
 defaults:
   - /config
@@ -12,12 +11,12 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "baseline_qwen25_math_official_dataset_${now:%H-%M-%S}"
+run_name: "baseline_qwen25_math_7b_gaokao2023en_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-gaokao2023en
 
 # Model configuration (vLLM backend)
 model:
@@ -25,9 +24,9 @@ model:
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
-  enable_prefix_caching: true  # Match official setting
+  enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 4096  # Model's native limit
+  max_model_len: 4096
 
 # System configuration
 system:
@@ -63,17 +62,17 @@ strategy:
   # No answer pattern stop tokens for baseline - only used for evaluation
   detector_answer_patterns: []
 
-# Dataset configuration - use HuggingFace MATH-500 dataset
+# Dataset configuration - GaoKao 2023 En
 dataset:
-  dataset_path: "test-time-compute/test_MATH"
+  dataset_path: "test-time-compute/test_gaokao2023en"
   dataset_config: null
   dataset_split: "test"
-  subset: 500
+  subset: 385  # Full GaoKao 2023 En dataset
   offset: 0
   question_field: "question"
   answer_field: "answer"
   answer_format: "numeric"
-  data_name: "math"
+  data_name: "gaokao2023en"
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
