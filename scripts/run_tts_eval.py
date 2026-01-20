@@ -186,8 +186,13 @@ def build_evaluators(config):
             evaluators[eval_key] = EvaluatorLLMAsAJudge(**llm_cfg)
 
         elif evaluator_name == "exact_match":
+            # Get data_name for official extraction (from dataset or strategy config)
+            data_name = config.dataset.get("data_name", None) or config.strategy.get("data_name", None)
+            if not data_name:
+                raise ValueError("data_name must be set in config.dataset or config.strategy")
             evaluators["exact_match"] = EvaluatorExactMatch(
-                config.dataset.answer_format
+                config.dataset.answer_format,
+                data_name=data_name,
             )
 
         elif evaluator_name == "alignscore":
@@ -633,10 +638,16 @@ def create_tts_strategy(
                 "Self-consistency strategy requires step_generator. "
                 "Ensure model.type is 'vllm' and step generator is created."
             )
+        # Get batch_generation flag (default True for fully batched mode)
+        batch_generation = config.strategy.get("batch_generation", True)
+        # Get data_name for official answer extraction (ensures consistency with final evaluation)
+        data_name = config.strategy.get("data_name", None)
         strategy = StrategySelfConsistency(
             step_generator=step_generator,
             num_paths=config.strategy.get("num_paths", 10),
             scorer=scorer,
+            batch_generation=batch_generation,
+            data_name=data_name,
         )
     elif config.strategy.type == "tree_of_thoughts":
         # Tree-of-Thoughts requires API-based model for state evaluation
@@ -710,7 +721,7 @@ def create_tts_strategy(
 def _generate_trajectories_batch(
     results,
     save_path,
-    strategy: "StrategyBaseline",
+    strategy,  # StrategyBaseline or StrategySelfConsistency
     dataset: Dataset,
     processed_indices: set,
     prompt_template: str,
@@ -722,12 +733,14 @@ def _generate_trajectories_batch(
     sample_metrics_path: Path,
 ):
     """
-    Batch generation for baseline strategy - generates all samples in a single vLLM call.
+    Batch generation for strategies that support it (baseline, self_consistency).
 
-    This is significantly faster than sequential generation because vLLM can
-    process all prompts together with continuous batching.
+    Generates all samples in a single vLLM call, which is significantly faster
+    than sequential generation because vLLM can process all prompts together
+    with continuous batching.
     """
-    log.info("Using batch generation mode for baseline strategy")
+    strategy_name = getattr(strategy, "__class__", type(strategy)).__name__
+    log.info(f"Using batch generation mode for {strategy_name}")
 
     subset_size = len(dataset)
 
@@ -963,7 +976,11 @@ def generate_trajectories(
     answer_field: str = "answer",
     flop_calculator: FLOPCalculator = None,
     exact_match_dataset_answer_format: str = "numeric",
+    data_name: str = None,  # Required - must be passed explicitly
 ):
+    if not data_name:
+        raise ValueError("data_name is required for generate_trajectories()")
+
     # Phase 1: Generate trajectories (without checking correctness)
     log.info("\n" + "=" * 60)
     log.info("Phase 1: Generating trajectories")
@@ -972,15 +989,17 @@ def generate_trajectories(
     save_path_file = Path(save_path) / "results.json"
     sample_metrics_path = Path(save_path) / "sample_metrics.jsonl"
     exact_match_evaluator = EvaluatorExactMatch(
-        dataset_answer_format=exact_match_dataset_answer_format
+        dataset_answer_format=exact_match_dataset_answer_format,
+        data_name=data_name,
     )
+    log.info(f"Phase 1 evaluator: data_name={exact_match_evaluator.data_name}")
 
     subset_size = len(dataset)
 
-    # Check if strategy supports batch generation (baseline strategy with batch_generation=True)
+    # Check if strategy supports batch generation (baseline or self_consistency with batch_generation=True)
     # When batch_generation=False, use per-sample loop for running accuracy during generation
     if (
-        isinstance(strategy, StrategyBaseline)
+        isinstance(strategy, (StrategyBaseline, StrategySelfConsistency))
         and hasattr(strategy, "generate_trajectories_batch")
         and getattr(strategy, "batch_generation", True)
     ):
@@ -1271,6 +1290,8 @@ def evaluate_results(
     # Process each evaluator separately (allows resuming per-evaluator)
     for eval_name, evaluator_fn in evaluators.items():
         log.info(f"\n--- Evaluator: {eval_name} ---")
+        if hasattr(evaluator_fn, 'data_name'):
+            log.info(f"  data_name: {evaluator_fn.data_name}")
 
         # Evaluate samples one at a time and save after each
         samples_evaluated = 0
@@ -1288,47 +1309,53 @@ def evaluate_results(
             log.info(f"Evaluating sample {result['index']} with {eval_name}...")
 
             try:
-                # Evaluate single sample
-                # Use generated_trajectory (full model output) for exact_match evaluator
-                # because it needs to run extract_answer() on the raw output.
-                # Other evaluators can use generated_answer (pre-extracted).
+                # Evaluate single sample - use SAME code path as Phase 1
                 solution = result.get(
-                    "generated_trajectory", result["generated_answer"]
-                )
-                eval_result = evaluator_fn(
-                    [result["question"]],
-                    [solution],
-                    [result["gold_answer"]],
+                    "generated_trajectory",
+                    result.get("trajectory", "")
                 )
 
-                # Handle both old format (list) and new format (tuple of lists)
-                if isinstance(eval_result, tuple):
-                    annotations, responses = eval_result
-                else:
-                    # Backward compatibility: old evaluators return just annotations
-                    annotations = eval_result
-                    responses = [None]
+                # For exact_match: call _score_single exactly like Phase 1
+                if eval_name == "exact_match" and hasattr(evaluator_fn, '_score_single'):
+                    gold_str = str(result["gold_answer"])
 
-                annotation = annotations[0]
-                response = responses[0] if responses else None
-
-                if np.isnan(annotation):
-                    log.warning(
-                        f"{eval_name} returned unclear result for sample "
-                        f"{result['index']}, marking as incorrect"
+                    # SAME call as Phase 1 line 869-871
+                    score = evaluator_fn._score_single(
+                        (result["question"], solution, gold_str)
                     )
-                    is_correct = False
+                    is_correct = score == 1.0
+                    annotation = 1.0 if is_correct else 0.0
+
+                    # Debug: compare with Phase 1 result
+                    phase1_correct = result.get("is_correct", None)
+                    if phase1_correct is not None and phase1_correct != is_correct:
+                        log.warning(f"MISMATCH sample {result['index']}: phase1={phase1_correct}, phase2={is_correct}")
+                        log.warning(f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}")
                 else:
-                    is_correct = annotation == 1  # 1 = correct, 0 = incorrect
+                    # Other evaluators use __call__
+                    eval_result = evaluator_fn(
+                        [result["question"]],
+                        [solution],
+                        [result["gold_answer"]],
+                    )
+                    if isinstance(eval_result, tuple):
+                        annotations, responses = eval_result
+                    else:
+                        annotations = eval_result
+                    annotation = annotations[0]
+                    if np.isnan(annotation):
+                        log.warning(
+                            f"{eval_name} returned unclear result for sample "
+                            f"{result['index']}, marking as incorrect"
+                        )
+                        is_correct = False
+                    else:
+                        is_correct = annotation == 1
 
                 eval_data = {
-                    "label": None if np.isnan(annotation) else int(annotation),
+                    "label": int(annotation),
                     "is_correct": bool(is_correct),
                 }
-
-                # Add raw response if available
-                if response is not None:
-                    eval_data["response"] = response
 
                 results[i].setdefault("eval", {})[eval_name] = eval_data
 
@@ -1619,6 +1646,10 @@ def main(config):
     # dataset = dataset.shuffle(seed=config.system.seed)
 
     # Generate trajectories
+    # Get data_name for official extraction (from dataset or strategy config)
+    data_name = config.dataset.get("data_name", None) or config.strategy.get("data_name", None)
+    if not data_name:
+        raise ValueError("data_name must be set in config.dataset or config.strategy")
     results = generate_trajectories(
         results=results,
         save_path=output_dir,
@@ -1631,6 +1662,7 @@ def main(config):
         answer_field=config.dataset.get("answer_field", "answer"),
         flop_calculator=flop_calculator,
         exact_match_dataset_answer_format=config.dataset.answer_format,
+        data_name=data_name,
     )
 
     # Evaluate results

@@ -54,6 +54,7 @@ strategy:
 dataset:
   subset: 675  # Full OlympiadBench dataset
   offset: 0
+  data_name: "olympiadbench"  # For answer extraction and grading
   # Use official Qwen2.5-Math prompt with \boxed{} format for proper grading
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
 

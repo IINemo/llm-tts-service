@@ -5,8 +5,9 @@ Majority voting scorer for self-consistency reasoning
 import logging
 import re
 from collections import Counter
-from typing import List
+from typing import List, Optional
 
+from llm_tts.evaluation.parser import extract_answer as extract_answer_official
 from llm_tts.utils import extract_answer as extract_answer_util
 
 from .step_scorer_base import CandidateScore, StepScorerBase
@@ -120,8 +121,13 @@ class ChainMajorityVotingScorer(StepScorerBase):
     rather than individual steps. Better suited for self-consistency evaluation.
     """
 
-    def __init__(self, answer_extraction_patterns: List[str] = None):
+    def __init__(
+        self,
+        answer_extraction_patterns: List[str] = None,
+        data_name: Optional[str] = None,
+    ):
         super().__init__("chain_majority_voting")
+        self.data_name = data_name  # Dataset name for official extraction (e.g., "minerva_math", "math500")
         self.answer_patterns = answer_extraction_patterns or [
             r"\\boxed\{([^}]+)\}",  # LaTeX boxed answer (most specific)
             r"<Answer>:\s*(.+?)(?:\n|$)",
@@ -135,17 +141,25 @@ class ChainMajorityVotingScorer(StepScorerBase):
 
     def extract_answer(self, text: str) -> str:
         """
-        Extract final answer using robust extraction utility.
+        Extract final answer using official Qwen2.5-Math extraction.
 
-        Uses llm_tts.utils.extract_answer which supports:
-        - \\boxed{} format with nested braces
-        - <Answer>: ... <end of response> format
-        - Auto-detection of format
+        When data_name is provided, uses llm_tts.evaluation.parser.extract_answer
+        which is the official extraction method matching the final evaluation.
+        This ensures consistency between running accuracy and final evaluation.
 
-        Note: Returns answer in original case (not lowercased) for consistency
-        with DeepConf. Majority voting comparison is case-insensitive internally.
+        Supports:
+        - \\boxed{} format with proper brace counting
+        - Dataset-specific handling (e.g., skip_unit for minerva_math)
+        - Proper normalization via strip_string()
         """
-        # Use the utility function for robust extraction
+        # Use official extraction when data_name is available (preferred)
+        if self.data_name:
+            answer = extract_answer_official(text, self.data_name, use_last_number=True)
+            if answer:
+                return answer.strip()
+            return "no_answer"
+
+        # Fallback: Use utility function when data_name not specified
         answer = extract_answer_util(text, answer_format="auto")
         if answer:
             return answer.strip()
