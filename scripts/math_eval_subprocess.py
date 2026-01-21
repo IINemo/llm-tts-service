@@ -338,6 +338,29 @@ def math_equal(
 
 
 def main():
+    # Test mode - verify environment is correctly set up
+    if "--test" in sys.argv:
+        print("Testing math evaluation environment...")
+        test_cases = [
+            ("2", "2", True),
+            ("\\frac{1}{2}", "0.5", True),
+            ("x^2 + 2x + 1", "(x+1)^2", True),
+            ("\\boxed{42}", "42", True),
+        ]
+        all_passed = True
+        for pred, gold, expected in test_cases:
+            result = math_equal(pred, gold)
+            status = "✓" if result == expected else "✗"
+            if result != expected:
+                all_passed = False
+            print(f"  {status} math_equal('{pred}', '{gold}') = {result} (expected {expected})")
+        if all_passed:
+            print("\n✓ All tests passed! Math evaluation environment is working correctly.")
+            sys.exit(0)
+        else:
+            print("\n✗ Some tests failed!")
+            sys.exit(1)
+
     batch_mode = "--batch" in sys.argv
 
     if batch_mode:
