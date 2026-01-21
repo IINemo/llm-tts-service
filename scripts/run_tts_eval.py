@@ -1074,7 +1074,12 @@ def generate_trajectories(
     if (
         isinstance(
             strategy,
-            (StrategyBaseline, StrategySelfConsistency, StrategyOfflineBestOfN, StrategyBeamSearch),
+            (
+                StrategyBaseline,
+                StrategySelfConsistency,
+                StrategyOfflineBestOfN,
+                StrategyBeamSearch,
+            ),
         )
         and hasattr(strategy, "generate_trajectories_batch")
         and getattr(strategy, "batch_generation", True)
@@ -1182,9 +1187,13 @@ def generate_trajectories(
         log.info(f"Gold answer:  {gold_answer_num}")
         # Use full trajectory for grading (evaluator will extract answer using official logic)
         exact_match_eval = phase1_evaluators.get("exact_match")
-        is_correct = exact_match_eval._score_single(
-            (question, result["trajectory"], str(gold_answer_num))
-        ) if exact_match_eval else False
+        is_correct = (
+            exact_match_eval._score_single(
+                (question, result["trajectory"], str(gold_answer_num))
+            )
+            if exact_match_eval
+            else False
+        )
         log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
         log.info("-" * 60)
         log.info(f"Num steps: {len(result['steps'])}")

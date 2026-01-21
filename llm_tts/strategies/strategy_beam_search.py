@@ -209,12 +209,16 @@ class StrategyBeamSearch(StrategyBase):
         # Check if scorer is a PRM model (separate model) or uses uncertainty from generation
         # PRM scorer (StepScorerPRM) has 'prm_model' attribute.
         # If using PRM, we'll batch score with PRM. Otherwise use uncertainty scores.
-        use_prm_scorer = hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
+        use_prm_scorer = (
+            hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
+        )
         log.info(f"Using PRM scorer: {use_prm_scorer}")
 
         # Initialize beams for all samples
         # sample_beams[sample_id] = list of beams, each beam = {"steps": [...], "scores": [...], "total_tokens": int}
-        sample_beams = {i: [{"steps": [], "scores": [], "total_tokens": 0}] for i in range(M)}
+        sample_beams = {
+            i: [{"steps": [], "scores": [], "total_tokens": 0}] for i in range(M)
+        }
 
         # Context limit for trajectories (leave room for prompt ~800 tokens + min generation)
         # Model has 4096 context, so 4096 - 800 (prompt) - 200 (buffer) = 3000
@@ -244,7 +248,9 @@ class StrategyBeamSearch(StrategyBase):
                     # Skip if beam is close to context limit (leave room for prompt ~800 tokens + generation)
                     if beam_tokens >= max_trajectory_tokens - 200:
                         skipped_beams.append((sample_id, beam_idx, beam))
-                        log.info(f"Sample {sample_id}: Skipping beam {beam_idx} (tokens: {beam_tokens} >= limit)")
+                        log.info(
+                            f"Sample {sample_id}: Skipping beam {beam_idx} (tokens: {beam_tokens} >= limit)"
+                        )
                     else:
                         prompt_metadata.append((sample_id, beam_idx, beam))
 
@@ -252,7 +258,9 @@ class StrategyBeamSearch(StrategyBase):
                 log.info("No prompts to process, stopping")
                 break
 
-            log.info(f"Generating candidates for {len(prompt_metadata)} (sample, beam) pairs, {len(skipped_beams)} skipped due to length")
+            log.info(
+                f"Generating candidates for {len(prompt_metadata)} (sample, beam) pairs, {len(skipped_beams)} skipped due to length"
+            )
 
             # Initialize containers for this step
             all_candidates_data = []
@@ -267,7 +275,9 @@ class StrategyBeamSearch(StrategyBase):
                     trajectory = parent_beam["steps"]
 
                     # Build prompt using step_generator's template
-                    prompt = self.step_generator._apply_chat_template(request, enable_thinking=False)
+                    prompt = self.step_generator._apply_chat_template(
+                        request, enable_thinking=False
+                    )
                     if trajectory:
                         trajectory_text = convert_trajectory_to_string(trajectory)
                         prompt = prompt + trajectory_text
@@ -295,7 +305,9 @@ class StrategyBeamSearch(StrategyBase):
                 # 4. Single vLLM call for ALL prompts
                 # Use raw vLLM for PRM scorer (compute_uncertainty=False)
                 if use_prm_scorer:
-                    raw_llm = getattr(self.step_generator.model, "llm", self.step_generator.model)
+                    raw_llm = getattr(
+                        self.step_generator.model, "llm", self.step_generator.model
+                    )
                     outputs = raw_llm.generate(prompts, sampling_params)
                 else:
                     # Use VLLMWithUncertainty to get uncertainty scores
@@ -306,9 +318,10 @@ class StrategyBeamSearch(StrategyBase):
                 outputs = sorted(outputs, key=lambda x: int(x.request_id))
 
                 # 5. Process outputs into candidate data (same logic as step_generator)
-                for prompt_idx, (request_output, (sample_id, beam_idx, parent_beam)) in enumerate(
-                    zip(outputs, prompt_metadata)
-                ):
+                for prompt_idx, (
+                    request_output,
+                    (sample_id, beam_idx, parent_beam),
+                ) in enumerate(zip(outputs, prompt_metadata)):
                     candidates_for_beam = []
 
                     for cand_idx, output in enumerate(request_output.outputs):
@@ -321,19 +334,28 @@ class StrategyBeamSearch(StrategyBase):
 
                         # Detect trajectory completion (same logic as step_generator)
                         # Stopped at EOS token ID
-                        stopped_at_eos = stop_reason in self.step_generator.stop_token_ids
+                        stopped_at_eos = (
+                            stop_reason in self.step_generator.stop_token_ids
+                        )
                         # Hit max tokens
                         hit_max_tokens = stop_reason == "length" or (
-                            stop_reason is None and len(token_ids) >= self.step_generator.max_step_tokens
+                            stop_reason is None
+                            and len(token_ids) >= self.step_generator.max_step_tokens
                         )
 
                         # Check for repetition and truncate if needed (same as step_generator)
                         repetition_detected = False
                         if hasattr(self.step_generator, "_detect_line_repetitions"):
-                            repetition_detected = self.step_generator._detect_line_repetitions(text)
-                        if hit_max_tokens and hasattr(self.step_generator, "_truncate_repetitions"):
-                            text, was_truncated = self.step_generator._truncate_repetitions(
-                                text, len(token_ids)
+                            repetition_detected = (
+                                self.step_generator._detect_line_repetitions(text)
+                            )
+                        if hit_max_tokens and hasattr(
+                            self.step_generator, "_truncate_repetitions"
+                        ):
+                            text, was_truncated = (
+                                self.step_generator._truncate_repetitions(
+                                    text, len(token_ids)
+                                )
                             )
                             if was_truncated:
                                 repetition_detected = True
@@ -345,30 +367,40 @@ class StrategyBeamSearch(StrategyBase):
                         # (checks for </think>, answer patterns, balanced \boxed{}, etc.)
                         detector_complete = False
                         if hasattr(self.step_generator, "detector"):
-                            detector_complete = self.step_generator.detector.is_trajectory_complete(
-                                text, reached_eos=stopped_at_eos
+                            detector_complete = (
+                                self.step_generator.detector.is_trajectory_complete(
+                                    text, reached_eos=stopped_at_eos
+                                )
                             )
 
                         is_trajectory_complete = (
-                            stopped_at_eos or has_boxed or repetition_detected or detector_complete
+                            stopped_at_eos
+                            or has_boxed
+                            or repetition_detected
+                            or detector_complete
                         )
 
                         # Get uncertainty from output if available
                         uncertainty = 0.0
-                        if hasattr(output, "uncertainty") and output.uncertainty is not None:
+                        if (
+                            hasattr(output, "uncertainty")
+                            and output.uncertainty is not None
+                        ):
                             uncertainty = output.uncertainty
                         validity = 1.0 / (1.0 + uncertainty) if uncertainty > 0 else 0.0
 
-                        candidates_for_beam.append({
-                            "text": text,
-                            "token_ids": token_ids,
-                            "uncertainty": uncertainty,
-                            "validity": validity,
-                            "is_complete": is_trajectory_complete,
-                            "sample_id": sample_id,
-                            "beam_idx": beam_idx,
-                            "parent_beam": parent_beam,
-                        })
+                        candidates_for_beam.append(
+                            {
+                                "text": text,
+                                "token_ids": token_ids,
+                                "uncertainty": uncertainty,
+                                "validity": validity,
+                                "is_complete": is_trajectory_complete,
+                                "sample_id": sample_id,
+                                "beam_idx": beam_idx,
+                                "parent_beam": parent_beam,
+                            }
+                        )
 
                     all_candidates_data.append(candidates_for_beam)
 
@@ -406,7 +438,10 @@ class StrategyBeamSearch(StrategyBase):
                     new_total_tokens = parent_beam.get("total_tokens", 0) + new_tokens
 
                     # Mark complete if exceeding context limit
-                    if new_total_tokens >= max_trajectory_tokens and not step_candidate.is_trajectory_complete:
+                    if (
+                        new_total_tokens >= max_trajectory_tokens
+                        and not step_candidate.is_trajectory_complete
+                    ):
                         step_candidate.is_trajectory_complete = True
                         log.info(
                             f"Sample {sample_id}: Trajectory marked complete "
@@ -436,7 +471,9 @@ class StrategyBeamSearch(StrategyBase):
 
                 if not beams:
                     # No beams generated, mark as complete with empty result
-                    log.warning(f"Sample {sample_indices[sample_id]}: No beams generated")
+                    log.warning(
+                        f"Sample {sample_indices[sample_id]}: No beams generated"
+                    )
                     completed_results[sample_id] = self._finalize_sample([], [])
                     samples_to_remove.append(sample_id)
                     continue
@@ -468,11 +505,17 @@ class StrategyBeamSearch(StrategyBase):
                         f"score={self._aggregate_scores(best_beam['scores']):.3f}, "
                         f"scores=[{scores_str}]"
                     )
-                    for step_idx, (step, score) in enumerate(zip(best_beam["steps"], best_beam["scores"])):
-                        log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
+                    for step_idx, (step, score) in enumerate(
+                        zip(best_beam["steps"], best_beam["scores"])
+                    ):
+                        log.info(
+                            f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}"
+                        )
                 else:
                     # Store completed beams and continue with active
-                    sample_beams[sample_id] = active + completed[: self.beam_size - len(active)]
+                    sample_beams[sample_id] = (
+                        active + completed[: self.beam_size - len(active)]
+                    )
 
             # Remove completed samples from active set
             for sample_id in samples_to_remove:
@@ -498,7 +541,9 @@ class StrategyBeamSearch(StrategyBase):
                 f"score={self._aggregate_scores(best_beam['scores']):.3f}, "
                 f"scores=[{scores_str}]"
             )
-            for step_idx, (step, score) in enumerate(zip(best_beam["steps"], best_beam["scores"])):
+            for step_idx, (step, score) in enumerate(
+                zip(best_beam["steps"], best_beam["scores"])
+            ):
                 log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
 
         # Return results in original order
@@ -506,8 +551,10 @@ class StrategyBeamSearch(StrategyBase):
         return results
 
     def _build_prompt_with_history(
-        self, request: List[Dict[str, str]], trajectory_text: str,
-        max_prompt_tokens: int = 3500
+        self,
+        request: List[Dict[str, str]],
+        trajectory_text: str,
+        max_prompt_tokens: int = 3500,
     ) -> str:
         """Build a prompt string with chat template and trajectory history.
 

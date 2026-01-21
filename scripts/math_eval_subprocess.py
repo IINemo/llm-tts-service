@@ -353,9 +353,13 @@ def main():
             status = "✓" if result == expected else "✗"
             if result != expected:
                 all_passed = False
-            print(f"  {status} math_equal('{pred}', '{gold}') = {result} (expected {expected})")
+            print(
+                f"  {status} math_equal('{pred}', '{gold}') = {result} (expected {expected})"
+            )
         if all_passed:
-            print("\n✓ All tests passed! Math evaluation environment is working correctly.")
+            print(
+                "\n✓ All tests passed! Math evaluation environment is working correctly."
+            )
             sys.exit(0)
         else:
             print("\n✗ Some tests failed!")

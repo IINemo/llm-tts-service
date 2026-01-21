@@ -143,7 +143,9 @@ class StrategyOfflineBestOfN(StrategyBase):
             # Score this step's tokens
             if step_token_ids and step_logprobs:
                 try:
-                    uncertainty = uncertainty_wrapper.score(step_token_ids, step_logprobs)
+                    uncertainty = uncertainty_wrapper.score(
+                        step_token_ids, step_logprobs
+                    )
                     # Convert to validity score: higher = better (lower uncertainty)
                     validity_score = 1.0 / (1.0 + uncertainty)
                 except Exception as e:
@@ -440,7 +442,9 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         if use_uncertainty_wrapper:
             # Use VLLMWithUncertainty to get uncertainty scores during generation
-            log.info("Using VLLMWithUncertainty for generation with uncertainty scoring")
+            log.info(
+                "Using VLLMWithUncertainty for generation with uncertainty scoring"
+            )
             outputs = self.step_generator.model.generate(
                 prompts, sampling_params, compute_uncertainty=True
             )
@@ -564,7 +568,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                     # Convert validity scores back to uncertainty for logging
                     step_uncertainties = []
                     for validity in traj["step_scores"]:
-                        uncertainty = (1.0 / validity - 1.0) if validity > 0 else float("inf")
+                        uncertainty = (
+                            (1.0 / validity - 1.0) if validity > 0 else float("inf")
+                        )
                         step_uncertainties.append(uncertainty)
                     avg_uncertainty = (
                         sum(step_uncertainties) / len(step_uncertainties)

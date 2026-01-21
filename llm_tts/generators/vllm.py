@@ -636,7 +636,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         # Check if model supports uncertainty computation (VLLMWithUncertainty wrapper)
         use_uncertainty_wrapper = hasattr(self.model, "estimator")
         if use_uncertainty_wrapper and compute_uncertainty:
-            outputs = self.model.generate(prompts, sampling_params, compute_uncertainty=True)
+            outputs = self.model.generate(
+                prompts, sampling_params, compute_uncertainty=True
+            )
         else:
             # Use raw vLLM for PRM scorer or when uncertainty not needed
             raw_llm = getattr(self.model, "llm", self.model)
@@ -1242,7 +1244,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         and call generate_answer_candidates() when reasoning phase is done.
         """
         return self._generate_step_candidates_impl(
-            request, trajectories, candidates_per_step, compute_uncertainty=compute_uncertainty
+            request,
+            trajectories,
+            candidates_per_step,
+            compute_uncertainty=compute_uncertainty,
         )
 
     def generate_answer_candidates(
