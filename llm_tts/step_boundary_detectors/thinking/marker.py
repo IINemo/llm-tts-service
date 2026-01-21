@@ -217,12 +217,18 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         flags = 0 if self.case_sensitive else re.IGNORECASE
         self.pattern = re.compile(combined, flags)
 
-    def detect_steps(self, text: str, **kwargs) -> List[str]:
+    def detect_steps(
+        self, text: str, normalize: bool = True, use_stop_tokens: bool = False, **kwargs
+    ) -> List[str]:
         """
         Detect steps by finding linguistic marker boundaries.
 
         Args:
             text: Thinking content (inside <think> tags)
+            normalize: If True, merge small steps and split large ones.
+                      If False, return raw splits at marker positions.
+            use_stop_tokens: If True, use vLLM stop tokens for splitting (matches online mode).
+                            This is the recommended mode for offline best-of-n.
 
         Returns:
             List of step strings
@@ -231,6 +237,10 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
 
         if not text.strip():
             return []
+
+        # Use stop tokens for splitting (matches online vLLM behavior)
+        if use_stop_tokens:
+            return self._split_by_stop_tokens(text)
 
         if not self.pattern:
             return [text]
@@ -241,8 +251,55 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         # Split at marker positions
         parts = self._split_at_positions(text, marker_positions)
 
-        # Normalize step sizes
-        steps = self._normalize_steps(parts)
+        # Normalize step sizes (optional - skip for offline mode)
+        if normalize:
+            steps = self._normalize_steps(parts)
+        else:
+            steps = [p for p in parts if p.strip()]
+
+        return steps
+
+    def _split_by_stop_tokens(self, text: str) -> List[str]:
+        """
+        Split text using the same stop tokens that vLLM uses in online mode.
+
+        This ensures offline step splitting matches online behavior exactly.
+        """
+        # Get the stop tokens this detector would use for vLLM
+        stop_tokens = self.get_vllm_stop_tokens(include_answer_tokens=False)
+
+        # Find all positions where stop tokens occur
+        split_positions = []
+        for token in stop_tokens:
+            pos = 0
+            while True:
+                pos = text.find(token, pos)
+                if pos == -1:
+                    break
+                split_positions.append(pos)
+                pos += 1
+
+        # Sort and deduplicate positions
+        split_positions = sorted(set(split_positions))
+
+        if not split_positions:
+            return [text] if text.strip() else []
+
+        # Split at these positions
+        steps = []
+        prev_pos = 0
+        for pos in split_positions:
+            if pos > prev_pos:
+                step = text[prev_pos:pos].strip()
+                if step:
+                    steps.append(step)
+            prev_pos = pos
+
+        # Add remaining text
+        if prev_pos < len(text):
+            step = text[prev_pos:].strip()
+            if step:
+                steps.append(step)
 
         return steps
 
@@ -273,7 +330,8 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
 
         parts = []
         prev_pos = 0
-        sentence_endings = ".!?\n"
+        # Include ] for LaTeX math blocks (\] commonly ends equations)
+        sentence_endings = ".!?\n]"
 
         for pos in positions:
             if pos > prev_pos:

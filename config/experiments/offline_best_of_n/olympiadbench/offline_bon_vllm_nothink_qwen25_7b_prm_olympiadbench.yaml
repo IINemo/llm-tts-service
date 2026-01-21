@@ -50,19 +50,20 @@ strategy:
   num_trajectories: 4
   max_steps: 50
   score_aggregation: min  # Conservative: trajectory is only as good as its weakest step
+  batch_generation: true  # Fully batched: M×N trajectories in single vLLM call
   # Stop tokens derived from detector config (use_* flags below)
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
   # Step boundary token limits
-  min_step_tokens: 50
+  min_step_tokens: 10
   max_step_tokens: 2048
   # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
   use_sequence: true
   use_conclusion: true
   use_thinking: true
   use_verification: true
-  use_structure: true
+  use_structure: false  # Disabled to avoid splitting on bullet points and paragraph breaks
   use_reasoning: true
   use_correction: false
   # Custom words for stop tokens
@@ -91,11 +92,25 @@ dataset:
   question_field: "question"
   answer_field: "answer"
   answer_format: "numeric"
+  data_name: olympiadbench  # For official Qwen2.5-Math answer extraction
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
 
 # Evaluation configuration
 evaluation:
+  # Phase 1 evaluators (run during generation for running accuracy)
   evaluators:
     - exact_match
+
+  # Phase 2 evaluators (batch evaluation after generation)
+  batch_evaluators:
+    - llm_judge
+
+  # API-based LLM judge configuration
+  llm_judge:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    cache_path: ./cache/llm_judge
+    n_threads: 10

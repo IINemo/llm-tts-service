@@ -120,5 +120,34 @@ class StepScorerBase(ABC):
         """
         raise NotImplementedError("score_trajectory must be implemented by subclass")
 
+    def score_trajectories_batch(
+        self,
+        chats: List[List[Dict[str, str]]],
+        trajectories: List[List],
+        sample_ids: List[int] = None,
+        trajectory_ids: List[int] = None,
+        **kwargs,
+    ) -> List[List[float]]:
+        """
+        Score multiple trajectories in a single batch call for efficiency.
+
+        Default implementation falls back to sequential scoring.
+        Subclasses (e.g., PRM scorer with vLLM) can override for true batching.
+
+        Args:
+            chats: List of chat messages (one per trajectory, contains question)
+            trajectories: List of trajectories (each is a list of steps)
+            sample_ids: Optional list of sample indices for logging
+            trajectory_ids: Optional list of trajectory indices within each sample
+
+        Returns:
+            List of score lists, one per trajectory
+        """
+        # Default: sequential fallback
+        return [
+            self.score_trajectory(chat, traj, **kwargs)
+            for chat, traj in zip(chats, trajectories)
+        ]
+
     def __str__(self):
         return f"{self.__class__.__name__}({self.name})"

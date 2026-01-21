@@ -180,7 +180,7 @@ def find_box(pred_str: str) -> str:
 
 
 def extract_answer(
-    pred_str: str, data_name: str = "math500", use_last_number: bool = True
+    pred_str: str, data_name: str = None, use_last_number: bool = True
 ) -> str:
     """
     Official Qwen2.5-Math answer extraction function.
@@ -190,7 +190,7 @@ def extract_answer(
 
     Args:
         pred_str: The model output string to extract answer from
-        data_name: Dataset name for format-specific handling
+        data_name: Dataset name for format-specific handling - REQUIRED
         use_last_number: Whether to fall back to last number extraction
 
     Returns:

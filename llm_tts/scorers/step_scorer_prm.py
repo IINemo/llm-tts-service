@@ -504,6 +504,156 @@ class StepScorerPRM(StepScorerRewardBase):
 
         return all_step_scores[: len(step_texts)]
 
+    def score_trajectories_batch(
+        self,
+        chats: List[List[Dict[str, str]]],
+        trajectories: List[List],
+        sample_ids: List[int] = None,
+        trajectory_ids: List[int] = None,
+        **kwargs,
+    ) -> List[List[float]]:
+        """
+        Score multiple trajectories in a single batched vLLM call.
+
+        This is significantly faster than sequential scoring because vLLM
+        can process all prompts together with continuous batching.
+
+        Args:
+            chats: List of chat messages (one per trajectory)
+            trajectories: List of trajectories (each is list of steps)
+            sample_ids: Optional list of sample indices for logging
+            trajectory_ids: Optional list of trajectory indices within each sample
+
+        Returns:
+            List of score lists, one per trajectory
+        """
+        if not self.use_vllm:
+            # Fall back to sequential for HuggingFace backend
+            log.info("HuggingFace backend: falling back to sequential scoring")
+            return [
+                self.score_trajectory(chat, traj, **kwargs)
+                for chat, traj in zip(chats, trajectories)
+            ]
+
+        if not trajectories:
+            return []
+
+        # Log all trajectories before scoring
+        log.info(f"--- Preparing {len(trajectories)} trajectories for PRM scoring ---")
+        for traj_idx, trajectory in enumerate(trajectories):
+            sample_id = sample_ids[traj_idx] if sample_ids else "?"
+            traj_id = trajectory_ids[traj_idx] if trajectory_ids else traj_idx
+            num_steps = len(trajectory) if trajectory else 0
+            log.info(f"Sample {sample_id}, Traj {traj_id}: {num_steps} steps")
+            # Log each step content (full text)
+            for step_idx, step in enumerate(trajectory or []):
+                step_text = step.text if hasattr(step, "text") else str(step)
+                log.info(f"  Step {step_idx}:\n{step_text}")
+
+        # Build all prompts and track metadata for result mapping
+        all_prompts = []
+        trajectory_metadata = (
+            []
+        )  # (traj_idx, num_steps, sample_id, traj_id) for each prompt
+
+        for traj_idx, (chat, trajectory) in enumerate(zip(chats, trajectories)):
+            if not trajectory:
+                trajectory_metadata.append((traj_idx, 0))
+                all_prompts.append("")  # Placeholder
+                continue
+
+            # Extract question
+            question = None
+            for msg in chat:
+                if msg["role"] == "user":
+                    question = msg["content"]
+                    break
+            if question is None:
+                question = chat[-1]["content"]
+
+            # Get step texts
+            step_texts = [
+                step.text if hasattr(step, "text") else str(step) for step in trajectory
+            ]
+
+            # Build prompt
+            prompt = self._format_prm_prompt(question, step_texts)
+
+            # Truncate if needed
+            max_tokens = 4000
+            tokens = self.prm_tokenizer.encode(prompt)
+            if len(tokens) > max_tokens:
+                log.warning(
+                    f"Truncating PRM prompt {traj_idx} from {len(tokens)} to {max_tokens} tokens"
+                )
+                tokens = tokens[:max_tokens]
+                prompt = self.prm_tokenizer.decode(tokens)
+
+            all_prompts.append(prompt)
+            sample_id = sample_ids[traj_idx] if sample_ids else None
+            traj_id = trajectory_ids[traj_idx] if trajectory_ids else traj_idx
+            trajectory_metadata.append((traj_idx, len(step_texts), sample_id, traj_id))
+
+        # Filter out empty prompts for scoring
+        valid_indices = [i for i, p in enumerate(all_prompts) if p]
+        valid_prompts = [all_prompts[i] for i in valid_indices]
+
+        log.info(f"PRM batch scoring {len(valid_prompts)} trajectories in single call")
+
+        # Single batched vLLM call
+        if valid_prompts:
+            outputs = self.prm_model.reward(valid_prompts, use_tqdm=False)
+        else:
+            outputs = []
+
+        # Parse results and map back to trajectories
+        log.info("--- PRM Scoring Results ---")
+        results = [[] for _ in trajectories]
+        output_idx = 0
+
+        for i, (traj_idx, num_steps, sample_id, traj_id) in enumerate(
+            trajectory_metadata
+        ):
+            if i not in valid_indices:
+                results[traj_idx] = []
+                continue
+
+            output = outputs[output_idx]
+            output_idx += 1
+
+            step_scores = []
+            if hasattr(output, "outputs") and hasattr(output.outputs, "data"):
+                data = output.outputs.data
+                if hasattr(data, "tolist"):
+                    raw_scores = data.tolist()
+                elif isinstance(data, list):
+                    raw_scores = data
+                else:
+                    raw_scores = [data]
+
+                for score in raw_scores:
+                    if isinstance(score, (list, tuple)) and len(score) == 2:
+                        step_scores.append(score[1])  # Positive class probability
+                    else:
+                        step_scores.append(float(score))
+
+            # Pad if needed
+            while len(step_scores) < num_steps:
+                step_scores.append(0.0)
+
+            final_scores = step_scores[:num_steps]
+            results[traj_idx] = final_scores
+
+            # Log detailed scores for this trajectory
+            sample_str = f"Sample {sample_id}" if sample_id is not None else ""
+            log.info(
+                f"{sample_str} Traj {traj_id}: {num_steps} steps, "
+                f"scores={[f'{s:.3f}' for s in final_scores]}"
+            )
+
+        log.info(f"PRM batch scoring complete: {len(results)} trajectories scored")
+        return results
+
     def _format_prm_prompt(self, question: str, step_texts: List[str]) -> str:
         """Format a prompt for PRM scoring with <extra_0> step separators."""
         messages = [

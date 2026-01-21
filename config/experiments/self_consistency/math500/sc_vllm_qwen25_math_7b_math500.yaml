@@ -1,7 +1,7 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/math500/baseline_qwen25_math_official_dataset
-# Baseline using official Qwen2.5-Math evaluation setup with their EXACT dataset
-# Uses the official MATH test.jsonl from Qwen2.5-Math repo (first 500 = all Prealgebra)
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/math500/sc_vllm_qwen25_math_7b_math500
+# Self-consistency evaluation on MATH-500 (500 competition math problems)
+# Uses majority voting over N diverse reasoning paths
 
 defaults:
   - /config
@@ -12,7 +12,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "baseline_qwen25_math_official_dataset_${now:%H-%M-%S}"
+run_name: "sc_vllm_qwen25_math_7b_math500_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -23,47 +23,35 @@ wandb_project: llm-tts-eval-math500
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
-  gpu_memory_utilization: 0.9
+  gpu_memory_utilization: 0.95
   tensor_parallel_size: 1
-  enable_prefix_caching: true  # Match official setting
+  enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 4096  # Model's native limit
+  max_model_len: 4096
 
 # System configuration
 system:
   device: cuda
-  seed: 0
+  seed: 42
 
-# Generation configuration - matches official Qwen2.5-Math eval exactly
+# Generation configuration - temperature > 0 for diversity
 generation:
   max_new_tokens: 2048
-  temperature: 0.0
-  top_p: 1.0
+  temperature: 0.7
+  top_p: 0.95
   batch_size: 1
 
-# Strategy - Baseline single-shot
+# Strategy - Self-consistency with majority voting
 strategy:
-  type: baseline
-  # No semantic stop tokens for baseline (full response generation)
-  # Only EOS token IDs stop generation
+  type: self_consistency
+  num_paths: 8  # Generate 8 diverse paths per sample
+  batch_generation: true  # Fully batched: 1 vLLM call for all M×N trajectories
+  data_name: math  # For official Qwen2.5-Math answer extraction
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
-  # Step token limits (required by ThinkingMarkerDetector)
-  min_step_tokens: 0
-  max_step_tokens: 2048  # Match generation.max_new_tokens
-  # Disable all semantic markers for baseline
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # No answer pattern stop tokens for baseline - only used for evaluation
-  detector_answer_patterns: []
 
-# Dataset configuration - use HuggingFace MATH-500 dataset
+# Dataset configuration
 dataset:
   dataset_path: "test-time-compute/test_MATH"
   dataset_config: null
@@ -73,7 +61,7 @@ dataset:
   question_field: "question"
   answer_field: "answer"
   answer_format: "numeric"
-  data_name: "math"
+  data_name: math  # CRITICAL: must match strategy.data_name for consistent evaluation
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
