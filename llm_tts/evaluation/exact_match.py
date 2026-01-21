@@ -12,7 +12,7 @@ import re
 from tqdm import tqdm
 
 from .grader import math_equal
-from .parser import extract_answer, strip_string, STRIP_EXCEPTIONS
+from .parser import STRIP_EXCEPTIONS, extract_answer, strip_string
 
 log = logging.getLogger()
 

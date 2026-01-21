@@ -8,16 +8,16 @@ Usage:
 """
 
 import json
-import sys
 import re
-import regex
+import sys
 from math import isclose
 from typing import Union
 
-from sympy import simplify, N
-from sympy.parsing.sympy_parser import parse_expr
-from sympy.parsing.latex import parse_latex
+import regex
 from latex2sympy2 import latex2sympy
+from sympy import N, simplify
+from sympy.parsing.latex import parse_latex
+from sympy.parsing.sympy_parser import parse_expr
 
 
 def choice_answer_clean(pred: str):
