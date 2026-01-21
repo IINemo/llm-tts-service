@@ -143,14 +143,13 @@ def load_prompt_template(prompt_file: str) -> str:
         return f.read().strip()
 
 
-def build_evaluators(config, llm=None):
+def build_evaluators(config):
     """
     Create evaluators from config.
     The list of evaluator names in config.evaluation.evaluators
 
     Args:
         config: Hydra config
-        llm: Optional vLLM instance to reuse for local judge
     """
     evaluators = {}
 
@@ -1035,7 +1034,6 @@ def generate_trajectories(
     exact_match_dataset_answer_format: str = "numeric",
     data_name: str = None,  # Required - must be passed explicitly
     config = None,  # Optional - needed for multi-evaluator support
-    llm = None,  # Optional - vLLM instance to reuse for local judge
 ):
     if not data_name:
         raise ValueError("data_name is required for generate_trajectories()")
@@ -1050,7 +1048,7 @@ def generate_trajectories(
 
     # Build all evaluators if config is provided, otherwise use just exact_match
     if config is not None:
-        phase1_evaluators = build_evaluators(config, llm=llm)
+        phase1_evaluators = build_evaluators(config)
         log.info(f"Phase 1 evaluators: {list(phase1_evaluators.keys())}")
     else:
         exact_match_evaluator = EvaluatorExactMatch(
@@ -1341,7 +1339,6 @@ def evaluate_results(
     config,
     results,
     save_path: str,
-    llm=None,  # Optional - vLLM instance to reuse for local judge
 ):
     # Phase 2: Check correctness for all results
     log.info("\n" + "=" * 60)
@@ -1349,7 +1346,7 @@ def evaluate_results(
     log.info("=" * 60)
 
     # Build evaluators dynamically (regular evaluators from config.evaluation.evaluators)
-    evaluators = build_evaluators(config, llm=llm)
+    evaluators = build_evaluators(config)
     log.info(f"Using evaluators: {list(evaluators.keys())}")
 
     # Build batch evaluators (from config.evaluation.batch_evaluators)
@@ -1826,8 +1823,6 @@ def main(config):
     data_name = config.dataset.get("data_name", None) or config.strategy.get("data_name", None)
     if not data_name:
         raise ValueError("data_name must be set in config.dataset or config.strategy")
-    # Get vLLM instance for local judge (if using vLLM backend)
-    vllm_instance = getattr(model, "vllm_engine", None)
 
     results = generate_trajectories(
         results=results,
@@ -1843,7 +1838,6 @@ def main(config):
         exact_match_dataset_answer_format=config.dataset.answer_format,
         data_name=data_name,
         config=config,  # Pass config for multi-evaluator support
-        llm=vllm_instance,  # Pass vLLM instance for local judge
     )
 
     # Evaluate results
@@ -1851,7 +1845,6 @@ def main(config):
         config=config,
         results=results,
         save_path=output_dir,
-        llm=vllm_instance,  # Pass vLLM instance for local judge
     )
 
     # Shutdown model resources (executor, client)
