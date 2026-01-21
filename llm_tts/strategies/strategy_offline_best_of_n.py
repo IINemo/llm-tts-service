@@ -83,6 +83,79 @@ class StrategyOfflineBestOfN(StrategyBase):
             return candidate.other_data["uncertainty_score"]
         return 0.0
 
+    def _compute_per_step_uncertainty(
+        self,
+        steps: List[str],
+        token_ids: List[int],
+        logprobs: List,
+        uncertainty_wrapper,
+    ) -> List[float]:
+        """
+        Compute uncertainty score for each step independently.
+
+        Maps step text boundaries to token boundaries, then scores each step's
+        tokens using VLLMWithUncertainty.score(). Works with any uncertainty
+        estimator (Perplexity, MeanTokenEntropy, etc.).
+
+        Args:
+            steps: List of step text strings
+            token_ids: Full trajectory token IDs
+            logprobs: Full trajectory logprobs from vLLM
+            uncertainty_wrapper: VLLMWithUncertainty instance
+
+        Returns:
+            List of validity scores (1/(1+uncertainty)) for each step
+        """
+        if not steps or not token_ids or not logprobs:
+            return [0.0] * len(steps) if steps else []
+
+        tokenizer = uncertainty_wrapper.get_tokenizer()
+
+        # Decode tokens incrementally to find step boundaries
+        # We need to match step text to token positions
+        step_scores = []
+        current_token_idx = 0
+
+        for step_idx, step_text in enumerate(steps):
+            # Find how many tokens this step uses
+            # Strategy: decode tokens incrementally until we cover this step's text
+            step_start_idx = current_token_idx
+            accumulated_text = ""
+
+            # Find end token index for this step
+            while current_token_idx < len(token_ids):
+                # Decode from start to current position
+                accumulated_text = tokenizer.decode(
+                    token_ids[step_start_idx : current_token_idx + 1],
+                    skip_special_tokens=False,
+                )
+                current_token_idx += 1
+
+                # Check if we've covered this step's text
+                # Use startswith to handle potential whitespace differences
+                if len(accumulated_text.strip()) >= len(step_text.strip()):
+                    break
+
+            # Get token_ids and logprobs for this step
+            step_token_ids = token_ids[step_start_idx:current_token_idx]
+            step_logprobs = logprobs[step_start_idx:current_token_idx]
+
+            # Score this step's tokens
+            if step_token_ids and step_logprobs:
+                try:
+                    uncertainty = uncertainty_wrapper.score(step_token_ids, step_logprobs)
+                    # Convert to validity score: higher = better (lower uncertainty)
+                    validity_score = 1.0 / (1.0 + uncertainty)
+                except Exception as e:
+                    log.warning(f"Failed to score step {step_idx}: {e}")
+                    validity_score = 0.5  # Neutral score on error
+            else:
+                validity_score = 0.5  # Neutral score for empty steps
+
+            step_scores.append(validity_score)
+
+        return step_scores
+
     def _aggregate_scores(self, step_scores: List[float]) -> float:
         """
         Aggregate step scores into a single trajectory score.
@@ -361,14 +434,26 @@ class StrategyOfflineBestOfN(StrategyBase):
             f"n={N}, max_tokens={sampling_params.max_tokens}"
         )
 
-        # Get the raw vLLM LLM (bypass wrapper)
-        raw_llm = getattr(self.step_generator.model, "llm", self.step_generator.model)
+        # Check if scorer uses uncertainty from generation (entropy/perplexity)
+        # vs separate model (PRM). VLLMWithUncertainty has 'estimator' attribute.
+        use_uncertainty_wrapper = hasattr(self.step_generator.model, "estimator")
 
-        # Single vLLM call for all M prompts × N trajectories
-        outputs = raw_llm.generate(prompts, sampling_params)
-
-        # Sort outputs by request_id to maintain order
-        outputs = sorted(outputs, key=lambda x: int(x.request_id))
+        if use_uncertainty_wrapper:
+            # Use VLLMWithUncertainty to get uncertainty scores during generation
+            log.info("Using VLLMWithUncertainty for generation with uncertainty scoring")
+            outputs = self.step_generator.model.generate(
+                prompts, sampling_params, compute_uncertainty=True
+            )
+            # Sort by request_id (outputs are RequestOutputWithUncertainty)
+            outputs = sorted(outputs, key=lambda x: int(x.request_id))
+        else:
+            # Use raw vLLM for PRM scorer (scores computed separately)
+            raw_llm = getattr(
+                self.step_generator.model, "llm", self.step_generator.model
+            )
+            outputs = raw_llm.generate(prompts, sampling_params)
+            # Sort outputs by request_id to maintain order
+            outputs = sorted(outputs, key=lambda x: int(x.request_id))
 
         # Phase 1: Parse all outputs and build trajectory data for ALL samples
         # This collects everything needed for batch scoring
@@ -416,10 +501,24 @@ class StrategyOfflineBestOfN(StrategyBase):
                 else:
                     steps = [raw_text]  # Fallback: treat as single step
 
+                # Compute per-step uncertainty if using uncertainty wrapper
+                # Score each step independently using its token logprobs
+                if use_uncertainty_wrapper and output.logprobs:
+                    step_scores = self._compute_per_step_uncertainty(
+                        steps=steps,
+                        token_ids=list(output.token_ids),
+                        logprobs=list(output.logprobs),
+                        uncertainty_wrapper=self.step_generator.model,
+                    )
+                    aggregated = self._aggregate_scores(step_scores)
+                else:
+                    step_scores = []
+                    aggregated = 0.0
+
                 traj_data = {
                     "steps": steps,
-                    "step_scores": [],
-                    "aggregated_score": 0.0,
+                    "step_scores": step_scores,
+                    "aggregated_score": aggregated,
                     "full_text": raw_text,
                     "num_steps": len(steps),
                     "is_complete": True,
@@ -427,8 +526,8 @@ class StrategyOfflineBestOfN(StrategyBase):
                 }
                 trajectories.append(traj_data)
 
-                # Add to flat lists for batch scoring (only if has steps)
-                if steps:
+                # Add to flat lists for batch scoring (only if has steps AND no pre-computed scores)
+                if steps and not use_uncertainty_wrapper:
                     all_chats_for_scoring.append(request)
                     all_trajectories_for_scoring.append(steps)
                     all_sample_ids_for_scoring.append(sample_idx)
@@ -447,13 +546,44 @@ class StrategyOfflineBestOfN(StrategyBase):
             )
 
         # Phase 2: Batch score ALL trajectories in single call
-        log.info(
-            f"Batch scoring {len(all_trajectories_for_scoring)} trajectories "
-            f"from {len(sample_data)} samples"
-        )
-
-        if all_trajectories_for_scoring:
+        # Skip if using uncertainty wrapper (scores already computed during generation)
+        if use_uncertainty_wrapper:
+            log.info(
+                "Skipping batch scoring - using per-step uncertainty scores "
+                f"from generation ({sum(len(d['trajectories']) for d in sample_data)} trajectories)"
+            )
+            # Log detailed per-step uncertainty scores
+            log.info("--- Per-Step Uncertainty Scoring Results ---")
+            for data in sample_data:
+                if data["failed"]:
+                    continue
+                sample_idx = data["sample_idx"]
+                trajectories = data["trajectories"]
+                log.info(f"Sample {sample_idx}: {len(trajectories)} trajectories")
+                for traj_idx, traj in enumerate(trajectories):
+                    # Convert validity scores back to uncertainty for logging
+                    step_uncertainties = []
+                    for validity in traj["step_scores"]:
+                        uncertainty = (1.0 / validity - 1.0) if validity > 0 else float("inf")
+                        step_uncertainties.append(uncertainty)
+                    avg_uncertainty = (
+                        sum(step_uncertainties) / len(step_uncertainties)
+                        if step_uncertainties
+                        else 0.0
+                    )
+                    log.info(
+                        f"  Trajectory {traj_idx + 1}: "
+                        f"steps={traj['num_steps']}, "
+                        f"avg_uncertainty={avg_uncertainty:.4f}, "
+                        f"aggregated_validity={traj['aggregated_score']:.4f}, "
+                        f"step_validities={[f'{s:.3f}' for s in traj['step_scores']]}"
+                    )
+        elif all_trajectories_for_scoring:
             # Use batch scoring if available, otherwise falls back to sequential
+            log.info(
+                f"Batch scoring {len(all_trajectories_for_scoring)} trajectories "
+                f"from {len(sample_data)} samples"
+            )
             all_scores = self.scorer.score_trajectories_batch(
                 all_chats_for_scoring,
                 all_trajectories_for_scoring,

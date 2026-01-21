@@ -825,6 +825,9 @@ def _generate_trajectories_batch(
                     for s in result.get("steps", [])
                 ],
                 "validity_scores": result.get("validity_scores", []),
+                "all_step_scores": result.get("all_step_scores", []),
+                "all_scores": result.get("all_scores", []),
+                "best_idx": result.get("best_idx"),
             }
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     log.info(f"Saved {len(batch_results)} batch results")
