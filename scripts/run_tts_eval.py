@@ -60,7 +60,6 @@ from llm_tts.evaluation import (
     EvaluatorExactMatch,
     EvaluatorLLMAsAJudge,
 )
-from llm_tts.evaluation.grader import grade_answer
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
@@ -190,9 +189,13 @@ def build_evaluators(config):
 
         elif evaluator_name == "exact_match":
             # Get data_name for official extraction (from dataset or strategy config)
-            data_name = config.dataset.get("data_name", None) or config.strategy.get("data_name", None)
+            data_name = config.dataset.get("data_name", None) or config.strategy.get(
+                "data_name", None
+            )
             if not data_name:
-                raise ValueError("data_name must be set in config.dataset or config.strategy")
+                raise ValueError(
+                    "data_name must be set in config.dataset or config.strategy"
+                )
             evaluators["exact_match"] = EvaluatorExactMatch(
                 config.dataset.answer_format,
                 data_name=data_name,
@@ -889,7 +892,7 @@ def _generate_trajectories_batch(
                     is_correct_eval = labels[0] == 1 if labels else False
                     eval_results[eval_name] = {
                         "is_correct": is_correct_eval,
-                        "response": responses[0] if responses else ""
+                        "response": responses[0] if responses else "",
                     }
                     continue
                 else:
@@ -901,7 +904,9 @@ def _generate_trajectories_batch(
                         labels, responses = result_output
                         is_correct_eval = labels[0] == 1 if labels else False
                     elif isinstance(result_output, list):
-                        is_correct_eval = bool(result_output[0]) if result_output else False
+                        is_correct_eval = (
+                            bool(result_output[0]) if result_output else False
+                        )
                     else:
                         is_correct_eval = False
                 eval_results[eval_name] = {"is_correct": is_correct_eval}
@@ -916,7 +921,7 @@ def _generate_trajectories_batch(
         log.info(f"FINAL ANSWER: {generated_text}")
         log.info(f"Gold answer:  {gold_answer_num}")
         for eval_name, eval_result in eval_results.items():
-            status = '✓ YES' if eval_result.get('is_correct') else '✗ NO'
+            status = "✓ YES" if eval_result.get("is_correct") else "✗ NO"
             log.info(f"[{eval_name}]: {status}")
         log.info("-" * 60)
         log.info(f"Num steps: {len(result['steps'])}")
@@ -959,15 +964,15 @@ def _generate_trajectories_batch(
         running_stats = {}
         for eval_name in phase1_evaluators.keys():
             correct_count = sum(
-                1 for r in results
+                1
+                for r in results
                 if r.get("eval", {}).get(eval_name, {}).get("is_correct", False)
             )
             accuracy = (correct_count / len(results)) if results else 0.0
-            running_stats[eval_name] = {
-                "correct": correct_count,
-                "accuracy": accuracy
-            }
-            log.info(f"Running accuracy [{eval_name}]: {correct_count}/{len(results)} = {accuracy:.3f}")
+            running_stats[eval_name] = {"correct": correct_count, "accuracy": accuracy}
+            log.info(
+                f"Running accuracy [{eval_name}]: {correct_count}/{len(results)} = {accuracy:.3f}"
+            )
 
         sample_metrics = {
             "sample_index": i,
@@ -1033,7 +1038,7 @@ def generate_trajectories(
     flop_calculator: FLOPCalculator = None,
     exact_match_dataset_answer_format: str = "numeric",
     data_name: str = None,  # Required - must be passed explicitly
-    config = None,  # Optional - needed for multi-evaluator support
+    config=None,  # Optional - needed for multi-evaluator support
 ):
     if not data_name:
         raise ValueError("data_name is required for generate_trajectories()")
@@ -1063,7 +1068,10 @@ def generate_trajectories(
     # Check if strategy supports batch generation (baseline, self_consistency, or offline_best_of_n with batch_generation=True)
     # When batch_generation=False, use per-sample loop for running accuracy during generation
     if (
-        isinstance(strategy, (StrategyBaseline, StrategySelfConsistency, StrategyOfflineBestOfN))
+        isinstance(
+            strategy,
+            (StrategyBaseline, StrategySelfConsistency, StrategyOfflineBestOfN),
+        )
         and hasattr(strategy, "generate_trajectories_batch")
         and getattr(strategy, "batch_generation", True)
     ):
@@ -1394,7 +1402,7 @@ def evaluate_results(
     # Process each evaluator separately (allows resuming per-evaluator)
     for eval_name, evaluator_fn in evaluators.items():
         log.info(f"\n--- Evaluator: {eval_name} ---")
-        if hasattr(evaluator_fn, 'data_name'):
+        if hasattr(evaluator_fn, "data_name"):
             log.info(f"  data_name: {evaluator_fn.data_name}")
 
         # Evaluate samples one at a time and save after each
@@ -1415,12 +1423,13 @@ def evaluate_results(
             try:
                 # Evaluate single sample - use SAME code path as Phase 1
                 solution = result.get(
-                    "generated_trajectory",
-                    result.get("trajectory", "")
+                    "generated_trajectory", result.get("trajectory", "")
                 )
 
                 # For exact_match: call _score_single exactly like Phase 1
-                if eval_name == "exact_match" and hasattr(evaluator_fn, '_score_single'):
+                if eval_name == "exact_match" and hasattr(
+                    evaluator_fn, "_score_single"
+                ):
                     gold_str = str(result["gold_answer"])
 
                     # SAME call as Phase 1 line 869-871
@@ -1433,11 +1442,17 @@ def evaluate_results(
                     # Debug: compare with Phase 1 result
                     phase1_correct = result.get("is_correct", None)
                     if phase1_correct is not None and phase1_correct != is_correct:
-                        log.warning(f"MISMATCH sample {result['index']}: phase1={phase1_correct}, phase2={is_correct}")
-                        log.warning(f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}")
+                        log.warning(
+                            f"MISMATCH sample {result['index']}: phase1={phase1_correct}, phase2={is_correct}"
+                        )
+                        log.warning(
+                            f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}"
+                        )
                 else:
                     # Other evaluators use __call__ with extracted answer
-                    extracted_answer = result.get("generated_answer", result.get("extracted_answer", ""))
+                    extracted_answer = result.get(
+                        "generated_answer", result.get("extracted_answer", "")
+                    )
                     eval_result = evaluator_fn(
                         [result["question"]],
                         [extracted_answer],
@@ -1503,7 +1518,9 @@ def evaluate_results(
             if "error" in result:
                 continue
             if "eval" in result and eval_name in result["eval"]:
-                log.info(f"Skipping sample {result['index']} (already evaluated by {eval_name})")
+                log.info(
+                    f"Skipping sample {result['index']} (already evaluated by {eval_name})"
+                )
                 continue
             samples_to_eval.append(result)
             indices_to_eval.append(i)
@@ -1519,7 +1536,10 @@ def evaluate_results(
         gold_answers = [str(r["gold_answer"]) for r in samples_to_eval]
 
         # API judge expects full solutions
-        solutions = [r.get("generated_trajectory", r.get("trajectory", "")) for r in samples_to_eval]
+        solutions = [
+            r.get("generated_trajectory", r.get("trajectory", ""))
+            for r in samples_to_eval
+        ]
 
         try:
             # Batch evaluate
@@ -1531,7 +1551,9 @@ def evaluate_results(
                 responses = [None] * len(annotations)
 
             # Store results
-            for idx, (i, annotation, response) in enumerate(zip(indices_to_eval, annotations, responses)):
+            for idx, (i, annotation, response) in enumerate(
+                zip(indices_to_eval, annotations, responses)
+            ):
                 is_correct = annotation == 1
                 eval_data = {
                     "label": int(annotation) if not np.isnan(annotation) else None,
@@ -1543,7 +1565,9 @@ def evaluate_results(
 
             # Save after batch
             save_results_json(results, save_path_file)
-            log.info(f"Completed batch evaluation with {eval_name} ({len(samples_to_eval)} samples)")
+            log.info(
+                f"Completed batch evaluation with {eval_name} ({len(samples_to_eval)} samples)"
+            )
 
         except Exception as e:
             traceback.print_exc()
@@ -1820,7 +1844,9 @@ def main(config):
 
     # Generate trajectories
     # Get data_name for official extraction (from dataset or strategy config)
-    data_name = config.dataset.get("data_name", None) or config.strategy.get("data_name", None)
+    data_name = config.dataset.get("data_name", None) or config.strategy.get(
+        "data_name", None
+    )
     if not data_name:
         raise ValueError("data_name must be set in config.dataset or config.strategy")
 

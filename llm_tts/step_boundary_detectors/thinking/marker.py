@@ -217,7 +217,9 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         flags = 0 if self.case_sensitive else re.IGNORECASE
         self.pattern = re.compile(combined, flags)
 
-    def detect_steps(self, text: str, normalize: bool = True, use_stop_tokens: bool = False, **kwargs) -> List[str]:
+    def detect_steps(
+        self, text: str, normalize: bool = True, use_stop_tokens: bool = False, **kwargs
+    ) -> List[str]:
         """
         Detect steps by finding linguistic marker boundaries.
 

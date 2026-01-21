@@ -68,7 +68,9 @@ class StrategySelfConsistency(StrategyBase):
             self.scorer.prepare_model()
 
         mode = "fully batched (single vLLM call)" if batch_generation else "per-sample"
-        log.info(f"Self-consistency strategy initialized: {num_paths} paths, {mode} mode")
+        log.info(
+            f"Self-consistency strategy initialized: {num_paths} paths, {mode} mode"
+        )
 
     def _generate_paths_batch(
         self, request: List[Dict[str, str]]
@@ -386,7 +388,9 @@ class StrategySelfConsistency(StrategyBase):
             top_p=self.step_generator.top_p,
             top_k=getattr(self.step_generator, "top_k", -1),
             stop=["<end of response>"],
-            stop_token_ids=getattr(self.step_generator, "eos_token_ids", [151645, 151643]),
+            stop_token_ids=getattr(
+                self.step_generator, "eos_token_ids", [151645, 151643]
+            ),
         )
 
         log.info(
@@ -405,9 +409,7 @@ class StrategySelfConsistency(StrategyBase):
 
         # Process results - each output has N completions
         results = []
-        for request_output, prompt, sample_idx in zip(
-            outputs, prompts, sample_indices
-        ):
+        for request_output, prompt, sample_idx in zip(outputs, prompts, sample_indices):
             context_tokens = len(self.step_generator.tokenizer.encode(prompt))
 
             if not request_output.outputs:
@@ -424,22 +426,26 @@ class StrategySelfConsistency(StrategyBase):
                 num_tokens = len(output.token_ids)
                 total_output_tokens += num_tokens
 
-                paths.append({
-                    "text": raw_text,
-                    "num_tokens": num_tokens,
-                    "steps": [raw_text],
-                    "is_complete": True,
-                    "thinking_steps": 0,
-                    "response_steps": 1,
-                    "validity_scores": [],
-                    "avg_validity": 0.0,
-                })
+                paths.append(
+                    {
+                        "text": raw_text,
+                        "num_tokens": num_tokens,
+                        "steps": [raw_text],
+                        "is_complete": True,
+                        "thinking_steps": 0,
+                        "response_steps": 1,
+                        "validity_scores": [],
+                        "avg_validity": 0.0,
+                    }
+                )
 
             # Do majority voting for this sample
             result = self.select_best_answer(paths)
 
             # Token stats for this sample
-            total_tokens = context_tokens * N + total_output_tokens  # N prompts worth of context
+            total_tokens = (
+                context_tokens * N + total_output_tokens
+            )  # N prompts worth of context
             token_stats = {
                 "total_tokens_this_sample": total_tokens,
                 "input_tokens": context_tokens * N,
@@ -452,7 +458,9 @@ class StrategySelfConsistency(StrategyBase):
                 hasattr(self.step_generator, "flop_calculator")
                 and self.step_generator.flop_calculator
             ):
-                tflops = self.step_generator.flop_calculator.compute_tflops(total_tokens)
+                tflops = self.step_generator.flop_calculator.compute_tflops(
+                    total_tokens
+                )
                 token_stats["tflops"] = tflops
 
             # Build metadata
@@ -472,20 +480,22 @@ class StrategySelfConsistency(StrategyBase):
                 t.get("response_steps", 0) for t in result.get("all_traces", [])
             ) / max(len(result.get("all_traces", [])), 1)
 
-            results.append({
-                "trajectory": result["best_path"],
-                "steps": [result["best_path"]],
-                "validity_scores": [result["consensus_score"]],
-                "completed": bool(paths),
-                "strategy": "self_consistency",
-                "extracted_answer": result["best_answer"],
-                "metadata": builder.build(),
-                "all_traces": result.get("all_traces", []),
-                "total_tokens": result.get("total_tokens", 0),
-                "token_stats": token_stats,
-                "thinking_num_steps": avg_thinking_steps,
-                "response_num_steps": avg_response_steps,
-            })
+            results.append(
+                {
+                    "trajectory": result["best_path"],
+                    "steps": [result["best_path"]],
+                    "validity_scores": [result["consensus_score"]],
+                    "completed": bool(paths),
+                    "strategy": "self_consistency",
+                    "extracted_answer": result["best_answer"],
+                    "metadata": builder.build(),
+                    "all_traces": result.get("all_traces", []),
+                    "total_tokens": result.get("total_tokens", 0),
+                    "token_stats": token_stats,
+                    "thinking_num_steps": avg_thinking_steps,
+                    "response_num_steps": avg_response_steps,
+                }
+            )
 
         log.info(
             f"Self-consistency batch: completed {len(results)} samples, "

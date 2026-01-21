@@ -20,7 +20,9 @@ from typing import Union
 _EVAL_TIMEOUT = 5  # seconds per evaluation
 
 # Subprocess-based math evaluation using qwen-eval environment
-_SUBPROCESS_SCRIPT = Path(__file__).parent.parent.parent / "scripts" / "math_eval_subprocess.py"
+_SUBPROCESS_SCRIPT = (
+    Path(__file__).parent.parent.parent / "scripts" / "math_eval_subprocess.py"
+)
 _CONDA_ENV = "qwen-eval"
 
 _subprocess_proc = None
@@ -87,7 +89,9 @@ def math_equal(
                 return result.get("result", False)
         else:
             # Timeout - kill and restart subprocess
-            _log.warning(f"Subprocess timeout for pred={pred_str[:50]}, gold={gold_str[:50]}")
+            _log.warning(
+                f"Subprocess timeout for pred={pred_str[:50]}, gold={gold_str[:50]}"
+            )
             proc.kill()
             _subprocess_proc = None
             return False

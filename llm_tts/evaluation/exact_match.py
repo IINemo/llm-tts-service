@@ -114,12 +114,15 @@ class EvaluatorExactMatch:
         try:
             pred = extract_answer(solution, data_name=self.data_name)
             gold = _normalize_gold_answer(gold_answer, self.data_name)
-            log.info(f"_score_single BEFORE math_equal: pred={repr(pred)}, gold={repr(gold)}")
+            log.info(
+                f"_score_single BEFORE math_equal: pred={repr(pred)}, gold={repr(gold)}"
+            )
             result = math_equal(pred, gold)
             log.info(f"_score_single AFTER math_equal: result={result}")
             return 1.0 if result else 0.0
         except Exception as e:
             import traceback
+
             log.error(f"Math grading error: {e}\n{traceback.format_exc()}")
             return 0.0
 
@@ -138,19 +141,28 @@ class EvaluatorExactMatch:
 
         # Numeric evaluation - direct math_equal calls (same logic, no ProcessPool overhead)
         scores = []
-        for idx, (solution, gold) in enumerate(tqdm(
-            zip(solutions, gold_answers), total=len(solutions), desc="Verifying solutions"
-        )):
+        for idx, (solution, gold) in enumerate(
+            tqdm(
+                zip(solutions, gold_answers),
+                total=len(solutions),
+                desc="Verifying solutions",
+            )
+        ):
             try:
                 pred = extract_answer(solution, data_name=self.data_name)
                 gold_normalized = _normalize_gold_answer(gold, self.data_name)
-                log.info(f"__call__ idx={idx} BEFORE math_equal: pred={repr(pred)}, gold={repr(gold_normalized)}")
+                log.info(
+                    f"__call__ idx={idx} BEFORE math_equal: pred={repr(pred)}, gold={repr(gold_normalized)}"
+                )
                 result = math_equal(pred, gold_normalized)
                 log.info(f"__call__ idx={idx} AFTER math_equal: result={result}")
                 scores.append(1.0 if result else 0.0)
             except Exception as e:
                 import traceback
-                log.error(f"__call__ idx={idx} Math grading error: {e}\n{traceback.format_exc()}")
+
+                log.error(
+                    f"__call__ idx={idx} Math grading error: {e}\n{traceback.format_exc()}"
+                )
                 scores.append(0.0)
 
         return scores
@@ -160,7 +172,9 @@ class EvaluatorExactMatch:
     ) -> list[float]:
         """Handle boolean, char, and string formats."""
         scores = []
-        for solution, gold in tqdm(zip(solutions, gold_answers), desc="Verifying solutions"):
+        for solution, gold in tqdm(
+            zip(solutions, gold_answers), desc="Verifying solutions"
+        ):
             if not gold or gold.strip() == "":
                 scores.append(0.0)
                 continue
@@ -169,7 +183,9 @@ class EvaluatorExactMatch:
                 pred_bool = _extract_boolean_answer(solution)
                 gold_bool = _extract_boolean_answer(gold)
                 if pred_bool and gold_bool:
-                    scores.append(1.0 if pred_bool.lower() == gold_bool.lower() else 0.0)
+                    scores.append(
+                        1.0 if pred_bool.lower() == gold_bool.lower() else 0.0
+                    )
                 else:
                     scores.append(0.0)
 
@@ -177,7 +193,9 @@ class EvaluatorExactMatch:
                 pred_char = _extract_single_letter_answer(solution)
                 gold_char = _extract_single_letter_answer(gold)
                 if pred_char and gold_char:
-                    scores.append(1.0 if pred_char.upper() == gold_char.upper() else 0.0)
+                    scores.append(
+                        1.0 if pred_char.upper() == gold_char.upper() else 0.0
+                    )
                 else:
                     scores.append(0.0)
 

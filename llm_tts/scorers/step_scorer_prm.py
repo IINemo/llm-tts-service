@@ -552,7 +552,9 @@ class StepScorerPRM(StepScorerRewardBase):
 
         # Build all prompts and track metadata for result mapping
         all_prompts = []
-        trajectory_metadata = []  # (traj_idx, num_steps, sample_id, traj_id) for each prompt
+        trajectory_metadata = (
+            []
+        )  # (traj_idx, num_steps, sample_id, traj_id) for each prompt
 
         for traj_idx, (chat, trajectory) in enumerate(zip(chats, trajectories)):
             if not trajectory:
@@ -571,8 +573,7 @@ class StepScorerPRM(StepScorerRewardBase):
 
             # Get step texts
             step_texts = [
-                step.text if hasattr(step, "text") else str(step)
-                for step in trajectory
+                step.text if hasattr(step, "text") else str(step) for step in trajectory
             ]
 
             # Build prompt
@@ -606,11 +607,13 @@ class StepScorerPRM(StepScorerRewardBase):
             outputs = []
 
         # Parse results and map back to trajectories
-        log.info(f"--- PRM Scoring Results ---")
+        log.info("--- PRM Scoring Results ---")
         results = [[] for _ in trajectories]
         output_idx = 0
 
-        for i, (traj_idx, num_steps, sample_id, traj_id) in enumerate(trajectory_metadata):
+        for i, (traj_idx, num_steps, sample_id, traj_id) in enumerate(
+            trajectory_metadata
+        ):
             if i not in valid_indices:
                 results[traj_idx] = []
                 continue

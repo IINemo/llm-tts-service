@@ -386,14 +386,16 @@ class StrategyOfflineBestOfN(StrategyBase):
 
             if not request_output.outputs:
                 log.error(f"No output generated for sample {sample_idx}")
-                sample_data.append({
-                    "sample_idx": sample_idx,
-                    "request": request,
-                    "context_tokens": context_tokens,
-                    "trajectories": [],
-                    "total_output_tokens": 0,
-                    "failed": True,
-                })
+                sample_data.append(
+                    {
+                        "sample_idx": sample_idx,
+                        "request": request,
+                        "context_tokens": context_tokens,
+                        "trajectories": [],
+                        "total_output_tokens": 0,
+                        "failed": True,
+                    }
+                )
                 continue
 
             # Build trajectory results from the N outputs
@@ -408,7 +410,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                 # Split into steps post-hoc using step generator's detector
                 # use_stop_tokens=True to match online vLLM behavior exactly
                 if hasattr(self.step_generator, "detector"):
-                    steps = self.step_generator.detector.detect_steps(raw_text, use_stop_tokens=True)
+                    steps = self.step_generator.detector.detect_steps(
+                        raw_text, use_stop_tokens=True
+                    )
                 else:
                     steps = [raw_text]  # Fallback: treat as single step
 
@@ -431,14 +435,16 @@ class StrategyOfflineBestOfN(StrategyBase):
                     all_trajectory_ids_for_scoring.append(traj_idx)
                     trajectory_to_sample_map.append((len(sample_data), traj_idx))
 
-            sample_data.append({
-                "sample_idx": sample_idx,
-                "request": request,
-                "context_tokens": context_tokens,
-                "trajectories": trajectories,
-                "total_output_tokens": total_output_tokens,
-                "failed": False,
-            })
+            sample_data.append(
+                {
+                    "sample_idx": sample_idx,
+                    "request": request,
+                    "context_tokens": context_tokens,
+                    "trajectories": trajectories,
+                    "total_output_tokens": total_output_tokens,
+                    "failed": False,
+                }
+            )
 
         # Phase 2: Batch score ALL trajectories in single call
         log.info(
@@ -456,12 +462,16 @@ class StrategyOfflineBestOfN(StrategyBase):
             )
 
             # Distribute scores back to trajectories
-            for flat_idx, (sample_data_idx, traj_idx) in enumerate(trajectory_to_sample_map):
+            for flat_idx, (sample_data_idx, traj_idx) in enumerate(
+                trajectory_to_sample_map
+            ):
                 step_scores = all_scores[flat_idx]
-                sample_data[sample_data_idx]["trajectories"][traj_idx]["step_scores"] = step_scores
-                sample_data[sample_data_idx]["trajectories"][traj_idx]["aggregated_score"] = (
-                    self._aggregate_scores(step_scores)
-                )
+                sample_data[sample_data_idx]["trajectories"][traj_idx][
+                    "step_scores"
+                ] = step_scores
+                sample_data[sample_data_idx]["trajectories"][traj_idx][
+                    "aggregated_score"
+                ] = self._aggregate_scores(step_scores)
 
         # Phase 3: Select best trajectory per sample and build results
         results = []
@@ -476,7 +486,9 @@ class StrategyOfflineBestOfN(StrategyBase):
             # Select best trajectory
             aggregated_scores = [t["aggregated_score"] for t in trajectories]
             best_idx = int(np.argmax(aggregated_scores)) if aggregated_scores else 0
-            best_result = trajectories[best_idx] if trajectories else self._empty_result()
+            best_result = (
+                trajectories[best_idx] if trajectories else self._empty_result()
+            )
 
             # Extract answer from best trajectory
             extracted = extract_answer(best_result.get("full_text", ""))
@@ -495,7 +507,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                 hasattr(self.step_generator, "flop_calculator")
                 and self.step_generator.flop_calculator
             ):
-                tflops = self.step_generator.flop_calculator.compute_tflops(total_tokens)
+                tflops = self.step_generator.flop_calculator.compute_tflops(
+                    total_tokens
+                )
                 token_stats["tflops"] = tflops
 
             log.info(
@@ -504,21 +518,23 @@ class StrategyOfflineBestOfN(StrategyBase):
                 f"steps={best_result.get('num_steps', 0)}"
             )
 
-            results.append({
-                "trajectory": best_result.get("full_text", ""),
-                "extracted_answer": extracted,
-                "steps": best_result.get("steps", []),
-                "thinking_num_steps": 0,
-                "response_num_steps": best_result.get("num_steps", 0),
-                "validity_scores": best_result.get("step_scores", []),
-                "aggregated_score": best_result.get("aggregated_score", 0.0),
-                "all_trajectories": [t["full_text"] for t in trajectories],
-                "all_scores": aggregated_scores,
-                "all_step_scores": [t["step_scores"] for t in trajectories],
-                "best_idx": best_idx,
-                "completed": best_result.get("is_complete", False),
-                "token_stats": token_stats,
-            })
+            results.append(
+                {
+                    "trajectory": best_result.get("full_text", ""),
+                    "extracted_answer": extracted,
+                    "steps": best_result.get("steps", []),
+                    "thinking_num_steps": 0,
+                    "response_num_steps": best_result.get("num_steps", 0),
+                    "validity_scores": best_result.get("step_scores", []),
+                    "aggregated_score": best_result.get("aggregated_score", 0.0),
+                    "all_trajectories": [t["full_text"] for t in trajectories],
+                    "all_scores": aggregated_scores,
+                    "all_step_scores": [t["step_scores"] for t in trajectories],
+                    "best_idx": best_idx,
+                    "completed": best_result.get("is_complete", False),
+                    "token_stats": token_stats,
+                }
+            )
 
         log.info(
             f"Offline Best-of-N batch: completed {len(results)} samples, "
