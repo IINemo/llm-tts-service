@@ -37,6 +37,39 @@ python scripts/run_tts_eval.py \
   dataset.subset=10
 ```
 
+### Math Evaluation Environment (Required for MATH/Minerva datasets)
+
+For exact match evaluation on math datasets (MATH-500, Minerva Math, etc.), a **separate conda environment** is required due to ANTLR version conflicts between latex2sympy2 and Hydra:
+
+```bash
+# 1. Create the qwen-eval environment
+conda create -n qwen-eval python=3.11 -y
+conda activate qwen-eval
+
+# 2. Install dependencies from requirements file
+pip install -r llm_tts/evaluation/requirements-math-eval.txt
+
+# 3. Switch back to main environment
+conda activate lm-polygraph-env
+```
+
+**Why a separate environment?**
+- `latex2sympy2` requires `antlr4-python3-runtime==4.11.1`
+- Hydra/OmegaConf require `antlr4-python3-runtime>=4.9.3`
+- These versions conflict at runtime, causing parsing errors
+- The `qwen-eval` environment is used via subprocess for math evaluation only
+
+**Verification:** Run a quick test to ensure both environments work:
+```bash
+# Test main environment
+conda activate lm-polygraph-env
+python -c "import hydra; print('Hydra OK')"
+
+# Test math eval environment
+conda activate qwen-eval
+python scripts/math_eval_subprocess.py --test
+```
+
 ### For Developers (Contribute Code)
 
 See [Onboarding Guide](#-onboarding-for-developers) below.
