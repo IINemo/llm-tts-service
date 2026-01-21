@@ -1,12 +1,11 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/math500/offline_bon_vllm_nothink_qwen25_7b_prm_math500
-# Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
+# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gaokao2023en/offline_bon_vllm_nothink_qwen25_7b_prm_gaokao2023en
+# Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on GaoKao 2023 En
 # Uses PRM scorer (Qwen2.5-Math-PRM-7B) for step evaluation
-# Generates N trajectories step-by-step, selects best based on min step score
+# Generates N trajectories in single call, splits post-hoc, selects best based on min step score
 
 defaults:
   - /config
-  - /dataset/math_500
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
@@ -14,12 +13,12 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_nothink_qwen25_7b_prm_math500_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_nothink_qwen25_7b_prm_gaokao2023en_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-gaokao2023en
 
 # Model configuration (vLLM backend)
 model:
@@ -83,12 +82,20 @@ scorer:
   device: cuda:1
   batch_size: 1
 
-# Dataset configuration
+# Dataset configuration - GaoKao 2023 En
 dataset:
-  subset: 500  # Full MATH-500 dataset
+  dataset_path: "test-time-compute/test_gaokao2023en"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 385  # Full GaoKao 2023 En dataset
   offset: 0
-  data_name: math  # For official Qwen2.5-Math answer extraction
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: gaokao2023en
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
 
 # Evaluation configuration
 evaluation:

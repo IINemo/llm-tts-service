@@ -579,7 +579,9 @@ def create_tts_strategy(
             output_dir=output_dir,
         )
     elif config.strategy.type == "offline_best_of_n":
-        # Offline Best-of-N generates N trajectories step-by-step, selects best
+        # Offline Best-of-N generates N trajectories, scores with PRM, selects best
+        # With batch_generation=True, all M×N trajectories generated in single vLLM call
+        batch_generation = config.strategy.get("batch_generation", True)
         strategy = StrategyOfflineBestOfN(
             scorer=scorer,
             num_trajectories=config.strategy.get("num_trajectories", 4),
@@ -587,6 +589,7 @@ def create_tts_strategy(
             step_generator=step_generator,
             score_aggregation=config.strategy.get("score_aggregation", "mean"),
             output_dir=output_dir,
+            batch_generation=batch_generation,
         )
     elif config.strategy.type == "adaptive":
         strategy = AdaptiveScalingBestOfN(
@@ -1059,10 +1062,10 @@ def generate_trajectories(
 
     subset_size = len(dataset)
 
-    # Check if strategy supports batch generation (baseline or self_consistency with batch_generation=True)
+    # Check if strategy supports batch generation (baseline, self_consistency, or offline_best_of_n with batch_generation=True)
     # When batch_generation=False, use per-sample loop for running accuracy during generation
     if (
-        isinstance(strategy, (StrategyBaseline, StrategySelfConsistency))
+        isinstance(strategy, (StrategyBaseline, StrategySelfConsistency, StrategyOfflineBestOfN))
         and hasattr(strategy, "generate_trajectories_batch")
         and getattr(strategy, "batch_generation", True)
     ):
