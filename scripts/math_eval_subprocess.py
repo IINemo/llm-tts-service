@@ -60,14 +60,14 @@ def parse_digits(num):
     num = normalize_scientific_notation(num)
     try:
         return float(num)
-    except:
+    except Exception:
         if num.endswith("%"):
             num = num[:-1]
             if num.endswith("\\"):
                 num = num[:-1]
             try:
                 return float(num) / 100
-            except:
+            except Exception:
                 pass
     return None
 
@@ -96,10 +96,10 @@ def symbolic_equal(a, b):
         for f in [parse_latex, parse_expr, latex2sympy]:
             try:
                 return f(s.replace("\\\\", "\\"))
-            except:
+            except Exception:
                 try:
                     return f(s)
-                except:
+                except Exception:
                     pass
         return s
 
@@ -110,27 +110,27 @@ def symbolic_equal(a, b):
     try:
         if str(a) == str(b) or a == b:
             return True
-    except:
+    except Exception:
         pass
 
     # simplify equal
     try:
         if a.equals(b) or simplify(a - b) == 0:
             return True
-    except:
+    except Exception:
         pass
 
     # equation equal
     try:
         if (abs(a.lhs - a.rhs)).equals(abs(b.lhs - b.rhs)):
             return True
-    except:
+    except Exception:
         pass
 
     try:
         if numeric_equal(float(N(a)), float(N(b))):
             return True
-    except:
+    except Exception:
         pass
 
     # matrix
@@ -140,7 +140,7 @@ def symbolic_equal(a, b):
             _b = b.applyfunc(lambda x: round(x, 3))
             if _a.equals(_b):
                 return True
-    except:
+    except Exception:
         pass
 
     return False
@@ -196,7 +196,7 @@ def math_equal(
                 except Exception:
                     continue
             return False
-    except:
+    except Exception:
         pass
 
     if not prediction and prediction not in [0, False]:
@@ -205,11 +205,11 @@ def math_equal(
     reference = str(reference).strip()
     prediction = str(prediction).strip()
 
-    ## pmatrix (amps)
-    if "pmatrix" in prediction and not "pmatrix" in reference:
+    # pmatrix (amps)
+    if "pmatrix" in prediction and "pmatrix" not in reference:
         reference = str_to_pmatrix(reference)
 
-    ## deal with [], (), {}
+    # deal with [], (), {}
     pred_str, ref_str = prediction, reference
     if (
         prediction.startswith("[")
@@ -228,7 +228,7 @@ def math_equal(
     if pred_str.lower() == ref_str.lower():
         return True
 
-    ## [a, b] vs. [c, d], return a==c and b==d
+    # [a, b] vs. [c, d], return a==c and b==d
     if (
         regex.match(r"(\(|\[).+(\)|\])", prediction) is not None
         and regex.match(r"(\(|\[).+(\)|\])", reference) is not None
