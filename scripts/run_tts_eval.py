@@ -632,6 +632,7 @@ def create_tts_strategy(
             candidates_per_beam=config.strategy.candidates_per_beam,
             max_steps=config.strategy.max_steps,
             aggregation=getattr(config.strategy, "aggregation", "mean"),
+            batch_generation=config.strategy.get("batch_generation", True),
         )
     elif config.strategy.type == "phi_decoding":
         strategy = PhiDecoding(
@@ -1068,12 +1069,12 @@ def generate_trajectories(
 
     subset_size = len(dataset)
 
-    # Check if strategy supports batch generation (baseline, self_consistency, or offline_best_of_n with batch_generation=True)
+    # Check if strategy supports batch generation (baseline, self_consistency, offline_best_of_n, or beam_search with batch_generation=True)
     # When batch_generation=False, use per-sample loop for running accuracy during generation
     if (
         isinstance(
             strategy,
-            (StrategyBaseline, StrategySelfConsistency, StrategyOfflineBestOfN),
+            (StrategyBaseline, StrategySelfConsistency, StrategyOfflineBestOfN, StrategyBeamSearch),
         )
         and hasattr(strategy, "generate_trajectories_batch")
         and getattr(strategy, "batch_generation", True)
@@ -1180,9 +1181,10 @@ def generate_trajectories(
         log.info(f"FINAL ANSWER: {generated_text}")
         log.info(f"Gold answer:  {gold_answer_num}")
         # Use full trajectory for grading (evaluator will extract answer using official logic)
-        is_correct = exact_match_evaluator._score_single(
+        exact_match_eval = phase1_evaluators.get("exact_match")
+        is_correct = exact_match_eval._score_single(
             (question, result["trajectory"], str(gold_answer_num))
-        )
+        ) if exact_match_eval else False
         log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
         log.info("-" * 60)
         log.info(f"Num steps: {len(result['steps'])}")
@@ -1712,6 +1714,7 @@ def evaluate_results(
 )
 def main(config):
     """Main evaluation function"""
+    stderr_file = None  # Initialize for cleanup
 
     cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
     log.info(f"Command: CUDA_VISIBLE_DEVICES={cuda_devices} {' '.join(sys.argv)}")
@@ -1724,6 +1727,12 @@ def main(config):
     log.info(f"Config: {config_file}")
     output_dir = HydraConfig.get().runtime.output_dir
     log.info(f"Output directory: {output_dir}")
+
+    # Redirect stderr to file in output directory (captures tqdm progress bars)
+    stderr_log_path = Path(output_dir) / "stderr.log"
+    stderr_file = open(stderr_log_path, "w", buffering=1)  # Line buffered
+    sys.stderr = stderr_file
+    log.info(f"Stderr redirected to: {stderr_log_path}")
 
     # Setup wandb if configured
     if getattr(config, "report_to", None) == "wandb":
@@ -1892,6 +1901,11 @@ def main(config):
             log.info("Finished wandb session")
         except Exception as e:
             log.warning(f"Failed to finish wandb session: {e}")
+
+    # Close stderr redirect file
+    if stderr_file:
+        sys.stderr = sys.__stderr__  # Restore original stderr
+        stderr_file.close()
 
 
 if __name__ == "__main__":
