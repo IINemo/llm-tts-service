@@ -174,7 +174,7 @@ outputs/
 
 *.zip
 *.bst
-*.pdf
+# *.pdf
 *.bib
 *.tex
 *.sty
@@ -187,5 +187,5 @@ workdir/
 lm-polygraph/
 
 # External Qwen repositories
-Qwen2.5-Math/
+# Qwen2.5-Math/
 Qwen3/

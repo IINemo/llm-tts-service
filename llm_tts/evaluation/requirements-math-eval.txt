@@ -1,0 +1,18 @@
+# Requirements for qwen-eval conda environment
+# Used for math evaluation via subprocess (avoids ANTLR conflicts with Hydra)
+#
+# Setup:
+#   conda create -n qwen-eval python=3.11 -y
+#   conda activate qwen-eval
+#   pip install -r llm_tts/evaluation/requirements-math-eval.txt
+
+# Core math evaluation dependencies
+sympy==1.12
+regex>=2023.0.0
+
+# ANTLR runtime - must be 4.11.1 for latex2sympy2 compatibility
+# (Hydra requires >=4.9.3 which conflicts at runtime)
+antlr4-python3-runtime==4.11.1
+
+# LaTeX to SymPy conversion
+latex2sympy2>=1.9.1

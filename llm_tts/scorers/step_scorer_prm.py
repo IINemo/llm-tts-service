@@ -384,7 +384,7 @@ class StepScorerPRM(StepScorerRewardBase):
         log.info(
             f"PRM scoring {len(truncated_prompts)} candidates (trajectory has {num_traj_steps} steps)"
         )
-        outputs = self.prm_model.reward(truncated_prompts, use_tqdm=False)
+        outputs = self.prm_model.reward(truncated_prompts, use_tqdm=True)
 
         # Extract reward for the last step (the candidate) from each output
         all_rewards = []
@@ -474,7 +474,7 @@ class StepScorerPRM(StepScorerRewardBase):
         log.info(f"PRM scoring trajectory with {len(step_texts)} steps")
 
         # Single forward pass
-        outputs = self.prm_model.reward([prompt], use_tqdm=False)
+        outputs = self.prm_model.reward([prompt], use_tqdm=True)
 
         # Extract all step scores
         all_step_scores = []
@@ -602,7 +602,7 @@ class StepScorerPRM(StepScorerRewardBase):
 
         # Single batched vLLM call
         if valid_prompts:
-            outputs = self.prm_model.reward(valid_prompts, use_tqdm=False)
+            outputs = self.prm_model.reward(valid_prompts, use_tqdm=True)
         else:
             outputs = []
 

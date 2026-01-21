@@ -536,6 +536,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         candidates_per_step: int = 1,
         stop_tokens_override: Optional[List[str]] = None,
         max_tokens_override: Optional[int] = None,
+        compute_uncertainty: bool = True,
     ) -> List[List[StepCandidate]]:
         """Unified step candidate generation for both thinking and non-thinking modes.
 
@@ -549,6 +550,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             stop_tokens_override: Override stop tokens (for full trajectory generation).
                                   If None, uses self.stop_tokens.
             max_tokens_override: Override max tokens. If None, uses self.max_step_tokens.
+            compute_uncertainty: If True and model supports it, compute uncertainty scores.
+                Set to False when using PRM scorer (scores computed separately).
 
         Returns:
             List of candidate lists, one per trajectory. Each inner list contains
@@ -630,7 +633,16 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             )
 
         # Generate for all prompts
-        outputs = self.model.generate(prompts, sampling_params)
+        # Check if model supports uncertainty computation (VLLMWithUncertainty wrapper)
+        use_uncertainty_wrapper = hasattr(self.model, "estimator")
+        if use_uncertainty_wrapper and compute_uncertainty:
+            outputs = self.model.generate(
+                prompts, sampling_params, compute_uncertainty=True
+            )
+        else:
+            # Use raw vLLM for PRM scorer or when uncertainty not needed
+            raw_llm = getattr(self.model, "llm", self.model)
+            outputs = raw_llm.generate(prompts, sampling_params)
 
         # Process outputs and organize by trajectory
         candidates_by_traj = {}
@@ -1210,6 +1222,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         request: List[Dict[str, str]],
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
+        compute_uncertainty: bool = True,
     ) -> List[List[StepCandidate]]:
         """Generate N candidate next steps for each trajectory.
 
@@ -1221,6 +1234,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             request: Chat messages (same for all trajectories)
             trajectories: List of trajectories. Each trajectory is a list of StepCandidates.
             candidates_per_step: Number of candidates to generate per trajectory.
+            compute_uncertainty: If True and model supports it, compute uncertainty scores.
+                Set to False when using PRM scorer (scores computed separately).
 
         Returns:
             List of candidate lists, one per trajectory.
@@ -1229,7 +1244,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         and call generate_answer_candidates() when reasoning phase is done.
         """
         return self._generate_step_candidates_impl(
-            request, trajectories, candidates_per_step
+            request,
+            trajectories,
+            candidates_per_step,
+            compute_uncertainty=compute_uncertainty,
         )
 
     def generate_answer_candidates(
@@ -1284,14 +1302,19 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         request: List[Dict[str, str]],
         trajectory: Optional[List[StepCandidate]] = None,
         candidates_per_step: int = 1,
+        compute_uncertainty: bool = True,
     ) -> List[StepCandidate]:
         """Callable interface for step generation.
 
         Convenience wrapper that accepts a single trajectory and returns flat list.
         Internally calls generate_step_candidates with [trajectory].
+
+        Args:
+            compute_uncertainty: If True and model supports it, compute uncertainty scores.
+                Set to False when using PRM scorer (scores computed separately).
         """
         trajectory = trajectory or []
         result = self.generate_step_candidates(
-            request, [trajectory], candidates_per_step
+            request, [trajectory], candidates_per_step, compute_uncertainty
         )
         return result[0] if result else []
