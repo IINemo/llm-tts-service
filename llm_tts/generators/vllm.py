@@ -1044,6 +1044,16 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     "full_text": text,
                     "steps": steps,
                     "token_ids": token_ids,
+                    "uncertainty_score": (
+                        candidate.other_data.get("uncertainty_score")
+                        if candidate.other_data
+                        else None
+                    ),
+                    "validity_score": (
+                        candidate.other_data.get("validity_score")
+                        if candidate.other_data
+                        else None
+                    ),
                     "is_complete": candidate.is_trajectory_complete,
                 }
             )

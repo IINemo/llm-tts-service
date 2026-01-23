@@ -194,7 +194,12 @@ class StrategyOfflineBestOfN(StrategyBase):
             if result["steps"]:
                 # Score entire trajectory in single forward pass
                 # steps is List[str] - PRM scorer handles this via hasattr check
-                step_scores = self.scorer.score_trajectory(request, result["steps"])
+                step_scores = self.scorer.score_trajectory(
+                    request,
+                    result["steps"],
+                    trajectory_validity_score=result.get("validity_score"),
+                    trajectory_uncertainty_score=result.get("uncertainty_score"),
+                )
                 result["step_scores"] = step_scores
                 result["aggregated_score"] = self._aggregate_scores(step_scores)
             else:
