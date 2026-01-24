@@ -9,6 +9,7 @@ Two modes:
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -25,6 +26,34 @@ from llm_tts.utils.answer_extraction import extract_answer
 from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
+
+# Pattern to detect garbage/degenerate output
+# Matches: emojis, CJK characters, unusual unicode, repeated nonsense patterns
+_GARBAGE_PATTERN = re.compile(
+    r"[\U0001F300-\U0001F9FF]"  # Emojis
+    r"|[\u4E00-\u9FFF]"  # CJK Unified Ideographs (Chinese)
+    r"|[\u3040-\u309F\u30A0-\u30FF]"  # Japanese Hiragana/Katakana
+    r"|[\uFF01-\uFF60]"  # Fullwidth punctuation (！」etc)
+    r"|[\u0100-\u024F]{2,}"  # Extended Latin with diacritics (mę etc) - 2+ consecutive
+)
+
+
+def _detect_garbage(text: str, threshold: int = 2) -> bool:
+    """
+    Detect garbage/degenerate output in text.
+
+    Returns True if text contains suspicious patterns that indicate
+    the model is generating garbage (emojis, CJK chars, unusual unicode).
+
+    Args:
+        text: Text to check
+        threshold: Minimum number of garbage matches to trigger detection
+
+    Returns:
+        True if garbage is detected
+    """
+    matches = _GARBAGE_PATTERN.findall(text)
+    return len(matches) >= threshold
 
 
 class StrategyBeamSearch(StrategyBase):
@@ -63,6 +92,7 @@ class StrategyBeamSearch(StrategyBase):
         max_steps: int = 10,
         aggregation: str = "mean",
         batch_generation: bool = True,
+        prompt_buffer: int = 500,
     ):
         self.step_generator = step_generator
         self.scorer = scorer
@@ -71,6 +101,7 @@ class StrategyBeamSearch(StrategyBase):
         self.max_steps = max_steps
         self.aggregation = aggregation
         self.batch_generation = batch_generation
+        self.prompt_buffer = prompt_buffer
 
         # Get stop tokens info for logging
         stop_tokens = getattr(step_generator, "stop_tokens", [])
@@ -220,10 +251,25 @@ class StrategyBeamSearch(StrategyBase):
         }
 
         # Store COMPLETED beams separately so they are never expanded
-        completed_beams_by_sample: Dict[int, List[Dict[str, Any]]] = {i: [] for i in range(M)}
+        completed_beams_by_sample: Dict[int, List[Dict[str, Any]]] = {
+            i: [] for i in range(M)
+        }
 
-        # Context limit for trajectories (leave room for prompt ~800 tokens + min generation)
-        max_trajectory_tokens = 3000
+        # Context limit for trajectories
+        # Calculated as min of:
+        #   1. max_model_len - prompt_buffer (leave room for prompt)
+        #   2. max_steps * max_step_tokens (theoretical max from step limits)
+        max_model_len = getattr(self.step_generator, "max_model_len", 4096)
+        max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
+        max_trajectory_tokens = min(
+            max_model_len - self.prompt_buffer,
+            self.max_steps * max_step_tokens,
+        )
+        log.info(
+            f"Max trajectory tokens: {max_trajectory_tokens} "
+            f"(max_model_len={max_model_len}, prompt_buffer={self.prompt_buffer}, "
+            f"max_steps={self.max_steps}, max_step_tokens={max_step_tokens})"
+        )
         completed_results: Dict[int, Dict[str, Any]] = {}
         active_samples = set(range(M))
 
@@ -243,7 +289,9 @@ class StrategyBeamSearch(StrategyBase):
             #    - beams already marked complete
             #    - beams too long to continue (context limit)
             prompt_metadata = []  # (sample_id, beam_idx, beam) for each prompt
-            skipped_beams = []  # beams that are too long to continue (treated as completed)
+            skipped_beams = (
+                []
+            )  # beams that are too long to continue (treated as completed)
 
             for sample_id in active_samples:
                 for beam_idx, beam in enumerate(sample_beams[sample_id]):
@@ -340,10 +388,11 @@ class StrategyBeamSearch(StrategyBase):
                         text = raw_text.strip()
 
                         # Detect trajectory completion (same logic as step_generator)
-                        # Stopped at EOS token ID
+                        # Stopped at EOS token ID (stop_reason=None means natural EOS)
                         stopped_at_eos = (
-                            stop_reason in self.step_generator.stop_token_ids
-                        )
+                            stop_reason is None
+                            and len(token_ids) < self.step_generator.max_step_tokens
+                        ) or (stop_reason in self.step_generator.stop_token_ids)
                         # Hit max tokens
                         hit_max_tokens = stop_reason == "length" or (
                             stop_reason is None
@@ -367,8 +416,12 @@ class StrategyBeamSearch(StrategyBase):
                             if was_truncated:
                                 repetition_detected = True
 
-                        # Check for boxed answer (marks trajectory complete, no truncation)
-                        has_boxed = "\\boxed{" in text or "\\boxed " in text
+                        # Check if we can extract a valid boxed answer from FULL trajectory
+                        # This handles cases where \boxed{} spans step boundaries
+                        full_traj_text = (
+                            convert_trajectory_to_string(parent_beam["steps"]) + text
+                        )
+                        has_boxed = bool(extract_answer(full_traj_text, "boxed"))
 
                         # Use detector's is_trajectory_complete for full pattern detection
                         # (checks for </think>, answer patterns, balanced \boxed{}, etc.)
@@ -380,11 +433,15 @@ class StrategyBeamSearch(StrategyBase):
                                 )
                             )
 
+                        # Detect garbage/degenerate output (emojis, CJK, unusual unicode)
+                        garbage_detected = _detect_garbage(text)
+
                         is_trajectory_complete = (
                             stopped_at_eos
                             or has_boxed
                             or repetition_detected
                             or detector_complete
+                            or garbage_detected
                         )
 
                         # Get uncertainty from output if available
@@ -499,7 +556,9 @@ class StrategyBeamSearch(StrategyBase):
 
                 if not active:
                     # No active beams remain; finalize using best completed beam (accumulated)
-                    best_beam = self._select_best_beam(completed_beams_by_sample[sample_id])
+                    best_beam = self._select_best_beam(
+                        completed_beams_by_sample[sample_id]
+                    )
                     completed_results[sample_id] = self._finalize_sample(
                         best_beam["steps"], best_beam["scores"]
                     )
