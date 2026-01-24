@@ -1,6 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/beam_search_vllm_nothink_qwen25_7b_prm_minerva_math
-# Beam Search with vLLM + Non-Thinking Mode (Qwen2.5-7B) on Minerva Math
+# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/olympiadbench/beam_search_vllm_nothink_qwen25_7b_prm_olympiadbench
+# Beam Search with vLLM + Non-Thinking Mode (Qwen2.5-7B) on OlympiadBench
 # Uses PRM scorer (Qwen2.5-Math-PRM-7B) for step evaluation
 # Maintains B beams, expands each with N candidates, prunes to top-B at each step
 
@@ -13,12 +13,12 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_nothink_qwen25_7b_prm_minerva_math_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_nothink_qwen25_7b_prm_olympiadbench_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-minerva-math
+wandb_project: llm-tts-eval-olympiadbench
 
 # Model configuration (vLLM backend)
 model:
@@ -49,7 +49,7 @@ strategy:
   type: beam_search
   beam_size: 5              # Number of top beams to keep at each step
   candidates_per_beam: 3    # Number of candidates to generate per beam
-  max_steps: 30             # Maximum reasoning steps
+  max_steps: 40             # Maximum reasoning steps
   aggregation: mean         # How to aggregate scores: mean, sum, min, max, product
   batch_generation: true    # Process ALL samples in parallel (one vLLM call per step)
   prompt_buffer: 500        # Tokens reserved for prompt (max_trajectory = max_model_len - prompt_buffer)
@@ -84,17 +84,17 @@ scorer:
   device: cuda:1
   batch_size: 1
 
-# Dataset configuration - Minerva Math
+# Dataset configuration - OlympiadBench
 dataset:
-  dataset_path: "test-time-compute/test_minerva_math"
+  dataset_path: "karantonis/test_olympiadbench"
   dataset_config: null
   dataset_split: "test"
-  subset: 272  # Full Minerva Math dataset
+  subset: 675  # Full OlympiadBench dataset
   offset: 0
   question_field: "question"
   answer_field: "answer"
   answer_format: "numeric"
-  data_name: minerva_math
+  data_name: olympiadbench
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
@@ -110,4 +110,4 @@ evaluation:
     model: gpt-4o-mini
     base_url: https://api.openai.com/v1
     cache_path: ./cache/llm_judge
-    n_threads: 10
+    n_threads: 50

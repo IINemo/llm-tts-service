@@ -9,6 +9,7 @@ Two modes:
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -25,6 +26,34 @@ from llm_tts.utils.answer_extraction import extract_answer
 from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
+
+# Pattern to detect garbage/degenerate output
+# Matches: emojis, CJK characters, unusual unicode, repeated nonsense patterns
+_GARBAGE_PATTERN = re.compile(
+    r"[\U0001F300-\U0001F9FF]"  # Emojis
+    r"|[\u4E00-\u9FFF]"  # CJK Unified Ideographs (Chinese)
+    r"|[\u3040-\u309F\u30A0-\u30FF]"  # Japanese Hiragana/Katakana
+    r"|[\uFF01-\uFF60]"  # Fullwidth punctuation (！」etc)
+    r"|[\u0100-\u024F]{2,}"  # Extended Latin with diacritics (mę etc) - 2+ consecutive
+)
+
+
+def _detect_garbage(text: str, threshold: int = 2) -> bool:
+    """
+    Detect garbage/degenerate output in text.
+
+    Returns True if text contains suspicious patterns that indicate
+    the model is generating garbage (emojis, CJK chars, unusual unicode).
+
+    Args:
+        text: Text to check
+        threshold: Minimum number of garbage matches to trigger detection
+
+    Returns:
+        True if garbage is detected
+    """
+    matches = _GARBAGE_PATTERN.findall(text)
+    return len(matches) >= threshold
 
 
 class StrategyBeamSearch(StrategyBase):
@@ -63,6 +92,7 @@ class StrategyBeamSearch(StrategyBase):
         max_steps: int = 10,
         aggregation: str = "mean",
         batch_generation: bool = True,
+        prompt_buffer: int = 500,
     ):
         self.step_generator = step_generator
         self.scorer = scorer
@@ -71,6 +101,7 @@ class StrategyBeamSearch(StrategyBase):
         self.max_steps = max_steps
         self.aggregation = aggregation
         self.batch_generation = batch_generation
+        self.prompt_buffer = prompt_buffer
 
         # Get stop tokens info for logging
         stop_tokens = getattr(step_generator, "stop_tokens", [])
@@ -214,16 +245,32 @@ class StrategyBeamSearch(StrategyBase):
         )
         log.info(f"Using PRM scorer: {use_prm_scorer}")
 
-        # Initialize beams for all samples
-        # sample_beams[sample_id] = list of beams, each beam = {"steps": [...], "scores": [...], "total_tokens": int}
+        # sample_beams[sample_id] = list of ACTIVE beams only
         sample_beams = {
             i: [{"steps": [], "scores": [], "total_tokens": 0}] for i in range(M)
         }
 
-        # Context limit for trajectories (leave room for prompt ~800 tokens + min generation)
-        # Model has 4096 context, so 4096 - 800 (prompt) - 200 (buffer) = 3000
-        max_trajectory_tokens = 3000
-        completed_results = {}  # sample_id -> result dict
+        # Store COMPLETED beams separately so they are never expanded
+        completed_beams_by_sample: Dict[int, List[Dict[str, Any]]] = {
+            i: [] for i in range(M)
+        }
+
+        # Context limit for trajectories
+        # Calculated as min of:
+        #   1. max_model_len - prompt_buffer (leave room for prompt)
+        #   2. max_steps * max_step_tokens (theoretical max from step limits)
+        max_model_len = getattr(self.step_generator, "max_model_len", 4096)
+        max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
+        max_trajectory_tokens = min(
+            max_model_len - self.prompt_buffer,
+            self.max_steps * max_step_tokens,
+        )
+        log.info(
+            f"Max trajectory tokens: {max_trajectory_tokens} "
+            f"(max_model_len={max_model_len}, prompt_buffer={self.prompt_buffer}, "
+            f"max_steps={self.max_steps}, max_step_tokens={max_step_tokens})"
+        )
+        completed_results: Dict[int, Dict[str, Any]] = {}
         active_samples = set(range(M))
 
         for step_num in range(self.max_steps):
@@ -232,20 +279,28 @@ class StrategyBeamSearch(StrategyBase):
                 break
 
             log.info(
-                f"\n{'='*60}\n"
+                f"\n{'=' * 60}\n"
                 f"Beam Search Step {step_num}: {len(active_samples)} active samples\n"
-                f"{'='*60}"
+                f"{'=' * 60}"
             )
 
-            # 1. Build list of (sample, beam) pairs to process
-            # Skip beams that are already too long (would exceed context limit)
-            prompt_metadata = []  # Track (sample_id, beam_idx, beam) for each prompt
-            skipped_beams = []  # Beams that are too long to continue
+            # 1) Build list of (sample, beam) pairs to process
+            #    Skip:
+            #    - beams already marked complete
+            #    - beams too long to continue (context limit)
+            prompt_metadata = []  # (sample_id, beam_idx, beam) for each prompt
+            skipped_beams = (
+                []
+            )  # beams that are too long to continue (treated as completed)
 
             for sample_id in active_samples:
                 for beam_idx, beam in enumerate(sample_beams[sample_id]):
+
+                    # Never expand a completed beam
+                    if beam["steps"] and beam["steps"][-1].is_trajectory_complete:
+                        continue
+
                     beam_tokens = beam.get("total_tokens", 0)
-                    # Skip if beam is close to context limit (leave room for prompt ~800 tokens + generation)
                     if beam_tokens >= max_trajectory_tokens - 200:
                         skipped_beams.append((sample_id, beam_idx, beam))
                         log.info(
@@ -333,10 +388,11 @@ class StrategyBeamSearch(StrategyBase):
                         text = raw_text.strip()
 
                         # Detect trajectory completion (same logic as step_generator)
-                        # Stopped at EOS token ID
+                        # Stopped at EOS token ID (stop_reason=None means natural EOS)
                         stopped_at_eos = (
-                            stop_reason in self.step_generator.stop_token_ids
-                        )
+                            stop_reason is None
+                            and len(token_ids) < self.step_generator.max_step_tokens
+                        ) or (stop_reason in self.step_generator.stop_token_ids)
                         # Hit max tokens
                         hit_max_tokens = stop_reason == "length" or (
                             stop_reason is None
@@ -360,8 +416,12 @@ class StrategyBeamSearch(StrategyBase):
                             if was_truncated:
                                 repetition_detected = True
 
-                        # Check for boxed answer (marks trajectory complete, no truncation)
-                        has_boxed = "\\boxed{" in text or "\\boxed " in text
+                        # Check if we can extract a valid boxed answer from FULL trajectory
+                        # This handles cases where \boxed{} spans step boundaries
+                        full_traj_text = (
+                            convert_trajectory_to_string(parent_beam["steps"]) + text
+                        )
+                        has_boxed = bool(extract_answer(full_traj_text, "boxed"))
 
                         # Use detector's is_trajectory_complete for full pattern detection
                         # (checks for </think>, answer patterns, balanced \boxed{}, etc.)
@@ -373,11 +433,15 @@ class StrategyBeamSearch(StrategyBase):
                                 )
                             )
 
+                        # Detect garbage/degenerate output (emojis, CJK, unusual unicode)
+                        garbage_detected = _detect_garbage(text)
+
                         is_trajectory_complete = (
                             stopped_at_eos
                             or has_boxed
                             or repetition_detected
                             or detector_complete
+                            or garbage_detected
                         )
 
                         # Get uncertainty from output if available
@@ -404,21 +468,20 @@ class StrategyBeamSearch(StrategyBase):
 
                     all_candidates_data.append(candidates_for_beam)
 
-                # 4. Score all candidates (PRM or uncertainty)
+                # 6) PRM scoring (optional)
                 if use_prm_scorer:
                     # Use PRM scorer - need to batch score all candidates
                     all_candidates_data = self._batch_score_with_prm(
                         requests, all_candidates_data, prompt_metadata
                     )
 
-            # 5. Update beams for each sample
+            # 7) Update beams for each sample
             new_sample_beams = {i: [] for i in active_samples}
 
             for prompt_idx, candidates in enumerate(all_candidates_data):
                 sample_id, beam_idx, parent_beam = prompt_metadata[prompt_idx]
 
                 for cand_data in candidates:
-                    # Create StepCandidate
                     step_candidate = StepCandidate(
                         text=cand_data["text"],
                         token_ids=cand_data["token_ids"],
@@ -430,10 +493,8 @@ class StrategyBeamSearch(StrategyBase):
                         },
                     )
 
-                    # Get score (validity for uncertainty, PRM score for PRM)
                     score = cand_data.get("prm_score", cand_data["validity"])
 
-                    # Calculate total tokens for new beam
                     new_tokens = len(cand_data["token_ids"])
                     new_total_tokens = parent_beam.get("total_tokens", 0) + new_tokens
 
@@ -448,7 +509,6 @@ class StrategyBeamSearch(StrategyBase):
                             f"(tokens: {new_total_tokens} >= {max_trajectory_tokens})"
                         )
 
-                    # Create new beam with this candidate
                     new_beam = {
                         "steps": parent_beam["steps"] + [step_candidate],
                         "scores": parent_beam["scores"] + [score],
@@ -456,14 +516,13 @@ class StrategyBeamSearch(StrategyBase):
                     }
                     new_sample_beams[sample_id].append(new_beam)
 
-            # 5b. Add skipped beams as completed (they hit context limit)
+            # 7b) Add skipped beams as completed (hit context limit)
             for sample_id, beam_idx, skipped_beam in skipped_beams:
-                # Mark the last step as complete due to context limit
                 if skipped_beam["steps"]:
                     skipped_beam["steps"][-1].is_trajectory_complete = True
                 new_sample_beams[sample_id].append(skipped_beam)
 
-            # 6. Prune to top-k beams per sample and check completions
+            # 8) Prune to top-k ACTIVE beams per sample and record completions
             samples_to_remove = []
 
             for sample_id in active_samples:
@@ -487,12 +546,19 @@ class StrategyBeamSearch(StrategyBase):
                 # Split into completed and active
                 completed, active = self._split_completed(beams)
 
-                # Keep top beam_size active beams
+                # ✅ FIX: store completed beams separately; never keep them in active beam list
+                if completed:
+                    completed_beams_by_sample[sample_id].extend(completed)
+
+                # Keep only top beam_size ACTIVE beams for next step
                 active = active[: self.beam_size]
+                sample_beams[sample_id] = active
 
                 if not active:
-                    # All beams completed - select best from completed
-                    best_beam = self._select_best_beam(completed)
+                    # No active beams remain; finalize using best completed beam (accumulated)
+                    best_beam = self._select_best_beam(
+                        completed_beams_by_sample[sample_id]
+                    )
                     completed_results[sample_id] = self._finalize_sample(
                         best_beam["steps"], best_beam["scores"]
                     )
@@ -511,11 +577,6 @@ class StrategyBeamSearch(StrategyBase):
                         log.info(
                             f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}"
                         )
-                else:
-                    # Store completed beams and continue with active
-                    sample_beams[sample_id] = (
-                        active + completed[: self.beam_size - len(active)]
-                    )
 
             # Remove completed samples from active set
             for sample_id in samples_to_remove:
@@ -526,10 +587,12 @@ class StrategyBeamSearch(StrategyBase):
                 f"{len(completed_results)} completed"
             )
 
-        # Finalize any remaining active samples
+        # Finalize any remaining active samples (prefer completed if any exist)
         for sample_id in active_samples:
-            beams = sample_beams[sample_id]
-            best_beam = self._select_best_beam(beams)
+            active = sample_beams[sample_id]
+            candidates = completed_beams_by_sample[sample_id] or active
+            best_beam = self._select_best_beam(candidates)
+
             completed_results[sample_id] = self._finalize_sample(
                 best_beam["steps"], best_beam["scores"]
             )
