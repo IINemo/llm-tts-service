@@ -4,9 +4,14 @@ from sympy import matrix_symbols, simplify, factor, expand, apart, expand_trig
 from antlr4 import InputStream, CommonTokenStream
 from antlr4.error.ErrorListener import ErrorListener
 
-from .gen.PSParser import PSParser
-from .gen.PSLexer import PSLexer
-from .gen.PSListener import PSListener
+try:
+    from gen.PSParser import PSParser
+    from gen.PSLexer import PSLexer
+    from gen.PSListener import PSListener
+except Exception:
+    from .gen.PSParser import PSParser
+    from .gen.PSLexer import PSLexer
+    from .gen.PSListener import PSListener
 
 from sympy.printing.str import StrPrinter
 
