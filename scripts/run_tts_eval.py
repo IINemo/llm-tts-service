@@ -889,13 +889,23 @@ def _generate_trajectories_batch(
                     )
                     is_correct_eval = bool(score)
                 elif isinstance(evaluator, EvaluatorLLMAsAJudge):
-                    # LLM judges: __call__ takes lists, returns (labels, responses)
-                    labels, responses = evaluator(
-                        [question], [result["trajectory"]], [str(gold_answer_num)]
+                    # LLM judges: __call__ takes lists, returns (labels, responses, consensus_scores)
+                    # For answer_only mode, use extracted answer
+                    if hasattr(evaluator, "mode") and evaluator.mode == "answer_only":
+                        solution = (
+                            result.get("extracted_answer")
+                            or result.get("generated_answer")
+                            or result["trajectory"]
+                        )
+                    else:
+                        solution = result["trajectory"]
+                    labels, responses, consensus_scores = evaluator(
+                        [question], [solution], [str(gold_answer_num)]
                     )
                     is_correct_eval = labels[0] == 1 if labels else False
                     eval_results[eval_name] = {
                         "is_correct": is_correct_eval,
+                        "consensus": consensus_scores[0] if consensus_scores else 0.0,
                         "response": responses[0] if responses else "",
                     }
                     continue
@@ -1549,30 +1559,44 @@ def evaluate_results(
         problems = [r["question"] for r in samples_to_eval]
         gold_answers = [str(r["gold_answer"]) for r in samples_to_eval]
 
-        # API judge expects full solutions
-        solutions = [
-            r.get("generated_trajectory", r.get("trajectory", ""))
-            for r in samples_to_eval
-        ]
+        # For answer_only mode, use extracted answer; otherwise use full solution
+        if hasattr(evaluator_fn, "mode") and evaluator_fn.mode == "answer_only":
+            solutions = [
+                r.get("extracted_answer")
+                or r.get("generated_answer")
+                or r.get("generated_trajectory", r.get("trajectory", ""))
+                for r in samples_to_eval
+            ]
+        else:
+            solutions = [
+                r.get("generated_trajectory", r.get("trajectory", ""))
+                for r in samples_to_eval
+            ]
 
         try:
             # Batch evaluate
             eval_result = evaluator_fn(problems, solutions, gold_answers)
-            if isinstance(eval_result, tuple):
+            if isinstance(eval_result, tuple) and len(eval_result) == 3:
+                annotations, responses, consensus_scores = eval_result
+            elif isinstance(eval_result, tuple) and len(eval_result) == 2:
                 annotations, responses = eval_result
+                consensus_scores = [None] * len(annotations)
             else:
                 annotations = eval_result
                 responses = [None] * len(annotations)
+                consensus_scores = [None] * len(annotations)
 
             # Store results
-            for idx, (i, annotation, response) in enumerate(
-                zip(indices_to_eval, annotations, responses)
+            for idx, (i, annotation, response, consensus) in enumerate(
+                zip(indices_to_eval, annotations, responses, consensus_scores)
             ):
                 is_correct = annotation == 1
                 eval_data = {
                     "label": int(annotation) if not np.isnan(annotation) else None,
                     "is_correct": bool(is_correct),
                 }
+                if consensus is not None:
+                    eval_data["consensus"] = consensus
                 if response:
                     eval_data["response"] = response
                 results[i].setdefault("eval", {})[eval_name] = eval_data

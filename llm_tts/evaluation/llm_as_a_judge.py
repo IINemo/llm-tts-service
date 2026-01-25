@@ -9,17 +9,27 @@ from tqdm import tqdm
 log = logging.getLogger()
 
 
-ANNOTATION_PROMPT = r"""
-You will be given a <Problem> and its proposed <Solution>.
-Your task is to assess whether the solution is **correct** or **incorrect**.
+PROMPT_FULL_SOLUTION = r"""
+You will be given a <Problem>, its proposed <Solution>, and the <Gold Answer>.
+Your task is to assess whether the solution arrives at the **correct final answer**.
 
-Respond using the **exact format** below,
-do not include any text outside this template.
+**IMPORTANT RULES**:
+1. The solution is ONLY correct if the final answer matches the Gold Answer.
+2. Good reasoning with a wrong final answer is INCORRECT.
+3. Answers in DIFFERENT FORMS that are MATHEMATICALLY EQUIVALENT should be considered CORRECT. Examples:
+   - "sinh(at)/a" equals "(exp(at) - exp(-at))/(2a)"
+   - "1/(2√X)" equals "(1/2)X^(-1/2)"
+   - "-8 - 8√3 i" equals "-8-8√3i" (spacing differences don't matter)
+   - "0.5" equals "1/2"
+
+Respond using the **exact format** below, do not include any text outside this template.
 Output format:
 <start of response>
 Solution comments:
-... your comments on the solution, explaining reasoning,
-    pointing out any errors or confirming correctness ...
+... brief comments on the solution ...
+Final answer in solution: [extract the final answer from the solution]
+Gold answer: [the provided gold answer]
+Mathematically equivalent: (Yes|No)
 <Grade>: (Correct|Incorrect)
 <end of response>
 
@@ -30,11 +40,56 @@ Solution comments:
 <Gold Answer>: {gold_answer}
 """
 
+PROMPT_ANSWER_ONLY = r"""
+You will be given a <Problem>, a <Proposed Answer>, and a <Gold Answer>.
+Your task is to assess whether the proposed answer is correct.
+
+**IMPORTANT RULES**:
+1. Answers in DIFFERENT FORMS that are MATHEMATICALLY EQUIVALENT should be considered CORRECT. Examples:
+   - "sinh(at)/a" equals "(exp(at) - exp(-at))/(2a)"
+   - "1/(2√X)" equals "(1/2)X^(-1/2)"
+   - "-8 - 8√3 i" equals "-8-8√3i" (spacing differences don't matter)
+   - "0.5" equals "1/2"
+   - "x = 2" equals "2"
+   - "\\frac{{1}}{{2}}" equals "0.5"
+2. Consider the problem context when comparing answers (e.g., units, variables).
+
+Respond using the **exact format** below, do not include any text outside this template.
+Output format:
+<start of response>
+Proposed answer: [restate the proposed answer]
+Gold answer: [restate the gold answer]
+Mathematically equivalent: (Yes|No)
+<Grade>: (Correct|Incorrect)
+<end of response>
+
+<Problem>: {problem}
+
+<Proposed Answer>: {answer}
+
+<Gold Answer>: {gold_answer}
+"""
+
+# Default prompt for backward compatibility
+ANNOTATION_PROMPT = PROMPT_FULL_SOLUTION
+
 
 class EvaluatorLLMAsAJudge:
     def __init__(
-        self, prompt: str, cache_path: str, base_url: str, model: str, n_threads: int
+        self,
+        prompt: str,
+        cache_path: str,
+        base_url: str,
+        model: str,
+        n_threads: int,
+        budget: int = 3,
+        mode: str = "answer_only",
     ):
+        """
+        Args:
+            mode: "full_solution" - pass entire reasoning to judge
+                  "answer_only" - compare just extracted answer vs gold (default)
+        """
         self.chat = OpenAIChat(
             cache_path=cache_path,
             openai_model=model,
@@ -42,9 +97,20 @@ class EvaluatorLLMAsAJudge:
         )
         self.prompt = prompt
         self.n_threads = n_threads
+        self.budget = budget  # Number of evaluations for majority voting
+        self.mode = mode
 
-    def _score_single(self, inp: tuple[str, str, str, int]) -> tuple[float, str]:
-        """Score a single solution and return (label, raw_response)."""
+    def _parse_reply(self, reply: str) -> tuple[int, str]:
+        """Parse a single reply and return (label, result_str)."""
+        if "<Grade>: Correct" in reply:
+            return 1, "Correct"
+        elif "<Grade>: Incorrect" in reply:
+            return 0, "Incorrect"
+        else:
+            return -1, "Unclear"  # Use -1 for unclear to distinguish from 0
+
+    def _score_single(self, inp: tuple[str, str, str, int]) -> tuple[float, str, float]:
+        """Score a single solution with majority voting and return (label, raw_response, consensus)."""
         problem, solution, gold_answer, idx = inp
         # This line extracts the question from the problem string using
         # the prompt template. It uses the parse library to match the
@@ -57,30 +123,66 @@ class EvaluatorLLMAsAJudge:
             problem = parsed.named["q"]
             # If parsing fails, keep the original problem string unchanged
 
-        log.info(f"Evaluating sample {idx + 1}...")
-        prompt = ANNOTATION_PROMPT.format(
-            problem=problem, solution=solution, gold_answer=gold_answer
+        log.info(
+            f"Evaluating sample {idx + 1} (budget={self.budget}, mode={self.mode})..."
         )
-        reply = self.chat.ask(prompt)
-
-        # Determine the numeric label
-        if "<Grade>: Correct" in reply:
-            label = 1
-            result_str = "Correct"
-        elif "<Grade>: Incorrect" in reply:
-            label = 0
-            result_str = "Incorrect"
+        if self.mode == "answer_only":
+            prompt = PROMPT_ANSWER_ONLY.format(
+                problem=problem, answer=solution, gold_answer=gold_answer
+            )
         else:
-            label = np.nan
+            prompt = PROMPT_FULL_SOLUTION.format(
+                problem=problem, solution=solution, gold_answer=gold_answer
+            )
+
+        # Collect multiple evaluations for majority voting
+        votes = []
+        replies = []
+        for i in range(self.budget):
+            # Use unique cache key per vote to avoid caching identical responses
+            if self.budget > 1:
+                vote_prompt = f"{prompt}\n<!-- vote {i+1}/{self.budget} -->"
+            else:
+                vote_prompt = prompt
+            reply = self.chat.ask(vote_prompt)
+            label, _ = self._parse_reply(reply)
+            votes.append(label)
+            replies.append(reply)
+
+        # Majority voting (exclude unclear votes)
+        valid_votes = [v for v in votes if v >= 0]
+        if valid_votes:
+            # Count votes: 1 = correct, 0 = incorrect
+            correct_votes = sum(1 for v in valid_votes if v == 1)
+            incorrect_votes = sum(1 for v in valid_votes if v == 0)
+            final_label = 1 if correct_votes > incorrect_votes else 0
+            consensus = max(correct_votes, incorrect_votes) / len(valid_votes)
+            result_str = (
+                f"Correct ({correct_votes}/{len(valid_votes)})"
+                if final_label == 1
+                else f"Incorrect ({incorrect_votes}/{len(valid_votes)})"
+            )
+        else:
+            final_label = np.nan
+            consensus = 0.0
             result_str = "Unclear"
 
+        # Combine all replies for transparency
+        if self.budget > 1:
+            combined_reply = f"=== Majority Vote: {result_str} ===\n"
+            for i, (reply, vote) in enumerate(zip(replies, votes)):
+                vote_str = {1: "Correct", 0: "Incorrect", -1: "Unclear"}[vote]
+                combined_reply += f"\n--- Vote {i+1}: {vote_str} ---\n{reply}\n"
+        else:
+            combined_reply = replies[0]
+
         log.info(f"Sample {idx + 1}: {result_str}")
-        return label, reply
+        return final_label, combined_reply, consensus
 
     def __call__(
         self, problems: list[str], solutions: list[str], gold_answers: list[str]
-    ) -> tuple[list[float], list[str]]:
-        """Evaluate solutions and return (labels, raw_responses)."""
+    ) -> tuple[list[float], list[str], list[float]]:
+        """Evaluate solutions and return (labels, raw_responses, consensus_scores)."""
         log.info(f"Starting evaluation of {len(problems)} samples...")
         all_inputs = [
             (problem, solution, gold_answer, idx)
@@ -92,10 +194,12 @@ class EvaluatorLLMAsAJudge:
             futures = [executor.submit(self._score_single, item) for item in all_inputs]
             labels = []
             responses = []
+            consensus_scores = []
             for future in tqdm(futures, desc="Verifying solutions"):
-                label, response = future.result()
+                label, response, consensus = future.result()
                 labels.append(label)
                 responses.append(response)
+                consensus_scores.append(consensus)
 
             # Summary statistics
             correct_count = sum(1 for label in labels if label == 1)
@@ -111,4 +215,4 @@ class EvaluatorLLMAsAJudge:
             if unclear_count > 0:
                 log.info(f"  Unclear: {unclear_count}")
 
-            return labels, responses
+            return labels, responses, consensus_scores
