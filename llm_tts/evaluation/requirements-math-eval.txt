@@ -5,14 +5,12 @@
 #   conda create -n qwen-eval python=3.11 -y
 #   conda activate qwen-eval
 #   pip install -r llm_tts/evaluation/requirements-math-eval.txt
+#
+# Note: latex2sympy2 is bundled in llm_tts/evaluation/latex2sympy/ (no pip install needed)
 
-# Core math evaluation dependencies
+# Core math evaluation dependencies (from Qwen2.5-Math)
 sympy==1.12
 regex>=2023.0.0
 
-# ANTLR runtime - must be 4.11.1 for latex2sympy2 compatibility
-# (Hydra requires >=4.9.3 which conflicts at runtime)
+# ANTLR runtime - must be 4.11.1 (bundled latex2sympy is compiled for this version)
 antlr4-python3-runtime==4.11.1
-
-# LaTeX to SymPy conversion
-latex2sympy2>=1.9.1
