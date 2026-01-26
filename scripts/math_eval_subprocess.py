@@ -341,11 +341,13 @@ def main():
     # Test mode - verify environment is correctly set up
     if "--test" in sys.argv:
         print("Testing math evaluation environment...")
+        # Note: math_equal() compares already-extracted answers.
+        # The \boxed{} extraction happens in parser.py BEFORE calling math_equal().
         test_cases = [
             ("2", "2", True),
             ("\\frac{1}{2}", "0.5", True),
             ("x^2 + 2x + 1", "(x+1)^2", True),
-            ("\\boxed{42}", "42", True),
+            ("42", "42", True),  # Answers are pre-extracted from \boxed{} by parser.py
         ]
         all_passed = True
         for pred, gold, expected in test_cases:
