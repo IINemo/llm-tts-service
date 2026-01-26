@@ -326,6 +326,7 @@ def create_model(config):
 
                 # Select estimator based on scorer config
                 scorer_type = config.scorer.type if config.scorer else "entropy"
+                vllm_with_uncertainty_arguments = {}
                 if scorer_type == "perplexity":
                     stat_calculators = [VLLMLogprobsCalculator()]
                     estimator = Perplexity()
@@ -344,6 +345,18 @@ def create_model(config):
                     # Use entropy wrapper for generation (scores not used for selection)
                     stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                     estimator = MeanTokenEntropy()
+                elif scorer_type == "uhead":
+                    from luh import AutoUncertaintyHead, CalculatorApplyUQHead, LuhClaimEstimatorDummy
+                    from luh.vllm import VLLMUncertaintyHeadFeatures
+                    uncertainty_head = AutoUncertaintyHead.from_pretrained(
+                        config.scorer.uq_head_path, base_model=llm
+                    )
+                    stat_calculators = [
+                        VLLMUncertaintyHeadFeatures(uncertainty_head),
+                        CalculatorApplyUQHead(uncertainty_head),
+                    ]
+                    estimator = LuhClaimEstimatorDummy()
+                    vllm_with_uncertainty_arguments = stat_calculators[0].vllm_with_uncertainty_arguments()
                 else:
                     raise ValueError(
                         f"Unsupported scorer type for vLLM: {scorer_type}. "
@@ -354,6 +367,7 @@ def create_model(config):
                     llm=llm,
                     stat_calculators=stat_calculators,
                     estimator=estimator,
+                    **vllm_with_uncertainty_arguments,
                 )
                 log.info(
                     f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__}"
