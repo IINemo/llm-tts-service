@@ -94,6 +94,7 @@ from llm_tts.strategies import (
     StrategyOfflineBestOfN,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
+    StrategySTBoN,
     StrategyTreeOfThoughts,
     StrategyUncertaintyCoT,
 )
@@ -734,6 +735,23 @@ def create_tts_strategy(
             max_empty_steps=config.strategy.max_empty_steps,
             uncertainty_threshold=config.strategy.uncertainty_threshold,
             uncertainty_sampling=config.strategy.uncertainty_sampling,
+        )
+
+    elif config.strategy.type == "st_bon":
+        if step_generator is None:
+            raise ValueError(
+                "ST-BoN strategy requires step_generator. "
+                "Ensure model.type is 'vllm' or 'huggingface' and step generator is created."
+            )
+        strategy = StrategySTBoN(
+            step_generator=step_generator,
+            num_paths=config.strategy.get("num_paths", 10),
+            max_steps=config.strategy.get("max_steps", 50),
+            buffer_multiplier=config.strategy.get("buffer_multiplier", 1.0),
+            similarity_mode=config.strategy.get("similarity_mode", "auto"),
+            semantic_model=config.strategy.get(
+                "semantic_model", "sentence-transformers/all-MiniLM-L6-v2"
+            ),
         )
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")

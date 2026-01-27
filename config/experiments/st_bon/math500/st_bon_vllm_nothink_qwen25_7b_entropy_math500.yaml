@@ -1,0 +1,83 @@
+# @package _global_
+# ST-BoN (Self-Truncation Best-of-N) with vLLM + Non-Thinking Mode (Qwen2.5-7B)
+# Based on "Sampling-Efficient Test-Time Scaling: Self-Estimating the Best-of-N Sampling in Early Decoding"
+# Uses early truncation to save 50-80% compute while maintaining accuracy
+
+defaults:
+  - /config
+  - /dataset/math_500
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - _self_
+
+run_name: "st_bon_vllm_nothink_qwen25_7b_entropy_math500_${now:%H-%M-%S}"
+
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-math500
+
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 4096
+  disable_thinking_mode: true
+
+system:
+  device: cuda
+  seed: 42
+
+generation:
+  max_new_tokens: 4096
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  batch_size: 1
+  max_length: 8192
+
+strategy:
+  type: st_bon
+  num_paths: 10
+  max_steps: 50
+  parallel: true
+  buffer_multiplier: 1.0
+  similarity_mode: "string"
+  similarity_threshold: 0.6
+  min_prefix_tokens: 20
+  detector_type: structured
+  min_step_tokens: 50
+  max_step_tokens: 300
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: false
+  use_verification: true
+  use_structure: true
+  use_reasoning: true
+  use_correction: false
+  custom_words:
+    - "for example"
+    - "given that"
+    - "similarly"
+    - "step"
+    - "therefore"
+    - "thus"
+  detector_answer_patterns:
+    - "<Answer>:"
+    - "\n<Answer>:"
+  detector_eos_patterns:
+    - "<end of response>"
+
+dataset:
+  subset: 500
+  offset: 0
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
+  data_name: math500
+
+evaluation:
+  evaluators:
+    - exact_match
