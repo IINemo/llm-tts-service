@@ -45,7 +45,11 @@ except ImportError:
 
 # lm-polygraph uncertainty wrapper (for vLLM uncertainty scoring)
 try:
-    from lm_polygraph.estimators import MeanTokenEntropy, Perplexity
+    from lm_polygraph.estimators import (
+        MaximumSequenceProbability,
+        MeanTokenEntropy,
+        Perplexity,
+    )
     from lm_polygraph.stat_calculators import EntropyCalculator, VLLMLogprobsCalculator
     from lm_polygraph.utils import VLLMWithUncertainty
 
@@ -251,7 +255,12 @@ def create_scorer(config):
         )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
-    elif config.scorer.type in ("perplexity", "entropy", "uncertainty_pd"):
+    elif config.scorer.type in (
+        "perplexity",
+        "entropy",
+        "uncertainty_pd",
+        "sequence_prob",
+    ):
         scorer = StepScorerConfidence()
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
@@ -329,6 +338,10 @@ def create_model(config):
                 if scorer_type == "perplexity":
                     stat_calculators = [VLLMLogprobsCalculator()]
                     estimator = Perplexity()
+                elif scorer_type == "sequence_prob":
+                    # Sequence probability scoring (sum of log-probs, not normalized)
+                    stat_calculators = [VLLMLogprobsCalculator()]
+                    estimator = MaximumSequenceProbability()
                 elif scorer_type == "uncertainty_pd":
                     # PD-Gap scoring using top-k logprobs matrix
                     from llm_tts.scorers.estimator_uncertainty_pd import PDGap
@@ -347,7 +360,7 @@ def create_model(config):
                 else:
                     raise ValueError(
                         f"Unsupported scorer type for vLLM: {scorer_type}. "
-                        f"Supported types: perplexity, uncertainty_pd, entropy, prm"
+                        f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm"
                     )
 
                 vllm_model = VLLMWithUncertainty(
