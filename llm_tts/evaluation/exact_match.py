@@ -55,10 +55,18 @@ def _extract_single_letter_answer(text: str) -> str | None:
     """Extract single alphabetical character answers (A, B, C, D, etc.) from text."""
     if not text:
         return None
+    text = text.strip()
+
+    # Try to extract from \boxed{X} format (last occurrence)
+    boxed_matches = re.findall(r"\\boxed\{([A-Za-z])\}", text)
+    if boxed_matches:
+        return boxed_matches[-1].upper()
+
     # Single letter at end
-    match = re.search(r"\b([A-Z])[.,]?\s*$", text.strip())
+    match = re.search(r"\b([A-Z])[.,]?\s*$", text)
     if match:
         return match.group(1).upper()
+
     return None
 
 
