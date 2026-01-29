@@ -48,7 +48,7 @@ generation:
 strategy:
   type: offline_best_of_n
   num_trajectories: 4
-  max_steps: 50
+  max_steps: 100
   score_aggregation: min  # Conservative: trajectory is only as good as its weakest step
   batch_generation: true  # Fully batched: M×N trajectories in single vLLM call
   # Stop tokens derived from detector config (use_* flags below)
