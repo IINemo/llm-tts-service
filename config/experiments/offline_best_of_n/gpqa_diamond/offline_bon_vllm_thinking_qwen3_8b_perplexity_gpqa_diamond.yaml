@@ -1,0 +1,97 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gpqa_diamond/offline_bon_vllm_thinking_qwen3_8b_perplexity_gpqa_diamond
+# Offline Best-of-N with Thinking Mode (Qwen3-8B) on GPQA-Diamond — Perplexity scorer
+# Generates N complete trajectories (thinking + response), then selects the best one
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/perplexity
+  - _self_
+
+# Run naming
+run_name: "offline_bon_vllm_thinking_qwen3_8b_perplexity_gpqa_diamond_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-gpqa-diamond
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  gpu_memory_utilization: 0.8
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
+  disable_thinking_mode: false  # ENABLE native thinking mode
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (thinking mode settings)
+generation:
+  max_new_tokens: 4096
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 32768
+
+# Strategy - Offline Best-of-N
+strategy:
+  type: offline_best_of_n
+  num_trajectories: 4
+  max_thinking_tokens: 32768
+  max_response_tokens: 1024
+  detector_answer_patterns:
+    - "<end of response>"
+  min_step_tokens: 125
+  max_step_tokens: 500
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: false
+  use_reasoning: true
+  use_correction: false
+
+# Perplexity scorer configuration
+scorer:
+  type: perplexity
+  batch_size: 1
+
+# Dataset configuration - GPQA-Diamond (198 graduate-level science multiple choice)
+dataset:
+  dataset_path: "test-time-compute/test_gpqa_diamond"
+  dataset_config: null
+  dataset_split: "test"
+  subset: null  # Full dataset (198 samples)
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "char"
+  data_name: "gpqa_diamond"
+  system_prompt: "Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match
+  batch_evaluators:
+    - llm_judge
+  llm_judge:
+    provider: openai
+    model: gpt-4o-mini
+    mode: answer_only
+    base_url: https://api.openai.com/v1
+    cache_path: ./cache/llm_judge
+    n_threads: 10
