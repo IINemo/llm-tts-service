@@ -1938,11 +1938,18 @@ def main(config):
     except Exception as e:
         log.warning(f"Failed to shutdown model: {e}")
 
-    # Finish wandb session if it was initialized
+    # Save log files and finish wandb session
     if getattr(config, "report_to", None) == "wandb":
         try:
             import wandb
 
+            if wandb.run is not None:
+                log_file = Path(output_dir) / "run_tts_eval.log"
+                stderr_log = Path(output_dir) / "stderr.log"
+                if log_file.exists():
+                    wandb.save(str(log_file))
+                if stderr_log.exists():
+                    wandb.save(str(stderr_log))
             wandb.finish()
             log.info("Finished wandb session")
         except Exception as e:
