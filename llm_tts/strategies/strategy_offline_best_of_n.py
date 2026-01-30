@@ -436,9 +436,18 @@ class StrategyOfflineBestOfN(StrategyBase):
             f"n={N}, max_tokens={sampling_params.max_tokens}"
         )
 
-        # Check if scorer uses uncertainty from generation (entropy/perplexity)
-        # vs separate model (PRM). VLLMWithUncertainty has 'estimator' attribute.
-        use_uncertainty_wrapper = hasattr(self.step_generator.model, "estimator")
+        # Check if scorer is a PRM model (separate model) or uses uncertainty from generation.
+        # PRM scorer (StepScorerPRM) has 'prm_model' attribute.
+        # If using PRM, we skip the uncertainty wrapper even if the model has one.
+        use_prm_scorer = (
+            hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
+        )
+        use_uncertainty_wrapper = (
+            hasattr(self.step_generator.model, "estimator") and not use_prm_scorer
+        )
+        log.info(
+            f"Using PRM scorer: {use_prm_scorer}, uncertainty wrapper: {use_uncertainty_wrapper}"
+        )
 
         if use_uncertainty_wrapper:
             # Use VLLMWithUncertainty to get uncertainty scores during generation
