@@ -1,0 +1,89 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/amc23/baseline_vllm_qwen3_8b_thinking_amc23
+# Baseline evaluation for Qwen3-8B (Thinking Mode) on AMC 2023
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - _self_
+
+# Run naming
+run_name: "baseline_qwen3_8b_thinking_amc23_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-amc23
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  gpu_memory_utilization: 0.8
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
+  disable_thinking_mode: false  # ENABLE native thinking mode
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration - thinking mode settings
+generation:
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+
+# Strategy - Baseline single-shot
+strategy:
+  type: baseline
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  min_step_tokens: 0
+  max_step_tokens: 32768
+  # Disable all semantic markers for baseline
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  detector_answer_patterns: []
+
+# Dataset configuration - AMC 2023 (40 problems)
+dataset:
+  dataset_path: "test-time-compute/test_amc23"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 40
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: "amc23"
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - exact_match
+  batch_evaluators:
+    - llm_judge
+  llm_judge:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    cache_path: ./cache/llm_judge
+    n_threads: 10
