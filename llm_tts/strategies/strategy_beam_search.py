@@ -128,6 +128,9 @@ class StrategyBeamSearch(StrategyBase):
             Dictionary with trajectory, steps, score, and metadata.
         """
 
+        # Reset token tracking for this sample
+        self.step_generator.reset_sample_stats()
+
         # Initialize beams with empty trajectory
         beams = [{"steps": [], "scores": []}]
         completed_beams = []
@@ -198,12 +201,17 @@ class StrategyBeamSearch(StrategyBase):
         # Extract answer from trajectory (e.g., from \boxed{})
         extracted = extract_answer(trajectory_text)
 
+        # Get token stats from generator
+        self.step_generator.finalize_sample_stats()
+        token_stats = self.step_generator.get_sample_stats()
+
         return {
             "trajectory": trajectory_text,
             "steps": best_beam["steps"],
             "validity_scores": best_beam["scores"],
             "completed": len(completed_beams) > 0,
             "extracted_answer": extracted,
+            "token_stats": token_stats,
         }
 
     def generate_trajectories_batch(
@@ -242,6 +250,12 @@ class StrategyBeamSearch(StrategyBase):
             hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
         )
         log.info(f"Using PRM scorer: {use_prm_scorer}")
+
+        # Per-sample token tracking for FLOP calculation
+        sample_token_stats = {
+            i: {"input_tokens": 0, "output_tokens": 0, "generation_count": 0}
+            for i in range(M)
+        }
 
         # sample_beams[sample_id] = list of ACTIVE beams only
         sample_beams = {
@@ -341,6 +355,36 @@ class StrategyBeamSearch(StrategyBase):
                     candidates_per_step=self.candidates_per_beam,
                     compute_uncertainty=not use_prm_scorer,
                 )
+
+                # Track tokens per sample from this generation step
+                # Each prompt's context is processed once (KV cache shared across candidates)
+                for prompt_idx, (sample_id, beam_idx, parent_beam) in enumerate(
+                    prompt_metadata
+                ):
+                    # Context tokens for this (sample, beam) pair
+                    traj_text = convert_trajectory_to_string(parent_beam["steps"])
+                    if getattr(self.step_generator, "disable_thinking_mode", False):
+                        prompt = self.step_generator._apply_chat_template(
+                            requests[sample_id], enable_thinking=False
+                        )
+                    else:
+                        prompt = self.step_generator.tokenizer.apply_chat_template(
+                            requests[sample_id],
+                            tokenize=False,
+                            add_generation_prompt=True,
+                        )
+                    if traj_text:
+                        prompt = prompt + traj_text
+                    ctx_tokens = len(self.step_generator.tokenizer.encode(prompt))
+                    sample_token_stats[sample_id]["input_tokens"] += ctx_tokens
+
+                    # Output tokens from all candidates for this beam
+                    for candidate in batch_results[prompt_idx]:
+                        out_tokens = candidate.other_data.get(
+                            "original_token_count", len(candidate.token_ids)
+                        )
+                        sample_token_stats[sample_id]["output_tokens"] += out_tokens
+                    sample_token_stats[sample_id]["generation_count"] += 1
 
                 # 4. Process StepCandidates into candidate data
                 for prompt_idx, (
@@ -450,7 +494,13 @@ class StrategyBeamSearch(StrategyBase):
                     log.warning(
                         f"Sample {sample_indices[sample_id]}: No beams generated"
                     )
-                    completed_results[sample_id] = self._finalize_sample([], [])
+                    completed_results[sample_id] = self._finalize_sample(
+                        [],
+                        [],
+                        token_stats=self._build_token_stats(
+                            sample_token_stats[sample_id]
+                        ),
+                    )
                     samples_to_remove.append(sample_id)
                     continue
 
@@ -477,7 +527,11 @@ class StrategyBeamSearch(StrategyBase):
                         completed_beams_by_sample[sample_id]
                     )
                     completed_results[sample_id] = self._finalize_sample(
-                        best_beam["steps"], best_beam["scores"]
+                        best_beam["steps"],
+                        best_beam["scores"],
+                        token_stats=self._build_token_stats(
+                            sample_token_stats[sample_id]
+                        ),
                     )
                     samples_to_remove.append(sample_id)
                     # Log chosen trajectory details - show each step separately
@@ -511,7 +565,9 @@ class StrategyBeamSearch(StrategyBase):
             best_beam = self._select_best_beam(candidates)
 
             completed_results[sample_id] = self._finalize_sample(
-                best_beam["steps"], best_beam["scores"]
+                best_beam["steps"],
+                best_beam["scores"],
+                token_stats=self._build_token_stats(sample_token_stats[sample_id]),
             )
             # Log chosen trajectory details - show each step separately
             scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
@@ -666,19 +722,45 @@ class StrategyBeamSearch(StrategyBase):
         return all_candidates_data
 
     def _finalize_sample(
-        self, steps: List[StepCandidate], scores: List[float]
+        self,
+        steps: List[StepCandidate],
+        scores: List[float],
+        token_stats: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create final result dict for a completed sample."""
         trajectory_text = convert_trajectory_to_string(steps)
         extracted = extract_answer(trajectory_text)
 
-        return {
+        result = {
             "trajectory": trajectory_text,
             "steps": steps,
             "validity_scores": scores,
             "completed": True,
             "extracted_answer": extracted,
         }
+        if token_stats is not None:
+            result["token_stats"] = token_stats
+        return result
+
+    def _build_token_stats(self, raw_stats: Dict[str, int]) -> Dict[str, Any]:
+        """Build token_stats dict from raw per-sample counters."""
+        input_tokens = raw_stats["input_tokens"]
+        output_tokens = raw_stats["output_tokens"]
+        total_tokens = input_tokens + output_tokens
+        token_stats = {
+            "total_tokens_this_sample": total_tokens,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "generation_count": raw_stats["generation_count"],
+        }
+        if (
+            hasattr(self.step_generator, "flop_calculator")
+            and self.step_generator.flop_calculator
+        ):
+            token_stats["tflops"] = self.step_generator.flop_calculator.compute_tflops(
+                total_tokens
+            )
+        return token_stats
 
     def _aggregate_scores(self, scores: list[float]) -> float:
         """Aggregate scores across steps according to selected strategy."""

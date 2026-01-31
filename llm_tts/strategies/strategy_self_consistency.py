@@ -427,10 +427,12 @@ class StrategySelfConsistency(StrategyBase):
             result = self.select_best_answer(paths)
 
             # Token stats for this sample
-            total_tokens = context_tokens * N + total_output_tokens
+            # Context is processed ONCE per prompt (KV cache shared across N candidates)
+            # so input_tokens = context_tokens, NOT context_tokens * N
+            total_tokens = context_tokens + total_output_tokens
             token_stats = {
                 "total_tokens_this_sample": total_tokens,
-                "input_tokens": context_tokens * N,
+                "input_tokens": context_tokens,
                 "output_tokens": total_output_tokens,
                 "generation_count": N,
             }

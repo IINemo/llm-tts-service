@@ -307,6 +307,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         extracted = extract_answer(best_result["full_text"])
 
         # Get token stats
+        self.step_generator.finalize_sample_stats()
         token_stats = self.step_generator.get_sample_stats()
 
         # Save logs if output_dir provided
@@ -589,10 +590,12 @@ class StrategyOfflineBestOfN(StrategyBase):
             extracted = extract_answer(best_result.get("full_text", ""))
 
             # Token stats for this sample
-            total_tokens = data["context_tokens"] * N + data["total_output_tokens"]
+            # Context is processed ONCE per prompt (KV cache shared across N candidates)
+            # so input_tokens = context_tokens, NOT context_tokens * N
+            total_tokens = data["context_tokens"] + data["total_output_tokens"]
             token_stats = {
                 "total_tokens_this_sample": total_tokens,
-                "input_tokens": data["context_tokens"] * N,
+                "input_tokens": data["context_tokens"],
                 "output_tokens": data["total_output_tokens"],
                 "generation_count": N,
             }
