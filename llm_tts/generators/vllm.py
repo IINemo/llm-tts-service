@@ -146,6 +146,14 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             f"VLLMStepGenerator initialized: thinking_mode={thinking_mode}, "
             f"{len(self.stop_tokens)} stop tokens"
         )
+        log.info(
+            f"Generation parameters: temperature={self.temperature}, "
+            f"top_p={self.top_p}, top_k={self.top_k}, "
+            f"presence_penalty={self.presence_penalty}, "
+            f"max_new_tokens={self.max_new_tokens}, "
+            f"max_answer_tokens={self.max_answer_tokens}, "
+            f"max_model_len={self.max_model_len}"
+        )
 
     def _init_detector(self, detector: Optional[ThinkingMarkerDetector]):
         """Initialize detector and derive stop tokens from it.
