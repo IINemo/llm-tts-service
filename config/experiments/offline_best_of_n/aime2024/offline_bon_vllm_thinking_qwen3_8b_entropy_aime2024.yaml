@@ -47,7 +47,7 @@ generation:
 # Strategy - Offline Best-of-N
 strategy:
   type: offline_best_of_n
-  num_trajectories: 4        # Number of complete trajectories to generate
+  num_trajectories: 8        # Number of complete trajectories to generate
   max_steps: 100
   score_aggregation: min     # Conservative: trajectory is only as good as its weakest step
   batch_generation: true     # Fully batched: M×N trajectories in single vLLM call

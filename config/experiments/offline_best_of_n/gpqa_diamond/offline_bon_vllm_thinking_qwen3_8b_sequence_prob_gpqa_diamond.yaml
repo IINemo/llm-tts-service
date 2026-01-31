@@ -47,7 +47,7 @@ generation:
 # Strategy - Offline Best-of-N
 strategy:
   type: offline_best_of_n
-  num_trajectories: 4
+  num_trajectories: 8
   max_steps: 100
   max_thinking_tokens: 32768
   max_response_tokens: 1024
