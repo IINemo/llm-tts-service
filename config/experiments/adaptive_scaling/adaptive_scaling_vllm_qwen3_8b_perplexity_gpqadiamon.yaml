@@ -3,25 +3,26 @@
 
 defaults:
   - /config
-  - /dataset/math_500
+  - /dataset/aime_2025
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
   - /scorer/perplexity
   - _self_
 
-run_name: "adaptive_scaling_vllm_qwen25_7.5b_perplexity_math500_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen3_8b_perplexity_gpqadiamon_${now:%H-%M-%S}"
 
 # Model configuration
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_path: "Qwen/Qwen3-8B"
   gpu_memory_utilization: 0.8
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 4096
-  disable_thinking_mode: true
+  max_model_len: 32768
+  disable_thinking_mode: false
+  device: "cuda"
 
 # System configuration
 system:
@@ -30,12 +31,12 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 1024
-  temperature: 0.7
-  top_p: 0.8
+  max_new_tokens: 2048
+  temperature: 0.6
+  top_p: 0.95
   top_k: 20
   batch_size: 512
-  max_length: 4096
+  max_length: 2048
 
 # Strategy - Adaptive Scaling
 strategy:
@@ -48,7 +49,7 @@ strategy:
   # Detector settings
   detector_type: structured
   min_step_tokens: 50
-  max_step_tokens: 1024
+  max_step_tokens: 2048
   use_sequence: true
   use_conclusion: true
   use_thinking: false
@@ -70,21 +71,21 @@ strategy:
   stop_token_ids:
     - 151645
     - 151643
-  
-  batch_generation: true
 
 # Dataset configuration
 dataset:
-  subset: 32
+  subset: 200
   offset: 0
-  dataset_path: "test-time-compute/test_MATH"
+  dataset_path: "test-time-compute/test_gpqa_diamond"
   dataset_config: null
   dataset_split: "test"
-  data_name: math
+  data_name: "gpqa_diamond"
 
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
+  answer_field: "answer"
+  answer_format: "char"
 
 # Evaluation configuration
 evaluation:
@@ -93,4 +94,4 @@ evaluation:
 
 # Reporting
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-gpqa_diamond

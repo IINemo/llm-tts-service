@@ -3,20 +3,20 @@
 
 defaults:
   - /config
-  - /dataset/math_500
+  - /dataset/olympiadbench
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
   - /scorer/perplexity
   - _self_
 
-run_name: "adaptive_scaling_vllm_qwen25_7.5b_perplexity_math500_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen25_7.5b_perplexity_minerva_${now:%H-%M-%S}"
 
 # Model configuration
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
-  gpu_memory_utilization: 0.8
+  gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -41,7 +41,7 @@ generation:
 strategy:
   type: adaptive
   candidates_per_step: 4
-  max_steps: 50
+  max_steps: 40
   scaling_rate: 0.9
   momentum_rate: 0.9
   adaptive_scaling_method: momentum  # momentum, random, average, always, threshold
@@ -66,21 +66,31 @@ strategy:
     - "```"
     - "🌈"
     - "\U0001F308"
-
   stop_token_ids:
     - 151645
     - 151643
-  
-  batch_generation: true
+
+  # detector_answer_patterns:
+  #   - "</think>"
+  #   - "<Answer>:"
+  #   - "\n<Answer>:"
+  #   - "boxed\\{"
+  #   - "boxed"
+
+  # detector_answer_patterns:
+  #   - "<Answer>:"
+  #   - "\n<Answer>:"
+  # detector_eos_patterns:
+  #   - "<end of response>"
 
 # Dataset configuration
 dataset:
-  subset: 32
+  subset: 272
   offset: 0
-  dataset_path: "test-time-compute/test_MATH"
+  dataset_path: "test-time-compute/test_minerva_math"
   dataset_config: null
   dataset_split: "test"
-  data_name: math
+  data_name: minerva_math
 
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
@@ -88,9 +98,22 @@ dataset:
 
 # Evaluation configuration
 evaluation:
+  # Phase 1 evaluators (run during generation for running accuracy)
   evaluators:
     - exact_match
 
+  # Phase 2 evaluators (batch evaluation after generation)
+  # batch_evaluators:
+  #   - llm_judge
+
+  # # API-based LLM judge configuration
+  # llm_judge:
+  #   provider: openai
+  #   model: gpt-4o-mini
+  #   base_url: https://api.openai.com/v1
+  #   cache_path: ./cache/llm_judge
+  #   n_threads: 10
+
 # Reporting
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-minerva_math

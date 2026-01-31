@@ -3,20 +3,20 @@
 
 defaults:
   - /config
-  - /dataset/math_500
+  - /dataset/gaokao2023en
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
   - /scorer/perplexity
   - _self_
 
-run_name: "adaptive_scaling_vllm_qwen25_7.5b_perplexity_math500_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen25_7.5b_perplexity_gaokao2023en_${now:%H-%M-%S}"
 
 # Model configuration
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
-  gpu_memory_utilization: 0.8
+  gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -34,7 +34,7 @@ generation:
   temperature: 0.7
   top_p: 0.8
   top_k: 20
-  batch_size: 512
+  batch_size: 1024
   max_length: 4096
 
 # Strategy - Adaptive Scaling
@@ -49,6 +49,10 @@ strategy:
   detector_type: structured
   min_step_tokens: 50
   max_step_tokens: 1024
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  # Step boundary token limits
   use_sequence: true
   use_conclusion: true
   use_thinking: false
@@ -67,30 +71,44 @@ strategy:
     - "🌈"
     - "\U0001F308"
 
-  stop_token_ids:
-    - 151645
-    - 151643
-  
-  batch_generation: true
+  # detector_answer_patterns:
+  #   - "<Answer>:"
+  #   - "\n<Answer>:"
+  # detector_eos_patterns:
+  #   - "<end of response>"
 
 # Dataset configuration
 dataset:
-  subset: 32
-  offset: 0
-  dataset_path: "test-time-compute/test_MATH"
+  subset: 385
+  offset: 0 
+  dataset_path: "test-time-compute/test_gaokao2023en"
   dataset_config: null
   dataset_split: "test"
-  data_name: math
+  data_name: gaokao2023en
 
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
+  # prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
 
 # Evaluation configuration
 evaluation:
+  # Phase 1 evaluators (run during generation for running accuracy)
   evaluators:
     - exact_match
 
+  # Phase 2 evaluators (batch evaluation after generation)
+  # batch_evaluators:
+  #   - llm_judge
+
+  # # API-based LLM judge configuration
+  # llm_judge:
+  #   provider: openai
+  #   model: gpt-4o-mini
+  #   base_url: https://api.openai.com/v1
+  #   cache_path: ./cache/llm_judge
+  #   n_threads: 10
+
 # Reporting
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-gaokao2023en

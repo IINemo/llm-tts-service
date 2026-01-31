@@ -607,6 +607,7 @@ def create_tts_strategy(
             batch_generation=batch_generation,
         )
     elif config.strategy.type == "adaptive":
+        batch_generation = config.strategy.get("batch_generation", True)
         strategy = AdaptiveScalingBestOfN(
             step_generator=step_generator,
             scorer=scorer,
@@ -615,6 +616,8 @@ def create_tts_strategy(
             adaptive_scaling_method=config.strategy.adaptive_scaling_method,
             scaling_rate=config.strategy.scaling_rate,
             momentum_rate=config.strategy.momentum_rate,
+            batch_generation=batch_generation,
+            batch_size=config.strategy.get("batch_size", 1000),
         )
     elif config.strategy.type == "deepconf":
         # DeepConf supports both API models (with logprobs) and local HuggingFace models
@@ -1102,6 +1105,7 @@ def generate_trajectories(
                 StrategySelfConsistency,
                 StrategyOfflineBestOfN,
                 StrategyBeamSearch,
+                AdaptiveScalingBestOfN,
             ),
         )
         and hasattr(strategy, "generate_trajectories_batch")
@@ -1775,10 +1779,10 @@ def main(config):
     log.info(f"Output directory: {output_dir}")
 
     # Redirect stderr to file in output directory (captures tqdm progress bars)
-    stderr_log_path = Path(output_dir) / "stderr.log"
-    stderr_file = open(stderr_log_path, "w", buffering=1)  # Line buffered
-    sys.stderr = stderr_file
-    log.info(f"Stderr redirected to: {stderr_log_path}")
+    # stderr_log_path = Path(output_dir) / "stderr.log"
+    # stderr_file = open(stderr_log_path, "w", buffering=1)  # Line buffered
+    # sys.stderr = stderr_file
+    # log.info(f"Stderr redirected to: {stderr_log_path}")
 
     # Setup wandb if configured
     if getattr(config, "report_to", None) == "wandb":
