@@ -13,8 +13,6 @@ import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from vllm import SamplingParams
-
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
@@ -323,135 +321,54 @@ class StrategyBeamSearch(StrategyBase):
 
             # Only generate if there are prompts to process
             if prompt_metadata:
-                # 2. Build all prompts for batched generation (like offline best-of-n)
-                prompts = []
-                for sample_id, beam_idx, parent_beam in prompt_metadata:
-                    request = requests[sample_id]
-                    trajectory = parent_beam["steps"]
-
-                    # Build prompt using step_generator's template
-                    prompt = self.step_generator._apply_chat_template(
-                        request, enable_thinking=False
-                    )
-                    if trajectory:
-                        trajectory_text = convert_trajectory_to_string(trajectory)
-                        prompt = prompt + trajectory_text
-                    prompts.append(prompt)
-
-                # 3. Create sampling params with step-level stop tokens (same as step_generator)
-                sampling_params = SamplingParams(
-                    n=self.candidates_per_beam,
-                    max_tokens=self.step_generator.max_step_tokens,
-                    min_tokens=self.step_generator.min_step_tokens,
-                    temperature=self.step_generator.temperature,
-                    top_p=self.step_generator.top_p,
-                    top_k=getattr(self.step_generator, "top_k", -1),
-                    stop=self.step_generator.stop_tokens,  # 433 step boundary tokens
-                    stop_token_ids=self.step_generator.stop_token_ids,  # EOS tokens [151645, 151643]
-                    logprobs=20 if not use_prm_scorer else None,
-                )
+                # 2. Build per-trajectory requests and trajectories for batched generation
+                batch_requests = [
+                    requests[sample_id] for sample_id, _, _ in prompt_metadata
+                ]
+                batch_trajectories = [
+                    parent_beam["steps"] for _, _, parent_beam in prompt_metadata
+                ]
 
                 log.info(
-                    f"Batched generation: {len(prompts)} prompts × {self.candidates_per_beam} candidates, "
-                    f"stop={len(self.step_generator.stop_tokens)} tokens, "
-                    f"min={sampling_params.min_tokens}, max={sampling_params.max_tokens}"
+                    f"Batched generation: {len(batch_requests)} (sample, beam) pairs "
+                    f"× {self.candidates_per_beam} candidates"
                 )
 
-                # 4. Single vLLM call for ALL prompts
-                # Use raw vLLM for PRM scorer (compute_uncertainty=False)
-                if use_prm_scorer:
-                    raw_llm = getattr(
-                        self.step_generator.model, "llm", self.step_generator.model
-                    )
-                    outputs = raw_llm.generate(prompts, sampling_params)
-                else:
-                    # Use VLLMWithUncertainty to get uncertainty scores
-                    outputs = self.step_generator.model.generate(
-                        prompts, sampling_params, compute_uncertainty=True
-                    )
-                # Sort by request_id to maintain order
-                outputs = sorted(outputs, key=lambda x: int(x.request_id))
+                # 3. Single call via generate_step_candidates_batch (handles FLOP tracking)
+                batch_results = self.step_generator.generate_step_candidates_batch(
+                    requests=batch_requests,
+                    trajectories=batch_trajectories,
+                    candidates_per_step=self.candidates_per_beam,
+                    compute_uncertainty=not use_prm_scorer,
+                )
 
-                # 5. Process outputs into candidate data (same logic as step_generator)
+                # 4. Process StepCandidates into candidate data
                 for prompt_idx, (
-                    request_output,
+                    candidates,
                     (sample_id, beam_idx, parent_beam),
-                ) in enumerate(zip(outputs, prompt_metadata)):
+                ) in enumerate(zip(batch_results, prompt_metadata)):
                     candidates_for_beam = []
 
-                    for cand_idx, output in enumerate(request_output.outputs):
-                        raw_text = output.text
-                        token_ids = list(output.token_ids)
-                        stop_reason = getattr(output, "stop_reason", None)
+                    for candidate in candidates:
+                        text = candidate.text
+                        token_ids = list(candidate.token_ids)
+                        is_trajectory_complete = candidate.is_trajectory_complete
 
-                        # Clean up text (same as step_generator)
-                        text = raw_text.strip()
-
-                        # Detect trajectory completion (same logic as step_generator)
-                        # Stopped at EOS token ID (stop_reason=None means natural EOS)
-                        stopped_at_eos = (
-                            stop_reason is None
-                            and len(token_ids) < self.step_generator.max_step_tokens
-                        ) or (stop_reason in self.step_generator.stop_token_ids)
-                        # Hit max tokens
-                        hit_max_tokens = stop_reason == "length" or (
-                            stop_reason is None
-                            and len(token_ids) >= self.step_generator.max_step_tokens
-                        )
-
-                        # Check for repetition and truncate if needed (same as step_generator)
-                        repetition_detected = False
-                        if hasattr(self.step_generator, "_detect_line_repetitions"):
-                            repetition_detected = (
-                                self.step_generator._detect_line_repetitions(text)
-                            )
-                        if hit_max_tokens and hasattr(
-                            self.step_generator, "_truncate_repetitions"
-                        ):
-                            text, was_truncated = (
-                                self.step_generator._truncate_repetitions(
-                                    text, len(token_ids)
-                                )
-                            )
-                            if was_truncated:
-                                repetition_detected = True
-
+                        # Additional beam search checks not in generator:
                         # Check if we can extract a valid boxed answer from FULL trajectory
-                        # This handles cases where \boxed{} spans step boundaries
                         full_traj_text = (
                             convert_trajectory_to_string(parent_beam["steps"]) + text
                         )
                         has_boxed = bool(extract_answer(full_traj_text, "boxed"))
-
-                        # Use detector's is_trajectory_complete for full pattern detection
-                        # (checks for </think>, answer patterns, balanced \boxed{}, etc.)
-                        detector_complete = False
-                        if hasattr(self.step_generator, "detector"):
-                            detector_complete = (
-                                self.step_generator.detector.is_trajectory_complete(
-                                    text, reached_eos=stopped_at_eos
-                                )
-                            )
+                        if has_boxed:
+                            is_trajectory_complete = True
 
                         # Detect garbage/degenerate output (emojis, CJK, unusual unicode)
-                        garbage_detected = _detect_garbage(text)
+                        if _detect_garbage(text):
+                            is_trajectory_complete = True
 
-                        is_trajectory_complete = (
-                            stopped_at_eos
-                            or has_boxed
-                            or repetition_detected
-                            or detector_complete
-                            or garbage_detected
-                        )
-
-                        # Get uncertainty from output if available
-                        uncertainty = 0.0
-                        if (
-                            hasattr(output, "uncertainty")
-                            and output.uncertainty is not None
-                        ):
-                            uncertainty = output.uncertainty
-                        validity = 1.0 / (1.0 + uncertainty) if uncertainty > 0 else 0.0
+                        uncertainty = candidate.other_data.get("uncertainty_score", 0.0)
+                        validity = candidate.other_data.get("validity_score", 0.0)
 
                         candidates_for_beam.append(
                             {
@@ -468,7 +385,7 @@ class StrategyBeamSearch(StrategyBase):
 
                     all_candidates_data.append(candidates_for_beam)
 
-                # 6) PRM scoring (optional)
+                # 5) PRM scoring (optional)
                 if use_prm_scorer:
                     # Use PRM scorer - need to batch score all candidates
                     all_candidates_data = self._batch_score_with_prm(

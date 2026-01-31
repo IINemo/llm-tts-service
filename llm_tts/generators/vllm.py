@@ -531,7 +531,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
     def _generate_step_candidates_impl(
         self,
-        request: List[Dict[str, str]],
+        requests: List[List[Dict[str, str]]],
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
         stop_tokens_override: Optional[List[str]] = None,
@@ -544,7 +544,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         in a single method using vLLM's batch generation capabilities.
 
         Args:
-            request: Chat messages (same for all trajectories)
+            requests: Per-trajectory chat messages. Must have len(requests) == len(trajectories).
             trajectories: List of trajectories. Each trajectory is a list of StepCandidates.
             candidates_per_step: Number of candidates to generate per trajectory.
             stop_tokens_override: Override stop tokens (for full trajectory generation).
@@ -588,9 +588,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
             # Build prompt (mode-specific)
             if self.thinking_mode:
-                prompt = self._build_prompt(request, trajectory)
+                prompt = self._build_prompt(requests[traj_idx], trajectory)
             else:
-                prompt = self._apply_chat_template(request, enable_thinking=False)
+                prompt = self._apply_chat_template(
+                    requests[traj_idx], enable_thinking=False
+                )
                 if trajectory:
                     trajectory_text = convert_trajectory_to_string(trajectory)
                     prompt = prompt + trajectory_text
@@ -1032,7 +1034,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         # - Empty stop tokens (only EOS token IDs stop generation)
         # - Override max_tokens for full trajectory
         raw_results = self._generate_step_candidates_impl(
-            request=request,
+            requests=[request],
             trajectories=[[]],  # Single empty trajectory
             candidates_per_step=num_trajectories,  # N candidates from one prompt
             stop_tokens_override=[],  # No step boundary tokens, only EOS
@@ -1217,6 +1219,46 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     # Common interface methods
     # =========================================================================
 
+    def generate_step_candidates_batch(
+        self,
+        requests: List[List[Dict[str, str]]],
+        trajectories: List[List[StepCandidate]],
+        candidates_per_step: int = 1,
+        stop_tokens_override: Optional[List[str]] = None,
+        max_tokens_override: Optional[int] = None,
+        compute_uncertainty: bool = True,
+    ) -> List[List[StepCandidate]]:
+        """Generate step candidates with per-trajectory requests.
+
+        PUBLIC API - Like generate_step_candidates but accepts a different request
+        per trajectory. Use this when each trajectory may have a different prompt
+        (e.g. offline best-of-n, self-consistency with varied prompts).
+
+        Args:
+            requests: Per-trajectory chat messages. len(requests) must equal len(trajectories).
+            trajectories: List of trajectories. Each trajectory is a list of StepCandidates.
+            candidates_per_step: Number of candidates to generate per trajectory.
+            stop_tokens_override: Override stop tokens. If None, uses self.stop_tokens.
+            max_tokens_override: Override max tokens. If None, uses self.max_step_tokens.
+            compute_uncertainty: If True and model supports it, compute uncertainty scores.
+
+        Returns:
+            List of candidate lists, one per trajectory.
+        """
+        if len(requests) != len(trajectories):
+            raise ValueError(
+                f"requests and trajectories must have the same length, "
+                f"got {len(requests)} and {len(trajectories)}"
+            )
+        return self._generate_step_candidates_impl(
+            requests,
+            trajectories,
+            candidates_per_step,
+            stop_tokens_override=stop_tokens_override,
+            max_tokens_override=max_tokens_override,
+            compute_uncertainty=compute_uncertainty,
+        )
+
     def generate_step_candidates(
         self,
         request: List[Dict[str, str]],
@@ -1243,8 +1285,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         Note: Strategy should check is_trajectory_complete on returned candidates
         and call generate_answer_candidates() when reasoning phase is done.
         """
+        requests = [request] * len(trajectories)
         return self._generate_step_candidates_impl(
-            request,
+            requests,
             trajectories,
             candidates_per_step,
             compute_uncertainty=compute_uncertainty,

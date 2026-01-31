@@ -379,11 +379,10 @@ class StrategyOfflineBestOfN(StrategyBase):
         sample_indices: Optional[List[int]] = None,
     ) -> List[Dict[str, any]]:
         """
-        Generate N trajectories for each of M samples in a SINGLE vLLM call.
+        Generate N trajectories for each of M samples using generate_step_candidates_batch.
 
-        This is the fully batched version - all M×N trajectories are generated
-        in one vLLM call, then each trajectory is scored with PRM and the best
-        one per sample is selected.
+        All M×N trajectories are generated with proper FLOP tracking,
+        then each trajectory is scored with PRM and the best one per sample is selected.
 
         Args:
             requests: List of M chat message lists (each is a sample's request)
@@ -392,8 +391,6 @@ class StrategyOfflineBestOfN(StrategyBase):
         Returns:
             List of M result dictionaries (one per sample)
         """
-        from vllm import SamplingParams
-
         if sample_indices is None:
             sample_indices = list(range(len(requests)))
 
@@ -402,10 +399,31 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         log.info(
             f"Offline Best-of-N batch: generating {M} samples × {N} trajectories = "
-            f"{M * N} total in SINGLE vLLM call"
+            f"{M * N} total via generate_step_candidates_batch"
         )
 
-        # Build all prompts using step generator's chat template
+        # Check if scorer is a PRM model (separate model) or uses uncertainty from generation.
+        use_prm_scorer = (
+            hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
+        )
+        use_uncertainty_wrapper = (
+            hasattr(self.step_generator.model, "estimator") and not use_prm_scorer
+        )
+        log.info(
+            f"Using PRM scorer: {use_prm_scorer}, uncertainty wrapper: {use_uncertainty_wrapper}"
+        )
+
+        # Generate all M×N trajectories via batched method (handles FLOP tracking)
+        batch_results = self.step_generator.generate_step_candidates_batch(
+            requests=requests,
+            trajectories=[[]] * M,
+            candidates_per_step=N,
+            stop_tokens_override=["<end of response>"],
+            max_tokens_override=self.step_generator.max_new_tokens,
+            compute_uncertainty=use_uncertainty_wrapper,
+        )
+
+        # Build prompts for token stats calculation
         prompts = []
         for request in requests:
             if getattr(self.step_generator, "disable_thinking_mode", False):
@@ -418,58 +436,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                 )
             prompts.append(prompt)
 
-        # Create sampling params with n=num_trajectories for diversity
-        sampling_params = SamplingParams(
-            n=N,  # Generate N outputs per prompt
-            max_tokens=self.step_generator.max_new_tokens,
-            temperature=self.step_generator.temperature,
-            top_p=self.step_generator.top_p,
-            top_k=getattr(self.step_generator, "top_k", -1),
-            stop=["<end of response>"],
-            stop_token_ids=getattr(
-                self.step_generator, "eos_token_ids", [151645, 151643]
-            ),
-        )
-
-        log.info(
-            f"Offline Best-of-N batch: temp={sampling_params.temperature}, "
-            f"n={N}, max_tokens={sampling_params.max_tokens}"
-        )
-
-        # Check if scorer is a PRM model (separate model) or uses uncertainty from generation.
-        # PRM scorer (StepScorerPRM) has 'prm_model' attribute.
-        # If using PRM, we skip the uncertainty wrapper even if the model has one.
-        use_prm_scorer = (
-            hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
-        )
-        use_uncertainty_wrapper = (
-            hasattr(self.step_generator.model, "estimator") and not use_prm_scorer
-        )
-        log.info(
-            f"Using PRM scorer: {use_prm_scorer}, uncertainty wrapper: {use_uncertainty_wrapper}"
-        )
-
-        if use_uncertainty_wrapper:
-            # Use VLLMWithUncertainty to get uncertainty scores during generation
-            log.info(
-                "Using VLLMWithUncertainty for generation with uncertainty scoring"
-            )
-            outputs = self.step_generator.model.generate(
-                prompts, sampling_params, compute_uncertainty=True
-            )
-            # Sort by request_id (outputs are RequestOutputWithUncertainty)
-            outputs = sorted(outputs, key=lambda x: int(x.request_id))
-        else:
-            # Use raw vLLM for PRM scorer (scores computed separately)
-            raw_llm = getattr(
-                self.step_generator.model, "llm", self.step_generator.model
-            )
-            outputs = raw_llm.generate(prompts, sampling_params)
-            # Sort outputs by request_id to maintain order
-            outputs = sorted(outputs, key=lambda x: int(x.request_id))
-
-        # Phase 1: Parse all outputs and build trajectory data for ALL samples
-        # This collects everything needed for batch scoring
+        # Phase 1: Parse StepCandidates and build trajectory data for ALL samples
         sample_data = []  # List of per-sample data
         all_chats_for_scoring = []  # Flat list for batch scoring
         all_trajectories_for_scoring = []  # Flat list for batch scoring
@@ -477,12 +444,12 @@ class StrategyOfflineBestOfN(StrategyBase):
         all_trajectory_ids_for_scoring = []  # Trajectory IDs within sample for logging
         trajectory_to_sample_map = []  # (sample_data_idx, traj_idx_within_sample)
 
-        for request_output, prompt, request, sample_idx in zip(
-            outputs, prompts, requests, sample_indices
+        for candidates, prompt, request, sample_idx in zip(
+            batch_results, prompts, requests, sample_indices
         ):
             context_tokens = len(self.step_generator.tokenizer.encode(prompt))
 
-            if not request_output.outputs:
+            if not candidates:
                 log.error(f"No output generated for sample {sample_idx}")
                 sample_data.append(
                     {
@@ -496,17 +463,18 @@ class StrategyOfflineBestOfN(StrategyBase):
                 )
                 continue
 
-            # Build trajectory results from the N outputs
+            # Build trajectory results from the N StepCandidates
             trajectories = []
             total_output_tokens = 0
 
-            for traj_idx, output in enumerate(request_output.outputs):
-                raw_text = output.text
-                num_tokens = len(output.token_ids)
+            for traj_idx, candidate in enumerate(candidates):
+                raw_text = candidate.raw_text or candidate.text
+                num_tokens = candidate.other_data.get(
+                    "original_token_count", len(candidate.token_ids)
+                )
                 total_output_tokens += num_tokens
 
                 # Split into steps post-hoc using step generator's detector
-                # use_stop_tokens=True to match online vLLM behavior exactly
                 if hasattr(self.step_generator, "detector"):
                     steps = self.step_generator.detector.detect_steps(
                         raw_text, use_stop_tokens=True
@@ -514,15 +482,10 @@ class StrategyOfflineBestOfN(StrategyBase):
                 else:
                     steps = [raw_text]  # Fallback: treat as single step
 
-                # Compute per-step uncertainty if using uncertainty wrapper
-                # Score each step independently using its token logprobs
-                if use_uncertainty_wrapper and output.logprobs:
-                    step_scores = self._compute_per_step_uncertainty(
-                        steps=steps,
-                        token_ids=list(output.token_ids),
-                        logprobs=list(output.logprobs),
-                        uncertainty_wrapper=self.step_generator.model,
-                    )
+                # Use whole-output uncertainty from generator if available
+                if use_uncertainty_wrapper:
+                    validity = candidate.other_data.get("validity_score", 0.5)
+                    step_scores = [validity] * len(steps)
                     aggregated = self._aggregate_scores(step_scores)
                 else:
                     step_scores = []
@@ -534,7 +497,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "aggregated_score": aggregated,
                     "full_text": raw_text,
                     "num_steps": len(steps),
-                    "is_complete": True,
+                    "is_complete": candidate.is_trajectory_complete,
                     "num_tokens": num_tokens,
                 }
                 trajectories.append(traj_data)
@@ -562,11 +525,11 @@ class StrategyOfflineBestOfN(StrategyBase):
         # Skip if using uncertainty wrapper (scores already computed during generation)
         if use_uncertainty_wrapper:
             log.info(
-                "Skipping batch scoring - using per-step uncertainty scores "
+                "Skipping batch scoring - using uncertainty scores "
                 f"from generation ({sum(len(d['trajectories']) for d in sample_data)} trajectories)"
             )
-            # Log detailed per-step uncertainty scores
-            log.info("--- Per-Step Uncertainty Scoring Results ---")
+            # Log uncertainty scores
+            log.info("--- Uncertainty Scoring Results ---")
             for data in sample_data:
                 if data["failed"]:
                     continue
@@ -574,22 +537,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                 trajectories = data["trajectories"]
                 log.info(f"Sample {sample_idx}: {len(trajectories)} trajectories")
                 for traj_idx, traj in enumerate(trajectories):
-                    # Convert validity scores back to uncertainty for logging
-                    step_uncertainties = []
-                    for validity in traj["step_scores"]:
-                        uncertainty = (
-                            (1.0 / validity - 1.0) if validity > 0 else float("inf")
-                        )
-                        step_uncertainties.append(uncertainty)
-                    avg_uncertainty = (
-                        sum(step_uncertainties) / len(step_uncertainties)
-                        if step_uncertainties
-                        else 0.0
-                    )
                     log.info(
                         f"  Trajectory {traj_idx + 1}: "
                         f"steps={traj['num_steps']}, "
-                        f"avg_uncertainty={avg_uncertainty:.4f}, "
                         f"aggregated_validity={traj['aggregated_score']:.4f}, "
                         f"step_validities={[f'{s:.3f}' for s in traj['step_scores']]}"
                     )
