@@ -346,14 +346,25 @@ def create_model(config):
                     stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                     estimator = MeanTokenEntropy()
                 elif scorer_type == "uhead":
-                    from luh import AutoUncertaintyHead, CalculatorApplyUQHead, LuhClaimEstimatorDummy
-                    from luh.vllm import VLLMUncertaintyHeadFeatures
+                    from luh import AutoUncertaintyHead
+                    from luh.calculator_apply_uq_head import CalculatorApplyUQHead
+                    from luh.luh_claim_estimator_dummy import LuhClaimEstimatorDummy
+                    from luh.vllm.vllm_uhead_features import VLLMUncertaintyHeadFeatures
                     uncertainty_head = AutoUncertaintyHead.from_pretrained(
                         config.scorer.uq_head_path, base_model=llm
                     )
                     stat_calculators = [
-                        VLLMUncertaintyHeadFeatures(uncertainty_head),
-                        CalculatorApplyUQHead(uncertainty_head),
+                        VLLMUncertaintyHeadFeatures(
+                            uncertainty_head,
+                            model_path=config.model.model_path,
+                            max_model_len=config.model.get("max_model_len", 32768),
+                            gpu_memory_utilization=config.model.get("hs_gpu_memory_utilization", 0.9),
+                            tensor_parallel_size=config.model.get("tensor_parallel_size", 1),
+                        ),
+                        CalculatorApplyUQHead(
+                            uncertainty_head,
+                            device=getattr(config.scorer, "device", "cuda"),
+                        ),
                     ]
                     estimator = LuhClaimEstimatorDummy()
                     vllm_with_uncertainty_arguments = stat_calculators[0].vllm_with_uncertainty_arguments()
