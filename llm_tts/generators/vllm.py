@@ -474,6 +474,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     token_ids[:best_prefix_len],
                     logprobs[:best_prefix_len],
                 ),
+                "raw_logprobs": logprobs[:best_prefix_len],
                 "original_token_count": original_token_count,
             },
             raw_text=raw_text,

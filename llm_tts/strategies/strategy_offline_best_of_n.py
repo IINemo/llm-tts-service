@@ -483,10 +483,15 @@ class StrategyOfflineBestOfN(StrategyBase):
                 else:
                     steps = [raw_text]  # Fallback: treat as single step
 
-                # Use whole-output uncertainty from generator if available
-                if use_uncertainty_wrapper:
-                    validity = candidate.other_data.get("validity_score", 0.5)
-                    step_scores = [validity] * len(steps)
+                # Compute per-step uncertainty if using uncertainty wrapper
+                # Score each step independently using its token logprobs
+                if use_uncertainty_wrapper and candidate.other_data.get("raw_logprobs"):
+                    step_scores = self._compute_per_step_uncertainty(
+                        steps=steps,
+                        token_ids=list(candidate.token_ids),
+                        logprobs=candidate.other_data["raw_logprobs"],
+                        uncertainty_wrapper=self.step_generator.model,
+                    )
                     aggregated = self._aggregate_scores(step_scores)
                 else:
                     step_scores = []
