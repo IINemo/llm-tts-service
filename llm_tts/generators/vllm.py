@@ -245,32 +245,30 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         # non-thinking mode: show raw_text and step_text
         if raw_text is not None and step_text is not None:
-            pass
-            # log.info(
-            #     f"{prefix}: {token_str}, stop={repr(stop_reason)}\n"
-            #     f"  Full tokens decoded: {repr(full_decoded)}\n"
-            #     f"  Raw text (stripped): {repr(raw_text)}\n"
-            #     f"  Step text:           {repr(step_text)}"
-            # )
+            log.info(
+                f"{prefix}: {token_str}, stop={repr(stop_reason)}\n"
+                f"  Full tokens decoded: {repr(full_decoded)}\n"
+                f"  Raw text (stripped): {repr(raw_text)}\n"
+                f"  Step text:           {repr(step_text)}"
+            )
         # Thinking mode with truncation
         elif is_truncated:
             scoring_text = self.tokenizer.decode(
                 token_ids[:scoring_token_count], skip_special_tokens=True
             )
-            # log.info(
-            #     f"{prefix}: {token_str}\n"
-            #     f"  Stop reason: {repr(stop_reason)}\n"
-            #     f"  Full tokens decoded:      {repr(full_decoded)}\n"
-            #     f"  Truncated tokens decoded: {repr(scoring_text)}"
-            # )
+            log.info(
+                f"{prefix}: {token_str}\n"
+                f"  Stop reason: {repr(stop_reason)}\n"
+                f"  Full tokens decoded:      {repr(full_decoded)}\n"
+                f"  Truncated tokens decoded: {repr(scoring_text)}"
+            )
         # Thinking mode without truncation
         else:
-            pass
-            # log.info(
-            #     f"{prefix}: {token_str} (full, no truncation)\n"
-            #     f"  Stop reason: {repr(stop_reason)}\n"
-            #     f"  Text: {repr(full_decoded)}"
-            # )
+            log.info(
+                f"{prefix}: {token_str} (full, no truncation)\n"
+                f"  Stop reason: {repr(stop_reason)}\n"
+                f"  Text: {repr(full_decoded)}"
+            )
 
     def _create_sampling_params(
         self,
