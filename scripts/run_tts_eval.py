@@ -1924,19 +1924,38 @@ def main(config):
         config=config,  # Pass config for multi-evaluator support
     )
 
+    # Free GPU memory before evaluation (model not needed for LLM judge API calls)
+    log.info("Freeing GPU memory before evaluation phase...")
+    try:
+        if hasattr(model, "shutdown"):
+            model.shutdown()
+        if hasattr(generator, "cleanup"):
+            generator.cleanup()
+        # Delete vLLM engine and model to release GPU memory
+        if hasattr(model, "vllm_engine"):
+            del model.vllm_engine
+        del model
+        del step_generator
+        del generator
+        if scorer is not None:
+            del scorer
+        import gc
+        gc.collect()
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except ImportError:
+            pass
+        log.info("GPU memory freed successfully")
+    except Exception as e:
+        log.warning(f"Failed to free GPU memory: {e}")
+
     # Evaluate results
     evaluate_results(
         config=config,
         results=results,
         save_path=output_dir,
     )
-
-    # Shutdown model resources (executor, client)
-    try:
-        if hasattr(model, "shutdown"):
-            model.shutdown()
-    except Exception as e:
-        log.warning(f"Failed to shutdown model: {e}")
 
     # Save log files and finish wandb session
     if getattr(config, "report_to", None) == "wandb":
