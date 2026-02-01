@@ -256,8 +256,48 @@ class AdaptiveScalingBestOfN(StrategyBase):
             None for _ in range(num_samples)
         ]
 
-        # Reset token tracking (batch-wide)
+        # Per-sample token tracking (like beam search)
+        sample_token_stats: Dict[int, Dict[str, int]] = {
+            i: {"input_tokens": 0, "output_tokens": 0, "generation_count": 0}
+            for i in range(num_samples)
+        }
+
+        # Reset batch-wide token tracking
         self.step_generator.reset_sample_stats()
+
+        def _count_context_tokens(
+            request: List[Dict[str, str]], trajectory: List[StepCandidate]
+        ) -> int:
+            """Count context tokens for a (request, trajectory) pair."""
+            traj_text = convert_trajectory_to_string(trajectory)
+            if getattr(self.step_generator, "disable_thinking_mode", False):
+                prompt = self.step_generator._apply_chat_template(
+                    request, enable_thinking=False
+                )
+            else:
+                prompt = self.step_generator.tokenizer.apply_chat_template(
+                    request, tokenize=False, add_generation_prompt=True
+                )
+            if traj_text:
+                prompt = prompt + traj_text
+            return len(self.step_generator.tokenizer.encode(prompt))
+
+        def _track_generation_tokens(
+            sample_indices_for_call: List[int],
+            reqs: List[List[Dict[str, str]]],
+            trajs: List[List[StepCandidate]],
+            candidates_batch: List[List[StepCandidate]],
+        ) -> None:
+            """Record per-sample input/output tokens from a generation call."""
+            for pos, sample_idx in enumerate(sample_indices_for_call):
+                ctx_tokens = _count_context_tokens(reqs[pos], trajs[pos])
+                sample_token_stats[sample_idx]["input_tokens"] += ctx_tokens
+                for candidate in candidates_batch[pos]:
+                    out_tokens = candidate.other_data.get(
+                        "original_token_count", len(candidate.token_ids)
+                    )
+                    sample_token_stats[sample_idx]["output_tokens"] += out_tokens
+                sample_token_stats[sample_idx]["generation_count"] += 1
 
         # ---- Batched helpers (duck-typing) ----
         def _gen_step_candidates_batch(
@@ -371,6 +411,11 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 active_reqs, active_trajs, candidates_per_step=1
             )
 
+            # Track tokens for the initial 1-candidate generation
+            _track_generation_tokens(
+                active_indices, active_reqs, active_trajs, step_candidates_batch
+            )
+
             # Handle samples that produced no candidates
             filtered_indices = []
             filtered_reqs = []
@@ -420,6 +465,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     scale_reqs,
                     scale_trajs,
                     candidates_per_step=self.candidates_per_step,
+                )
+                # Track tokens for the scaling generation
+                _track_generation_tokens(
+                    scale_indices, scale_reqs, scale_trajs, scale_cands_batch
                 )
                 scale_scores_batch = _score_candidates_batch(
                     scale_reqs, scale_cands_batch, scale_trajs
@@ -515,6 +564,11 @@ class AdaptiveScalingBestOfN(StrategyBase):
 
             answer_cands_batch = _gen_answer_candidates_batch(fin_reqs, fin_trajs)
 
+            # Track tokens for final answer generation
+            _track_generation_tokens(
+                to_finalize, fin_reqs, fin_trajs, answer_cands_batch
+            )
+
             answer_scores_batch = _score_candidates_batch(
                 fin_reqs, answer_cands_batch, fin_trajs
             )
@@ -536,21 +590,28 @@ class AdaptiveScalingBestOfN(StrategyBase):
 
         # ---- Finalize stats & build outputs ----
         self.step_generator.finalize_sample_stats(num_samples=num_samples)
-        token_stats = self.step_generator.get_sample_stats()
+
+        # Compute batch totals from per-sample stats
+        total_input = sum(s["input_tokens"] for s in sample_token_stats.values())
+        total_output = sum(s["output_tokens"] for s in sample_token_stats.values())
+        total_tokens = total_input + total_output
+        total_gens = sum(s["generation_count"] for s in sample_token_stats.values())
+        batch_tflops = (
+            self.step_generator.flop_calculator.compute_tflops(total_tokens)
+            if hasattr(self.step_generator, "flop_calculator")
+            and self.step_generator.flop_calculator
+            else None
+        )
 
         log.info(
             f"\n{'='*60}\n"
             f"Mini-batch complete: {num_samples} samples\n"
-            f"Token stats: "
-            f"total_tokens={token_stats['total_tokens_this_sample']:,}, "
-            f"input_tokens={token_stats.get('input_tokens', 0):,}, "
-            f"output_tokens={token_stats.get('output_tokens', 0):,}, "
-            f"generations={token_stats['generation_count']}"
-            + (
-                f", tflops={token_stats['tflops']:.3f}"
-                if token_stats.get("tflops")
-                else ""
-            )
+            f"Token stats (batch total): "
+            f"total_tokens={total_tokens:,}, "
+            f"input_tokens={total_input:,}, "
+            f"output_tokens={total_output:,}, "
+            f"generations={total_gens}"
+            + (f", tflops={batch_tflops:.3f}" if batch_tflops else "")
             + f"\n{'='*60}"
         )
 
@@ -563,11 +624,28 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 selected_steps[idx]
             )
 
+            # Build per-sample token stats (like beam search _build_token_stats)
+            raw = sample_token_stats[idx]
+            sample_total = raw["input_tokens"] + raw["output_tokens"]
+            token_stats = {
+                "input_tokens": raw["input_tokens"],
+                "output_tokens": raw["output_tokens"],
+                "total_tokens_this_sample": sample_total,
+                "generation_count": raw["generation_count"],
+                "tflops": (
+                    self.step_generator.flop_calculator.compute_tflops(sample_total)
+                    if hasattr(self.step_generator, "flop_calculator")
+                    and self.step_generator.flop_calculator
+                    else None
+                ),
+            }
+
             scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
             log.info(
                 f"Sample {sample_idxs[idx]}: "
                 f"{len(selected_steps[idx])} steps "
                 f"({thinking_num_steps} thinking, {response_num_steps} response), "
+                f"tokens={sample_total:,}, "
                 f"scores=[{scores_str}], "
                 f"answer={extracted!r}"
             )
