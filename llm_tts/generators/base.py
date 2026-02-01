@@ -104,11 +104,11 @@ class StepCandidateGeneratorBase:
             f"(sample total: input={self._sample_input_tokens}, output={self._sample_output_tokens})"
         )
 
-    def finalize_sample_stats(self) -> None:
+    def finalize_sample_stats(self, num_samples: int = 1) -> None:
         """Finalize sample statistics. Call at end of each sample."""
         self._total_input_tokens += self._sample_input_tokens
         self._total_output_tokens += self._sample_output_tokens
-        self._total_samples += 1
+        self._total_samples += num_samples
 
     def get_sample_stats(self) -> Dict[str, any]:
         """Get statistics for current sample.
