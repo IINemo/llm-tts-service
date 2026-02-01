@@ -77,6 +77,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         trajectory = []
         selected_steps = []
         validity_scores = []
+        selected_candidate = None
         for step_num in range(self.max_steps):
             log.info(f"\n=== Step {step_num} ===")
 
@@ -92,7 +93,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
 
             # Score candidates
             candidate_validity_scores = self.scorer.score_candidates(
-                request, candidates
+                request, candidates, trajectory=trajectory
             )
             selected_candidate = candidates[0]
             cur_signal = candidate_validity_scores[0]
@@ -108,7 +109,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     trajectory=trajectory,
                     candidates_per_step=self.candidates_per_step,
                 )
-                all_candidate_scores = self.scorer.score_candidates(request, candidates)
+                all_candidate_scores = self.scorer.score_candidates(request, candidates, trajectory=trajectory)
                 # Select best candidate
                 best_idx, selected_candidate = self._select_best_candidate(
                     candidates, all_candidate_scores
@@ -140,6 +141,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     log.info("Answer content missing, generating final answer")
                     trajectory.pop()
                     selected_steps.pop()
+                    validity_scores.pop()
                     final_answer, final_validity = self._generate_final_answer(
                         request, trajectory
                     )
@@ -148,7 +150,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     validity_scores.append(final_validity)
                 break
 
-        if not selected_candidate.is_trajectory_complete:
+        if selected_candidate is not None and not selected_candidate.is_trajectory_complete:
             final_answer, final_validity = self._generate_final_answer(
                 request, trajectory
             )
