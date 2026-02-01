@@ -76,6 +76,7 @@ strategy:
 # Dataset configuration
 dataset:
   subset: 500  # Full MATH-500 dataset
+  data_name: math
   offset: 0
   prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
 
