@@ -332,7 +332,6 @@ class StrategyBeamSearch(StrategyBase):
 
             # Initialize containers for this step
             all_candidates_data = []
-            outputs = []
 
             # Only generate if there are prompts to process
             if prompt_metadata:
