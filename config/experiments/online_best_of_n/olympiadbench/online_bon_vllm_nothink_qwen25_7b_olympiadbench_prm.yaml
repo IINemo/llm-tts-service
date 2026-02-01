@@ -85,6 +85,7 @@ scorer:
 dataset:
   subset: 675  # Full OlympiadBench dataset
   offset: 0
+  data_name: olympiadbench
   # system_prompt set in base config (matches official Qwen2.5-Math eval)
 
 # Evaluation configuration

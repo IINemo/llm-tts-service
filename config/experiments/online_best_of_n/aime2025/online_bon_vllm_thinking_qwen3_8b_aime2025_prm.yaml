@@ -74,6 +74,7 @@ strategy:
 dataset:
   subset: 30  # Full AIME-2025 dataset
   offset: 0
+  data_name: aime2025
   prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
 
 # Evaluation configuration
