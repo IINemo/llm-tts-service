@@ -7,10 +7,10 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/perplexity
   - _self_
 
-run_name: "adaptive_scaling_vllm_qwen3_8b_entropy_aime24_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen3_8b_aime24_perplexity_${now:%H-%M-%S}"
 
 # Model configuration
 model:

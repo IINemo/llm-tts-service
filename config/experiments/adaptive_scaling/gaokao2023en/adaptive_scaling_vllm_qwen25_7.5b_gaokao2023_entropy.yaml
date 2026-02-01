@@ -3,14 +3,14 @@
 
 defaults:
   - /config
-  - /dataset/olympiadbench
+  - /dataset/gaokao2023en
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
   - /scorer/entropy
   - _self_
 
-run_name: "adaptive_scaling_vllm_qwen25_7.5b_entropy_olympiadbench_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen25_7.5b_gaokao2023_entropyen_${now:%H-%M-%S}"
 
 # Model configuration
 model:
@@ -48,7 +48,11 @@ strategy:
   # Detector settings
   detector_type: structured
   min_step_tokens: 50
-  max_step_tokens: 512
+  max_step_tokens: 2048
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  # Step boundary token limits
   use_sequence: true
   use_conclusion: true
   use_thinking: false
@@ -66,7 +70,6 @@ strategy:
     - "```"
     - "🌈"
     - "\U0001F308"
-    
 
   # detector_answer_patterns:
   #   - "<Answer>:"
@@ -76,16 +79,13 @@ strategy:
 
 # Dataset configuration
 dataset:
-  subset: 675
+  subset: 385
   offset: 0 
-  dataset_path: "test-time-compute/test_olympiadbench"
+  dataset_path: "test-time-compute/test_gaokao2023en"
   dataset_config: null
   dataset_split: "test"
-  data_name: olympiadbench
+  data_name: gaokao2023en
 
-  # question_field: "question"
-  # answer_field: "answer"
-  # answer_format: "numeric"
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
@@ -98,17 +98,17 @@ evaluation:
     - exact_match
 
   # Phase 2 evaluators (batch evaluation after generation)
-  # batch_evaluators:
-  #   - llm_judge
+  batch_evaluators:
+    - llm_judge
 
   # API-based LLM judge configuration
-  # llm_judge:
-  #   provider: openai
-  #   model: gpt-4o-mini
-  #   base_url: https://api.openai.com/v1
-  #   cache_path: ./cache/llm_judge
-  #   n_threads: 5
+  llm_judge:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    cache_path: ./cache/llm_judge
+    n_threads: 50
 
 # Reporting
 report_to: wandb
-wandb_project: llm-tts-eval-olympiadbench
+wandb_project: llm-tts-eval-gaokao2023en

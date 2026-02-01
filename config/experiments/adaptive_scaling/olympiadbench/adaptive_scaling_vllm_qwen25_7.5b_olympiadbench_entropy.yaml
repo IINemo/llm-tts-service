@@ -3,20 +3,20 @@
 
 defaults:
   - /config
-  - /dataset/math_500
+  - /dataset/olympiadbench
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/perplexity
+  - /scorer/entropy
   - _self_
 
-run_name: "adaptive_scaling_vllm_qwen25_7.5b_perplexity_math500_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen25_7.5b_olympiadbench_entropy_${now:%H-%M-%S}"
 
 # Model configuration
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
-  gpu_memory_utilization: 0.8
+  gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -30,11 +30,11 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 1024
+  max_new_tokens: 2048
   temperature: 0.7
   top_p: 0.8
   top_k: 20
-  batch_size: 512
+  batch_size: 4
   max_length: 4096
 
 # Strategy - Adaptive Scaling
@@ -48,7 +48,7 @@ strategy:
   # Detector settings
   detector_type: structured
   min_step_tokens: 50
-  max_step_tokens: 1024
+  max_step_tokens: 512
   use_sequence: true
   use_conclusion: true
   use_thinking: false
@@ -66,39 +66,49 @@ strategy:
     - "```"
     - "🌈"
     - "\U0001F308"
+    
 
-  stop_token_ids:
-    - 151645
-    - 151643
-  
-  batch_generation: true
+  # detector_answer_patterns:
+  #   - "<Answer>:"
+  #   - "\n<Answer>:"
+  # detector_eos_patterns:
+  #   - "<end of response>"
 
 # Dataset configuration
 dataset:
-  subset: 32
-  offset: 0
-  dataset_path: "test-time-compute/test_MATH"
+  subset: 675
+  offset: 0 
+  dataset_path: "test-time-compute/test_olympiadbench"
   dataset_config: null
   dataset_split: "test"
-  data_name: math
+  data_name: olympiadbench
 
+  # question_field: "question"
+  # answer_field: "answer"
+  # answer_format: "numeric"
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
+  # prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
 
 # Evaluation configuration
 evaluation:
+  # Phase 1 evaluators (run during generation for running accuracy)
   evaluators:
     - exact_match
-  batch_evaluators:
-    - llm_judge
-  llm_judge:
-    provider: openai
-    model: gpt-4o-mini
-    base_url: https://api.openai.com/v1
-    cache_path: ./cache/llm_judge
-    n_threads: 50
+
+  # Phase 2 evaluators (batch evaluation after generation)
+  # batch_evaluators:
+  #   - llm_judge
+
+  # API-based LLM judge configuration
+  # llm_judge:
+  #   provider: openai
+  #   model: gpt-4o-mini
+  #   base_url: https://api.openai.com/v1
+  #   cache_path: ./cache/llm_judge
+  #   n_threads: 5
 
 # Reporting
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-olympiadbench

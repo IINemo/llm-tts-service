@@ -3,26 +3,25 @@
 
 defaults:
   - /config
-  - /dataset/aime_2025
+  - /dataset/gaokao2023en
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
   - /scorer/perplexity
   - _self_
 
-run_name: "adaptive_scaling_vllm_qwen3_8b_perplexity_aime24_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen25_7.5b_gaokao2023_perplexityen_${now:%H-%M-%S}"
 
 # Model configuration
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen3-8B"
-  gpu_memory_utilization: 0.8
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 32768
-  disable_thinking_mode: false
-  device: "cuda"
+  max_model_len: 4096
+  disable_thinking_mode: true
 
 # System configuration
 system:
@@ -31,11 +30,11 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 4096
-  temperature: 0.6
-  top_p: 0.95
+  max_new_tokens: 1024
+  temperature: 0.7
+  top_p: 0.8
   top_k: 20
-  batch_size: 512
+  batch_size: 1024
   max_length: 4096
 
 # Strategy - Adaptive Scaling
@@ -49,7 +48,11 @@ strategy:
   # Detector settings
   detector_type: structured
   min_step_tokens: 50
-  max_step_tokens: 4096
+  max_step_tokens: 1024
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  # Step boundary token limits
   use_sequence: true
   use_conclusion: true
   use_thinking: false
@@ -68,36 +71,44 @@ strategy:
     - "🌈"
     - "\U0001F308"
 
-  stop_token_ids:
-    - 151645
-    - 151643
+  # detector_answer_patterns:
+  #   - "<Answer>:"
+  #   - "\n<Answer>:"
+  # detector_eos_patterns:
+  #   - "<end of response>"
 
 # Dataset configuration
 dataset:
-  subset: 30
-  offset: 0
-  dataset_path: "test-time-compute/test_aime24"
+  subset: 385
+  offset: 0 
+  dataset_path: "test-time-compute/test_gaokao2023en"
   dataset_config: null
   dataset_split: "test"
-  data_name: math
+  data_name: gaokao2023en
 
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
+  # prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
 
 # Evaluation configuration
 evaluation:
+  # Phase 1 evaluators (run during generation for running accuracy)
   evaluators:
     - exact_match
-  batch_evaluators:
-    - llm_judge
-  llm_judge:
-    provider: openai
-    model: gpt-4o-mini
-    base_url: https://api.openai.com/v1
-    cache_path: ./cache/llm_judge
-    n_threads: 50
+
+  # Phase 2 evaluators (batch evaluation after generation)
+  # batch_evaluators:
+  #   - llm_judge
+
+  # # API-based LLM judge configuration
+  # llm_judge:
+  #   provider: openai
+  #   model: gpt-4o-mini
+  #   base_url: https://api.openai.com/v1
+  #   cache_path: ./cache/llm_judge
+  #   n_threads: 50
 
 # Reporting
 report_to: wandb
-wandb_project: llm-tts-eval-aime24
+wandb_project: llm-tts-eval-gaokao2023en

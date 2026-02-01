@@ -1,6 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/aime2025/self_consistency_vllm_nothink_qwen25_7b_entropy_aime2025
-# Self-Consistency with vLLM + Non-Thinking Mode (Qwen2.5-7B)
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/aime2025/self_consistency_vllm_nothink_qwen25_7b_aime2025_pd
+# Self-Consistency with vLLM + Non-Thinking Mode (Qwen2.5-7B) + PD Scorer
 # Uses step generator for step-by-step generation with majority voting
 
 defaults:
@@ -9,11 +9,11 @@ defaults:
   - /model/vllm_qwen25
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/uncertainty_pd
   - _self_
 
 # Run naming
-run_name: "self_consistency_vllm_nothink_qwen25_7b_entropy_aime2025_${now:%H-%M-%S}"
+run_name: "self_consistency_vllm_nothink_qwen25_7b_aime2025_pd_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true

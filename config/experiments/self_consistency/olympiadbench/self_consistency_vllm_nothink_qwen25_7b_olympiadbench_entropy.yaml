@@ -1,5 +1,5 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/olympiadbench/self_consistency_vllm_nothink_qwen25_7b_entropy_olympiadbench
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/olympiadbench/self_consistency_vllm_nothink_qwen25_7b_olympiadbench_entropy
 # Self-Consistency with Qwen2.5-Math-7B-Instruct on OlympiadBench
 # Uses majority voting over N diverse reasoning paths
 
