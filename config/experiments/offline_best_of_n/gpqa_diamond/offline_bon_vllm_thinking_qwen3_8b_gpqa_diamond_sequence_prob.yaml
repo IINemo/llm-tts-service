@@ -89,15 +89,10 @@ dataset:
 
 # Evaluation configuration
 evaluation:
-  # Phase 1 evaluators (run during generation for running accuracy)
   evaluators:
     - exact_match
-
-  # Phase 2 evaluators (batch evaluation after generation)
   batch_evaluators:
     - llm_judge
-
-  # API-based LLM judge configuration
   llm_judge:
     provider: openai
     model: gpt-4o-mini

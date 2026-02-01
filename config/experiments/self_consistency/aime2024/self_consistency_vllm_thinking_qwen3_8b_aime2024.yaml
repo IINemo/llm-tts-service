@@ -58,7 +58,7 @@ dataset:
   question_field: "question"
   answer_field: "answer"
   answer_format: "numeric"
-  data_name: "aime2024"
+  data_name: "aime24"
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
