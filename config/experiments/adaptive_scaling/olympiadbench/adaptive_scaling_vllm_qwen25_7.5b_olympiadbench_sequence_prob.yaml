@@ -66,6 +66,9 @@ strategy:
     - "```"
     - "🌈"
     - "\U0001F308"
+  stop_token_ids:
+    - 151645
+    - 151643
 
 # Dataset configuration
 dataset:

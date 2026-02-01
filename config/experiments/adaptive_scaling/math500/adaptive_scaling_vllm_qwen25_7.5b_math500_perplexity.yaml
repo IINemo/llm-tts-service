@@ -75,7 +75,7 @@ strategy:
 
 # Dataset configuration
 dataset:
-  subset: 32
+  subset: 500
   offset: 0
   dataset_path: "test-time-compute/test_MATH"
   dataset_config: null
