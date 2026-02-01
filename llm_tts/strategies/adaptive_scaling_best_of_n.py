@@ -355,7 +355,13 @@ class AdaptiveScalingBestOfN(StrategyBase):
             # Which samples are still active?
             active_indices = [idx for idx in range(num_samples) if not completed[idx]]
             if not active_indices:
+                log.info(f"All {num_samples} samples completed at step {step_num}")
                 break
+
+            log.info(
+                f"\n=== Step {step_num} === "
+                f"({len(active_indices)}/{num_samples} active samples)"
+            )
 
             active_reqs = [requests[idx] for idx in active_indices]
             active_trajs = [trajectories[idx] for idx in active_indices]
@@ -400,6 +406,12 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     scale_reqs.append(requests[sample_idx])
                     scale_trajs.append(trajectories[sample_idx])
 
+            if scale_indices:
+                log.info(
+                    f"Scaling {len(scale_indices)}/{len(filtered_indices)} samples "
+                    f"(samples: {[sample_idxs[i] for i in scale_indices]})"
+                )
+
             # 4) For samples that scale, generate N more candidates and rescore
             scaled_candidates = {}
             scaled_scores = {}
@@ -442,6 +454,14 @@ class AdaptiveScalingBestOfN(StrategyBase):
 
                     if completion_reason == CompletionReason.EOS_PATTERN:
                         completed[sample_idx] = True
+                        scores_str = ", ".join(
+                            f"{s:.3f}" for s in validity_scores[sample_idx]
+                        )
+                        log.info(
+                            f"Sample {sample_idxs[sample_idx]}: Completed (EOS) at step {step_num} "
+                            f"with {len(selected_steps[sample_idx])} steps, "
+                            f"scores=[{scores_str}]"
+                        )
                         continue
 
                     if not self._has_answer_content(chosen):
@@ -450,6 +470,25 @@ class AdaptiveScalingBestOfN(StrategyBase):
                         validity_scores[sample_idx].pop()
                         needs_final_answer[sample_idx] = True
                     completed[sample_idx] = True
+                    scores_str = ", ".join(
+                        f"{s:.3f}" for s in validity_scores[sample_idx]
+                    )
+                    log.info(
+                        f"Sample {sample_idxs[sample_idx]}: Completed (answer pattern) at step {step_num} "
+                        f"with {len(selected_steps[sample_idx])} steps, "
+                        f"needs_final_answer={needs_final_answer[sample_idx]}, "
+                        f"scores=[{scores_str}]"
+                    )
+
+        # Log samples that hit max_steps without completing
+        for idx in range(num_samples):
+            if not completed[idx]:
+                scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
+                log.info(
+                    f"Sample {sample_idxs[idx]}: Reached max_steps ({self.max_steps}) "
+                    f"with {len(selected_steps[idx])} steps, "
+                    f"scores=[{scores_str}]"
+                )
 
         # ---- Final answer for samples that need it (batched) ----
         to_finalize: List[int] = []
@@ -467,6 +506,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 to_finalize.append(idx)
 
         if to_finalize:
+            log.info(
+                f"Generating final answers for {len(to_finalize)} samples "
+                f"(samples: {[sample_idxs[i] for i in to_finalize]})"
+            )
             fin_reqs = [requests[idx] for idx in to_finalize]
             fin_trajs = [trajectories[idx] for idx in to_finalize]
 
@@ -480,6 +523,9 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 a_cands = answer_cands_batch[pos]
                 a_scores = answer_scores_batch[pos]
                 if not a_cands:
+                    log.info(
+                        f"Sample {sample_idxs[sample_idx]}: No final answer candidates generated"
+                    )
                     continue
                 best_idx = _select_best(a_scores)
                 chosen = a_cands[best_idx]
@@ -492,6 +538,22 @@ class AdaptiveScalingBestOfN(StrategyBase):
         self.step_generator.finalize_sample_stats(num_samples=num_samples)
         token_stats = self.step_generator.get_sample_stats()
 
+        log.info(
+            f"\n{'='*60}\n"
+            f"Mini-batch complete: {num_samples} samples\n"
+            f"Token stats: "
+            f"total_tokens={token_stats['total_tokens_this_sample']:,}, "
+            f"input_tokens={token_stats.get('input_tokens', 0):,}, "
+            f"output_tokens={token_stats.get('output_tokens', 0):,}, "
+            f"generations={token_stats['generation_count']}"
+            + (
+                f", tflops={token_stats['tflops']:.3f}"
+                if token_stats.get("tflops")
+                else ""
+            )
+            + f"\n{'='*60}"
+        )
+
         outputs: List[Dict[str, Any]] = []
         for idx in range(num_samples):
             final_trajectory = convert_trajectory_to_string(trajectories[idx])
@@ -499,6 +561,15 @@ class AdaptiveScalingBestOfN(StrategyBase):
 
             thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
                 selected_steps[idx]
+            )
+
+            scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
+            log.info(
+                f"Sample {sample_idxs[idx]}: "
+                f"{len(selected_steps[idx])} steps "
+                f"({thinking_num_steps} thinking, {response_num_steps} response), "
+                f"scores=[{scores_str}], "
+                f"answer={extracted!r}"
             )
 
             outputs.append(
