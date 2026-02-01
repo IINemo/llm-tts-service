@@ -371,7 +371,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                         candidate_map.append((batch_idx, cand_idx))
 
                 # Score all trajectories in batch
-                if flat_trajectories and hasattr(self.scorer, "score_trajectories_batch"):
+                if flat_trajectories and hasattr(
+                    self.scorer, "score_trajectories_batch"
+                ):
                     all_traj_scores = self.scorer.score_trajectories_batch(
                         flat_chats, flat_trajectories
                     )
@@ -397,9 +399,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                 all_scores = []
                 for candidates in batch_results:
                     scores = [
-                        c.other_data.get("validity_score", 0.0)
-                        if c.other_data
-                        else 0.0
+                        c.other_data.get("validity_score", 0.0) if c.other_data else 0.0
                         for c in candidates
                     ]
                     all_scores.append(scores)
@@ -440,7 +440,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                         )
 
                 # Detect garbage/degenerate output
-                if not selected.is_trajectory_complete and _detect_garbage(selected.text):
+                if not selected.is_trajectory_complete and _detect_garbage(
+                    selected.text
+                ):
                     selected.is_trajectory_complete = True
                     forced_complete = True
                     log.info(
@@ -469,14 +471,10 @@ class StrategyOnlineBestOfN(StrategyBase):
                 elif selected.is_trajectory_complete:
                     completion_reason = None
                     if selected.other_data:
-                        completion_reason = selected.other_data.get(
-                            "completion_reason"
-                        )
+                        completion_reason = selected.other_data.get("completion_reason")
 
                     if completion_reason == CompletionReason.EOS_PATTERN:
-                        log.info(
-                            f"Sample {sample_indices[sample_id]}: Stopped at EOS"
-                        )
+                        log.info(f"Sample {sample_indices[sample_id]}: Stopped at EOS")
                         completed[sample_id] = True
                     elif not self._has_answer_content(selected):
                         log.info(
