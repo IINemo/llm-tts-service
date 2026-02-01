@@ -1,6 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/gpqa_diamond/baseline_vllm_qwen3_8b_gpqa_diamond
-# Baseline evaluation for Qwen3-8B on GPQA-Diamond (graduate-level science multiple choice)
+# Baseline evaluation for Qwen3-8B (Thinking Mode) on GPQA-Diamond (graduate-level science multiple choice)
 
 defaults:
   - /config
@@ -22,35 +22,32 @@ wandb_project: llm-tts-eval-gpqa-diamond
 model:
   type: "vllm"
   model_path: "Qwen/Qwen3-8B"
-  gpu_memory_utilization: 0.9
+  gpu_memory_utilization: 0.8
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 32768
-  disable_thinking_mode: true  # Disable thinking mode for baseline
+  disable_thinking_mode: false  # ENABLE native thinking mode
 
 # System configuration
 system:
   device: cuda
-  seed: 0
+  seed: 42
 
-# Generation configuration - match official Qwen3 eval parameters
+# Generation configuration - thinking mode settings
 generation:
   max_new_tokens: 32768
-  temperature: 0.7
-  top_p: 0.8
+  temperature: 0.6
+  top_p: 0.95
   top_k: 20
-  presence_penalty: 1.5  # Official Qwen3 non-thinking mode parameter
   batch_size: 1
 
 # Strategy - Baseline single-shot
 strategy:
   type: baseline
-  # No semantic stop tokens for baseline (full response generation)
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
-  # Step token limits (required by ThinkingMarkerDetector)
   min_step_tokens: 0
   max_step_tokens: 32768
   # Disable all semantic markers for baseline
@@ -61,11 +58,7 @@ strategy:
   use_structure: false
   use_reasoning: false
   use_correction: false
-  # Answer patterns for evaluation (multiple choice)
-  detector_answer_patterns:
-    - "\\boxed{"
-    - "answer is ([A-D])"
-    - "Answer: ([A-D])"
+  detector_answer_patterns: []
 
 # Dataset configuration - GPQA-Diamond (graduate-level science multiple choice)
 dataset:
@@ -78,7 +71,7 @@ dataset:
   question_field: "question"
   answer_field: "answer"
   answer_format: "char"
-  system_prompt: "You are an expert in graduate-level science. Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
+  system_prompt: "Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
 
@@ -86,3 +79,11 @@ dataset:
 evaluation:
   evaluators:
     - exact_match
+  batch_evaluators:
+    - llm_judge
+  llm_judge:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    cache_path: ./cache/llm_judge
+    n_threads: 50

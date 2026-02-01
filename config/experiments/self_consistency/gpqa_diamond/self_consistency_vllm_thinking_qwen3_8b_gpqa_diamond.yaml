@@ -72,7 +72,6 @@ evaluation:
   llm_judge:
     provider: openai
     model: gpt-4o-mini
-    mode: answer_only
     base_url: https://api.openai.com/v1
     cache_path: ./cache/llm_judge
     n_threads: 50
