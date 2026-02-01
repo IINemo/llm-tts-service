@@ -1949,9 +1949,11 @@ def main(config):
         if scorer is not None:
             del scorer
         import gc
+
         gc.collect()
         try:
             import torch
+
             torch.cuda.empty_cache()
         except ImportError:
             pass

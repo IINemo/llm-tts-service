@@ -141,7 +141,10 @@ class EvaluatorLLMAsAJudge:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
-                        {"role": "system", "content": "You are an intelligent assistant."},
+                        {
+                            "role": "system",
+                            "content": "You are an intelligent assistant.",
+                        },
                         {"role": "user", "content": vote_prompt},
                     ],
                     temperature=0,
@@ -208,7 +211,9 @@ class EvaluatorLLMAsAJudge:
             }
 
             for future in tqdm(
-                as_completed(future_to_idx), total=len(all_inputs), desc="Verifying solutions"
+                as_completed(future_to_idx),
+                total=len(all_inputs),
+                desc="Verifying solutions",
             ):
                 idx = future_to_idx[future]
                 label, response, consensus = future.result()
