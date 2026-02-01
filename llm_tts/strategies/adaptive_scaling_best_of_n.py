@@ -71,6 +71,9 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 - completed: Whether trajectory reached completion
         """
 
+        # Reset token tracking for this sample
+        self.step_generator.reset_sample_stats()
+
         trajectory = []
         selected_steps = []
         validity_scores = []
