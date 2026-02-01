@@ -50,7 +50,7 @@ generation:
 strategy:
   type: beam_search
   beam_size: 5
-  candidates_per_beam: 3
+  candidates_per_beam: 8
   max_steps: 30
   aggregation: mean
   batch_generation: true

@@ -1,0 +1,95 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_thinking_qwen3_8b_math500_entropy
+# Online Best-of-N with vLLM + Thinking Mode (Qwen3-8B) on MATH-500
+
+defaults:
+  - /config
+  - /dataset/math_500
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - _self_
+
+# Run naming
+run_name: "online_bon_vllm_thinking_qwen3_8b_math500_entropy_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-math500
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  gpu_memory_utilization: 0.8
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
+  disable_thinking_mode: false  # ENABLE native thinking mode
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (thinking mode settings)
+generation:
+  max_new_tokens: 4096
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 8192
+
+# Strategy - Online Best-of-N with thinking marker detector
+strategy:
+  type: online_best_of_n
+  candidates_per_step: 8
+  max_steps: 250
+  # Use VLLMStepGenerator in thinking mode
+  detector_type: thinking_marker
+  # Step boundary token limits
+  min_step_tokens: 50
+  max_step_tokens: 300
+  # Marker categories (for vLLM stop token generation)
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: false
+  use_reasoning: true
+  use_correction: false
+  # Custom words for stop tokens
+  custom_words:
+    - "for example"
+    - "given that"
+    - "similarly"
+  detector_answer_patterns:
+    - "<end of response>"
+
+# Dataset configuration
+dataset:
+  subset: 500  # Full MATH-500 dataset
+  offset: 0
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
+
+# Evaluation configuration
+evaluation:
+  # Phase 1 evaluators (run during generation for running accuracy)
+  evaluators:
+    - exact_match
+
+  # Phase 2 evaluators (batch evaluation after generation)
+  batch_evaluators:
+    - llm_judge
+
+  # API-based LLM judge configuration
+  llm_judge:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    cache_path: ./cache/llm_judge
+    n_threads: 50
