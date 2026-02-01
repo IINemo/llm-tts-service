@@ -1,30 +1,30 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen25_7b_math500_prm
-# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
-# Uses PRM scorer (Qwen2.5-Math-PRM800K) for step evaluation
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/olympiadbench/online_bon_vllm_nothink_qwen25_7b_olympiadbench_entropy
+# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on OlympiadBench
+# Uses Entropy scorer for step evaluation
 
 defaults:
   - /config
-  - /dataset/math_500
+  - /dataset/olympiadbench
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/prm
+  - /scorer/entropy
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_nothink_qwen25_7b_math500_prm_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_nothink_qwen25_7b_olympiadbench_entropy_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-olympiadbench
 
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
-  gpu_memory_utilization: 0.7
+  gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -74,20 +74,11 @@ strategy:
     - "therefore"
     - "thus"
 
-# PRM scorer configuration (override defaults)
-scorer:
-  type: prm
-  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
-  device: cuda:1
-  batch_size: 1
-
 # Dataset configuration
 dataset:
-  subset: 500  # Full MATH-500 dataset
-  data_name: math
+  subset: 675  # Full OlympiadBench dataset
   offset: 0
-  prompt_file: null  # Not used - using system_prompt instead
-  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  # system_prompt set in base config (matches official Qwen2.5-Math eval)
 
 # Evaluation configuration
 evaluation:

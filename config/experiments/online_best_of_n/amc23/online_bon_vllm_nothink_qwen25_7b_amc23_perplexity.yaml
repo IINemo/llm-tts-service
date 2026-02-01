@@ -1,17 +1,17 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/amc23/online_bon_vllm_thinking_qwen3_8b_amc23_pd
-# Online Best-of-N with vLLM + Thinking Mode (Qwen3-8B) + PD Scorer on AMC 2023
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/amc23/online_bon_vllm_nothink_qwen25_7b_amc23_perplexity
+# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on AMC 2023
 
 defaults:
   - /config
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/uncertainty_pd
+  - /scorer/perplexity
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_thinking_qwen3_8b_amc23_pd_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_nothink_qwen25_7b_amc23_perplexity_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -21,44 +21,46 @@ wandb_project: llm-tts-eval-amc23
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen3-8B"
-  gpu_memory_utilization: 0.8
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 32768
-  disable_thinking_mode: false  # ENABLE native thinking mode
+  max_model_len: 4096
+  # disable_thinking_mode not set (None) = model doesn't support thinking
 
 # System configuration
 system:
   device: cuda
   seed: 42
 
-# Generation configuration (thinking mode settings)
+# Generation configuration (non-thinking mode settings)
 generation:
   max_new_tokens: 4096
-  temperature: 0.6
-  top_p: 0.95
+  temperature: 0.7
+  top_p: 0.8
   top_k: 20
   batch_size: 1
   max_length: 8192
 
-# Strategy - Online Best-of-N with thinking marker detector
+# Strategy - Online Best-of-N (always uses ThinkingMarkerDetector)
 strategy:
   type: online_best_of_n
   candidates_per_step: 8
-  max_steps: 250
-  # Use VLLMStepGenerator in thinking mode
-  detector_type: thinking_marker
+  max_steps: 50
+  # Stop tokens derived from detector config (use_* flags below)
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
   # Step boundary token limits
   min_step_tokens: 50
-  max_step_tokens: 300
-  # Marker categories (for vLLM stop token generation)
+  max_step_tokens: 2048
+  # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
   use_sequence: true
   use_conclusion: true
-  use_thinking: true
+  use_thinking: true  # Include thinking markers for step boundaries
   use_verification: true
-  use_structure: false
+  use_structure: true
   use_reasoning: true
   use_correction: false
   # Custom words for stop tokens
@@ -66,8 +68,9 @@ strategy:
     - "for example"
     - "given that"
     - "similarly"
-  detector_answer_patterns:
-    - "<end of response>"
+    - "step"
+    - "therefore"
+    - "thus"
 
 # Dataset configuration - AMC 2023
 dataset:
@@ -80,7 +83,8 @@ dataset:
   answer_field: "answer"
   answer_format: "numeric"
   data_name: amc23
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
+  prompt_file: null  # Not used - using system_prompt instead
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
 
 # Evaluation configuration
 evaluation:

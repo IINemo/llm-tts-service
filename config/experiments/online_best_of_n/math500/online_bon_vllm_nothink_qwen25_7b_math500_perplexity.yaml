@@ -1,7 +1,7 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen25_7b_math500_prm
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen25_7b_math500_perplexity
 # Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
-# Uses PRM scorer (Qwen2.5-Math-PRM800K) for step evaluation
+# Uses Perplexity scorer for step evaluation
 
 defaults:
   - /config
@@ -9,11 +9,11 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/prm
+  - /scorer/perplexity
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_nothink_qwen25_7b_math500_prm_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_nothink_qwen25_7b_math500_perplexity_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -24,7 +24,7 @@ wandb_project: llm-tts-eval-math500
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
-  gpu_memory_utilization: 0.7
+  gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -73,21 +73,12 @@ strategy:
     - "step"
     - "therefore"
     - "thus"
-
-# PRM scorer configuration (override defaults)
-scorer:
-  type: prm
-  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
-  device: cuda:1
-  batch_size: 1
-
 # Dataset configuration
 dataset:
   subset: 500  # Full MATH-500 dataset
   data_name: math
   offset: 0
-  prompt_file: null  # Not used - using system_prompt instead
-  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
 
 # Evaluation configuration
 evaluation:

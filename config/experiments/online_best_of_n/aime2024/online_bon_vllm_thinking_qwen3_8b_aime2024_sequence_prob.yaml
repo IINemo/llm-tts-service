@@ -1,35 +1,34 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/aime2025/vllm/online_bon_vllm_thinking_qwen25_7b_aime2025_entropy
-# Online Best-of-N with vLLM + Thinking Mode (Qwen2.5-7B)
-# Same as online_bon_vllm_thinking_aime2025.yaml but using Qwen2.5-7B
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/aime2024/vllm/online_bon_vllm_thinking_qwen3_8b_aime2024_sequence_prob
+# Online Best-of-N with vLLM + Thinking Mode (Qwen3-8B) on AIME 2024
+# Uses Sequence Prob scorer for step evaluation
 
 defaults:
   - /config
-  - /dataset/aime_2025
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/sequence_prob
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_thinking_qwen25_7b_aime2025_entropy_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_thinking_qwen3_8b_aime2024_sequence_prob_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-aime2025
+wandb_project: llm-tts-eval-aime2024
 
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen2.5-7B"
+  model_path: "Qwen/Qwen3-8B"
   gpu_memory_utilization: 0.8
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 32768
-  disable_thinking_mode: false  # ENABLE thinking mode
+  disable_thinking_mode: false  # ENABLE native thinking mode
 
 # System configuration
 system:
@@ -71,11 +70,20 @@ strategy:
   detector_answer_patterns:
     - "<end of response>"
 
-# Dataset configuration
+# Dataset configuration - AIME 2024 (30 problems)
 dataset:
-  subset: 30  # Full AIME-2025 dataset
+  dataset_path: "test-time-compute/test_aime24"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 30
   offset: 0
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed_qwen2.5.txt"
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: "aime2024"
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
 
 # Evaluation configuration
 evaluation:
