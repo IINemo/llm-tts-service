@@ -109,7 +109,9 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     trajectory=trajectory,
                     candidates_per_step=self.candidates_per_step,
                 )
-                all_candidate_scores = self.scorer.score_candidates(request, candidates, trajectory=trajectory)
+                all_candidate_scores = self.scorer.score_candidates(
+                    request, candidates, trajectory=trajectory
+                )
                 # Select best candidate
                 best_idx, selected_candidate = self._select_best_candidate(
                     candidates, all_candidate_scores
@@ -150,7 +152,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     validity_scores.append(final_validity)
                 break
 
-        if selected_candidate is not None and not selected_candidate.is_trajectory_complete:
+        if (
+            selected_candidate is not None
+            and not selected_candidate.is_trajectory_complete
+        ):
             final_answer, final_validity = self._generate_final_answer(
                 request, trajectory
             )
@@ -258,54 +263,16 @@ class AdaptiveScalingBestOfN(StrategyBase):
             None for _ in range(num_samples)
         ]
 
-        # Per-sample token tracking (like beam search)
-        sample_token_stats: Dict[int, Dict[str, int]] = {
-            i: {"input_tokens": 0, "output_tokens": 0, "generation_count": 0}
-            for i in range(num_samples)
-        }
-
-        # Reset batch-wide token tracking
+        # Reset batch-wide and per-sample token tracking
         self.step_generator.reset_sample_stats()
-
-        def _count_context_tokens(
-            request: List[Dict[str, str]], trajectory: List[StepCandidate]
-        ) -> int:
-            """Count context tokens for a (request, trajectory) pair."""
-            traj_text = convert_trajectory_to_string(trajectory)
-            if getattr(self.step_generator, "disable_thinking_mode", False):
-                prompt = self.step_generator._apply_chat_template(
-                    request, enable_thinking=False
-                )
-            else:
-                prompt = self.step_generator.tokenizer.apply_chat_template(
-                    request, tokenize=False, add_generation_prompt=True
-                )
-            if traj_text:
-                prompt = prompt + traj_text
-            return len(self.step_generator.tokenizer.encode(prompt))
-
-        def _track_generation_tokens(
-            sample_indices_for_call: List[int],
-            reqs: List[List[Dict[str, str]]],
-            trajs: List[List[StepCandidate]],
-            candidates_batch: List[List[StepCandidate]],
-        ) -> None:
-            """Record per-sample input/output tokens from a generation call."""
-            for pos, sample_idx in enumerate(sample_indices_for_call):
-                ctx_tokens = _count_context_tokens(reqs[pos], trajs[pos])
-                sample_token_stats[sample_idx]["input_tokens"] += ctx_tokens
-                for candidate in candidates_batch[pos]:
-                    out_tokens = candidate.other_data.get(
-                        "original_token_count", len(candidate.token_ids)
-                    )
-                    sample_token_stats[sample_idx]["output_tokens"] += out_tokens
-                sample_token_stats[sample_idx]["generation_count"] += 1
+        self.step_generator.reset_per_sample_stats()
 
         # ---- Batched helpers (duck-typing) ----
         def _gen_step_candidates_batch(
             active_reqs: List[List[Dict[str, str]]],
             active_trajs: List[List[StepCandidate]],
             candidates_per_step: int,
+            sample_ids: Optional[List[int]] = None,
         ) -> List[List[StepCandidate]]:
             """
             Returns list-of-list of candidates aligned to active samples.
@@ -316,6 +283,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     active_reqs,
                     trajectories=active_trajs,
                     candidates_per_step=candidates_per_step,
+                    sample_ids=sample_ids,
                 )
 
             try:
@@ -412,12 +380,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
 
             # 1) Generate a single candidate first for each active sample
             step_candidates_batch = _gen_step_candidates_batch(
-                active_reqs, active_trajs, candidates_per_step=1
-            )
-
-            # Track tokens for the initial 1-candidate generation
-            _track_generation_tokens(
-                active_indices, active_reqs, active_trajs, step_candidates_batch
+                active_reqs,
+                active_trajs,
+                candidates_per_step=1,
+                sample_ids=active_indices,
             )
 
             # Handle samples that produced no candidates
@@ -469,10 +435,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     scale_reqs,
                     scale_trajs,
                     candidates_per_step=self.candidates_per_step,
-                )
-                # Track tokens for the scaling generation
-                _track_generation_tokens(
-                    scale_indices, scale_reqs, scale_trajs, scale_cands_batch
+                    sample_ids=scale_indices,
                 )
                 scale_scores_batch = _score_candidates_batch(
                     scale_reqs, scale_cands_batch, scale_trajs
@@ -568,10 +531,15 @@ class AdaptiveScalingBestOfN(StrategyBase):
 
             answer_cands_batch = _gen_answer_candidates_batch(fin_reqs, fin_trajs)
 
-            # Track tokens for final answer generation
-            _track_generation_tokens(
-                to_finalize, fin_reqs, fin_trajs, answer_cands_batch
-            )
+            # Record tokens for final answer generation (not going through batch API)
+            for pos, sample_idx in enumerate(to_finalize):
+                if answer_cands_batch[pos]:
+                    ctx_tokens = self.step_generator.count_context_tokens(
+                        fin_reqs[pos], fin_trajs[pos]
+                    )
+                    self.step_generator.record_sample_tokens(
+                        sample_idx, answer_cands_batch[pos], context_tokens=ctx_tokens
+                    )
 
             answer_scores_batch = _score_candidates_batch(
                 fin_reqs, answer_cands_batch, fin_trajs
@@ -596,10 +564,15 @@ class AdaptiveScalingBestOfN(StrategyBase):
         self.step_generator.finalize_sample_stats(num_samples=num_samples)
 
         # Compute batch totals from per-sample stats
-        total_input = sum(s["input_tokens"] for s in sample_token_stats.values())
-        total_output = sum(s["output_tokens"] for s in sample_token_stats.values())
+        total_input = 0
+        total_output = 0
+        total_gens = 0
+        for idx in range(num_samples):
+            s = self.step_generator.get_sample_stats_for(idx)
+            total_input += s["input_tokens"]
+            total_output += s["output_tokens"]
+            total_gens += s["generation_count"]
         total_tokens = total_input + total_output
-        total_gens = sum(s["generation_count"] for s in sample_token_stats.values())
         batch_tflops = (
             self.step_generator.flop_calculator.compute_tflops(total_tokens)
             if hasattr(self.step_generator, "flop_calculator")
@@ -628,21 +601,9 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 selected_steps[idx]
             )
 
-            # Build per-sample token stats (like beam search _build_token_stats)
-            raw = sample_token_stats[idx]
-            sample_total = raw["input_tokens"] + raw["output_tokens"]
-            token_stats = {
-                "input_tokens": raw["input_tokens"],
-                "output_tokens": raw["output_tokens"],
-                "total_tokens_this_sample": sample_total,
-                "generation_count": raw["generation_count"],
-                "tflops": (
-                    self.step_generator.flop_calculator.compute_tflops(sample_total)
-                    if hasattr(self.step_generator, "flop_calculator")
-                    and self.step_generator.flop_calculator
-                    else None
-                ),
-            }
+            # Get per-sample token stats from generator's tracking
+            token_stats = self.step_generator.get_sample_stats_for(idx)
+            sample_total = token_stats["total_tokens_this_sample"]
 
             scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
             log.info(

@@ -1,7 +1,7 @@
 import logging
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import torch
 
@@ -64,6 +64,9 @@ class StepCandidateGeneratorBase:
         self._sample_output_tokens: int = 0  # Generated tokens (all candidates)
         self._sample_generation_count: int = 0  # Number of generate calls
 
+        # Per-sample statistics for batch strategies (keyed by sample_id)
+        self._per_sample_stats: Dict[Any, Dict[str, int]] = {}
+
         # Cumulative statistics (across all samples)
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
@@ -74,6 +77,64 @@ class StepCandidateGeneratorBase:
         self._sample_input_tokens = 0
         self._sample_output_tokens = 0
         self._sample_generation_count = 0
+
+    def reset_per_sample_stats(self) -> None:
+        """Reset per-sample statistics dict. Call at start of a batch."""
+        self._per_sample_stats.clear()
+
+    def record_sample_tokens(
+        self, sample_id: Any, candidates: List[StepCandidate], context_tokens: int = 0
+    ) -> None:
+        """Record tokens for a specific sample. Accumulates across calls.
+
+        Args:
+            sample_id: Identifier for the sample (e.g., index in batch).
+            candidates: List of generated candidates for this sample.
+            context_tokens: Number of context tokens (prompt + trajectory).
+        """
+        if sample_id not in self._per_sample_stats:
+            self._per_sample_stats[sample_id] = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "generation_count": 0,
+            }
+        out = sum(
+            (
+                c.other_data.get("original_token_count", len(c.token_ids))
+                if c.other_data
+                else len(c.token_ids)
+            )
+            for c in candidates
+        )
+        self._per_sample_stats[sample_id]["input_tokens"] += context_tokens
+        self._per_sample_stats[sample_id]["output_tokens"] += out
+        self._per_sample_stats[sample_id]["generation_count"] += 1
+
+    def get_sample_stats_for(self, sample_id: Any) -> Dict[str, Any]:
+        """Get token_stats dict for a specific sample (same schema as get_sample_stats).
+
+        Args:
+            sample_id: Identifier for the sample.
+
+        Returns:
+            Dictionary with token counts and FLOP estimates for the given sample.
+        """
+        raw = self._per_sample_stats.get(
+            sample_id, {"input_tokens": 0, "output_tokens": 0, "generation_count": 0}
+        )
+        total = raw["input_tokens"] + raw["output_tokens"]
+        stats = {
+            "input_tokens": raw["input_tokens"],
+            "output_tokens": raw["output_tokens"],
+            "total_tokens_this_sample": total,
+            "generation_count": raw["generation_count"],
+            "tflops": (
+                self.flop_calculator.compute_tflops(total)
+                if self.flop_calculator
+                else None
+            ),
+        }
+        return stats
 
     def _record_generation(
         self,

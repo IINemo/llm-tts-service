@@ -365,7 +365,8 @@ class StrategySelfConsistency(StrategyBase):
             f"trajectories via generate_step_candidates_batch"
         )
 
-        # Generate all M×N trajectories via batched method (handles FLOP tracking)
+        # Reset per-sample tracking and generate all M×N trajectories
+        self.step_generator.reset_per_sample_stats()
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
             trajectories=[[]] * M,
@@ -373,28 +374,14 @@ class StrategySelfConsistency(StrategyBase):
             stop_tokens_override=["<end of response>"],
             max_tokens_override=self.step_generator.max_new_tokens,
             compute_uncertainty=False,
+            sample_ids=list(range(M)),
         )
-
-        # Build prompts for token stats calculation
-        prompts = []
-        for request in requests:
-            if getattr(self.step_generator, "disable_thinking_mode", False):
-                prompt = self.step_generator._apply_chat_template(
-                    request, enable_thinking=False
-                )
-            else:
-                prompt = self.step_generator.tokenizer.apply_chat_template(
-                    request, tokenize=False, add_generation_prompt=True
-                )
-            prompts.append(prompt)
 
         # Process results - each entry has N candidates
         results = []
-        for candidates, prompt, sample_idx in zip(
-            batch_results, prompts, sample_indices
+        for idx, (candidates, sample_idx) in enumerate(
+            zip(batch_results, sample_indices)
         ):
-            context_tokens = len(self.step_generator.tokenizer.encode(prompt))
-
             if not candidates:
                 log.error(f"No output generated for sample {sample_idx}")
                 results.append(self._empty_result())
@@ -402,13 +389,11 @@ class StrategySelfConsistency(StrategyBase):
 
             # Build paths from the N StepCandidates
             paths = []
-            total_output_tokens = 0
 
             for candidate in candidates:
                 num_tokens = candidate.other_data.get(
                     "original_token_count", len(candidate.token_ids)
                 )
-                total_output_tokens += num_tokens
 
                 paths.append(
                     {
@@ -426,26 +411,9 @@ class StrategySelfConsistency(StrategyBase):
             # Do majority voting for this sample
             result = self.select_best_answer(paths)
 
-            # Token stats for this sample
-            # Context is processed ONCE per prompt (KV cache shared across N candidates)
-            # so input_tokens = context_tokens, NOT context_tokens * N
-            total_tokens = context_tokens + total_output_tokens
-            token_stats = {
-                "total_tokens_this_sample": total_tokens,
-                "input_tokens": context_tokens,
-                "output_tokens": total_output_tokens,
-                "generation_count": N,
-            }
-
-            # Add TFLOPs if calculator available
-            if (
-                hasattr(self.step_generator, "flop_calculator")
-                and self.step_generator.flop_calculator
-            ):
-                tflops = self.step_generator.flop_calculator.compute_tflops(
-                    total_tokens
-                )
-                token_stats["tflops"] = tflops
+            # Token stats from generator's per-sample tracking
+            token_stats = self.step_generator.get_sample_stats_for(idx)
+            token_stats["generation_count"] = N  # N candidates in one vLLM call
 
             # Build metadata
             builder = StrategyMetadataBuilder("self_consistency")
