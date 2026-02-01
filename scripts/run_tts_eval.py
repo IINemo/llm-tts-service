@@ -1788,10 +1788,10 @@ def main(config):
     log.info(f"Output directory: {output_dir}")
 
     # Redirect stderr to file in output directory (captures tqdm progress bars)
-    # stderr_log_path = Path(output_dir) / "stderr.log"
-    # stderr_file = open(stderr_log_path, "w", buffering=1)  # Line buffered
-    # sys.stderr = stderr_file
-    # log.info(f"Stderr redirected to: {stderr_log_path}")
+    stderr_log_path = Path(output_dir) / "stderr.log"
+    stderr_file = open(stderr_log_path, "w", buffering=1)  # Line buffered
+    sys.stderr = stderr_file
+    log.info(f"Stderr redirected to: {stderr_log_path}")
 
     # Setup wandb if configured
     if getattr(config, "report_to", None) == "wandb":
