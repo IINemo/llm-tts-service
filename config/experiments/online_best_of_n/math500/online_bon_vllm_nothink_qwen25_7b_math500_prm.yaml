@@ -1,11 +1,11 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/olympiadbench/online_bon_vllm_nothink_qwen25_7b_prm_olympiadbench
-# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on OlympiadBench
-# Uses PRM scorer (Qwen2.5-Math-PRM-7B) for step evaluation
+# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen25_7b_math500_prm
+# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
+# Uses PRM scorer (Qwen2.5-Math-PRM800K) for step evaluation
 
 defaults:
   - /config
-  - /dataset/olympiadbench
+  - /dataset/math_500
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
@@ -13,12 +13,12 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_nothink_qwen25_7b_prm_olympiadbench_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_nothink_qwen25_7b_math500_prm_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-olympiadbench
+wandb_project: llm-tts-eval-math500
 
 # Model configuration (vLLM backend)
 model:
@@ -83,9 +83,10 @@ scorer:
 
 # Dataset configuration
 dataset:
-  subset: 675  # Full OlympiadBench dataset
+  subset: 500  # Full MATH-500 dataset
   offset: 0
-  # system_prompt set in base config (matches official Qwen2.5-Math eval)
+  prompt_file: null  # Not used - using system_prompt instead
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
 
 # Evaluation configuration
 evaluation:

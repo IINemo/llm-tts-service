@@ -1,39 +1,36 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_thinking_qwen3_8b_pd_math500
-# Online Best-of-N with vLLM + Thinking Mode (Qwen3-8B) + PD Scorer on MATH-500
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/aime2025/hf/online_bon_hf_thinking_qwen25_aime2025_entropy
+# Online Best-of-N with HuggingFace + Thinking Mode (Qwen2.5-7B)
+# Uses ThinkingMarkerDetector for step boundaries
 
 defaults:
   - /config
-  - /dataset/math_500
-  - /model/vllm_qwen3
+  - /dataset/aime_2025
+  - /model/hf_qwen25
   - /generation/default
   - /system/default
-  - /scorer/uncertainty_pd
+  - /scorer/entropy
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_thinking_qwen3_8b_pd_math500_${now:%H-%M-%S}"
+run_name: "online_bon_hf_thinking_qwen25_aime2025_entropy_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-aime2025
 
-# Model configuration (vLLM backend)
+# Model configuration (HuggingFace backend)
 model:
-  type: "vllm"
-  model_path: "Qwen/Qwen3-8B"
-  gpu_memory_utilization: 0.8
-  tensor_parallel_size: 1
-  enable_prefix_caching: true
-  trust_remote_code: true
-  max_model_len: 32768
-  disable_thinking_mode: false  # ENABLE native thinking mode
+  type: "local"
+  model_path: "Qwen/Qwen2.5-7B"
+  disable_thinking_mode: false  # ENABLE thinking mode
 
 # System configuration
 system:
   device: cuda
   seed: 42
+  torch_dtype: "bfloat16"
 
 # Generation configuration (thinking mode settings)
 generation:
@@ -49,30 +46,31 @@ strategy:
   type: online_best_of_n
   candidates_per_step: 4
   max_steps: 250
-  # Use VLLMStepGenerator in thinking mode
+  # Use ThinkingMarkerDetector with marker_semantic_v2 settings
   detector_type: thinking_marker
   # Step boundary token limits
   min_step_tokens: 50
   max_step_tokens: 300
-  # Marker categories (for vLLM stop token generation)
+  # Marker categories
   use_sequence: true
   use_conclusion: true
   use_thinking: true
   use_verification: true
-  use_structure: false
-  use_reasoning: true
+  use_structure: false       # No paragraph/bullet splitting
+  use_reasoning: false       # REASONING_MARKERS has too many patterns
+  use_sentence_start: false  # Avoid "but", "however" over-splitting
   use_correction: false
   # Custom words for stop tokens
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
+  custom_markers:
+    - "\\bfor example\\b"
+    - "\\bgiven that\\b"
+    - "\\bsimilarly\\b"
   detector_answer_patterns:
     - "<end of response>"
 
 # Dataset configuration
 dataset:
-  subset: 500  # Full MATH-500 dataset
+  subset: 5  # Start small for testing
   offset: 0
   prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
 

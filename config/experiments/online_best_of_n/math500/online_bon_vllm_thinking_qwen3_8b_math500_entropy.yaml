@@ -1,7 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen3_8b_entropy_math500
-# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen3-8B) on MATH-500
-# Uses standard generation without thinking markers
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_thinking_qwen3_8b_math500_entropy
+# Online Best-of-N with vLLM + Thinking Mode (Qwen3-8B) on MATH-500
 
 defaults:
   - /config
@@ -13,7 +12,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_nothink_qwen3_8b_entropy_math500_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_thinking_qwen3_8b_math500_entropy_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -29,38 +28,38 @@ model:
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 32768
-  disable_thinking_mode: true  # DISABLE native thinking mode
+  disable_thinking_mode: false  # ENABLE native thinking mode
 
 # System configuration
 system:
   device: cuda
   seed: 42
 
-# Generation configuration (non-thinking mode settings)
+# Generation configuration (thinking mode settings)
 generation:
   max_new_tokens: 4096
-  temperature: 0.7
-  top_p: 0.8
+  temperature: 0.6
+  top_p: 0.95
   top_k: 20
   batch_size: 1
   max_length: 8192
 
-# Strategy - Online Best-of-N with structured step detector
+# Strategy - Online Best-of-N with thinking marker detector
 strategy:
   type: online_best_of_n
   candidates_per_step: 4
-  max_steps: 50
-  # Use structured detector for non-thinking mode
-  detector_type: structured
+  max_steps: 250
+  # Use VLLMStepGenerator in thinking mode
+  detector_type: thinking_marker
   # Step boundary token limits
   min_step_tokens: 50
   max_step_tokens: 300
   # Marker categories (for vLLM stop token generation)
   use_sequence: true
   use_conclusion: true
-  use_thinking: false  # No thinking markers in non-thinking mode
+  use_thinking: true
   use_verification: true
-  use_structure: true
+  use_structure: false
   use_reasoning: true
   use_correction: false
   # Custom words for stop tokens
@@ -68,15 +67,7 @@ strategy:
     - "for example"
     - "given that"
     - "similarly"
-    - "step"
-    - "therefore"
-    - "thus"
-  # Answer patterns for checking if there's actual answer content
   detector_answer_patterns:
-    - "<Answer>:"
-    - "\n<Answer>:"
-  # EOS patterns for checking trajectory completion (stop tokens)
-  detector_eos_patterns:
     - "<end of response>"
 
 # Dataset configuration

@@ -1,35 +1,35 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen3_8b_pd_math500
-# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen3-8B) + PD Scorer on MATH-500
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/aime2025/vllm/online_bon_vllm_nothink_qwen25_7b_aime2025_entropy
+# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B)
 # Uses standard generation without thinking markers
 
 defaults:
   - /config
-  - /dataset/math_500
+  - /dataset/aime_2025
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/uncertainty_pd
+  - /scorer/entropy
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_nothink_qwen3_8b_pd_math500_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_nothink_qwen25_7b_aime2025_entropy_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-aime2025
 
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen3-8B"
+  model_path: "Qwen/Qwen2.5-7B"
   gpu_memory_utilization: 0.8
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 32768
-  disable_thinking_mode: true  # DISABLE native thinking mode
+  disable_thinking_mode: true  # No native thinking mode
 
 # System configuration
 system:
@@ -81,9 +81,9 @@ strategy:
 
 # Dataset configuration
 dataset:
-  subset: 500  # Full MATH-500 dataset
+  subset: 30  # Full AIME-2025 dataset
   offset: 0
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed.txt"
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed_qwen2.5.txt"
 
 # Evaluation configuration
 evaluation:
