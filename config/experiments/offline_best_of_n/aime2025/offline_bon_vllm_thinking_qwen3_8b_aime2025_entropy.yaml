@@ -1,6 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gpqa_diamond/offline_bon_vllm_thinking_qwen3_8b_entropy_gpqa_diamond
-# Offline Best-of-N with Thinking Mode (Qwen3-8B) + Entropy scorer on GPQA-Diamond
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/aime2025/offline_bon_vllm_thinking_qwen3_8b_aime2025_entropy
+# Offline Best-of-N with Thinking Mode (Qwen3-8B) + Entropy scorer on AIME 2025
 # Generates N complete trajectories (thinking + response), then selects the best one
 
 defaults:
@@ -12,12 +12,12 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_thinking_qwen3_8b_entropy_gpqa_diamond_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_thinking_qwen3_8b_aime2025_entropy_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-gpqa-diamond
+wandb_project: llm-tts-eval-aime2025
 
 # Model configuration (vLLM backend)
 model:
@@ -67,37 +67,32 @@ strategy:
   use_reasoning: true
   use_correction: false
 
-# Entropy scorer configuration (uses same model, no separate GPU needed)
+# Entropy scorer configuration
 scorer:
   type: entropy
   batch_size: 1
 
-# Dataset configuration - GPQA-Diamond (graduate-level science multiple choice)
+# Dataset configuration - AIME 2025
 dataset:
-  dataset_path: "test-time-compute/test_gpqa_diamond"
-  dataset_config: null
+  dataset_path: "test-time-compute/aime_2025"
+  dataset_config: "default"
   dataset_split: "test"
-  subset: null  # Full dataset
+  subset: 30  # Full AIME 2025 dataset
   offset: 0
   question_field: "question"
   answer_field: "answer"
-  answer_format: "char"
-  data_name: gpqa_diamond
-  system_prompt: "You are an expert in graduate-level science. Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
+  answer_format: "numeric"
+  data_name: aime25
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
 
 # Evaluation configuration
 evaluation:
-  # Phase 1 evaluators (run during generation for running accuracy)
   evaluators:
     - exact_match
-
-  # Phase 2 evaluators (batch evaluation after generation)
   batch_evaluators:
     - llm_judge
-
-  # API-based LLM judge configuration
   llm_judge:
     provider: openai
     model: gpt-4o-mini

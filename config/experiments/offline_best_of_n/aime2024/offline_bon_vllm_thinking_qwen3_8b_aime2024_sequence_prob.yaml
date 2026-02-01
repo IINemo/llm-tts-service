@@ -1,6 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gpqa_diamond/offline_bon_vllm_thinking_qwen3_8b_sequence_prob_gpqa_diamond
-# Offline Best-of-N with Thinking Mode (Qwen3-8B) on GPQA-Diamond — Sequence Probability scorer
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/aime2024/offline_bon_vllm_thinking_qwen3_8b_aime2024_sequence_prob
+# Offline Best-of-N with Thinking Mode (Qwen3-8B) + Sequence Probability scorer on AIME 2024
 # Generates N complete trajectories (thinking + response), then selects the best one
 
 defaults:
@@ -12,12 +12,12 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_thinking_qwen3_8b_sequence_prob_gpqa_diamond_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_thinking_qwen3_8b_aime2024_sequence_prob_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-gpqa-diamond
+wandb_project: llm-tts-eval-aime2024
 
 # Model configuration (vLLM backend)
 model:
@@ -37,24 +37,28 @@ system:
 
 # Generation configuration (thinking mode settings)
 generation:
-  max_new_tokens: 4096
+  max_new_tokens: 32768
   temperature: 0.6
   top_p: 0.95
   top_k: 20
   batch_size: 1
-  max_length: 32768
+  max_length: 65536
 
 # Strategy - Offline Best-of-N
 strategy:
   type: offline_best_of_n
-  num_trajectories: 8
+  num_trajectories: 8        # Number of complete trajectories to generate
   max_steps: 100
-  max_thinking_tokens: 32768
-  max_response_tokens: 1024
-  detector_answer_patterns:
-    - "<end of response>"
+  score_aggregation: min     # Conservative: trajectory is only as good as its weakest step
+  batch_generation: true     # Fully batched: M×N trajectories in single vLLM call
+  # Stop tokens for Qwen3
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  # Step boundary detector settings - used for post-hoc step splitting
   min_step_tokens: 125
   max_step_tokens: 500
+  # These flags control how thinking is SPLIT into steps after generation
   use_sequence: true
   use_conclusion: true
   use_thinking: true
@@ -68,18 +72,18 @@ scorer:
   type: sequence_prob
   batch_size: 1
 
-# Dataset configuration - GPQA-Diamond (198 graduate-level science multiple choice)
+# Dataset configuration - AIME 2024
 dataset:
-  dataset_path: "test-time-compute/test_gpqa_diamond"
+  dataset_path: "test-time-compute/test_aime24"
   dataset_config: null
   dataset_split: "test"
-  subset: null  # Full dataset (198 samples)
+  subset: 30  # Full AIME 2024 dataset
   offset: 0
   question_field: "question"
   answer_field: "answer"
-  answer_format: "char"
-  data_name: "gpqa_diamond"
-  system_prompt: "Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
+  answer_format: "numeric"
+  data_name: aime24
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
 
@@ -92,7 +96,6 @@ evaluation:
   llm_judge:
     provider: openai
     model: gpt-4o-mini
-    mode: answer_only
     base_url: https://api.openai.com/v1
     cache_path: ./cache/llm_judge
     n_threads: 50

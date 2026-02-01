@@ -1,6 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/aime2024/offline_bon_vllm_thinking_qwen3_8b_perplexity_aime2024
-# Offline Best-of-N with Thinking Mode (Qwen3-8B) + Perplexity scorer on AIME 2024
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/aime2025/offline_bon_vllm_thinking_qwen3_8b_aime2025_perplexity
+# Offline Best-of-N with Thinking Mode (Qwen3-8B) + Perplexity scorer on AIME 2025
 # Generates N complete trajectories (thinking + response), then selects the best one
 
 defaults:
@@ -12,12 +12,12 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_thinking_qwen3_8b_perplexity_aime2024_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_thinking_qwen3_8b_aime2025_perplexity_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-aime2024
+wandb_project: llm-tts-eval-aime2025
 
 # Model configuration (vLLM backend)
 model:
@@ -72,17 +72,17 @@ scorer:
   type: perplexity
   batch_size: 1
 
-# Dataset configuration - AIME 2024
+# Dataset configuration - AIME 2025
 dataset:
-  dataset_path: "test-time-compute/test_aime24"
-  dataset_config: null
+  dataset_path: "test-time-compute/aime_2025"
+  dataset_config: "default"
   dataset_split: "test"
-  subset: 30  # Full AIME 2024 dataset
+  subset: 30  # Full AIME 2025 dataset
   offset: 0
   question_field: "question"
   answer_field: "answer"
   answer_format: "numeric"
-  data_name: aime24
+  data_name: aime25
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null

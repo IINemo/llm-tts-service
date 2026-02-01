@@ -1,7 +1,7 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/amc23/offline_bon_vllm_nothink_qwen25_7b_perplexity_amc23
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/amc23/offline_bon_vllm_nothink_qwen25_7b_amc23_sequence_prob
 # Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on AMC 2023
-# Uses Perplexity scorer for step evaluation (no separate PRM model needed)
+# Uses Sequence Probability scorer for step evaluation (sum of log-probs, not normalized)
 # Generates N trajectories in single call, splits post-hoc, selects best based on min step score
 
 defaults:
@@ -9,11 +9,11 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/perplexity
+  - /scorer/sequence_prob
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_nothink_qwen25_7b_perplexity_amc23_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_nothink_qwen25_7b_amc23_sequence_prob_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -21,7 +21,7 @@ report_to: wandb
 wandb_project: llm-tts-eval-amc23
 
 # Model configuration (vLLM backend)
-# Single GPU since perplexity scorer uses the same model (no separate PRM)
+# Single GPU since sequence_prob scorer uses the same model (no separate PRM)
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
@@ -76,9 +76,9 @@ strategy:
     - "therefore"
     - "thus"
 
-# Perplexity scorer configuration (uses same model, no separate GPU needed)
+# Sequence probability scorer configuration (uses same model, no separate GPU needed)
 scorer:
-  type: perplexity
+  type: sequence_prob
   batch_size: 1
 
 # Dataset configuration - AMC 2023 (40 problems)

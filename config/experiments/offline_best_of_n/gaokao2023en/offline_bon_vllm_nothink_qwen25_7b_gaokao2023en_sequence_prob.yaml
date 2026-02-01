@@ -1,6 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/olympiadbench/offline_bon_vllm_nothink_qwen25_7b_sequence_prob_olympiadbench
-# Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on OlympiadBench
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gaokao2023en/offline_bon_vllm_nothink_qwen25_7b_gaokao2023en_sequence_prob
+# Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on GaoKao 2023 En
 # Uses Sequence Probability scorer for step evaluation (sum of log-probs, not normalized)
 # Generates N trajectories in single call, splits post-hoc, selects best based on min step score
 
@@ -13,19 +13,19 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_nothink_qwen25_7b_sequence_prob_olympiadbench_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_nothink_qwen25_7b_gaokao2023en_sequence_prob_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-olympiadbench
+wandb_project: llm-tts-eval-gaokao2023en
 
 # Model configuration (vLLM backend)
 # Single GPU since sequence_prob scorer uses the same model (no separate PRM)
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
-  gpu_memory_utilization: 0.95
+  gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -81,17 +81,17 @@ scorer:
   type: sequence_prob
   batch_size: 1
 
-# Dataset configuration - OlympiadBench
+# Dataset configuration - GaoKao 2023 En
 dataset:
-  dataset_path: "karantonis/test_olympiadbench"
+  dataset_path: "test-time-compute/test_gaokao2023en"
   dataset_config: null
   dataset_split: "test"
-  subset: 675  # Full OlympiadBench dataset
+  subset: 385  # Full GaoKao 2023 En dataset
   offset: 0
   question_field: "question"
   answer_field: "answer"
   answer_format: "numeric"
-  data_name: olympiadbench  # For official Qwen2.5-Math answer extraction
+  data_name: gaokao2023en
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null

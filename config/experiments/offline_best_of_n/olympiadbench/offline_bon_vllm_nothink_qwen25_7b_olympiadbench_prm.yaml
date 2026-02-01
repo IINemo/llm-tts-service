@@ -1,7 +1,7 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/amc23/offline_bon_vllm_nothink_qwen25_7b_sequence_prob_amc23
-# Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on AMC 2023
-# Uses Sequence Probability scorer for step evaluation (sum of log-probs, not normalized)
+# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/olympiadbench/offline_bon_vllm_nothink_qwen25_7b_olympiadbench_prm
+# Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on OlympiadBench
+# Uses PRM scorer (Qwen2.5-Math-PRM-7B) for step evaluation
 # Generates N trajectories in single call, splits post-hoc, selects best based on min step score
 
 defaults:
@@ -9,23 +9,22 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/sequence_prob
+  - /scorer/prm
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_nothink_qwen25_7b_sequence_prob_amc23_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_nothink_qwen25_7b_olympiadbench_prm_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-amc23
+wandb_project: llm-tts-eval-olympiadbench
 
 # Model configuration (vLLM backend)
-# Single GPU since sequence_prob scorer uses the same model (no separate PRM)
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
-  gpu_memory_utilization: 0.9
+  gpu_memory_utilization: 0.7
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -76,32 +75,39 @@ strategy:
     - "therefore"
     - "thus"
 
-# Sequence probability scorer configuration (uses same model, no separate GPU needed)
+# PRM scorer configuration
 scorer:
-  type: sequence_prob
+  type: prm
+  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+  device: cuda:1
   batch_size: 1
 
-# Dataset configuration - AMC 2023 (40 problems)
+# Dataset configuration - OlympiadBench
 dataset:
-  dataset_path: "test-time-compute/test_amc23"
+  dataset_path: "karantonis/test_olympiadbench"
   dataset_config: null
   dataset_split: "test"
-  subset: 40
+  subset: 675  # Full OlympiadBench dataset
   offset: 0
   question_field: "question"
   answer_field: "answer"
   answer_format: "numeric"
-  data_name: amc23
+  data_name: olympiadbench  # For official Qwen2.5-Math answer extraction
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
 
 # Evaluation configuration
 evaluation:
+  # Phase 1 evaluators (run during generation for running accuracy)
   evaluators:
     - exact_match
+
+  # Phase 2 evaluators (batch evaluation after generation)
   batch_evaluators:
     - llm_judge
+
+  # API-based LLM judge configuration
   llm_judge:
     provider: openai
     model: gpt-4o-mini

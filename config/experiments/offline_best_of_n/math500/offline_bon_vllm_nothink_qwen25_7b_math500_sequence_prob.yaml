@@ -1,11 +1,12 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/minerva_math/offline_bon_vllm_nothink_qwen25_7b_sequence_prob_minerva_math
-# Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on Minerva Math
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/math500/offline_bon_vllm_nothink_qwen25_7b_math500_sequence_prob
+# Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
 # Uses Sequence Probability scorer for step evaluation (sum of log-probs, not normalized)
 # Generates N trajectories in single call, splits post-hoc, selects best based on min step score
 
 defaults:
   - /config
+  - /dataset/math_500
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
@@ -13,12 +14,12 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_nothink_qwen25_7b_sequence_prob_minerva_math_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_nothink_qwen25_7b_math500_sequence_prob_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-minerva-math
+wandb_project: llm-tts-eval-math500
 
 # Model configuration (vLLM backend)
 # Single GPU since sequence_prob scorer uses the same model (no separate PRM)
@@ -81,20 +82,12 @@ scorer:
   type: sequence_prob
   batch_size: 1
 
-# Dataset configuration - Minerva Math
+# Dataset configuration
 dataset:
-  dataset_path: "test-time-compute/test_minerva_math"
-  dataset_config: null
-  dataset_split: "test"
-  subset: 272  # Full Minerva Math dataset
+  subset: 500  # Full MATH-500 dataset
   offset: 0
-  question_field: "question"
-  answer_field: "answer"
-  answer_format: "numeric"
-  data_name: minerva_math  # For official Qwen2.5-Math answer extraction
-  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
-  prompt_template: "{question}"
-  prompt_file: null
+  data_name: math  # For official Qwen2.5-Math answer extraction
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
 
 # Evaluation configuration
 evaluation:

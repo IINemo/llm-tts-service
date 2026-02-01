@@ -1,6 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/aime2024/offline_bon_vllm_thinking_qwen3_8b_sequence_prob_aime2024
-# Offline Best-of-N with Thinking Mode (Qwen3-8B) + Sequence Probability scorer on AIME 2024
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/aime2024/offline_bon_vllm_thinking_qwen3_8b_aime2024_entropy
+# Offline Best-of-N with Thinking Mode (Qwen3-8B) + Entropy scorer on AIME 2024
 # Generates N complete trajectories (thinking + response), then selects the best one
 
 defaults:
@@ -8,11 +8,11 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/sequence_prob
+  - /scorer/entropy
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_thinking_qwen3_8b_sequence_prob_aime2024_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_thinking_qwen3_8b_aime2024_entropy_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -67,9 +67,9 @@ strategy:
   use_reasoning: true
   use_correction: false
 
-# Sequence Probability scorer configuration
+# Entropy scorer configuration
 scorer:
-  type: sequence_prob
+  type: entropy
   batch_size: 1
 
 # Dataset configuration - AIME 2024

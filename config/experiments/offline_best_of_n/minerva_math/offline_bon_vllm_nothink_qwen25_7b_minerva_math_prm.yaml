@@ -1,32 +1,30 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/math500/offline_bon_vllm_nothink_qwen25_7b_entropy_math500
-# Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
-# Uses Entropy scorer for step evaluation (no separate PRM model needed)
+# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/minerva_math/offline_bon_vllm_nothink_qwen25_7b_minerva_math_prm
+# Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on Minerva Math
+# Uses PRM scorer (Qwen2.5-Math-PRM-7B) for step evaluation
 # Generates N trajectories in single call, splits post-hoc, selects best based on min step score
 
 defaults:
   - /config
-  - /dataset/math_500
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/prm
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_nothink_qwen25_7b_entropy_math500_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_nothink_qwen25_7b_minerva_math_prm_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-math500
+wandb_project: llm-tts-eval-minerva-math
 
 # Model configuration (vLLM backend)
-# Single GPU since entropy scorer uses the same model (no separate PRM)
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
-  gpu_memory_utilization: 0.95
+  gpu_memory_utilization: 0.7
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -77,17 +75,27 @@ strategy:
     - "therefore"
     - "thus"
 
-# Entropy scorer configuration (uses same model, no separate GPU needed)
+# PRM scorer configuration
 scorer:
-  type: entropy
+  type: prm
+  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+  device: cuda:1
   batch_size: 1
 
-# Dataset configuration
+# Dataset configuration - Minerva Math
 dataset:
-  subset: 500  # Full MATH-500 dataset
+  dataset_path: "test-time-compute/test_minerva_math"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 272  # Full Minerva Math dataset
   offset: 0
-  data_name: math  # For official Qwen2.5-Math answer extraction
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: minerva_math  # For official Qwen2.5-Math answer extraction
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
 
 # Evaluation configuration
 evaluation:
