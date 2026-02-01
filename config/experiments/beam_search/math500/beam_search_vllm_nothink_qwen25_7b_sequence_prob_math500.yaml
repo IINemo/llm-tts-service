@@ -75,6 +75,13 @@ strategy:
     - "therefore"
     - "thus"
 
+# Dataset configuration
+dataset:
+  subset: 500
+  offset: 0
+  data_name: math
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
+
 # Sequence probability scorer configuration (uses same model, no separate GPU needed)
 scorer:
   type: sequence_prob
