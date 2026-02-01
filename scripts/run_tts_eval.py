@@ -607,7 +607,6 @@ def create_tts_strategy(
             batch_generation=batch_generation,
         )
     elif config.strategy.type == "adaptive":
-        batch_generation = config.strategy.get("batch_generation", True)
         strategy = AdaptiveScalingBestOfN(
             step_generator=step_generator,
             scorer=scorer,
@@ -616,7 +615,6 @@ def create_tts_strategy(
             adaptive_scaling_method=config.strategy.adaptive_scaling_method,
             scaling_rate=config.strategy.scaling_rate,
             momentum_rate=config.strategy.momentum_rate,
-            batch_generation=batch_generation,
             batch_size=config.strategy.get("batch_size", 1000),
         )
     elif config.strategy.type == "deepconf":

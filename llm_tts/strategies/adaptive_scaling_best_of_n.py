@@ -38,7 +38,6 @@ class AdaptiveScalingBestOfN(StrategyBase):
         scaling_rate: float = 0.9,
         momentum_rate: float = 0.9,
         adaptive_scaling_method: str = "momentum",
-        batch_generation: bool = True,
         batch_size: int = 1000,
     ):
         self.candidates_per_step = candidates_per_step
@@ -54,9 +53,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         self.scale_discriminator = ScaleDiscriminator(
             criterion=adaptive_scaling_method, **kwargs
         )
-        self.batch_generation = batch_generation
         self.batch_size = batch_size
-        self.output_dir = None
 
     def generate_trajectory(
         self, request: List[Dict[str, str]], sample_idx: int = 0
@@ -325,8 +322,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 if out and isinstance(out[0], list):
                     return out
             except Exception:
-                log.info("Error generating step candidates")
-                pass
+                log.warning(
+                    "Batch generation failed, falling back to sequential",
+                    exc_info=True,
+                )
 
             # Fallback: loop (no vLLM batching)
             return [
@@ -674,7 +673,8 @@ class AdaptiveScalingBestOfN(StrategyBase):
         Batched version of generate_trajectory that runs multiple samples "online" in parallel.
         """
         # split requests into mini-batches
-        sample_idxs = list(range(len(requests)))
+        if sample_idxs is None:
+            sample_idxs = list(range(len(requests)))
         mini_batches = [
             requests[i : min(i + self.batch_size, len(requests))]
             for i in range(0, len(requests), self.batch_size)
