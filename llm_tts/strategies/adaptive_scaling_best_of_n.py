@@ -240,18 +240,21 @@ class AdaptiveScalingBestOfN(StrategyBase):
         Returns:
             List of per-sample outputs (same schema as generate_trajectory()).
         """
-        B = len(requests)
+        num_samples = len(requests)
         if sample_idxs is None:
-            sample_idxs = list(range(B))
-        assert len(sample_idxs) == B, "sample_idxs must have same length as requests"
+            sample_idxs = list(range(num_samples))
+        assert (
+            len(sample_idxs) == num_samples
+        ), "sample_idxs must have same length as requests"
 
         # --- Per-sample state ---
-        trajectories: List[List[StepCandidate]] = [[] for _ in range(B)]
-        selected_steps: List[List[StepCandidate]] = [[] for _ in range(B)]
-        validity_scores: List[List[float]] = [[] for _ in range(B)]
-        completed: List[bool] = [False for _ in range(B)]
-        # We need selected_candidate per sample for post-loop logic
-        last_selected: List[Optional[StepCandidate]] = [None for _ in range(B)]
+        trajectories: List[List[StepCandidate]] = [[] for _ in range(num_samples)]
+        selected_steps: List[List[StepCandidate]] = [[] for _ in range(num_samples)]
+        validity_scores: List[List[float]] = [[] for _ in range(num_samples)]
+        completed: List[bool] = [False for _ in range(num_samples)]
+        last_selected: List[Optional[StepCandidate]] = [
+            None for _ in range(num_samples)
+        ]
 
         # Reset token tracking (batch-wide)
         self.step_generator.reset_sample_stats()
@@ -266,7 +269,6 @@ class AdaptiveScalingBestOfN(StrategyBase):
             Returns list-of-list of candidates aligned to active samples.
             Prefer true batched generator method for vLLM throughput.
             """
-            # Preferred: a dedicated batch method on generator
             if hasattr(self.step_generator, "generate_step_candidates_batch"):
                 return self.step_generator.generate_step_candidates_batch(
                     active_reqs,
@@ -274,14 +276,12 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     candidates_per_step=candidates_per_step,
                 )
 
-            # Alternative: generator __call__ supports list input (some implementations do)
             try:
                 out = self.step_generator(
                     active_reqs,
                     trajectory=active_trajs,
                     candidates_per_step=candidates_per_step,
                 )
-                # Expect list[list[StepCandidate]]
                 if out and isinstance(out[0], list):
                     return out
             except Exception:
@@ -303,15 +303,13 @@ class AdaptiveScalingBestOfN(StrategyBase):
             active_cands: List[List[StepCandidate]],
             active_trajs: List[List[StepCandidate]],
         ) -> List[List[float]]:
-            """
-            Returns list-of-list of scores aligned to active samples.
-            """
+            """Returns list-of-list of scores aligned to active samples."""
             if hasattr(self.scorer, "score_candidates_batch"):
                 return self.scorer.score_candidates_batch(
                     active_reqs, active_cands, trajectories=active_trajs
                 )
 
-            # Fallback: loop per sample (still ok; main win is batched generation)
+            # Fallback: loop per sample
             scores = []
             for req, cands, traj in zip(active_reqs, active_cands, active_trajs):
                 scores.append(self.scorer.score_candidates(req, cands, trajectory=traj))
@@ -321,9 +319,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
             active_reqs: List[List[Dict[str, str]]],
             active_trajs: List[List[StepCandidate]],
         ) -> List[List[StepCandidate]]:
-            """
-            Batched final answer generation (preferred for vLLM).
-            """
+            """Batched final answer generation."""
             if hasattr(self.step_generator, "generate_answer_candidates_batch"):
                 return self.step_generator.generate_answer_candidates_batch(
                     active_reqs,
@@ -351,41 +347,41 @@ class AdaptiveScalingBestOfN(StrategyBase):
 
         # ---- Main online loop (batched across samples) ----
         scale_discriminators: List[ScaleDiscriminator] = [
-            _new_scale_discriminator() for _ in range(B)
+            _new_scale_discriminator() for _ in range(num_samples)
         ]
-        needs_final_answer: List[bool] = [False for _ in range(B)]
+        needs_final_answer: List[bool] = [False for _ in range(num_samples)]
 
         for step_num in range(self.max_steps):
             # Which samples are still active?
-            active_idx = [i for i in range(B) if not completed[i]]
-            if not active_idx:
+            active_indices = [idx for idx in range(num_samples) if not completed[idx]]
+            if not active_indices:
                 break
 
-            active_reqs = [requests[i] for i in active_idx]
-            active_trajs = [trajectories[i] for i in active_idx]
+            active_reqs = [requests[idx] for idx in active_indices]
+            active_trajs = [trajectories[idx] for idx in active_indices]
 
             # 1) Generate a single candidate first for each active sample
             step_candidates_batch = _gen_step_candidates_batch(
                 active_reqs, active_trajs, candidates_per_step=1
             )
+
             # Handle samples that produced no candidates
-            # (mark completed; they'll go to final answer later if needed)
-            filtered_active_idx = []
+            filtered_indices = []
             filtered_reqs = []
             filtered_trajs = []
             filtered_cands = []
-            for j, bi in enumerate(active_idx):
-                cands = step_candidates_batch[j]
+            for pos, sample_idx in enumerate(active_indices):
+                cands = step_candidates_batch[pos]
                 if not cands:
-                    completed[bi] = True
-                    last_selected[bi] = None
+                    completed[sample_idx] = True
+                    last_selected[sample_idx] = None
                 else:
-                    filtered_active_idx.append(bi)
-                    filtered_reqs.append(requests[bi])
-                    filtered_trajs.append(trajectories[bi])
+                    filtered_indices.append(sample_idx)
+                    filtered_reqs.append(requests[sample_idx])
+                    filtered_trajs.append(trajectories[sample_idx])
                     filtered_cands.append(cands)
 
-            if not filtered_active_idx:
+            if not filtered_indices:
                 break
 
             # 2) Score the single candidates (batched if possible)
@@ -394,20 +390,20 @@ class AdaptiveScalingBestOfN(StrategyBase):
             )
 
             # 3) Decide which samples should scale
-            scale_idx = []
+            scale_indices = []
             scale_reqs = []
             scale_trajs = []
-            for j, bi in enumerate(filtered_active_idx):
-                cur_signal = scores_batch[j][0]
-                if scale_discriminators[bi].should_scale(cur_signal):
-                    scale_idx.append(bi)
-                    scale_reqs.append(requests[bi])
-                    scale_trajs.append(trajectories[bi])
+            for pos, sample_idx in enumerate(filtered_indices):
+                cur_signal = scores_batch[pos][0]
+                if scale_discriminators[sample_idx].should_scale(cur_signal):
+                    scale_indices.append(sample_idx)
+                    scale_reqs.append(requests[sample_idx])
+                    scale_trajs.append(trajectories[sample_idx])
 
             # 4) For samples that scale, generate N more candidates and rescore
             scaled_candidates = {}
             scaled_scores = {}
-            if scale_idx:
+            if scale_indices:
                 scale_cands_batch = _gen_step_candidates_batch(
                     scale_reqs,
                     scale_trajs,
@@ -416,27 +412,27 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 scale_scores_batch = _score_candidates_batch(
                     scale_reqs, scale_cands_batch, scale_trajs
                 )
-                for j, bi in enumerate(scale_idx):
-                    scaled_candidates[bi] = scale_cands_batch[j]
-                    scaled_scores[bi] = scale_scores_batch[j]
+                for pos, sample_idx in enumerate(scale_indices):
+                    scaled_candidates[sample_idx] = scale_cands_batch[pos]
+                    scaled_scores[sample_idx] = scale_scores_batch[pos]
 
             # 5) Select candidate per sample and update states
-            for j, bi in enumerate(filtered_active_idx):
-                if bi in scaled_candidates and scaled_candidates[bi]:
-                    cands = scaled_candidates[bi]
-                    scores = scaled_scores[bi]
+            for pos, sample_idx in enumerate(filtered_indices):
+                if sample_idx in scaled_candidates and scaled_candidates[sample_idx]:
+                    cands = scaled_candidates[sample_idx]
+                    scores = scaled_scores[sample_idx]
                     best_idx = _select_best(scores)
                     chosen = cands[best_idx]
                     cur_signal = scores[best_idx]
                 else:
-                    chosen = filtered_cands[j][0]
-                    cur_signal = scores_batch[j][0]
+                    chosen = filtered_cands[pos][0]
+                    cur_signal = scores_batch[pos][0]
 
-                scale_discriminators[bi].update(1 - cur_signal)
-                trajectories[bi].append(chosen)
-                selected_steps[bi].append(chosen)
-                validity_scores[bi].append(cur_signal)
-                last_selected[bi] = chosen
+                scale_discriminators[sample_idx].update(1 - cur_signal)
+                trajectories[sample_idx].append(chosen)
+                selected_steps[sample_idx].append(chosen)
+                validity_scores[sample_idx].append(cur_signal)
+                last_selected[sample_idx] = chosen
 
                 # Completion checks (mirror single-sample behavior)
                 if chosen.is_trajectory_complete:
@@ -444,86 +440,77 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     if chosen.other_data:
                         completion_reason = chosen.other_data.get("completion_reason")
 
-                    # If stopped at EOS pattern, treat as complete
                     if completion_reason == CompletionReason.EOS_PATTERN:
-                        completed[bi] = True
+                        completed[sample_idx] = True
                         continue
 
-                    # If answer pattern detected but answer content missing,
-                    # remove step and generate final answer later.
                     if not self._has_answer_content(chosen):
-                        trajectories[bi].pop()
-                        selected_steps[bi].pop()
-                        validity_scores[bi].pop()
-                        needs_final_answer[bi] = True
-                    completed[bi] = True
+                        trajectories[sample_idx].pop()
+                        selected_steps[sample_idx].pop()
+                        validity_scores[sample_idx].pop()
+                        needs_final_answer[sample_idx] = True
+                    completed[sample_idx] = True
 
         # ---- Final answer for samples that need it (batched) ----
-        # Need final answer if:
-        # - never completed with a valid trajectory, OR
-        # - last selected exists but is not trajectory complete, OR
-        # - last step signaled completion but missing answer content
         to_finalize: List[int] = []
-        for i in range(B):
-            if len(selected_steps[i]) == 0:
-                to_finalize.append(i)
+        for idx in range(num_samples):
+            if len(selected_steps[idx]) == 0:
+                to_finalize.append(idx)
                 continue
-            if last_selected[i] is None:
-                to_finalize.append(i)
+            if last_selected[idx] is None:
+                to_finalize.append(idx)
                 continue
-            if not last_selected[i].is_trajectory_complete:
-                to_finalize.append(i)
+            if not last_selected[idx].is_trajectory_complete:
+                to_finalize.append(idx)
                 continue
-            if needs_final_answer[i]:
-                to_finalize.append(i)
+            if needs_final_answer[idx]:
+                to_finalize.append(idx)
 
         if to_finalize:
-            fin_reqs = [requests[i] for i in to_finalize]
-            fin_trajs = [trajectories[i] for i in to_finalize]
+            fin_reqs = [requests[idx] for idx in to_finalize]
+            fin_trajs = [trajectories[idx] for idx in to_finalize]
 
             answer_cands_batch = _gen_answer_candidates_batch(fin_reqs, fin_trajs)
 
-            # Score final answers (batched if scorer supports)
             answer_scores_batch = _score_candidates_batch(
                 fin_reqs, answer_cands_batch, fin_trajs
             )
 
-            for j, bi in enumerate(to_finalize):
-                a_cands = answer_cands_batch[j]
-                a_scores = answer_scores_batch[j]
+            for pos, sample_idx in enumerate(to_finalize):
+                a_cands = answer_cands_batch[pos]
+                a_scores = answer_scores_batch[pos]
                 if not a_cands:
-                    # If generation failed, leave as-is (rare)
                     continue
                 best_idx = _select_best(a_scores)
                 chosen = a_cands[best_idx]
-                trajectories[bi].append(chosen)
-                selected_steps[bi].append(chosen)
-                validity_scores[bi].append(a_scores[best_idx])
-                last_selected[bi] = chosen
+                trajectories[sample_idx].append(chosen)
+                selected_steps[sample_idx].append(chosen)
+                validity_scores[sample_idx].append(a_scores[best_idx])
+                last_selected[sample_idx] = chosen
 
         # ---- Finalize stats & build outputs ----
-        self.step_generator.finalize_sample_stats(num_samples=B)
+        self.step_generator.finalize_sample_stats(num_samples=num_samples)
         token_stats = self.step_generator.get_sample_stats()
 
         outputs: List[Dict[str, Any]] = []
-        for bi in range(B):
-            final_trajectory = convert_trajectory_to_string(trajectories[bi])
+        for idx in range(num_samples):
+            final_trajectory = convert_trajectory_to_string(trajectories[idx])
             extracted = extract_answer(final_trajectory)
 
             thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-                selected_steps[bi]
+                selected_steps[idx]
             )
 
             outputs.append(
                 {
                     "trajectory": final_trajectory,
                     "extracted_answer": extracted,
-                    "steps": selected_steps[bi],
+                    "steps": selected_steps[idx],
                     "thinking_num_steps": thinking_num_steps,
                     "response_num_steps": response_num_steps,
-                    "validity_scores": validity_scores[bi],
-                    "completed": len(selected_steps[bi]) > 0,
-                    "token_stats": token_stats,  # batch-wide; see note below
+                    "validity_scores": validity_scores[idx],
+                    "completed": len(selected_steps[idx]) > 0,
+                    "token_stats": token_stats,
                 }
             )
 
