@@ -1,8 +1,9 @@
 import logging
-from concurrent.futures.thread import ThreadPoolExecutor
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
-from lm_polygraph.utils.openai_chat import OpenAIChat
+import openai
 from parse import parse
 from tqdm import tqdm
 
@@ -90,11 +91,9 @@ class EvaluatorLLMAsAJudge:
             mode: "full_solution" - pass entire reasoning to judge
                   "answer_only" - compare just extracted answer vs gold (default)
         """
-        self.chat = OpenAIChat(
-            cache_path=cache_path,
-            openai_model=model,
-            base_url=base_url,
-        )
+        api_key = os.environ.get("OPENAI_API_KEY")
+        self.client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        self.model = model
         self.prompt = prompt
         self.n_threads = n_threads
         self.budget = budget  # Number of evaluations for majority voting
@@ -112,16 +111,9 @@ class EvaluatorLLMAsAJudge:
     def _score_single(self, inp: tuple[str, str, str, int]) -> tuple[float, str, float]:
         """Score a single solution with majority voting and return (label, raw_response, consensus)."""
         problem, solution, gold_answer, idx = inp
-        # This line extracts the question from the problem string using
-        # the prompt template. It uses the parse library to match the
-        # prompt template against the problem string and extracts the
-        # named field "q" (which corresponds to {q} in the template).
-        # If parsing fails, parse() returns None and accessing
-        # .named["q"] will raise an AttributeError
         parsed = parse(self.prompt, problem)
         if parsed is not None:
             problem = parsed.named["q"]
-            # If parsing fails, keep the original problem string unchanged
 
         log.info(
             f"Evaluating sample {idx + 1} (budget={self.budget}, mode={self.mode})..."
@@ -144,7 +136,25 @@ class EvaluatorLLMAsAJudge:
                 vote_prompt = f"{prompt}\n<!-- vote {i+1}/{self.budget} -->"
             else:
                 vote_prompt = prompt
-            reply = self.chat.ask(vote_prompt)
+
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an intelligent assistant.",
+                        },
+                        {"role": "user", "content": vote_prompt},
+                    ],
+                    temperature=0,
+                    max_tokens=1024,
+                )
+                reply = response.choices[0].message.content
+            except Exception as e:
+                log.warning(f"API call failed for sample {idx + 1}: {e}")
+                reply = f"Error: {e}"
+
             label, _ = self._parse_reply(reply)
             votes.append(label)
             replies.append(reply)
@@ -190,29 +200,47 @@ class EvaluatorLLMAsAJudge:
                 zip(problems, solutions, gold_answers)
             )
         ]
+
+        # Use dict to collect results by index (as_completed returns out of order)
+        results_by_idx = {}
+
         with ThreadPoolExecutor(max_workers=self.n_threads) as executor:
-            futures = [executor.submit(self._score_single, item) for item in all_inputs]
-            labels = []
-            responses = []
-            consensus_scores = []
-            for future in tqdm(futures, desc="Verifying solutions"):
+            future_to_idx = {
+                executor.submit(self._score_single, item): item[3]
+                for item in all_inputs
+            }
+
+            for future in tqdm(
+                as_completed(future_to_idx),
+                total=len(all_inputs),
+                desc="Verifying solutions",
+            ):
+                idx = future_to_idx[future]
                 label, response, consensus = future.result()
-                labels.append(label)
-                responses.append(response)
-                consensus_scores.append(consensus)
+                results_by_idx[idx] = (label, response, consensus)
 
-            # Summary statistics
-            correct_count = sum(1 for label in labels if label == 1)
-            incorrect_count = sum(1 for label in labels if label == 0)
-            unclear_count = sum(1 for label in labels if np.isnan(label))
-            accuracy = (correct_count / len(labels) * 100) if labels else 0
+        # Reconstruct ordered lists
+        labels = []
+        responses = []
+        consensus_scores = []
+        for idx in range(len(all_inputs)):
+            label, response, consensus = results_by_idx[idx]
+            labels.append(label)
+            responses.append(response)
+            consensus_scores.append(consensus)
 
-            log.info(
-                f"Evaluation complete: {correct_count}/{len(labels)} correct ({accuracy:.1f}%)"
-            )
-            if incorrect_count > 0:
-                log.info(f"  Incorrect: {incorrect_count}")
-            if unclear_count > 0:
-                log.info(f"  Unclear: {unclear_count}")
+        # Summary statistics
+        correct_count = sum(1 for label in labels if label == 1)
+        incorrect_count = sum(1 for label in labels if label == 0)
+        unclear_count = sum(1 for label in labels if np.isnan(label))
+        accuracy = (correct_count / len(labels) * 100) if labels else 0
 
-            return labels, responses, consensus_scores
+        log.info(
+            f"Evaluation complete: {correct_count}/{len(labels)} correct ({accuracy:.1f}%)"
+        )
+        if incorrect_count > 0:
+            log.info(f"  Incorrect: {incorrect_count}")
+        if unclear_count > 0:
+            log.info(f"  Unclear: {unclear_count}")
+
+        return labels, responses, consensus_scores

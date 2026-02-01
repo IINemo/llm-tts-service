@@ -13,7 +13,6 @@ References:
 
 import logging
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -33,65 +32,6 @@ class ModelArchitecture:
     @property
     def head_dim(self) -> int:
         return self.hidden_size // self.num_attention_heads
-
-
-@lru_cache(maxsize=16)
-def get_model_architecture(model_name: str) -> Optional[ModelArchitecture]:
-    """
-    Load model architecture from HuggingFace config.
-
-    Args:
-        model_name: HuggingFace model name (e.g., "Qwen/Qwen3-8B")
-
-    Returns:
-        ModelArchitecture dataclass or None if loading fails
-    """
-    try:
-        from transformers import AutoConfig
-
-        config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
-
-        # Extract architecture parameters (handle different naming conventions)
-        hidden_size = getattr(config, "hidden_size", None) or getattr(
-            config, "d_model", 4096
-        )
-        num_layers = getattr(config, "num_hidden_layers", None) or getattr(
-            config, "n_layer", 36
-        )
-        num_heads = getattr(config, "num_attention_heads", None) or getattr(
-            config, "n_head", 32
-        )
-        intermediate = getattr(config, "intermediate_size", None) or hidden_size * 4
-        vocab_size = getattr(config, "vocab_size", 151936)
-
-        # Estimate non-embedding parameters
-        # Embedding: vocab_size * hidden_size
-        # Each layer: ~12 * hidden_size^2 (attention: 4*h^2, FFN: 8*h^2 for 4x intermediate)
-        embedding_params = vocab_size * hidden_size
-        per_layer_params = 12 * hidden_size * hidden_size  # Rough estimate
-        total_params = embedding_params + num_layers * per_layer_params
-
-        # Use actual num_parameters if available
-        if hasattr(config, "num_parameters"):
-            total_params = config.num_parameters
-
-        arch = ModelArchitecture(
-            num_parameters=total_params,
-            hidden_size=hidden_size,
-            num_hidden_layers=num_layers,
-            num_attention_heads=num_heads,
-            intermediate_size=intermediate,
-            vocab_size=vocab_size,
-        )
-
-        log.info(
-            f"Loaded architecture for {model_name}: {num_layers} layers, h={hidden_size}, ~{total_params/1e9:.1f}B params"
-        )
-        return arch
-
-    except Exception as e:
-        log.warning(f"Failed to load model config for {model_name}: {e}")
-        return None
 
 
 def calculate_flops_simple(
@@ -187,7 +127,7 @@ class FLOPCalculator:
         tflops = calc.compute_tflops(num_tokens=45000)
     """
 
-    # Known model configurations (fallback if HF loading fails)
+    # Known model configurations
     KNOWN_MODELS = {
         "Qwen/Qwen3-8B": ModelArchitecture(
             num_parameters=8_000_000_000,
@@ -197,7 +137,7 @@ class FLOPCalculator:
             intermediate_size=14336,
             vocab_size=151936,
         ),
-        "Qwen/Qwen2.5-7B": ModelArchitecture(
+        "Qwen/Qwen2.5-Math-7B-Instruct": ModelArchitecture(
             num_parameters=7_000_000_000,
             hidden_size=3584,
             num_hidden_layers=28,
@@ -222,27 +162,17 @@ class FLOPCalculator:
         self.model_name = model_name
         self.method = method
 
-        # Try to load architecture from HuggingFace
-        self.arch = get_model_architecture(model_name)
+        # Look up architecture in known models
+        self.arch = None
+        for known_name, known_arch in self.KNOWN_MODELS.items():
+            if known_name.lower() in model_name.lower():
+                self.arch = known_arch
+                log.info(f"Using known architecture for {known_name}")
+                break
 
-        # Fall back to known models
         if self.arch is None:
-            for known_name, known_arch in self.KNOWN_MODELS.items():
-                if known_name.lower() in model_name.lower():
-                    self.arch = known_arch
-                    log.info(f"Using known architecture for {known_name}")
-                    break
-
-        # Final fallback: assume 8B model
-        if self.arch is None:
-            log.warning(f"Unknown model {model_name}, assuming 8B parameters")
-            self.arch = ModelArchitecture(
-                num_parameters=8_000_000_000,
-                hidden_size=4096,
-                num_hidden_layers=36,
-                num_attention_heads=32,
-                intermediate_size=14336,
-                vocab_size=151936,
+            raise ValueError(
+                f"Unknown model '{model_name}'. Add it to FLOPCalculator.KNOWN_MODELS."
             )
 
     def compute_flops(
@@ -262,7 +192,7 @@ class FLOPCalculator:
         else:
             return calculate_flops_simple(
                 num_tokens=num_tokens,
-                num_parameters=self.arch.num_parameters if self.arch else 8_000_000_000,
+                num_parameters=self.arch.num_parameters,
             )
 
     def compute_tflops(
@@ -279,7 +209,7 @@ class FLOPCalculator:
     @property
     def flops_per_token(self) -> float:
         """Get FLOPs per token (simple method)."""
-        return 2 * self.arch.num_parameters if self.arch else 16e9
+        return 2 * self.arch.num_parameters
 
     @property
     def tflops_per_1k_tokens(self) -> float:
