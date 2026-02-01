@@ -91,6 +91,14 @@ dataset:
 evaluation:
   evaluators:
     - exact_match
+  batch_evaluators:
+    - llm_judge
+  llm_judge:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    cache_path: ./cache/llm_judge
+    n_threads: 50
 
 # Reporting
 report_to: wandb

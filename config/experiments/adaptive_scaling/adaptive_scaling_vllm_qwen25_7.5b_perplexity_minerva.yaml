@@ -112,7 +112,7 @@ evaluation:
   #   model: gpt-4o-mini
   #   base_url: https://api.openai.com/v1
   #   cache_path: ./cache/llm_judge
-  #   n_threads: 10
+  #   n_threads: 50
 
 # Reporting
 report_to: wandb

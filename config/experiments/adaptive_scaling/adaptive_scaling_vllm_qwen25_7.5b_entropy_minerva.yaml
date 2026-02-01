@@ -78,8 +78,8 @@ strategy:
 
 # Dataset configuration
 dataset:
-  subset: 2
-  offset: 10
+  subset: 272
+  offset: 0
   dataset_path: "test-time-compute/test_minerva_math"
   dataset_config: null
   dataset_split: "test"
@@ -105,7 +105,7 @@ evaluation:
     model: gpt-4o-mini
     base_url: https://api.openai.com/v1
     cache_path: ./cache/llm_judge
-    n_threads: 10
+    n_threads: 50
 
 # Reporting
 report_to: wandb
