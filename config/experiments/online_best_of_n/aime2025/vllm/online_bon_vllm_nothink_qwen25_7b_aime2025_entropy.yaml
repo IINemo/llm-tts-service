@@ -58,7 +58,7 @@ strategy:
   # Marker categories (for vLLM stop token generation)
   use_sequence: true
   use_conclusion: true
-  use_thinking: false  # No thinking markers in non-thinking mode
+  use_thinking: true  # No thinking markers in non-thinking mode
   use_verification: true
   use_structure: true
   use_reasoning: true

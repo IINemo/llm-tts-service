@@ -49,7 +49,7 @@ strategy:
   max_steps: 250
   # Use StructuredStepDetector for non-thinking mode
   detector_type: structured
-  use_thinking: false
+  use_thinking: true
   # Step patterns for structured mode
   detector_step_patterns:
     - "- Step"
