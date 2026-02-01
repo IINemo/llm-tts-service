@@ -1,5 +1,5 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/adaptive_scaling_vllm_qwen25_7.5b_math500_perplexity
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/math500/adaptive_scaling_vllm_qwen25_7.5b_math500_sequence_prob
 
 defaults:
   - /config
@@ -7,10 +7,10 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/perplexity
+  - /scorer/sequence_prob
   - _self_
 
-run_name: "adaptive_scaling_vllm_qwen25_7.5b_math500_perplexity_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen25_7.5b_math500_sequence_prob_${now:%H-%M-%S}"
 
 # Model configuration
 model:
@@ -70,7 +70,7 @@ strategy:
   stop_token_ids:
     - 151645
     - 151643
-  
+
   batch_generation: true
 
 # Dataset configuration

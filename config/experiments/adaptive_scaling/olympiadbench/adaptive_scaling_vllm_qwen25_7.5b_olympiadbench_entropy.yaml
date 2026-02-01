@@ -66,7 +66,9 @@ strategy:
     - "```"
     - "🌈"
     - "\U0001F308"
-    
+  stop_token_ids:
+    - 151645
+    - 151643
 
   # detector_answer_patterns:
   #   - "<Answer>:"
@@ -98,16 +100,16 @@ evaluation:
     - exact_match
 
   # Phase 2 evaluators (batch evaluation after generation)
-  # batch_evaluators:
-  #   - llm_judge
+  batch_evaluators:
+    - llm_judge
 
   # API-based LLM judge configuration
-  # llm_judge:
-  #   provider: openai
-  #   model: gpt-4o-mini
-  #   base_url: https://api.openai.com/v1
-  #   cache_path: ./cache/llm_judge
-  #   n_threads: 5
+  llm_judge:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    cache_path: ./cache/llm_judge
+    n_threads: 50
 
 # Reporting
 report_to: wandb

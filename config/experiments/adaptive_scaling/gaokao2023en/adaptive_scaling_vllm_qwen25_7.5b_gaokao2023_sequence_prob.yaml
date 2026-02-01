@@ -1,26 +1,18 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/math500/online_bon_vllm_nothink_qwen25_7b_math500_sequence_prob
-# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
-# Uses Sequence Probability scorer for step evaluation
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/gaokao2023en/adaptive_scaling_vllm_qwen25_7.5b_gaokao2023_sequence_prob
 
 defaults:
   - /config
-  - /dataset/math_500
+  - /dataset/gaokao2023en
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
   - /scorer/sequence_prob
   - _self_
 
-# Run naming
-run_name: "online_bon_vllm_nothink_qwen25_7b_math500_sequence_prob_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen25_7.5b_gaokao2023_sequence_prob_${now:%H-%M-%S}"
 
-# Main configuration
-verbose: true
-report_to: wandb
-wandb_project: llm-tts-eval-math500
-
-# Model configuration (vLLM backend)
+# Model configuration
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
@@ -29,43 +21,45 @@ model:
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 4096
-  # disable_thinking_mode not set (None) = model doesn't support thinking
+  disable_thinking_mode: true
 
 # System configuration
 system:
   device: cuda
   seed: 42
 
-# Generation configuration (non-thinking mode settings)
+# Generation configuration
 generation:
-  max_new_tokens: 4096
+  max_new_tokens: 2048
   temperature: 0.7
   top_p: 0.8
   top_k: 20
-  batch_size: 1
-  max_length: 8192
+  batch_size: 4
+  max_length: 4096
 
-# Strategy - Online Best-of-N (always uses ThinkingMarkerDetector)
+# Strategy - Adaptive Scaling
 strategy:
-  type: online_best_of_n
+  type: adaptive
   candidates_per_step: 8
   max_steps: 50
-  # Stop tokens derived from detector config (use_* flags below)
+  scaling_rate: 0.9
+  momentum_rate: 0.9
+  adaptive_scaling_method: momentum  # momentum, random, average, always, threshold
+  # Detector settings
+  detector_type: structured
+  min_step_tokens: 50
+  max_step_tokens: 2048
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
   # Step boundary token limits
-  min_step_tokens: 50
-  max_step_tokens: 2048
-  # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
   use_sequence: true
   use_conclusion: true
-  use_thinking: true  # Include thinking markers for step boundaries
+  use_thinking: false
   use_verification: true
   use_structure: true
   use_reasoning: true
   use_correction: false
-  # Custom words for stop tokens
   custom_words:
     - "for example"
     - "given that"
@@ -73,13 +67,22 @@ strategy:
     - "step"
     - "therefore"
     - "thus"
+    - "```"
+    - "🌈"
+    - "\U0001F308"
 
 # Dataset configuration
 dataset:
-  subset: 500  # Full MATH-500 dataset
-  data_name: math
+  subset: 385
   offset: 0
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
+  dataset_path: "test-time-compute/test_gaokao2023en"
+  dataset_config: null
+  dataset_split: "test"
+  data_name: gaokao2023en
+
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
 
 # Evaluation configuration
 evaluation:
@@ -98,3 +101,7 @@ evaluation:
     base_url: https://api.openai.com/v1
     cache_path: ./cache/llm_judge
     n_threads: 50
+
+# Reporting
+report_to: wandb
+wandb_project: llm-tts-eval-gaokao2023en

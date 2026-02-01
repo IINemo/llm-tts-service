@@ -79,7 +79,7 @@ dataset:
   dataset_path: "test-time-compute/test_aime24"
   dataset_config: null
   dataset_split: "test"
-  data_name: math
+  data_name: aime24
 
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"

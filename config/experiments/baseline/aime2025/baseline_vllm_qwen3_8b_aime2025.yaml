@@ -75,6 +75,7 @@ dataset:
   question_field: "question"
   answer_field: "answer"
   answer_format: "numeric"
+  data_name: "aime25"
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
@@ -83,3 +84,11 @@ dataset:
 evaluation:
   evaluators:
     - exact_match
+  batch_evaluators:
+    - llm_judge
+  llm_judge:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    cache_path: ./cache/llm_judge
+    n_threads: 50

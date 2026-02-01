@@ -53,20 +53,15 @@ strategy:
 dataset:
   subset: 30  # Full AIME-2025 dataset
   offset: 0
-  data_name: aime2025
+  data_name: aime25
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
 
 # Evaluation configuration
 evaluation:
-  # Phase 1 evaluators (run during generation for running accuracy)
   evaluators:
     - exact_match
-
-  # Phase 2 evaluators (batch evaluation after generation)
   batch_evaluators:
     - llm_judge
-
-  # API-based LLM judge configuration
   llm_judge:
     provider: openai
     model: gpt-4o-mini
