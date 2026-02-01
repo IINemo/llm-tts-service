@@ -1,5 +1,5 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/adaptive_scaling_vllm_qwen25_7.5b_perplexity_math500
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/minerva_math/adaptive_scaling_vllm_qwen25_7.5b_sequence_prob_minerva
 
 defaults:
   - /config
@@ -7,10 +7,10 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/perplexity
+  - /scorer/sequence_prob
   - _self_
 
-run_name: "adaptive_scaling_vllm_qwen25_7.5b_perplexity_minerva_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen25_7.5b_sequence_prob_minerva_${now:%H-%M-%S}"
 
 # Model configuration
 model:
@@ -64,24 +64,11 @@ strategy:
     - "therefore"
     - "thus"
     - "```"
-    - "🌈"
+    - "\U0001F4A1"
     - "\U0001F308"
   stop_token_ids:
     - 151645
     - 151643
-
-  # detector_answer_patterns:
-  #   - "</think>"
-  #   - "<Answer>:"
-  #   - "\n<Answer>:"
-  #   - "boxed\\{"
-  #   - "boxed"
-
-  # detector_answer_patterns:
-  #   - "<Answer>:"
-  #   - "\n<Answer>:"
-  # detector_eos_patterns:
-  #   - "<end of response>"
 
 # Dataset configuration
 dataset:

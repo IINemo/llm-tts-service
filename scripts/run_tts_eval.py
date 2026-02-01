@@ -586,12 +586,14 @@ def create_tts_strategy(
             batch_generation=batch_generation,
         )
     elif config.strategy.type == "online_best_of_n":
+        batch_generation = config.strategy.get("batch_generation", True)
         strategy = StrategyOnlineBestOfN(
             step_generator=step_generator,
             scorer=scorer,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,
             output_dir=output_dir,
+            batch_generation=batch_generation,
         )
     elif config.strategy.type == "offline_best_of_n":
         # Offline Best-of-N generates N trajectories, scores with PRM, selects best
@@ -1104,6 +1106,7 @@ def generate_trajectories(
                 StrategyOfflineBestOfN,
                 StrategyBeamSearch,
                 AdaptiveScalingBestOfN,
+                StrategyOnlineBestOfN,
             ),
         )
         and hasattr(strategy, "generate_trajectories_batch")
