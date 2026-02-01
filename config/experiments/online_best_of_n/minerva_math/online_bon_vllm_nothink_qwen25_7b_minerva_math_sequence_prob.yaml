@@ -73,11 +73,6 @@ strategy:
     - "therefore"
     - "thus"
 
-# Sequence probability scorer configuration (uses same model, no separate GPU needed)
-scorer:
-  type: sequence_prob
-  batch_size: 1
-
 # Dataset configuration - Minerva Math
 dataset:
   dataset_path: "test-time-compute/test_minerva_math"
