@@ -38,7 +38,7 @@ system:
 generation:
   max_new_tokens: 2048
   temperature: 0.7
-  top_p: 0.95
+  top_p: 0.8
   batch_size: 1
 
 # Strategy - Self-consistency with majority voting
@@ -82,4 +82,4 @@ evaluation:
     model: gpt-4o-mini
     base_url: https://api.openai.com/v1
     cache_path: ./cache/llm_judge
-    n_threads: 10
+    n_threads: 50

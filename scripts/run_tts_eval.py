@@ -1676,6 +1676,22 @@ def evaluate_results(
             all_thinking_steps.append(r.get("thinking_num_steps", len(r["steps"])))
             all_response_steps.append(r.get("response_num_steps", 0))
 
+    # Token / FLOPs aggregates
+    all_token_stats = [r.get("token_stats") or {} for r in results]
+    total_tokens = sum(ts.get("total_tokens_this_sample", 0) for ts in all_token_stats)
+    total_input_tokens = sum(ts.get("input_tokens", 0) for ts in all_token_stats)
+    total_output_tokens = sum(ts.get("output_tokens", 0) for ts in all_token_stats)
+    total_generations = sum(ts.get("generation_count", 0) for ts in all_token_stats)
+    total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
+
+    log.info("Compute:")
+    log.info(f"Total tokens: {total_tokens:,}")
+    log.info(f"Total input tokens: {total_input_tokens:,}")
+    log.info(f"Total output tokens: {total_output_tokens:,}")
+    log.info(f"Total TFLOPs: {total_tflops:.2f}")
+    log.info(f"Avg tokens per sample: {total_tokens / len(results):,.0f}")
+    log.info(f"Avg output tokens per sample: {total_output_tokens / len(results):,.0f}")
+    log.info(f"Avg TFLOPs per sample: {total_tflops / len(results):.4f}")
     log.info("Step Statistics:")
     log.info(f"Avg thinking steps per trajectory: {np.mean(all_thinking_steps):.1f}")
     log.info(f"Avg response steps per trajectory: {np.mean(all_response_steps):.1f}")
@@ -1712,27 +1728,20 @@ def evaluate_results(
     if all_validities:
         metrics["avg_validity_score"] = float(np.mean(all_validities))
 
-    # Add token / FLOPs aggregates if available
-    all_token_stats = [r.get("token_stats") or {} for r in results]
-    total_tokens = sum(ts.get("total_tokens_this_sample", 0) for ts in all_token_stats)
-    total_input_tokens = sum(ts.get("input_tokens", 0) for ts in all_token_stats)
-    total_output_tokens = sum(ts.get("output_tokens", 0) for ts in all_token_stats)
-    total_generations = sum(ts.get("generation_count", 0) for ts in all_token_stats)
-    total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
-
-    metrics["total_tokens"] = int(total_tokens)
-    metrics["total_input_tokens"] = int(total_input_tokens)
-    metrics["total_output_tokens"] = int(total_output_tokens)
-    metrics["total_generations"] = int(total_generations)
-    metrics["total_tflops"] = float(total_tflops)
-    metrics["avg_tokens_per_sample"] = (
+    # Add token / FLOPs aggregates (computed above)
+    metrics["compute/total_tokens"] = int(total_tokens)
+    metrics["compute/total_input_tokens"] = int(total_input_tokens)
+    metrics["compute/total_output_tokens"] = int(total_output_tokens)
+    metrics["compute/total_generations"] = int(total_generations)
+    metrics["compute/total_tflops"] = float(total_tflops)
+    metrics["compute/avg_tokens_per_sample"] = (
         float(total_tokens / len(results)) if results else 0.0
     )
-    metrics["avg_tflops_per_sample"] = (
-        float(total_tflops / len(results)) if results else 0.0
+    metrics["compute/avg_output_tokens_per_sample"] = (
+        float(total_output_tokens / len(results)) if results else 0.0
     )
-    metrics["tflops_per_1k_tokens"] = (
-        float(total_tflops * 1000.0 / total_tokens) if total_tokens else 0.0
+    metrics["compute/avg_tflops_per_sample"] = (
+        float(total_tflops / len(results)) if results else 0.0
     )
 
     # Save metrics locally (so FLOPs metrics aren't only in W&B)
@@ -1928,19 +1937,40 @@ def main(config):
         config=config,  # Pass config for multi-evaluator support
     )
 
+    # Free GPU memory before evaluation (model not needed for LLM judge API calls)
+    log.info("Freeing GPU memory before evaluation phase...")
+    try:
+        if hasattr(model, "shutdown"):
+            model.shutdown()
+        if hasattr(generator, "cleanup"):
+            generator.cleanup()
+        # Delete vLLM engine and model to release GPU memory
+        if hasattr(model, "vllm_engine"):
+            del model.vllm_engine
+        del model
+        del step_generator
+        del generator
+        if scorer is not None:
+            del scorer
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            torch.cuda.empty_cache()
+        except ImportError:
+            pass
+        log.info("GPU memory freed successfully")
+    except Exception as e:
+        log.warning(f"Failed to free GPU memory: {e}")
+
     # Evaluate results
     evaluate_results(
         config=config,
         results=results,
         save_path=output_dir,
     )
-
-    # Shutdown model resources (executor, client)
-    try:
-        if hasattr(model, "shutdown"):
-            model.shutdown()
-    except Exception as e:
-        log.warning(f"Failed to shutdown model: {e}")
 
     # Save log files and finish wandb session
     if getattr(config, "report_to", None) == "wandb":

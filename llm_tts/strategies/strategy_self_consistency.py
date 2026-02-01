@@ -342,10 +342,10 @@ class StrategySelfConsistency(StrategyBase):
         sample_indices: List[int] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Generate N paths for each of M samples in a SINGLE vLLM call.
+        Generate N paths for each of M samples using generate_step_candidates_batch.
 
-        This is the fully batched version - all M×N trajectories are generated
-        in one vLLM call, then grouped by sample for majority voting.
+        All M×N trajectories are generated in one call with proper FLOP tracking,
+        then grouped by sample for majority voting.
 
         Args:
             requests: List of M chat message lists (each is a sample's request)
@@ -354,8 +354,6 @@ class StrategySelfConsistency(StrategyBase):
         Returns:
             List of M result dictionaries (one per sample)
         """
-        from vllm import SamplingParams
-
         if sample_indices is None:
             sample_indices = list(range(len(requests)))
 
@@ -364,10 +362,20 @@ class StrategySelfConsistency(StrategyBase):
 
         log.info(
             f"Self-consistency batch: generating {M} samples × {N} paths = {M * N} "
-            f"trajectories in SINGLE vLLM call"
+            f"trajectories via generate_step_candidates_batch"
         )
 
-        # Build all prompts using step generator's chat template
+        # Generate all M×N trajectories via batched method (handles FLOP tracking)
+        batch_results = self.step_generator.generate_step_candidates_batch(
+            requests=requests,
+            trajectories=[[]] * M,
+            candidates_per_step=N,
+            stop_tokens_override=["<end of response>"],
+            max_tokens_override=self.step_generator.max_new_tokens,
+            compute_uncertainty=False,
+        )
+
+        # Build prompts for token stats calculation
         prompts = []
         for request in requests:
             if getattr(self.step_generator, "disable_thinking_mode", False):
@@ -380,58 +388,34 @@ class StrategySelfConsistency(StrategyBase):
                 )
             prompts.append(prompt)
 
-        # Create sampling params with n=num_paths for diversity
-        sampling_params = SamplingParams(
-            n=N,  # Generate N outputs per prompt
-            max_tokens=self.step_generator.max_new_tokens,
-            temperature=self.step_generator.temperature,
-            top_p=self.step_generator.top_p,
-            top_k=getattr(self.step_generator, "top_k", -1),
-            stop=["<end of response>"],
-            stop_token_ids=getattr(
-                self.step_generator, "eos_token_ids", [151645, 151643]
-            ),
-        )
-
-        log.info(
-            f"Self-consistency batch: temp={sampling_params.temperature}, "
-            f"n={N}, max_tokens={sampling_params.max_tokens}"
-        )
-
-        # Get the raw vLLM LLM (bypass wrapper)
-        raw_llm = getattr(self.step_generator.model, "llm", self.step_generator.model)
-
-        # Single vLLM call for all M prompts × N paths
-        outputs = raw_llm.generate(prompts, sampling_params)
-
-        # Sort outputs by request_id to maintain order
-        outputs = sorted(outputs, key=lambda x: int(x.request_id))
-
-        # Process results - each output has N completions
+        # Process results - each entry has N candidates
         results = []
-        for request_output, prompt, sample_idx in zip(outputs, prompts, sample_indices):
+        for candidates, prompt, sample_idx in zip(
+            batch_results, prompts, sample_indices
+        ):
             context_tokens = len(self.step_generator.tokenizer.encode(prompt))
 
-            if not request_output.outputs:
+            if not candidates:
                 log.error(f"No output generated for sample {sample_idx}")
                 results.append(self._empty_result())
                 continue
 
-            # Build paths from the N outputs
+            # Build paths from the N StepCandidates
             paths = []
             total_output_tokens = 0
 
-            for output in request_output.outputs:
-                raw_text = output.text
-                num_tokens = len(output.token_ids)
+            for candidate in candidates:
+                num_tokens = candidate.other_data.get(
+                    "original_token_count", len(candidate.token_ids)
+                )
                 total_output_tokens += num_tokens
 
                 paths.append(
                     {
-                        "text": raw_text,
+                        "text": candidate.raw_text or candidate.text,
                         "num_tokens": num_tokens,
-                        "steps": [raw_text],
-                        "is_complete": True,
+                        "steps": [candidate.raw_text or candidate.text],
+                        "is_complete": candidate.is_trajectory_complete,
                         "thinking_steps": 0,
                         "response_steps": 1,
                         "validity_scores": [],
@@ -443,12 +427,12 @@ class StrategySelfConsistency(StrategyBase):
             result = self.select_best_answer(paths)
 
             # Token stats for this sample
-            total_tokens = (
-                context_tokens * N + total_output_tokens
-            )  # N prompts worth of context
+            # Context is processed ONCE per prompt (KV cache shared across N candidates)
+            # so input_tokens = context_tokens, NOT context_tokens * N
+            total_tokens = context_tokens + total_output_tokens
             token_stats = {
                 "total_tokens_this_sample": total_tokens,
-                "input_tokens": context_tokens * N,
+                "input_tokens": context_tokens,
                 "output_tokens": total_output_tokens,
                 "generation_count": N,
             }
