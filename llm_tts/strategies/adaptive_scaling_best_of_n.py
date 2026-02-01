@@ -253,11 +253,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         # We need selected_candidate per sample for post-loop logic
         last_selected: List[Optional[StepCandidate]] = [None for _ in range(B)]
 
-        # Optional per-sample logs (keep local to avoid shared mutable state)
-        steps_logs: List[List[Dict[str, Any]]] = [[] for _ in range(B)]
-
-        # Reset token tracking (batch-wide). If your generator tracks per-sample stats internally,
-        # consider extending it to support batch reset/finalize per sample.
+        # Reset token tracking (batch-wide)
         self.step_generator.reset_sample_stats()
 
         # ---- Batched helpers (duck-typing) ----
@@ -372,7 +368,6 @@ class AdaptiveScalingBestOfN(StrategyBase):
             step_candidates_batch = _gen_step_candidates_batch(
                 active_reqs, active_trajs, candidates_per_step=1
             )
-            # log.info(f"Step candidates batch: {step_candidates_batch}")
             # Handle samples that produced no candidates
             # (mark completed; they'll go to final answer later if needed)
             filtered_active_idx = []
@@ -397,31 +392,22 @@ class AdaptiveScalingBestOfN(StrategyBase):
             scores_batch = _score_candidates_batch(
                 filtered_reqs, filtered_cands, filtered_trajs
             )
-            log.info(f"Scores batch: {scores_batch}")
+
             # 3) Decide which samples should scale
             scale_idx = []
             scale_reqs = []
             scale_trajs = []
             for j, bi in enumerate(filtered_active_idx):
                 cur_signal = scores_batch[j][0]
-                validity_scores[bi].append(cur_signal)
                 if scale_discriminators[bi].should_scale(cur_signal):
                     scale_idx.append(bi)
                     scale_reqs.append(requests[bi])
                     scale_trajs.append(trajectories[bi])
 
-            # store current results
-            # for j, bi in enumerate(active_idx):
-            #     cands = step_candidates_batch[j]
-            #     trajectories[bi].append(cands[0])
-            #     selected_steps[bi].append(cands[0])
-            #     last_selected[bi] = cands[0]
-
             # 4) For samples that scale, generate N more candidates and rescore
             scaled_candidates = {}
             scaled_scores = {}
             if scale_idx:
-                # import pdb; pdb.set_trace();
                 scale_cands_batch = _gen_step_candidates_batch(
                     scale_reqs,
                     scale_trajs,
@@ -490,7 +476,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 continue
             if needs_final_answer[i]:
                 to_finalize.append(i)
-        # import pdb; pdb.set_trace();
+
         if to_finalize:
             fin_reqs = [requests[i] for i in to_finalize]
             fin_trajs = [trajectories[i] for i in to_finalize]
@@ -523,19 +509,6 @@ class AdaptiveScalingBestOfN(StrategyBase):
         for bi in range(B):
             final_trajectory = convert_trajectory_to_string(trajectories[bi])
             extracted = extract_answer(final_trajectory)
-
-            # Save per-sample final logs
-            if self.output_dir:
-                prev_idx = getattr(self, "_current_sample_idx", None)
-                prev_log = getattr(self, "_steps_log", None)
-                try:
-                    self._current_sample_idx = sample_idxs[bi]
-                    self._steps_log = steps_logs[bi]
-                    self._save_steps_log()
-                    self._save_trajectory_log(final_trajectory)
-                finally:
-                    self._current_sample_idx = prev_idx
-                    self._steps_log = prev_log
 
             thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
                 selected_steps[bi]
@@ -577,10 +550,14 @@ class AdaptiveScalingBestOfN(StrategyBase):
         outputs = []
         for i, mini_batch in enumerate(mini_batches):
             log.info(f"Generating mini-batch {i+1} of {len(mini_batches)}")
-            outputs.extend(
-                self.generate_trajectory_mini_batch(mini_batch, sample_idxs[i])
+            batch_outputs = self.generate_trajectory_mini_batch(
+                mini_batch, sample_idxs[i]
             )
-            log.info(f"Sample output: {outputs[i]['extracted_answer']}")
+            outputs.extend(batch_outputs)
+            log.info(
+                f"Mini-batch {i+1} done, "
+                f"{sum(1 for o in batch_outputs if o['completed'])}/{len(batch_outputs)} completed"
+            )
 
         return outputs
 
