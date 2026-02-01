@@ -53,7 +53,7 @@ generation:
 # Strategy - Online Best-of-N with thinking marker detector
 strategy:
   type: online_best_of_n
-  candidates_per_step: 4
+  candidates_per_step: 8
   max_steps: 250
   # Use ThinkingMarkerDetector with marker_semantic_v2 settings
   detector_type: thinking_marker
