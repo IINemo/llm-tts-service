@@ -414,7 +414,8 @@ class StrategyOfflineBestOfN(StrategyBase):
             f"Using PRM scorer: {use_prm_scorer}, uncertainty wrapper: {use_uncertainty_wrapper}"
         )
 
-        # Generate all M×N trajectories via batched method (handles FLOP tracking)
+        # Reset per-sample tracking and generate all M×N trajectories
+        self.step_generator.reset_per_sample_stats()
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
             trajectories=[[]] * M,
@@ -422,20 +423,8 @@ class StrategyOfflineBestOfN(StrategyBase):
             stop_tokens_override=["<end of response>"],
             max_tokens_override=self.step_generator.max_new_tokens,
             compute_uncertainty=use_uncertainty_wrapper,
+            sample_ids=list(range(M)),
         )
-
-        # Build prompts for token stats calculation
-        prompts = []
-        for request in requests:
-            if getattr(self.step_generator, "disable_thinking_mode", False):
-                prompt = self.step_generator._apply_chat_template(
-                    request, enable_thinking=False
-                )
-            else:
-                prompt = self.step_generator.tokenizer.apply_chat_template(
-                    request, tokenize=False, add_generation_prompt=True
-                )
-            prompts.append(prompt)
 
         # Phase 1: Parse StepCandidates and build trajectory data for ALL samples
         sample_data = []  # List of per-sample data
@@ -445,20 +434,16 @@ class StrategyOfflineBestOfN(StrategyBase):
         all_trajectory_ids_for_scoring = []  # Trajectory IDs within sample for logging
         trajectory_to_sample_map = []  # (sample_data_idx, traj_idx_within_sample)
 
-        for candidates, prompt, request, sample_idx in zip(
-            batch_results, prompts, requests, sample_indices
+        for idx, (candidates, request, sample_idx) in enumerate(
+            zip(batch_results, requests, sample_indices)
         ):
-            context_tokens = len(self.step_generator.tokenizer.encode(prompt))
-
             if not candidates:
                 log.error(f"No output generated for sample {sample_idx}")
                 sample_data.append(
                     {
                         "sample_idx": sample_idx,
                         "request": request,
-                        "context_tokens": context_tokens,
                         "trajectories": [],
-                        "total_output_tokens": 0,
                         "failed": True,
                     }
                 )
@@ -466,14 +451,12 @@ class StrategyOfflineBestOfN(StrategyBase):
 
             # Build trajectory results from the N StepCandidates
             trajectories = []
-            total_output_tokens = 0
 
             for traj_idx, candidate in enumerate(candidates):
                 raw_text = candidate.raw_text or candidate.text
                 num_tokens = candidate.other_data.get(
                     "original_token_count", len(candidate.token_ids)
                 )
-                total_output_tokens += num_tokens
 
                 # Split into steps post-hoc using step generator's detector
                 if hasattr(self.step_generator, "detector"):
@@ -520,9 +503,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                 {
                     "sample_idx": sample_idx,
                     "request": request,
-                    "context_tokens": context_tokens,
                     "trajectories": trajectories,
-                    "total_output_tokens": total_output_tokens,
                     "failed": False,
                 }
             )
@@ -576,7 +557,7 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         # Phase 3: Select best trajectory per sample and build results
         results = []
-        for data in sample_data:
+        for sample_data_idx, data in enumerate(sample_data):
             if data["failed"]:
                 results.append(self._empty_result())
                 continue
@@ -594,26 +575,9 @@ class StrategyOfflineBestOfN(StrategyBase):
             # Extract answer from best trajectory
             extracted = extract_answer(best_result.get("full_text", ""))
 
-            # Token stats for this sample
-            # Context is processed ONCE per prompt (KV cache shared across N candidates)
-            # so input_tokens = context_tokens, NOT context_tokens * N
-            total_tokens = data["context_tokens"] + data["total_output_tokens"]
-            token_stats = {
-                "total_tokens_this_sample": total_tokens,
-                "input_tokens": data["context_tokens"],
-                "output_tokens": data["total_output_tokens"],
-                "generation_count": N,
-            }
-
-            # Add TFLOPs if calculator available
-            if (
-                hasattr(self.step_generator, "flop_calculator")
-                and self.step_generator.flop_calculator
-            ):
-                tflops = self.step_generator.flop_calculator.compute_tflops(
-                    total_tokens
-                )
-                token_stats["tflops"] = tflops
+            # Token stats from generator's per-sample tracking
+            token_stats = self.step_generator.get_sample_stats_for(sample_data_idx)
+            token_stats["generation_count"] = N  # N candidates in one vLLM call
 
             log.info(
                 f"Sample {sample_idx}: best trajectory {best_idx + 1}/{N}, "

@@ -236,7 +236,8 @@ class StrategyBaseline(StrategyBase):
             f"via generate_step_candidates_batch"
         )
 
-        # Generate all responses via batched method (handles FLOP tracking internally)
+        # Reset per-sample tracking and generate all responses
+        self.step_generator.reset_per_sample_stats()
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
             trajectories=[[]] * M,
@@ -244,6 +245,7 @@ class StrategyBaseline(StrategyBase):
             stop_tokens_override=self.eos_patterns,
             max_tokens_override=self.step_generator.max_new_tokens,
             compute_uncertainty=False,
+            sample_ids=list(range(M)),
         )
 
         # Process StepCandidates into result dicts
@@ -276,37 +278,8 @@ class StrategyBaseline(StrategyBase):
             # Extract answer from trajectory
             extracted = extract_answer(final_trajectory)
 
-            # Token stats for this sample
-            output_tokens = candidate.other_data.get(
-                "original_token_count", len(candidate.token_ids)
-            )
-            # Estimate context tokens from request
-            if getattr(self.step_generator, "disable_thinking_mode", False):
-                prompt = self.step_generator._apply_chat_template(
-                    requests[idx], enable_thinking=False
-                )
-            else:
-                prompt = self.step_generator.tokenizer.apply_chat_template(
-                    requests[idx], tokenize=False, add_generation_prompt=True
-                )
-            context_tokens = len(self.step_generator.tokenizer.encode(prompt))
-            total_tokens = context_tokens + output_tokens
-            token_stats = {
-                "total_tokens_this_sample": total_tokens,
-                "input_tokens": context_tokens,
-                "output_tokens": output_tokens,
-                "generation_count": 1,
-            }
-
-            # Add TFLOPs if calculator available
-            if (
-                hasattr(self.step_generator, "flop_calculator")
-                and self.step_generator.flop_calculator
-            ):
-                tflops = self.step_generator.flop_calculator.compute_tflops(
-                    total_tokens
-                )
-                token_stats["tflops"] = tflops
+            # Token stats from generator's per-sample tracking
+            token_stats = self.step_generator.get_sample_stats_for(idx)
 
             # Count thinking and response steps
             thinking_num_steps, response_num_steps = count_thinking_and_response_steps(

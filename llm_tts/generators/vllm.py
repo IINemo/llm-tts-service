@@ -546,6 +546,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         stop_tokens_override: Optional[List[str]] = None,
         max_tokens_override: Optional[int] = None,
         compute_uncertainty: bool = True,
+        sample_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Unified step candidate generation for both thinking and non-thinking modes.
 
@@ -615,7 +616,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         if not prompts:
             return [already_complete[i] for i in range(len(trajectories))]
 
-        total_context_tokens = sum(len(self.tokenizer.encode(p)) for p in prompts)
+        per_prompt_context_tokens = [len(self.tokenizer.encode(p)) for p in prompts]
+        total_context_tokens = sum(per_prompt_context_tokens)
 
         # Use override parameters if provided, otherwise use defaults
         effective_stop_tokens = (
@@ -812,9 +814,18 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         # Build result in original trajectory order
         result = [candidates_by_traj[i] for i in range(len(trajectories))]
 
-        # Flatten for token recording
+        # Flatten for aggregate token recording
         all_candidates = [c for cands in result for c in cands]
         self._record_generation(all_candidates, context_tokens=total_context_tokens)
+
+        # Per-sample token recording (when sample_ids provided by strategy)
+        if sample_ids is not None:
+            for prompt_idx, traj_idx in enumerate(traj_indices):
+                sid = sample_ids[traj_idx]
+                ctx = per_prompt_context_tokens[prompt_idx]
+                self.record_sample_tokens(
+                    sid, candidates_by_traj[traj_idx], context_tokens=ctx
+                )
 
         return result
 
@@ -1228,6 +1239,33 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     # Common interface methods
     # =========================================================================
 
+    def count_context_tokens(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+    ) -> int:
+        """Count context tokens for a (request, trajectory) pair.
+
+        Builds the full prompt (chat template + trajectory text) and tokenizes it.
+
+        Args:
+            request: Chat messages for the request.
+            trajectory: Current trajectory steps.
+
+        Returns:
+            Number of context tokens.
+        """
+        traj_text = convert_trajectory_to_string(trajectory)
+        if self.disable_thinking_mode:
+            prompt = self._apply_chat_template(request, enable_thinking=False)
+        else:
+            prompt = self.tokenizer.apply_chat_template(
+                request, tokenize=False, add_generation_prompt=True
+            )
+        if traj_text:
+            prompt = prompt + traj_text
+        return len(self.tokenizer.encode(prompt))
+
     def generate_step_candidates_batch(
         self,
         requests: List[List[Dict[str, str]]],
@@ -1236,6 +1274,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         stop_tokens_override: Optional[List[str]] = None,
         max_tokens_override: Optional[int] = None,
         compute_uncertainty: bool = True,
+        sample_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Generate step candidates with per-trajectory requests.
 
@@ -1250,6 +1289,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             stop_tokens_override: Override stop tokens. If None, uses self.stop_tokens.
             max_tokens_override: Override max tokens. If None, uses self.max_step_tokens.
             compute_uncertainty: If True and model supports it, compute uncertainty scores.
+            sample_ids: Optional list mapping each trajectory index to a sample_id.
+                If provided, per-sample token stats are recorded via record_sample_tokens().
+                Multiple trajectories can map to the same sample_id (e.g., beam search).
 
         Returns:
             List of candidate lists, one per trajectory.
@@ -1266,6 +1308,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             stop_tokens_override=stop_tokens_override,
             max_tokens_override=max_tokens_override,
             compute_uncertainty=compute_uncertainty,
+            sample_ids=sample_ids,
         )
 
     def generate_step_candidates(
