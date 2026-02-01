@@ -48,7 +48,7 @@ generation:
 strategy:
   type: beam_search
   beam_size: 5              # Number of top beams to keep at each step
-  candidates_per_beam: 3    # Number of candidates to generate per beam
+  candidates_per_beam: 8    # Number of candidates to generate per beam
   max_steps: 30             # Maximum reasoning steps
   aggregation: mean         # How to aggregate scores: mean, sum, min, max, product
   batch_generation: true    # Process ALL samples in parallel (one vLLM call per step)
