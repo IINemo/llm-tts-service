@@ -131,7 +131,7 @@ class StrategyBeamSearch(StrategyBase):
 
         # Reset token tracking for this sample
         self.step_generator.reset_sample_stats()
-        if hasattr(self.scorer, 'reset_prm_stats'):
+        if hasattr(self.scorer, "reset_prm_stats"):
             self.scorer.reset_prm_stats()
 
         # Initialize beams with empty trajectory
@@ -209,11 +209,13 @@ class StrategyBeamSearch(StrategyBase):
         token_stats = self.step_generator.get_sample_stats()
 
         # Merge PRM scorer stats if available
-        if hasattr(self.scorer, 'get_prm_total_stats'):
+        if hasattr(self.scorer, "get_prm_total_stats"):
             prm_stats = self.scorer.get_prm_total_stats()
             token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (prm_stats["prm_tflops"] or 0)
+            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
+                prm_stats["prm_tflops"] or 0
+            )
 
         return {
             "trajectory": trajectory_text,
@@ -263,7 +265,7 @@ class StrategyBeamSearch(StrategyBase):
 
         # Reset per-sample token tracking in generator
         self.step_generator.reset_per_sample_stats()
-        if hasattr(self.scorer, 'reset_prm_stats'):
+        if hasattr(self.scorer, "reset_prm_stats"):
             self.scorer.reset_prm_stats()
 
         # sample_beams[sample_id] = list of ACTIVE beams only
@@ -713,11 +715,17 @@ class StrategyBeamSearch(StrategyBase):
         extracted = extract_answer(trajectory_text)
 
         # Merge PRM scorer stats if available
-        if token_stats is not None and hasattr(self.scorer, 'get_prm_stats_for') and sample_id is not None:
+        if (
+            token_stats is not None
+            and hasattr(self.scorer, "get_prm_stats_for")
+            and sample_id is not None
+        ):
             prm_stats = self.scorer.get_prm_stats_for(sample_id)
             token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (prm_stats["prm_tflops"] or 0)
+            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
+                prm_stats["prm_tflops"] or 0
+            )
 
         result = {
             "trajectory": trajectory_text,

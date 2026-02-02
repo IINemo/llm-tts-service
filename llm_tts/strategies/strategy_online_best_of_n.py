@@ -84,7 +84,7 @@ class StrategyOnlineBestOfN(StrategyBase):
 
         # Reset token tracking for this sample
         self.step_generator.reset_sample_stats()
-        if hasattr(self.scorer, 'reset_prm_stats'):
+        if hasattr(self.scorer, "reset_prm_stats"):
             self.scorer.reset_prm_stats()
 
         trajectory = []
@@ -222,11 +222,13 @@ class StrategyOnlineBestOfN(StrategyBase):
         token_stats = self.step_generator.get_sample_stats()
 
         # Merge PRM scorer stats if available
-        if hasattr(self.scorer, 'get_prm_total_stats'):
+        if hasattr(self.scorer, "get_prm_total_stats"):
             prm_stats = self.scorer.get_prm_total_stats()
             token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (prm_stats["prm_tflops"] or 0)
+            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
+                prm_stats["prm_tflops"] or 0
+            )
 
         log.info(
             f"Sample token stats: "
@@ -291,7 +293,7 @@ class StrategyOnlineBestOfN(StrategyBase):
 
         # Reset per-sample token tracking in generator
         self.step_generator.reset_per_sample_stats()
-        if hasattr(self.scorer, 'reset_prm_stats'):
+        if hasattr(self.scorer, "reset_prm_stats"):
             self.scorer.reset_prm_stats()
 
         # Context limit for trajectories
@@ -389,7 +391,8 @@ class StrategyOnlineBestOfN(StrategyBase):
                     self.scorer, "score_trajectories_batch"
                 ):
                     all_traj_scores = self.scorer.score_trajectories_batch(
-                        flat_chats, flat_trajectories,
+                        flat_chats,
+                        flat_trajectories,
                         sample_ids=flat_sample_ids,
                     )
                     flat_scores = [
@@ -626,11 +629,13 @@ class StrategyOnlineBestOfN(StrategyBase):
             token_stats = self.step_generator.get_sample_stats_for(idx)
 
             # Merge PRM scorer stats if available
-            if hasattr(self.scorer, 'get_prm_stats_for'):
+            if hasattr(self.scorer, "get_prm_stats_for"):
                 prm_stats = self.scorer.get_prm_stats_for(idx)
                 token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
                 token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-                token_stats["tflops"] = (token_stats.get("tflops") or 0) + (prm_stats["prm_tflops"] or 0)
+                token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
+                    prm_stats["prm_tflops"] or 0
+                )
 
             scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
             log.info(

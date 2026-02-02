@@ -314,7 +314,11 @@ class StepScorerPRM(StepScorerRewardBase):
     def get_prm_stats_for(self, sample_id: Any) -> Dict[str, Any]:
         """Get PRM stats for a specific sample."""
         tokens = self._per_sample_prm_tokens.get(sample_id, 0)
-        tflops = self.flop_calculator.compute_tflops(tokens) if self.flop_calculator else None
+        tflops = (
+            self.flop_calculator.compute_tflops(tokens)
+            if self.flop_calculator
+            else None
+        )
         return {"prm_input_tokens": tokens, "prm_tflops": tflops}
 
     def get_prm_total_stats(self) -> Dict[str, Any]:
