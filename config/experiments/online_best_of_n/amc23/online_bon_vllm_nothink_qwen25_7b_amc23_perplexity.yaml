@@ -8,6 +8,7 @@ defaults:
   - /generation/default
   - /system/default
   - /scorer/perplexity
+  - /evaluation/default
   - _self_
 
 # Run naming
@@ -85,21 +86,3 @@ dataset:
   data_name: amc23
   prompt_file: null  # Not used - using system_prompt instead
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
-
-# Evaluation configuration
-evaluation:
-  # Phase 1 evaluators (run during generation for running accuracy)
-  evaluators:
-    - exact_match
-
-  # Phase 2 evaluators (batch evaluation after generation)
-  batch_evaluators:
-    - llm_judge
-
-  # API-based LLM judge configuration
-  llm_judge:
-    provider: openai
-    model: gpt-4o-mini
-    base_url: https://api.openai.com/v1
-    cache_path: ./cache/llm_judge
-    n_threads: 50

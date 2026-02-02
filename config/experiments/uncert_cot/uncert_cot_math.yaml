@@ -12,6 +12,7 @@ defaults:
   - generation: default
   - system: default
   - scorer: uncertainty_pd
+  - /evaluation/default
   - _self_
 
 model:
@@ -54,10 +55,6 @@ strategy:
 
 dataset:
   prompt_file: ./config/prompts/default.txt
-
-evaluation:
-  evaluators: [exact_match]
-
 output:
   resume: false
 

@@ -8,6 +8,7 @@ defaults:
   - /generation/default
   - /system/default
   - /scorer/perplexity
+  - /evaluation/default
   - _self_
 
 run_name: "adaptive_scaling_vllm_qwen25_7.5b_minerva_perplexity_${now:%H-%M-%S}"
@@ -95,25 +96,5 @@ dataset:
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
-
-# Evaluation configuration
-evaluation:
-  # Phase 1 evaluators (run during generation for running accuracy)
-  evaluators:
-    - exact_match
-
-  # Phase 2 evaluators (batch evaluation after generation)
-  batch_evaluators:
-    - llm_judge
-
-  # API-based LLM judge configuration
-  llm_judge:
-    provider: openai
-    model: gpt-4o-mini
-    base_url: https://api.openai.com/v1
-    cache_path: ./cache/llm_judge
-    n_threads: 50
-
-# Reporting
 report_to: wandb
 wandb_project: llm-tts-eval-minerva_math

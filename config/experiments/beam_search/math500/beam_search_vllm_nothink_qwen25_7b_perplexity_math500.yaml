@@ -11,6 +11,7 @@ defaults:
   - /generation/default
   - /system/default
   - /scorer/perplexity
+  - /evaluation/default
   - _self_
 
 # Run naming
@@ -86,16 +87,3 @@ dataset:
 scorer:
   type: perplexity
   batch_size: 1
-
-# Evaluation configuration
-evaluation:
-  evaluators:
-    - exact_match
-  batch_evaluators:
-    - llm_judge
-  llm_judge:
-    provider: openai
-    model: gpt-4o-mini
-    base_url: https://api.openai.com/v1
-    cache_path: ./cache/llm_judge
-    n_threads: 50

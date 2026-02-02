@@ -9,6 +9,7 @@ defaults:
   - /generation/default
   - /system/default
   - /scorer/entropy
+  - /evaluation/default
   - _self_
 
 # Run naming
@@ -84,8 +85,3 @@ dataset:
   subset: 30  # Full AIME-2025 dataset
   offset: 0
   prompt_file: "${hydra:runtime.cwd}/config/prompts/default_relaxed_qwen2.5.txt"
-
-# Evaluation configuration
-evaluation:
-  evaluators:
-    - exact_match
