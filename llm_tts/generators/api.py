@@ -729,6 +729,12 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         if not use_streaming and effective_stop_tokens:
             api_stop = effective_stop_tokens[:4]
 
+        # Progress counter for concurrent generation
+        import threading
+        _completed_count = [0]
+        _count_lock = threading.Lock()
+        total_active = len(active_indices)
+
         def _generate_for_trajectory(traj_idx):
             """Generate candidates for a single trajectory."""
             messages = prepared_requests[traj_idx]
@@ -755,7 +761,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                         ]
                         for future in as_completed(futures):
                             results.append(future.result())
-                return traj_idx, results
             else:
                 # Batch path — stop tokens passed directly to API
                 results = self._generate_batch(
@@ -764,7 +769,21 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     max_tokens=effective_max_tokens,
                     stop=api_stop,
                 )
-                return traj_idx, results
+
+            # Log progress
+            with _count_lock:
+                _completed_count[0] += 1
+                count = _completed_count[0]
+            sample_id = sample_ids[traj_idx] if sample_ids else traj_idx
+            full_text = results[0].get("text", "") if results else ""
+            token_count = len(results[0].get("logprobs", [])) if results else 0
+            log.info(
+                f"[{count}/{total_active}] Sample {sample_id} done, "
+                f"{len(results)} candidate(s), "
+                f"{token_count} tokens, "
+                f"text: {repr(full_text)}"
+            )
+            return traj_idx, results
 
         # Execute concurrently across trajectories
         if len(active_indices) > 1:
