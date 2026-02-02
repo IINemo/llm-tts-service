@@ -63,6 +63,7 @@ from llm_tts.evaluation import (
     EvaluatorAlignScore,
     EvaluatorExactMatch,
     EvaluatorLLMAsAJudge,
+    EvaluatorSWEBench,
 )
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
@@ -210,6 +211,25 @@ def build_evaluators(config):
                 config.evaluation.alignscore, resolve=True
             )
             evaluators["alignscore"] = EvaluatorAlignScore(**align_cfg)
+
+        elif evaluator_name == "swe_bench":
+            # SWE-bench evaluator for code patch generation
+            swe_bench_cfg = config.evaluation.get("swe_bench", {})
+            if isinstance(swe_bench_cfg, dict):
+                swe_bench_cfg = OmegaConf.to_container(swe_bench_cfg, resolve=True)
+            else:
+                swe_bench_cfg = (
+                    OmegaConf.to_container(swe_bench_cfg, resolve=True)
+                    if swe_bench_cfg
+                    else {}
+                )
+            evaluators["swe_bench"] = EvaluatorSWEBench(
+                mode=swe_bench_cfg.get("mode", "patch_validation"),
+                max_workers=swe_bench_cfg.get("max_workers", 4),
+                timeout=swe_bench_cfg.get("timeout", 1800),
+                run_id=swe_bench_cfg.get("run_id", "llm_tts_eval"),
+                use_modal=swe_bench_cfg.get("use_modal", False),
+            )
 
         else:
             log.warning(f"Unknown evaluator type '{evaluator_name}', skipping")
