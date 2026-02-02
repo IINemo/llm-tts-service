@@ -253,6 +253,10 @@ def create_scorer(config):
                 config.scorer, "gpu_memory_utilization", 0.9
             ),
         )
+        try:
+            scorer.init_flop_calculator(config.scorer.model_path)
+        except Exception as e:
+            log.warning(f"Could not init PRM FLOP calculator: {e}")
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
     elif config.scorer.type in (
@@ -1017,6 +1021,8 @@ def _generate_trajectories_batch(
             "output_tokens_this_sample": token_stats.get("output_tokens", 0),
             "generations_this_sample": token_stats.get("generation_count", 0),
             "tflops_this_sample": token_stats.get("tflops") or 0,
+            "prm_tokens_this_sample": token_stats.get("prm_input_tokens", 0),
+            "prm_tflops_this_sample": token_stats.get("prm_tflops") or 0,
             "running_avg_tokens_per_sample": (
                 (running_total_tokens / len(results)) if results else 0.0
             ),
@@ -1305,6 +1311,8 @@ def generate_trajectories(
             "output_tokens_this_sample": token_stats.get("output_tokens", 0),
             "generations_this_sample": token_stats.get("generation_count", 0),
             "tflops_this_sample": token_stats.get("tflops") or 0,
+            "prm_tokens_this_sample": token_stats.get("prm_input_tokens", 0),
+            "prm_tflops_this_sample": token_stats.get("prm_tflops") or 0,
             # Running totals
             "running_avg_tokens_per_sample": (
                 (running_total_tokens / len(results)) if results else 0.0
@@ -1685,11 +1693,18 @@ def evaluate_results(
     total_generations = sum(ts.get("generation_count", 0) for ts in all_token_stats)
     total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
 
+    # PRM token/FLOP aggregates
+    total_prm_tokens = sum(ts.get("prm_input_tokens", 0) for ts in all_token_stats)
+    total_prm_tflops = sum((ts.get("prm_tflops") or 0) for ts in all_token_stats)
+
     log.info("Compute:")
     log.info(f"Total tokens: {total_tokens:,}")
     log.info(f"Total input tokens: {total_input_tokens:,}")
     log.info(f"Total output tokens: {total_output_tokens:,}")
     log.info(f"Total TFLOPs: {total_tflops:.2f}")
+    if total_prm_tokens > 0:
+        log.info(f"Total PRM input tokens: {total_prm_tokens:,}")
+        log.info(f"Total PRM TFLOPs: {total_prm_tflops:.2f}")
     log.info(f"Avg tokens per sample: {total_tokens / len(results):,.0f}")
     log.info(f"Avg output tokens per sample: {total_output_tokens / len(results):,.0f}")
     log.info(f"Avg TFLOPs per sample: {total_tflops / len(results):.4f}")
@@ -1744,6 +1759,9 @@ def evaluate_results(
     metrics["compute/avg_tflops_per_sample"] = (
         float(total_tflops / len(results)) if results else 0.0
     )
+    if total_prm_tokens > 0:
+        metrics["compute/prm_input_tokens"] = int(total_prm_tokens)
+        metrics["compute/prm_tflops"] = float(total_prm_tflops)
 
     # Save metrics locally (so FLOPs metrics aren't only in W&B)
     metrics_path = Path(save_path) / "metrics.json"

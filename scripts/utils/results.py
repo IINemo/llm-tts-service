@@ -28,7 +28,13 @@ def safe_serialize(obj):
             "is_trajectory_complete": obj.is_trajectory_complete,
             "generation_scores": safe_serialize(obj.generation_scores),
             "raw_text": obj.raw_text,
-            "other_data": safe_serialize(obj.other_data) if obj.other_data else None,
+            "other_data": (
+                safe_serialize(
+                    {k: v for k, v in obj.other_data.items() if k != "raw_logprobs"}
+                )
+                if obj.other_data
+                else None
+            ),
         }
     if hasattr(obj, "tolist"):
         try:

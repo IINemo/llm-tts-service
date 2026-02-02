@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH -J baseline_qwen3_gpqa_diamond        # Job name
-#SBATCH -N 1                                   # Number of nodes
-#SBATCH --ntasks-per-node=1                    # 1 task
-#SBATCH --gres=gpu:1                           # 1 GPU (baseline only needs model)
-#SBATCH -p long                                # Partition/queue name
-#SBATCH -t 04:00:00                            # Time limit (4h for 198 samples)
-#SBATCH -o logs/baseline_qwen3_gpqa_diamond_%j.out
-#SBATCH -e logs/baseline_qwen3_gpqa_diamond_%j.err
+#SBATCH -J obon_ppl_gpqa              # Job name
+#SBATCH -N 1                           # Number of nodes
+#SBATCH --ntasks-per-node=1            # 1 task
+#SBATCH --gres=gpu:1                   # 1 GPU (perplexity scorer, no PRM)
+#SBATCH -p long                        # Partition/queue name
+#SBATCH -t 24:00:00                    # Time limit
+#SBATCH -o logs/offline_bon_perplexity_gpqa_diamond_%j.out
+#SBATCH -e logs/offline_bon_perplexity_gpqa_diamond_%j.err
 #SBATCH --cpus-per-task=16
 
 PROJECT_DIR="/home/artem.shelmanov/vlad/llm-tts-service"
@@ -29,12 +29,11 @@ source ~/.bashrc
 conda activate lm-polygraph-env
 
 echo "Python path: $(which python)"
-
 echo "Starting experiment..."
 
 python scripts/run_tts_eval.py \
     --config-path=../config \
-    --config-name=experiments/baseline/gpqa_diamond/baseline_vllm_qwen3_8b_thinking_gpqa_diamond
+    --config-name=experiments/offline_best_of_n/gpqa_diamond/offline_bon_vllm_thinking_qwen3_8b_gpqa_diamond_perplexity
 
 echo "============================================"
 echo "End time: $(date)"

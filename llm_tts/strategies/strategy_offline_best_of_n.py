@@ -253,6 +253,8 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         # Reset token tracking
         self.step_generator.reset_sample_stats()
+        if hasattr(self.scorer, "reset_prm_stats"):
+            self.scorer.reset_prm_stats()
 
         log.info(f"\n{'='*60}")
         log.info(
@@ -309,6 +311,15 @@ class StrategyOfflineBestOfN(StrategyBase):
         # Get token stats
         self.step_generator.finalize_sample_stats()
         token_stats = self.step_generator.get_sample_stats()
+
+        # Merge PRM scorer stats if available
+        if hasattr(self.scorer, "get_prm_total_stats"):
+            prm_stats = self.scorer.get_prm_total_stats()
+            token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
+            token_stats["prm_tflops"] = prm_stats["prm_tflops"]
+            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
+                prm_stats["prm_tflops"] or 0
+            )
 
         # Save logs if output_dir provided
         if self.output_dir:
@@ -416,6 +427,8 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         # Reset per-sample tracking and generate all M×N trajectories
         self.step_generator.reset_per_sample_stats()
+        if hasattr(self.scorer, "reset_prm_stats"):
+            self.scorer.reset_prm_stats()
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
             trajectories=[[]] * M,
@@ -578,6 +591,16 @@ class StrategyOfflineBestOfN(StrategyBase):
             # Token stats from generator's per-sample tracking
             token_stats = self.step_generator.get_sample_stats_for(sample_data_idx)
             token_stats["generation_count"] = N  # N candidates in one vLLM call
+
+            # Merge PRM scorer stats if available
+            # PRM scorer tracks tokens keyed by dataset sample_idx (passed via score_trajectories_batch)
+            if hasattr(self.scorer, "get_prm_stats_for"):
+                prm_stats = self.scorer.get_prm_stats_for(sample_idx)
+                token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
+                token_stats["prm_tflops"] = prm_stats["prm_tflops"]
+                token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
+                    prm_stats["prm_tflops"] or 0
+                )
 
             log.info(
                 f"Sample {sample_idx}: best trajectory {best_idx + 1}/{N}, "

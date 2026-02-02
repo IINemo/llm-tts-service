@@ -43,6 +43,7 @@ def _extract_boolean_answer(text: str) -> str | None:
     """Extract True/False boolean answers from text."""
     if not text:
         return None
+    text = _strip_thinking_tags(text)
     text_lower = text.lower().strip()
     if re.search(r"\btrue\b", text_lower):
         return "True"
@@ -51,11 +52,26 @@ def _extract_boolean_answer(text: str) -> str | None:
     return None
 
 
+def _strip_thinking_tags(text: str) -> str:
+    """Strip <think>...</think> tags, keeping only content after the last closing tag.
+
+    If there is content after </think>, return that. Otherwise return the
+    content inside the last <think>...</think> block (for models that put
+    everything inside thinking tags).
+    """
+    # If there is content after the last </think>, use that
+    parts = text.rsplit("</think>", 1)
+    if len(parts) == 2 and parts[1].strip():
+        return parts[1].strip()
+    # Otherwise strip all thinking tags and return the inner content
+    return re.sub(r"</?think>", "", text).strip()
+
+
 def _extract_single_letter_answer(text: str) -> str | None:
     """Extract single alphabetical character answers (A, B, C, D, etc.) from text."""
     if not text:
         return None
-    text = text.strip()
+    text = _strip_thinking_tags(text)
 
     # Try to extract from \boxed{X} format (last occurrence)
     boxed_matches = re.findall(r"\\boxed\{([A-Za-z])\}", text)
