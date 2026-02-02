@@ -5,7 +5,7 @@ Supports both HuggingFace and vLLM backends for the PRM model.
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -15,6 +15,7 @@ from lm_polygraph.stat_calculators.extract_claims import Claim
 from tqdm import tqdm
 
 from llm_tts.utils import get_torch_dtype
+from llm_tts.utils.flops import FLOPCalculator
 
 from .step_scorer_reward_base import StepScorerRewardBase
 
@@ -194,6 +195,11 @@ class StepScorerPRM(StepScorerRewardBase):
         self.prm_tokenizer = None
         self.steps_extractor = StepsExtractor(progress_bar=False)
 
+        # PRM token/FLOP tracking
+        self.flop_calculator: Optional[FLOPCalculator] = None
+        self._total_prm_tokens: int = 0
+        self._per_sample_prm_tokens: Dict[Any, int] = {}
+
         if use_vllm and not VLLM_AVAILABLE:
             log.warning("vLLM requested but not available, falling back to HuggingFace")
 
@@ -284,6 +290,42 @@ class StepScorerPRM(StepScorerRewardBase):
             self.prm_tokenizer = None
         torch.cuda.empty_cache()
 
+    def init_flop_calculator(self, model_name: str):
+        """Initialize FLOP calculator for PRM token/compute tracking."""
+        self.flop_calculator = FLOPCalculator(model_name, method="simple")
+        log.info(
+            f"PRM FLOP calculator initialized: "
+            f"{self.flop_calculator.tflops_per_1k_tokens:.3f} TFLOPs/1k tokens"
+        )
+
+    def _record_prm_tokens(self, num_tokens: int, sample_id: Any = None):
+        """Record PRM input tokens for tracking."""
+        self._total_prm_tokens += num_tokens
+        if sample_id is not None:
+            self._per_sample_prm_tokens[sample_id] = (
+                self._per_sample_prm_tokens.get(sample_id, 0) + num_tokens
+            )
+
+    def reset_prm_stats(self):
+        """Clear per-sample PRM stats (call before each batch)."""
+        self._per_sample_prm_tokens.clear()
+        self._total_prm_tokens = 0
+
+    def get_prm_stats_for(self, sample_id: Any) -> Dict[str, Any]:
+        """Get PRM stats for a specific sample."""
+        tokens = self._per_sample_prm_tokens.get(sample_id, 0)
+        tflops = self.flop_calculator.compute_tflops(tokens) if self.flop_calculator else None
+        return {"prm_input_tokens": tokens, "prm_tflops": tflops}
+
+    def get_prm_total_stats(self) -> Dict[str, Any]:
+        """Get aggregate PRM stats across all samples."""
+        tflops = (
+            self.flop_calculator.compute_tflops(self._total_prm_tokens)
+            if self.flop_calculator
+            else None
+        )
+        return {"prm_input_tokens": self._total_prm_tokens, "prm_tflops": tflops}
+
     def compute_claim_rewards(
         self, chat: List[Dict[str, str]], candidates: List[str], **kwargs
     ) -> List[List[float]]:
@@ -369,8 +411,10 @@ class StepScorerPRM(StepScorerRewardBase):
         # Truncate prompts that exceed max length
         max_tokens = 4000
         truncated_prompts = []
+        total_prompt_tokens = 0
         for prompt in all_prompts:
             tokens = self.prm_tokenizer.encode(prompt)
+            total_prompt_tokens += len(tokens)
             if len(tokens) > max_tokens:
                 log.warning(
                     f"Truncating PRM prompt from {len(tokens)} to {max_tokens} tokens"
@@ -378,6 +422,9 @@ class StepScorerPRM(StepScorerRewardBase):
                 tokens = tokens[:max_tokens]
                 prompt = self.prm_tokenizer.decode(tokens)
             truncated_prompts.append(prompt)
+
+        # Track PRM tokens
+        self._record_prm_tokens(total_prompt_tokens)
 
         # Batch score all prompts
         num_traj_steps = len(trajectory_steps)
@@ -464,12 +511,16 @@ class StepScorerPRM(StepScorerRewardBase):
         # Truncate if needed
         max_tokens = 4000
         tokens = self.prm_tokenizer.encode(prompt)
+        num_prompt_tokens = len(tokens)
         if len(tokens) > max_tokens:
             log.warning(
                 f"Truncating PRM prompt from {len(tokens)} to {max_tokens} tokens"
             )
             tokens = tokens[:max_tokens]
             prompt = self.prm_tokenizer.decode(tokens)
+
+        # Track PRM tokens
+        self._record_prm_tokens(num_prompt_tokens)
 
         log.info(f"PRM scoring trajectory with {len(step_texts)} steps")
 
@@ -582,6 +633,7 @@ class StepScorerPRM(StepScorerRewardBase):
             # Truncate if needed
             max_tokens = 4000
             tokens = self.prm_tokenizer.encode(prompt)
+            num_prompt_tokens = len(tokens)
             if len(tokens) > max_tokens:
                 log.warning(
                     f"Truncating PRM prompt {traj_idx} from {len(tokens)} to {max_tokens} tokens"
@@ -589,8 +641,11 @@ class StepScorerPRM(StepScorerRewardBase):
                 tokens = tokens[:max_tokens]
                 prompt = self.prm_tokenizer.decode(tokens)
 
-            all_prompts.append(prompt)
+            # Track PRM tokens per sample
             sample_id = sample_ids[traj_idx] if sample_ids else None
+            self._record_prm_tokens(num_prompt_tokens, sample_id=sample_id)
+
+            all_prompts.append(prompt)
             traj_id = trajectory_ids[traj_idx] if trajectory_ids else traj_idx
             trajectory_metadata.append((traj_idx, len(step_texts), sample_id, traj_id))
 

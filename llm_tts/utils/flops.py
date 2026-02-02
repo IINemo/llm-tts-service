@@ -145,6 +145,14 @@ class FLOPCalculator:
             intermediate_size=18944,
             vocab_size=152064,
         ),
+        "Qwen/Qwen2.5-Math-PRM-7B": ModelArchitecture(
+            num_parameters=7_000_000_000,
+            hidden_size=3584,
+            num_hidden_layers=28,
+            num_attention_heads=28,
+            intermediate_size=18944,
+            vocab_size=152064,
+        ),
     }
 
     def __init__(

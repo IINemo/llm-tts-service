@@ -131,6 +131,8 @@ class StrategyBeamSearch(StrategyBase):
 
         # Reset token tracking for this sample
         self.step_generator.reset_sample_stats()
+        if hasattr(self.scorer, 'reset_prm_stats'):
+            self.scorer.reset_prm_stats()
 
         # Initialize beams with empty trajectory
         beams = [{"steps": [], "scores": []}]
@@ -206,6 +208,13 @@ class StrategyBeamSearch(StrategyBase):
         self.step_generator.finalize_sample_stats()
         token_stats = self.step_generator.get_sample_stats()
 
+        # Merge PRM scorer stats if available
+        if hasattr(self.scorer, 'get_prm_total_stats'):
+            prm_stats = self.scorer.get_prm_total_stats()
+            token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
+            token_stats["prm_tflops"] = prm_stats["prm_tflops"]
+            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (prm_stats["prm_tflops"] or 0)
+
         return {
             "trajectory": trajectory_text,
             "steps": best_beam["steps"],
@@ -254,6 +263,8 @@ class StrategyBeamSearch(StrategyBase):
 
         # Reset per-sample token tracking in generator
         self.step_generator.reset_per_sample_stats()
+        if hasattr(self.scorer, 'reset_prm_stats'):
+            self.scorer.reset_prm_stats()
 
         # sample_beams[sample_id] = list of ACTIVE beams only
         sample_beams = {
@@ -468,6 +479,7 @@ class StrategyBeamSearch(StrategyBase):
                         [],
                         [],
                         token_stats=self.step_generator.get_sample_stats_for(sample_id),
+                        sample_id=sample_id,
                     )
                     samples_to_remove.append(sample_id)
                     continue
@@ -498,6 +510,7 @@ class StrategyBeamSearch(StrategyBase):
                         best_beam["steps"],
                         best_beam["scores"],
                         token_stats=self.step_generator.get_sample_stats_for(sample_id),
+                        sample_id=sample_id,
                     )
                     samples_to_remove.append(sample_id)
                     # Log chosen trajectory details - show each step separately
@@ -534,6 +547,7 @@ class StrategyBeamSearch(StrategyBase):
                 best_beam["steps"],
                 best_beam["scores"],
                 token_stats=self.step_generator.get_sample_stats_for(sample_id),
+                sample_id=sample_id,
             )
             # Log chosen trajectory details - show each step separately
             scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
@@ -692,10 +706,18 @@ class StrategyBeamSearch(StrategyBase):
         steps: List[StepCandidate],
         scores: List[float],
         token_stats: Optional[Dict[str, Any]] = None,
+        sample_id: Any = None,
     ) -> Dict[str, Any]:
         """Create final result dict for a completed sample."""
         trajectory_text = convert_trajectory_to_string(steps)
         extracted = extract_answer(trajectory_text)
+
+        # Merge PRM scorer stats if available
+        if token_stats is not None and hasattr(self.scorer, 'get_prm_stats_for') and sample_id is not None:
+            prm_stats = self.scorer.get_prm_stats_for(sample_id)
+            token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
+            token_stats["prm_tflops"] = prm_stats["prm_tflops"]
+            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (prm_stats["prm_tflops"] or 0)
 
         result = {
             "trajectory": trajectory_text,

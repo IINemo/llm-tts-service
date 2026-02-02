@@ -84,6 +84,8 @@ class StrategyOnlineBestOfN(StrategyBase):
 
         # Reset token tracking for this sample
         self.step_generator.reset_sample_stats()
+        if hasattr(self.scorer, 'reset_prm_stats'):
+            self.scorer.reset_prm_stats()
 
         trajectory = []
         selected_steps = []
@@ -219,6 +221,13 @@ class StrategyOnlineBestOfN(StrategyBase):
         self.step_generator.finalize_sample_stats()
         token_stats = self.step_generator.get_sample_stats()
 
+        # Merge PRM scorer stats if available
+        if hasattr(self.scorer, 'get_prm_total_stats'):
+            prm_stats = self.scorer.get_prm_total_stats()
+            token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
+            token_stats["prm_tflops"] = prm_stats["prm_tflops"]
+            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (prm_stats["prm_tflops"] or 0)
+
         log.info(
             f"Sample token stats: "
             f"total_tokens={token_stats['total_tokens_this_sample']:,}, "
@@ -282,6 +291,8 @@ class StrategyOnlineBestOfN(StrategyBase):
 
         # Reset per-sample token tracking in generator
         self.step_generator.reset_per_sample_stats()
+        if hasattr(self.scorer, 'reset_prm_stats'):
+            self.scorer.reset_prm_stats()
 
         # Context limit for trajectories
         max_model_len = getattr(self.step_generator, "max_model_len", 4096)
@@ -359,15 +370,18 @@ class StrategyOnlineBestOfN(StrategyBase):
                 # Build flat lists for batch scoring
                 flat_chats = []
                 flat_trajectories = []
+                flat_sample_ids = []  # Track sample IDs for PRM token accounting
                 candidate_map = []  # (batch_idx, cand_idx)
 
                 for batch_idx in range(len(batch_results)):
                     req = batch_requests[batch_idx]
                     parent_traj = batch_trajectories[batch_idx]
+                    sample_id = batch_sample_ids[batch_idx]
                     for cand_idx, cand in enumerate(batch_results[batch_idx]):
                         full_traj = parent_traj + [cand]
                         flat_chats.append(req)
                         flat_trajectories.append(full_traj)
+                        flat_sample_ids.append(sample_id)
                         candidate_map.append((batch_idx, cand_idx))
 
                 # Score all trajectories in batch
@@ -375,7 +389,8 @@ class StrategyOnlineBestOfN(StrategyBase):
                     self.scorer, "score_trajectories_batch"
                 ):
                     all_traj_scores = self.scorer.score_trajectories_batch(
-                        flat_chats, flat_trajectories
+                        flat_chats, flat_trajectories,
+                        sample_ids=flat_sample_ids,
                     )
                     flat_scores = [
                         traj_scores[-1] if traj_scores else 0.0
@@ -609,6 +624,13 @@ class StrategyOnlineBestOfN(StrategyBase):
             )
 
             token_stats = self.step_generator.get_sample_stats_for(idx)
+
+            # Merge PRM scorer stats if available
+            if hasattr(self.scorer, 'get_prm_stats_for'):
+                prm_stats = self.scorer.get_prm_stats_for(idx)
+                token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
+                token_stats["prm_tflops"] = prm_stats["prm_tflops"]
+                token_stats["tflops"] = (token_stats.get("tflops") or 0) + (prm_stats["prm_tflops"] or 0)
 
             scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
             log.info(
