@@ -11,6 +11,7 @@ defaults:
   - /generation/default
   - /system/default
   - /scorer/prm
+  - /evaluation/default
   - _self_
 
 # Run naming
@@ -91,16 +92,3 @@ dataset:
   offset: 0
   data_name: math  # For official Qwen2.5-Math answer extraction
   prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
-
-# Evaluation configuration
-evaluation:
-  evaluators:
-    - exact_match
-  batch_evaluators:
-    - llm_judge
-  llm_judge:
-    provider: openai
-    model: gpt-4o-mini
-    base_url: https://api.openai.com/v1
-    cache_path: ./cache/llm_judge
-    n_threads: 50

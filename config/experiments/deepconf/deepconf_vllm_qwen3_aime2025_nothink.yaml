@@ -9,6 +9,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /evaluation/default
   - _self_
 
 # Run naming
@@ -69,8 +70,3 @@ dataset:
   subset: 30  # All AIME 2025 problems
   offset: 0  # Start from beginning
   prompt_file: "${hydra:runtime.cwd}/config/prompts/default.txt"
-
-# Evaluation configuration
-evaluation:
-  evaluators:
-    - exact_match

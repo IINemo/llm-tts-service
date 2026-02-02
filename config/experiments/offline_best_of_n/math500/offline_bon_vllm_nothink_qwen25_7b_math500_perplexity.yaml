@@ -11,6 +11,7 @@ defaults:
   - /generation/default
   - /system/default
   - /scorer/perplexity
+  - /evaluation/default
   - _self_
 
 # Run naming
@@ -88,21 +89,3 @@ dataset:
   offset: 0
   data_name: math  # For official Qwen2.5-Math answer extraction
   prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
-
-# Evaluation configuration
-evaluation:
-  # Phase 1 evaluators (run during generation for running accuracy)
-  evaluators:
-    - exact_match
-
-  # Phase 2 evaluators (batch evaluation after generation)
-  batch_evaluators:
-    - llm_judge
-
-  # API-based LLM judge configuration
-  llm_judge:
-    provider: openai
-    model: gpt-4o-mini
-    base_url: https://api.openai.com/v1
-    cache_path: ./cache/llm_judge
-    n_threads: 50

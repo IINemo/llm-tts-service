@@ -8,6 +8,7 @@ defaults:
   - /generation/default
   - /system/default
   - /scorer/perplexity
+  - /evaluation/default
   - _self_
 
 run_name: "adaptive_scaling_vllm_qwen3_8b_gpqadiamon_perplexity_${now:%H-%M-%S}"
@@ -86,20 +87,5 @@ dataset:
   prompt_file: null
   answer_field: "answer"
   answer_format: "char"
-
-# Evaluation configuration
-evaluation:
-  evaluators:
-    - exact_match
-  batch_evaluators:
-    - llm_judge
-  llm_judge:
-    provider: openai
-    model: gpt-4o-mini
-    base_url: https://api.openai.com/v1
-    cache_path: ./cache/llm_judge
-    n_threads: 50
-
-# Reporting
 report_to: wandb
 wandb_project: llm-tts-eval-gpqa_diamond

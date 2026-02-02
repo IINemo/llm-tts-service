@@ -10,6 +10,7 @@ defaults:
   - /generation/default
   - /system/default
   - /scorer/entropy
+  - /evaluation/default
   - _self_
 
 # Run naming
@@ -80,21 +81,3 @@ dataset:
   offset: 0
   data_name: olympiadbench
   # system_prompt set in base config (matches official Qwen2.5-Math eval)
-
-# Evaluation configuration
-evaluation:
-  # Phase 1 evaluators (run during generation for running accuracy)
-  evaluators:
-    - exact_match
-
-  # Phase 2 evaluators (batch evaluation after generation)
-  batch_evaluators:
-    - llm_judge
-
-  # API-based LLM judge configuration
-  llm_judge:
-    provider: openai
-    model: gpt-4o-mini
-    base_url: https://api.openai.com/v1
-    cache_path: ./cache/llm_judge
-    n_threads: 50
