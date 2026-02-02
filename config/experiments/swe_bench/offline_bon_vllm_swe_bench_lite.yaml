@@ -1,0 +1,93 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/swe_bench/offline_bon_vllm_swe_bench_lite
+# Offline Best-of-N evaluation for SWE-bench Lite using local vLLM model with entropy scoring
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - /evaluation/swe_bench/default
+  - _self_
+
+# Run naming
+run_name: "offline_bon_vllm_swe_bench_lite_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-swe-bench
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen2.5-Coder-7B-Instruct"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 32768
+  disable_thinking_mode: true
+
+# System configuration
+system:
+  device: cuda
+  seed: 0
+
+# Generation configuration - higher temperature for diversity
+generation:
+  max_new_tokens: 4096
+  temperature: 0.7
+  top_p: 0.95
+  top_k: 50
+  batch_size: 1
+
+# Scorer configuration - entropy-based
+scorer:
+  type: entropy
+
+# Strategy - Offline Best-of-N
+strategy:
+  type: offline_best_of_n
+  num_trajectories: 4  # Generate 4 candidate patches, select best
+  max_steps: 1  # Single step for patch generation
+  score_aggregation: "mean"
+  batch_generation: true
+  # Stop tokens for Qwen models
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  # Step token limits
+  min_step_tokens: 0
+  max_step_tokens: 4096
+  # Disable semantic markers
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+
+# Dataset configuration - SWE-bench Lite
+dataset:
+  data_name: "swe_bench_lite"
+  dataset_path: "princeton-nlp/SWE-bench_Lite"
+  dataset_split: "test"
+  subset: null
+  offset: 0
+  question_field: "problem_statement"
+  answer_field: "patch"
+  answer_format: "patch"
+  prompt_file: ./config/prompts/swe_bench.txt
+  system_prompt: "You are an expert software engineer. Your task is to fix bugs in Python repositories by generating patches in unified diff format."
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - swe_bench
+  swe_bench:
+    mode: patch_validation
+    max_workers: 4
+    timeout: 1800

@@ -1,0 +1,37 @@
+You are an expert software engineer tasked with fixing a bug in a Python repository.
+
+You will be given an issue description from a GitHub repository. Your task is to analyze the issue and provide a patch that resolves the problem.
+
+## Issue Description
+
+{question}
+
+## Instructions
+
+1. Carefully analyze the issue description to understand the problem
+2. Think through the root cause of the issue
+3. Develop a fix that addresses the problem without introducing new issues
+4. Provide your solution as a unified diff patch
+
+## Output Format
+
+Provide your patch in unified diff format within a code block:
+
+```diff
+diff --git a/path/to/file.py b/path/to/file.py
+--- a/path/to/file.py
++++ b/path/to/file.py
+@@ -line_num,count +line_num,count @@
+ context line
+-removed line
++added line
+ context line
+```
+
+Important:
+- Include the full file path in the diff header
+- Provide sufficient context lines (usually 3 lines before and after changes)
+- Make minimal changes necessary to fix the issue
+- Ensure your patch applies cleanly to the codebase
+
+Think step by step about the issue, then provide your patch.

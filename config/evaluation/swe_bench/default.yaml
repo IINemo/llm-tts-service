@@ -1,0 +1,25 @@
+# @package evaluation.swe_bench
+# SWE-bench evaluator configuration
+#
+# Supports two modes:
+# - patch_validation: Quick syntax check (no Docker required)
+# - full: Complete evaluation with Docker containers and test execution
+
+# Evaluation mode
+# - "patch_validation": Quick check that validates patch syntax (default)
+# - "full": Full Docker-based evaluation running actual tests
+mode: patch_validation
+
+# Number of parallel workers for full evaluation
+max_workers: 4
+
+# Timeout per instance in seconds (full mode only)
+timeout: 1800
+
+# Unique identifier for this evaluation run
+run_id: llm_tts_eval
+
+# Whether to use Modal cloud for evaluation (full mode only)
+# Modal provides cloud-based evaluation without local Docker setup
+# Requires Modal account: https://modal.com
+use_modal: false

@@ -1,0 +1,34 @@
+# @package dataset
+# SWE-bench Lite dataset configuration
+#
+# SWE-bench is a benchmark for evaluating language models on real-world
+# software engineering tasks. Given a codebase and an issue description,
+# the model must generate a patch that resolves the described problem.
+#
+# Dataset: https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite
+# - 300 test instances
+# - 23 dev instances
+# - 11 Python repositories
+
+dataset_path: "princeton-nlp/SWE-bench_Lite"
+dataset_split: "test"  # "test" (300 instances) or "dev" (23 instances)
+subset: null  # Only process first N samples (null for all)
+prompt_file: ./config/prompts/swe_bench.txt  # Path to prompt template file
+answer_format: "patch"  # Custom format for code patches
+question_field: "problem_statement"  # Field containing the issue description
+answer_field: "patch"  # Field containing the gold patch
+data_name: "swe_bench_lite"  # Used for evaluation routing
+
+# SWE-bench specific options
+include_hints: false  # Whether to include hints in the problem statement
+include_repo_info: true  # Whether to include repository name in prompt
+
+# Additional fields available in each instance:
+# - instance_id: Unique identifier (e.g., "django__django-11001")
+# - repo: Repository name (e.g., "django/django")
+# - base_commit: Git commit hash for the base state
+# - test_patch: Test code to verify the fix
+# - hints_text: Optional hints for solving the issue
+# - FAIL_TO_PASS: Tests that should transition from failing to passing
+# - PASS_TO_PASS: Tests that should remain passing
+# - environment_setup_commit: Commit hash for environment setup
