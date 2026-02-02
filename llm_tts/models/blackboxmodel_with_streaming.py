@@ -204,15 +204,51 @@ class BlackboxModelWithStreaming(BlackboxModel):
             "output_scores", False
         )  # Explicit request
 
-        # If n>1, use parent's non-streaming implementation which supports batched generation
+        # If n>1, call API directly with logprobs + stop support
+        # (parent's generate_texts returns plain strings without logprobs)
         if n > 1:
             log.info(f"[IMPL] Batched generation with n={n} for {len(chats)} chat(s)")
-            return super(BlackboxModelWithStreaming, self).generate_texts(chats, **args)
+            stop = args.get("stop", None)
+            results = []
+            for chat in chats:
+                response = self.client.chat.completions.create(
+                    model=self.model_path,
+                    messages=chat,
+                    max_tokens=max_new_tokens,
+                    temperature=temperature,
+                    n=n,
+                    stream=False,
+                    logprobs=needs_logprobs,
+                    top_logprobs=20 if needs_logprobs else None,
+                    stop=stop,
+                )
+                chat_results = []
+                for choice in response.choices:
+                    text = choice.message.content or ""
+                    logprobs_data = []
+                    if needs_logprobs and choice.logprobs and choice.logprobs.content:
+                        for token_info in choice.logprobs.content:
+                            logprobs_data.append({
+                                "token": token_info.token,
+                                "logprob": token_info.logprob,
+                                "top_logprobs": [
+                                    {"token": t.token, "logprob": t.logprob}
+                                    for t in token_info.top_logprobs
+                                ],
+                            })
+                    chat_results.append({
+                        "text": text,
+                        "logprobs": logprobs_data,
+                        "finish_reason": choice.finish_reason,
+                    })
+                results.append(chat_results)
+            return results
 
         # Otherwise use streaming implementation (n=1)
         results = []
         for chat in chats:
             # Create streaming request
+            stop = args.get("stop", None)
             response = self.client.chat.completions.create(
                 model=self.model_path,
                 messages=chat,
@@ -220,7 +256,8 @@ class BlackboxModelWithStreaming(BlackboxModel):
                 temperature=temperature,
                 stream=True,
                 logprobs=needs_logprobs,
-                top_logprobs=20 if needs_logprobs else None,  # TODO:
+                top_logprobs=20 if needs_logprobs else None,
+                stop=stop,
             )
 
             accumulated_text = ""

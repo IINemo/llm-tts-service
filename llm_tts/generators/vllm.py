@@ -27,7 +27,6 @@ Token tracking (_record_generation):
 
 import inspect
 import logging
-from enum import Enum
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 # Optional vLLM import (not available in CI)
@@ -49,6 +48,7 @@ except ImportError:
     VLLMWithUncertainty = None
 
 from llm_tts.generators.base import (
+    CompletionReason,
     StepCandidate,
     StepCandidateGeneratorBase,
     convert_trajectory_to_string,
@@ -59,15 +59,6 @@ if TYPE_CHECKING:
     from llm_tts.utils.flops import FLOPCalculator
 
 log = logging.getLogger(__name__)
-
-
-class CompletionReason(str, Enum):
-    """Reason why a trajectory was marked as complete."""
-
-    THINKING_COMPLETE = "thinking_complete"  # </think> found in thinking mode
-    EOS_PATTERN = "eos_pattern"  # <end of response> pattern matched
-    ANSWER_PATTERN = "answer_pattern"  # <Answer>: or similar pattern matched
-    CONTEXT_LIMIT = "context_limit"  # Not enough context for next step + answer
 
 
 class VLLMStepGenerator(StepCandidateGeneratorBase):

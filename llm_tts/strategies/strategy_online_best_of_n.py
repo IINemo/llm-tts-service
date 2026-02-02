@@ -11,7 +11,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorBase,
     convert_trajectory_to_string,
 )
-from llm_tts.generators.vllm import CompletionReason
+from llm_tts.generators.base import CompletionReason
 from llm_tts.utils.answer_extraction import extract_answer
 
 from .strategy_base import StrategyBase, count_thinking_and_response_steps

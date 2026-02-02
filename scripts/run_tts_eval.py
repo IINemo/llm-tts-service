@@ -523,6 +523,11 @@ def create_model(config):
         else:
             # Other strategies use boundary detection via early stopping
             from llm_tts.early_stopping import BoundaryEarlyStopping
+            from llm_tts.generators.api import APIUncertaintyScorer
+
+            # Determine thinking mode (same logic as vLLM)
+            disable_thinking_mode = config.model.get("disable_thinking_mode", None)
+            thinking_mode = disable_thinking_mode is False
 
             # Always use ThinkingMarkerDetector for step boundary detection
             detector = ThinkingMarkerDetector(
@@ -547,19 +552,76 @@ def create_model(config):
             # Create boundary-based early stopping
             early_stopping = BoundaryEarlyStopping(detector=detector)
 
+            supports_logprobs = config.model.get("supports_logprobs", True)
+
             model = BlackboxModelWithStreaming(
                 openai_api_key=api_key,
                 model_path=model_path,
-                supports_logprobs=config.model.supports_logprobs,
+                supports_logprobs=supports_logprobs,
                 early_stopping=early_stopping,
                 generation_parameters=generation_parameters,
                 base_url=base_url,
             )
 
+            # Set up uncertainty scorer if logprobs are supported and scorer is configured
+            uncertainty_scorer = None
+            scorer_type = config.scorer.type if config.scorer else None
+            if supports_logprobs and scorer_type and POLYGRAPH_UNCERTAINTY_AVAILABLE:
+                if scorer_type == "perplexity":
+                    stat_calculators = [VLLMLogprobsCalculator()]
+                    estimator = Perplexity()
+                elif scorer_type == "sequence_prob":
+                    stat_calculators = [VLLMLogprobsCalculator()]
+                    estimator = MaximumSequenceProbability()
+                elif scorer_type == "uncertainty_pd":
+                    from llm_tts.scorers.estimator_uncertainty_pd import PDGap
+
+                    stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
+                    estimator = PDGap()
+                elif scorer_type == "entropy":
+                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                    estimator = MeanTokenEntropy()
+                elif scorer_type == "prm":
+                    # PRM uses its own model; use entropy for generation scoring
+                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                    estimator = MeanTokenEntropy()
+                else:
+                    stat_calculators = None
+                    estimator = None
+
+                if stat_calculators and estimator:
+                    uncertainty_scorer = APIUncertaintyScorer(
+                        stat_calculators=stat_calculators,
+                        estimator=estimator,
+                    )
+                    log.info(
+                        f"Created APIUncertaintyScorer with {type(estimator).__name__}"
+                    )
+
             step_generator = StepCandidateGeneratorThroughAPI(
                 model=model,
+                thinking_mode=thinking_mode,
                 detector=detector,
-                prefill_mode=config.model.prefill_mode,
+                answer_patterns=config.strategy.get(
+                    "detector_answer_patterns",
+                    [],
+                ),
+                max_new_tokens=config.generation.max_new_tokens,
+                max_answer_tokens=config.generation.get("max_answer_tokens", 512),
+                temperature=config.generation.temperature,
+                top_p=config.generation.top_p,
+                top_k=config.generation.get("top_k", 20),
+                presence_penalty=config.generation.get("presence_penalty", 0.0),
+                max_model_len=config.model.get("max_model_len", 32768),
+                prefill_mode=config.model.get("prefill_mode", False),
+                disable_thinking_mode=disable_thinking_mode,
+                supports_logprobs=supports_logprobs,
+                uncertainty_scorer=uncertainty_scorer,
+            )
+
+            log.info(
+                f"Created API step generator: thinking_mode={thinking_mode}, "
+                f"uncertainty_scorer={'yes' if uncertainty_scorer else 'no'}"
             )
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
