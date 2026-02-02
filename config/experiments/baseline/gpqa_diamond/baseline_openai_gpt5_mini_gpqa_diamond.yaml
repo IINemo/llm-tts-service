@@ -1,0 +1,71 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/gpqa_diamond/baseline_openai_gpt5_mini_gpqa_diamond
+# Baseline evaluation for GPT-5-mini on GPQA-Diamond (graduate-level science multiple choice)
+
+defaults:
+  - /config
+  - /model/openai
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "baseline_gpt5_mini_gpqa_diamond_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-gpqa-diamond
+
+# Model configuration (OpenAI API)
+model:
+  type: "openai_api"
+  model_path: "gpt-5-mini"
+  supports_logprobs: true
+  prefill_mode: false
+  max_model_len: 32768
+
+# System configuration
+system:
+  device: cpu
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+
+# Strategy - Baseline single-shot
+strategy:
+  type: baseline
+  min_step_tokens: 0
+  max_step_tokens: 32768
+  # Disable all semantic markers for baseline
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  detector_answer_patterns: []
+
+# Dataset configuration - GPQA-Diamond (graduate-level science multiple choice)
+dataset:
+  data_name: "gpqa_diamond"
+  dataset_path: "test-time-compute/test_gpqa_diamond"
+  dataset_config: null
+  dataset_split: "test"
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "char"
+  system_prompt: "Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
