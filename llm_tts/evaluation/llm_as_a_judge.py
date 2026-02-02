@@ -147,8 +147,8 @@ class EvaluatorLLMAsAJudge:
                         },
                         {"role": "user", "content": vote_prompt},
                     ],
-                    temperature=0,
-                    max_tokens=1024,
+                    temperature=1,
+                    max_completion_tokens=1024,
                 )
                 reply = response.choices[0].message.content
             except Exception as e:

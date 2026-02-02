@@ -83,7 +83,7 @@ def evaluate_sample(client, model, sample, idx, budget=1, mode="full_solution"):
                     {"role": "user", "content": vote_prompt},
                 ],
                 temperature=0,
-                max_tokens=1024,
+                max_completion_tokens=1024,
             )
             reply = response.choices[0].message.content
             label = parse_reply(reply)
