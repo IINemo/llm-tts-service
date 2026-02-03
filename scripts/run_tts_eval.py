@@ -1116,6 +1116,31 @@ def _generate_trajectories_batch(
                         "response": responses[0] if responses else "",
                     }
                     continue
+                elif isinstance(evaluator, EvaluatorMBPPPlus):
+                    # MBPP+ evaluator needs instance data with test_list
+                    # Call with proper parameters
+                    task_ids = (
+                        [instance.get("task_id")] if "task_id" in instance else None
+                    )
+                    instance_data = (
+                        [instance]
+                        if any(
+                            k in instance
+                            for k in ["test_list", "task_id", "entry_point"]
+                        )
+                        else None
+                    )
+
+                    scores = evaluator(
+                        problems=[question],
+                        solutions=[result["trajectory"]],
+                        gold_answers=[str(gold_answer_num)],
+                        task_ids=task_ids,
+                        instance_data=instance_data,
+                    )
+                    is_correct_eval = bool(scores[0]) if scores else False
+                    eval_results[eval_name] = {"is_correct": is_correct_eval}
+                    continue
                 else:
                     # Fallback: try __call__ with lists
                     result_output = evaluator(
@@ -1132,8 +1157,13 @@ def _generate_trajectories_batch(
                         is_correct_eval = False
                 eval_results[eval_name] = {"is_correct": is_correct_eval}
             except Exception as e:
-                log.warning(f"Evaluator {eval_name} failed: {e}")
-                eval_results[eval_name] = {"is_correct": False, "error": str(e)}
+                log.error(f"Evaluator {eval_name} failed: {e}")
+                traceback.print_exc()
+                # Don't store failed evaluation - let it retry in batch phase
+                log.warning(
+                    f"Skipping {eval_name} for sample {i} in phase 1, "
+                    "will retry in batch evaluation phase"
+                )
 
         # Use exact_match as primary for logging (if available)
         is_correct = eval_results.get("exact_match", {}).get("is_correct", False)
@@ -1169,6 +1199,14 @@ def _generate_trajectories_batch(
 
         if "token_stats" in result:
             result_dict["token_stats"] = result["token_stats"]
+
+        # Store dataset-specific fields for evaluators (e.g., MBPP+ test_list, task_id)
+        if "task_id" in instance:
+            result_dict["task_id"] = instance["task_id"]
+        if "test_list" in instance:
+            result_dict["test_list"] = instance["test_list"]
+        if "entry_point" in instance:
+            result_dict["entry_point"] = instance["entry_point"]
 
         results.append(result_dict)
 
@@ -1685,6 +1723,26 @@ def evaluate_results(
                         log.warning(
                             f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}"
                         )
+                elif isinstance(evaluator_fn, EvaluatorMBPPPlus):
+                    # MBPP+ evaluator needs instance data with test_list
+                    task_ids = [result.get("task_id")] if "task_id" in result else None
+                    instance_data = (
+                        [result]
+                        if any(
+                            k in result for k in ["test_list", "task_id", "entry_point"]
+                        )
+                        else None
+                    )
+
+                    eval_result = evaluator_fn(
+                        problems=[result["question"]],
+                        solutions=[solution],
+                        gold_answers=[str(result["gold_answer"])],
+                        task_ids=task_ids,
+                        instance_data=instance_data,
+                    )
+                    annotation = eval_result[0] if eval_result else 0.0
+                    is_correct = annotation == 1.0
                 else:
                     # Other evaluators use __call__ with extracted answer
                     extracted_answer = result.get(
@@ -1786,9 +1844,24 @@ def evaluate_results(
                 for r in samples_to_eval
             ]
 
+        # Prepare optional parameters for evaluators that need them (e.g., MBPP+)
+        task_ids = None
+        instance_data = None
+        if isinstance(evaluator_fn, EvaluatorMBPPPlus):
+            # Check if we have task_ids or test_list in the samples
+            if any("task_id" in r for r in samples_to_eval):
+                task_ids = [r.get("task_id") for r in samples_to_eval]
+            if any("test_list" in r or "entry_point" in r for r in samples_to_eval):
+                instance_data = samples_to_eval
+
         try:
-            # Batch evaluate
-            eval_result = evaluator_fn(problems, solutions, gold_answers)
+            # Batch evaluate - pass additional params if evaluator needs them
+            if isinstance(evaluator_fn, EvaluatorMBPPPlus):
+                eval_result = evaluator_fn(
+                    problems, solutions, gold_answers, task_ids, instance_data
+                )
+            else:
+                eval_result = evaluator_fn(problems, solutions, gold_answers)
             if isinstance(eval_result, tuple) and len(eval_result) == 3:
                 annotations, responses, consensus_scores = eval_result
             elif isinstance(eval_result, tuple) and len(eval_result) == 2:
