@@ -326,36 +326,7 @@ class EvaluatorMBPPPlus:
             if test_list:
                 return test_list
 
-        # Try to get from evalplus problems using task_id
-        if task_ids and idx < len(task_ids) and self._problems:
-            task_id = task_ids[idx]
-            if task_id in self._problems:
-                problem = self._problems[task_id]
-                # EvalPlus has base_input for test inputs
-                if "base_input" in problem and problem["base_input"]:
-                    # Construct test assertions from inputs
-                    return self._construct_tests_from_inputs(problem)
-
-        # Try to extract assertions from problem prompt
-        if idx < len(problems):
-            return self._extract_assertions_from_prompt(problems[idx])
-
         return []
-
-    def _construct_tests_from_inputs(self, problem: Dict[str, Any]) -> List[str]:
-        """Construct test assertions from EvalPlus problem inputs."""
-        # EvalPlus problems have contract/test info
-        # For now, we'll rely on assertions in the prompt
-        return []
-
-    def _extract_assertions_from_prompt(self, prompt: str) -> List[str]:
-        """Extract assert statements from problem prompt."""
-        assertions = []
-        for line in prompt.split("\n"):
-            line = line.strip()
-            if line.startswith("assert "):
-                assertions.append(line)
-        return assertions
 
     def _run_tests(
         self, code: str, test_list: List[str]
