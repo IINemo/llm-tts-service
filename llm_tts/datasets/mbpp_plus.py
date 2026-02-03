@@ -58,6 +58,14 @@ def _load_from_evalplus(subset_size: Optional[int] = None) -> List[Dict[str, Any
     formatted_data = []
 
     for task_id, problem in problems.items():
+        # Extract test_list from assertion field (newline-separated assert statements)
+        assertion_text = problem.get("assertion", "")
+        test_list = [
+            line.strip()
+            for line in assertion_text.split("\n")
+            if line.strip() and line.strip().startswith("assert ")
+        ]
+
         formatted = {
             # Standard fields for the evaluation pipeline
             "question": problem["prompt"],
@@ -67,10 +75,12 @@ def _load_from_evalplus(subset_size: Optional[int] = None) -> List[Dict[str, Any
             "entry_point": problem.get(
                 "entry_point", _extract_function_name(problem["prompt"])
             ),
-            "test": problem.get("test", ""),
+            "test_list": test_list,  # Extracted from assertion field
+            "assertion": assertion_text,  # Keep original assertion text
             "base_input": problem.get("base_input", []),
             "plus_input": problem.get("plus_input", []),
             "atol": problem.get("atol", 0),
+            "contract": problem.get("contract", ""),
         }
         formatted_data.append(formatted)
 
