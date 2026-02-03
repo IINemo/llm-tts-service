@@ -2010,9 +2010,21 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
+    # Special handling for MBPP+ to use EvalPlus API (provides correct prompt format)
+    data_name = config.dataset.get("data_name", "")
+    if data_name == "mbpp_plus" or "mbppplus" in config.dataset.dataset_path.lower():
+        from llm_tts.datasets.mbpp_plus import load_mbpp_plus
+
+        log.info(
+            "Using EvalPlus API for MBPP+ (provides correct prompt format with function name)"
+        )
+        subset_size = config.dataset.get("subset", None)
+        mbpp_data = load_mbpp_plus(subset_size=None)  # Load all, subset later
+        # Convert to HuggingFace Dataset format
+        dataset = Dataset.from_list(mbpp_data)
     # Support loading local JSON/JSONL files via data_files parameter
-    data_files = config.dataset.get("data_files", None)
-    if data_files:
+    elif config.dataset.get("data_files", None):
+        data_files = config.dataset.get("data_files", None)
         log.info(f"Loading from local file: {data_files}")
         dataset = load_dataset(
             config.dataset.dataset_path,

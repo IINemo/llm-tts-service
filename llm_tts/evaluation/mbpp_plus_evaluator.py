@@ -384,9 +384,16 @@ class EvaluatorMBPPPlus:
             samples = []
             for task_id, solution in zip(task_ids, solutions):
                 code = self._extract_code(solution)
+                # Ensure task_id is in correct format "Mbpp/X" for EvalPlus
+                if isinstance(task_id, int):
+                    task_id_str = f"Mbpp/{task_id}"
+                elif isinstance(task_id, str) and not task_id.startswith("Mbpp/"):
+                    task_id_str = f"Mbpp/{task_id}"
+                else:
+                    task_id_str = task_id
                 samples.append(
                     {
-                        "task_id": task_id,
+                        "task_id": task_id_str,
                         "solution": code,
                     }
                 )
