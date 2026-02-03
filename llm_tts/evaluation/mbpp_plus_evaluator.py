@@ -3,11 +3,14 @@ MBPP+ evaluator for code generation.
 
 This evaluator supports three modes:
 1. syntax: Quick check that code is valid Python (does NOT verify correctness)
-2. test: Run code against basic test assertions from the dataset
-3. full: Run code against complete EvalPlus test suite (requires evalplus)
+2. test: Run code against basic test assertions from the dataset (requires test_list or assertions)
+3. full: Run code against complete EvalPlus test suite (requires evalplus and task_ids)
+
+IMPORTANT: Modes are strict - if requirements are not met, evaluation will fail with an error.
 
 For full evaluation, you need:
 - evalplus package: pip install evalplus
+- task_ids parameter in __call__ method
 """
 
 import ast
@@ -38,8 +41,11 @@ class EvaluatorMBPPPlus:
 
     Supports three modes:
     - syntax: Only check if code parses (does NOT verify correctness!)
-    - test: Run code against basic test assertions (verifies correctness)
-    - full: Run against complete EvalPlus test suite
+    - test: Run code against basic test assertions (verifies correctness, requires test data)
+    - full: Run against complete EvalPlus test suite (requires evalplus + task_ids)
+
+    NOTE: Modes are strict - no automatic fallbacks. If requirements are missing,
+    evaluation will raise an error with detailed diagnostics.
     """
 
     def __init__(
@@ -53,25 +59,29 @@ class EvaluatorMBPPPlus:
         Initialize the MBPP+ evaluator.
 
         Args:
-            mode: Evaluation mode
+            mode: Evaluation mode (strict - will fail if requirements not met)
                 - "syntax": Check if generated code is valid Python (NO correctness check!)
-                - "test": Run against basic test assertions (RECOMMENDED)
-                - "full": Run against complete EvalPlus test suite
+                - "test": Run against basic test assertions (requires test_list or assertions)
+                - "full": Run against complete EvalPlus test suite (requires evalplus + task_ids)
             timeout: Timeout per test case in seconds
             min_time_limit: Minimum time limit for test execution
             gt_time_limit_factor: Factor to multiply ground truth time
+
+        Raises:
+            RuntimeError: If mode='full' but evalplus is not installed
         """
         self.mode = mode
         self.timeout = timeout
         self.min_time_limit = min_time_limit
         self.gt_time_limit_factor = gt_time_limit_factor
 
+        # Strict mode checking - no fallbacks
         if mode == "full" and not EVALPLUS_AVAILABLE:
-            log.warning(
-                "evalplus not installed. Install with: pip install evalplus\n"
-                "Falling back to test mode."
+            raise RuntimeError(
+                "Full evaluation mode requires evalplus package.\n"
+                "Install with: pip install evalplus\n"
+                "Or use mode='test' instead."
             )
-            self.mode = "test"
 
         # Load problems for test/full evaluation
         self._problems = None
@@ -80,6 +90,10 @@ class EvaluatorMBPPPlus:
                 self._problems = get_mbpp_plus()
                 log.info(f"Loaded {len(self._problems)} MBPP+ problems for evaluation")
             except Exception as e:
+                if self.mode == "full":
+                    raise RuntimeError(
+                        f"Failed to load MBPP+ problems for full evaluation: {e}"
+                    )
                 log.warning(f"Failed to load MBPP+ problems: {e}")
                 self._problems = None
 
@@ -101,9 +115,10 @@ class EvaluatorMBPPPlus:
                 return 1.0
             return 0.0
 
-        # Full mode doesn't support single scoring efficiently
-        log.warning("Full evaluation mode doesn't support single scoring")
-        return 0.0
+        raise NotImplementedError(
+            f"_score_single is not supported for mode='{self.mode}'.\n"
+            f"Use the __call__ method for batch evaluation instead."
+        )
 
     def __call__(
         self,
@@ -117,14 +132,18 @@ class EvaluatorMBPPPlus:
         Evaluate solutions.
 
         Args:
-            problems: List of problem prompts (used for test mode if no task_ids)
+            problems: List of problem prompts (can contain assert statements for test mode)
             solutions: List of model-generated solutions
             gold_answers: List of gold/reference solutions
-            task_ids: Optional list of task IDs (for test/full evaluation)
-            instance_data: Optional list of full instance data (contains test_list)
+            task_ids: Optional list of task IDs (REQUIRED for full mode, used in test mode)
+            instance_data: Optional list of full instance data (contains test_list for test mode)
 
         Returns:
             List of scores (0.0 or 1.0 for each instance)
+
+        Raises:
+            ValueError: If mode requirements are not met (e.g., full mode without task_ids,
+                test mode without test assertions)
         """
         if self.mode == "syntax":
             return self._evaluate_syntax(solutions)
@@ -134,11 +153,9 @@ class EvaluatorMBPPPlus:
             )
         elif self.mode == "full":
             if task_ids is None:
-                log.warning(
-                    "Full evaluation requires task_ids. " "Falling back to test mode."
-                )
-                return self._evaluate_test(
-                    solutions, task_ids, instance_data, problems, gold_answers
+                raise ValueError(
+                    "Full evaluation mode requires task_ids parameter.\n"
+                    "Provide task_ids or use mode='test' instead."
                 )
             return self._evaluate_full(solutions, task_ids)
         else:
@@ -197,11 +214,16 @@ class EvaluatorMBPPPlus:
             solutions: List of model-generated solutions
             task_ids: Optional list of task IDs
             instance_data: Optional list of instance data with test_list
-            problems: List of problem prompts (fallback for extracting tests)
+            problems: List of problem prompts (for extracting assert statements)
             gold_answers: List of gold solutions (not used directly)
 
         Returns:
             List of scores (1.0 if all tests pass, 0.0 otherwise)
+
+        Raises:
+            ValueError: If no test assertions found for any sample.
+                Test mode requires test_list in instance_data, task_ids with MBPP+ problems,
+                or 'assert' statements in problem prompts.
         """
         scores = []
         passed_count = 0
@@ -219,9 +241,57 @@ class EvaluatorMBPPPlus:
             test_list = self._get_test_list(idx, task_ids, instance_data, problems)
 
             if not test_list:
-                log.warning(f"No tests found for sample {idx}, using syntax check only")
-                scores.append(1.0 if self._is_valid_python(code) else 0.0)
-                continue
+                # Collect diagnostic information
+                has_instance_data = instance_data is not None and idx < len(
+                    instance_data
+                )
+                has_task_ids = task_ids is not None and idx < len(task_ids)
+                has_problems = idx < len(problems)
+
+                error_msg = (
+                    f"No tests found for sample {idx} in test evaluation mode.\n"
+                    f"Test mode requires test assertions from one of these sources:\n"
+                    f"  1. instance_data[{idx}]['test_list'] - "
+                    f"{'PRESENT' if has_instance_data else 'MISSING'}\n"
+                    f"  2. task_ids[{idx}] in MBPP+ problems - "
+                    f"{'PRESENT' if has_task_ids else 'MISSING'}\n"
+                    f"  3. 'assert' statements in problems[{idx}] - "
+                    f"{'PRESENT' if has_problems else 'MISSING'}\n"
+                    f"Use mode='syntax' for syntax-only validation, or provide proper test data."
+                )
+
+                if has_instance_data:
+                    test_list_value = instance_data[idx].get("test_list", "NOT_FOUND")
+                    error_msg += (
+                        f"\n  instance_data[{idx}]['test_list'] = {test_list_value}"
+                    )
+
+                if has_task_ids:
+                    task_id = task_ids[idx]
+                    error_msg += f"\n  task_ids[{idx}] = {task_id}"
+                    if self._problems:
+                        if task_id in self._problems:
+                            error_msg += (
+                                " (found in MBPP+ problems but no tests extracted)"
+                            )
+                        else:
+                            error_msg += " (NOT found in MBPP+ problems)"
+
+                if has_problems:
+                    prompt_lines = problems[idx].split("\n")
+                    assert_lines = [
+                        line.strip()
+                        for line in prompt_lines
+                        if line.strip().startswith("assert ")
+                    ]
+                    if assert_lines:
+                        error_msg += (
+                            f"\n  Found {len(assert_lines)} assert statements in prompt"
+                        )
+                    else:
+                        error_msg += "\n  No 'assert' statements found in prompt"
+
+                raise ValueError(error_msg)
 
             # Run tests
             passed, total, error = self._run_tests(code, test_list)
