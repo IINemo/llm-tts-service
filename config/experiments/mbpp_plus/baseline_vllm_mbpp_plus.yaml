@@ -68,7 +68,7 @@ dataset:
   data_name: "mbpp_plus"
   dataset_path: "evalplus/mbppplus"
   dataset_split: "test"  # 378 problems
-  subset: 5
+  subset: null
   offset: 0
   question_field: "prompt"
   answer_field: "code"
@@ -81,5 +81,5 @@ evaluation:
   evaluators:
     - mbpp_plus
   mbpp_plus:
-    mode: syntax  # or "full" for EvalPlus test execution
+    mode: test
     timeout: 10
