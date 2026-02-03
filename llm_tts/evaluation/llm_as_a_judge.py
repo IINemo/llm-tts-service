@@ -22,6 +22,11 @@ Your task is to assess whether the solution arrives at the **correct final answe
    - "1/(2√X)" equals "(1/2)X^(-1/2)"
    - "-8 - 8√3 i" equals "-8-8√3i" (spacing differences don't matter)
    - "0.5" equals "1/2"
+4. Answers must be EXACTLY equal numerically. There is NO tolerance for approximate values. Examples of INCORRECT answers:
+   - "698" does NOT equal "700"
+   - "9.7" does NOT equal "9.6"
+   - "0.147" does NOT equal "0.15"
+   - "0.822" does NOT equal "8.233e-19" (different numbers, even if same physical quantity in different units)
 
 Respond using the **exact format** below, do not include any text outside this template.
 Output format:
@@ -53,7 +58,12 @@ Your task is to assess whether the proposed answer is correct.
    - "0.5" equals "1/2"
    - "x = 2" equals "2"
    - "\\frac{{1}}{{2}}" equals "0.5"
-2. Consider the problem context when comparing answers (e.g., units, variables).
+2. Answers must be EXACTLY equal numerically. There is NO tolerance for approximate values. Examples of INCORRECT answers:
+   - "698" does NOT equal "700"
+   - "9.7" does NOT equal "9.6"
+   - "0.147" does NOT equal "0.15"
+   - "0.822" does NOT equal "8.233e-19" (different numbers, even if same physical quantity in different units)
+3. Consider the problem context when comparing answers (e.g., units, variables).
 
 Respond using the **exact format** below, do not include any text outside this template.
 Output format:
@@ -147,8 +157,8 @@ class EvaluatorLLMAsAJudge:
                         },
                         {"role": "user", "content": vote_prompt},
                     ],
-                    temperature=0,
-                    max_tokens=1024,
+                    temperature=1,
+                    max_completion_tokens=1024,
                 )
                 reply = response.choices[0].message.content
             except Exception as e:
