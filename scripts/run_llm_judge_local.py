@@ -82,8 +82,8 @@ def evaluate_sample(client, model, sample, idx, budget=1, mode="full_solution"):
                     {"role": "system", "content": "You are an intelligent assistant."},
                     {"role": "user", "content": vote_prompt},
                 ],
-                temperature=0,
-                max_tokens=1024,
+                temperature=1,
+                max_completion_tokens=1024,
             )
             reply = response.choices[0].message.content
             label = parse_reply(reply)
