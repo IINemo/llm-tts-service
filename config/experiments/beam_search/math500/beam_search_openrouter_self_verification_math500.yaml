@@ -1,0 +1,84 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/math500/beam_search_openrouter_self_verification_math500
+#
+# Beam Search with Self-Verification Scorer (Tree of Thoughts paper)
+# Uses OpenRouter API - no GPU required!
+#
+# Based on: "Tree of Thoughts: Deliberate Problem Solving with Large Language Models"
+# Paper: https://arxiv.org/abs/2305.10601
+
+defaults:
+  - /config
+  - /dataset/math_500
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - /scorer/self_verification
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "beam_search_openrouter_self_verification_math500_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-math500
+
+# Model configuration (OpenRouter API)
+model:
+  type: openai_api
+  provider: openrouter
+  model_name: "qwen/qwen-2.5-7b-instruct"
+  supports_logprobs: false
+  prefill_mode: false
+  disable_thinking_mode: true
+
+# System configuration
+system:
+  device: cpu  # No GPU needed for API
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 2048
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 50
+  batch_size: 1
+  max_length: 4096
+
+# Strategy - Beam Search
+strategy:
+  type: beam_search
+  beam_size: 3
+  candidates_per_beam: 3
+  max_steps: 10
+  aggregation: mean
+  batch_generation: false  # API doesn't support true batching
+  prompt_buffer: 500
+  min_step_tokens: 10
+  max_step_tokens: 512
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: false
+  use_reasoning: true
+  use_correction: false
+
+# Self-Verification Scorer (Tree of Thoughts)
+scorer:
+  type: self_verification
+  method: value  # "value" or "vote"
+  n_evaluate_sample: 3  # Paper uses 3 samples
+  temperature: 0.7
+  max_tokens: 100
+  timeout: 60
+
+# Dataset configuration
+dataset:
+  subset: 50  # Start small for testing
+  offset: 0
+  data_name: math
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"

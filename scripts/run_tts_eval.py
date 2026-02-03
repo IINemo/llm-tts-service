@@ -22,6 +22,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+import clearml
 import hydra
 import numpy as np
 import torch
@@ -72,6 +73,7 @@ from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreami
 from llm_tts.scorers import (
     StepScorerConfidence,
     StepScorerPRM,
+    StepScorerSelfVerification,
     StepScorerUncertainty,
     TotValueScorer,
     TotVoteScorer,
@@ -257,6 +259,22 @@ def create_scorer(config):
             scorer.init_flop_calculator(config.scorer.model_path)
         except Exception as e:
             log.warning(f"Could not init PRM FLOP calculator: {e}")
+    elif config.scorer.type == "self_verification":
+        # Self-Verification Scorer (Tree of Thoughts paper)
+        # Model will be set later in create_model() after model is initialized
+        scorer = StepScorerSelfVerification(
+            model=None,  # Set later
+            method=getattr(config.scorer, "method", "value"),
+            n_evaluate_sample=getattr(config.scorer, "n_evaluate_sample", 3),
+            temperature=getattr(config.scorer, "temperature", 0.7),
+            max_tokens=getattr(config.scorer, "max_tokens", 100),
+            timeout=getattr(config.scorer, "timeout", 60),
+            value_prompt=getattr(config.scorer, "value_prompt", None),
+            value_prompt_file=getattr(config.scorer, "value_prompt_file", None),
+            vote_prompt=getattr(config.scorer, "vote_prompt", None),
+            vote_prompt_file=getattr(config.scorer, "vote_prompt_file", None),
+            use_vllm=False,  # Will be set based on model type
+        )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
     elif config.scorer.type in (
@@ -570,6 +588,21 @@ def create_model(config):
 def create_tts_strategy(
     config, model, step_generator, scorer, output_dir=None, flop_calculator=None
 ):
+    if scorer is not None and isinstance(scorer, StepScorerSelfVerification):
+        # For API models, use the model directly
+        if isinstance(model, BlackboxModelWithStreaming):
+            scorer.set_model(model, use_vllm=False)
+            log.info("Self-verification scorer: using API backend")
+        # For vLLM models, use the underlying vLLM engine
+        elif hasattr(model, "vllm_engine"):
+            scorer.set_model(model.vllm_engine, use_vllm=True)
+            log.info("Self-verification scorer: using vLLM backend")
+        else:
+            log.warning(
+                "Self-verification scorer: unknown model type, may not work correctly"
+            )
+            scorer.set_model(model, use_vllm=False)
+
     if config.strategy.type == "baseline":
         # Get eos_patterns from config, default to ["<end of response>"]
         eos_patterns = getattr(config.strategy, "detector_eos_patterns", None)
@@ -2015,6 +2048,7 @@ def main(config):
 
 
 if __name__ == "__main__":
+    task = clearml.Task.init(project_name="llm-tts", task_name="tts-eval-experiment")
     # Parse custom resume arguments before Hydra processes sys.argv
     parse_resume_arguments()
     main()

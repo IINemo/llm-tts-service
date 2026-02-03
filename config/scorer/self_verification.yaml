@@ -1,0 +1,32 @@
+# Self-Verification Scorer (Tree of Thoughts)
+# Based on "Tree of Thoughts: Deliberate Problem Solving with Large Language Models"
+# Paper: https://arxiv.org/abs/2305.10601
+
+type: self_verification
+
+# Evaluation method: "value" or "vote"
+# - value: Evaluates each step independently (sure/likely/unlikely/impossible)
+# - vote: Presents all candidates and asks which is most promising
+method: value
+
+# Number of evaluation samples for aggregation (paper uses 3)
+n_evaluate_sample: 3
+
+# Sampling temperature for evaluation
+temperature: 0.7
+
+# Maximum tokens for evaluation response
+max_tokens: 100
+
+# Timeout in seconds for API calls
+timeout: 60
+
+# Prompt files (relative to config/prompts/, or absolute path)
+# Defaults: tree-of-thought/self_verification/value_prompt.txt
+#           tree-of-thought/self_verification/vote_prompt.txt
+# value_prompt_file: null
+# vote_prompt_file: null
+
+# Direct prompt strings (override files if set)
+# value_prompt: null
+# vote_prompt: null
