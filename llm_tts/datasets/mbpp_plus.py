@@ -112,8 +112,8 @@ def _load_from_huggingface(
             "task_id": f"Mbpp/{item['task_id']}",
             "entry_point": entry_point,
             "test": item.get("test", ""),
-            "test_list": item.get("test_list", []),
-            "test_imports": item.get("test_imports", []),
+            "test_list": item["test_list"],
+            "test_imports": item["test_imports"],
         }
         formatted_data.append(formatted)
 
