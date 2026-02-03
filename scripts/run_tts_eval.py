@@ -73,6 +73,7 @@ from llm_tts.evaluation import (
     EvaluatorAlignScore,
     EvaluatorExactMatch,
     EvaluatorLLMAsAJudge,
+    EvaluatorMBPPPlus,
 )
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
@@ -221,6 +222,18 @@ def build_evaluators(config):
                 config.evaluation.alignscore, resolve=True
             )
             evaluators["alignscore"] = EvaluatorAlignScore(**align_cfg)
+
+        elif evaluator_name == "mbpp_plus":
+            # MBPP+ evaluator for code generation
+            mbpp_cfg = config.evaluation.get("mbpp_plus", {})
+            if mbpp_cfg:
+                mbpp_cfg = OmegaConf.to_container(mbpp_cfg, resolve=True)
+            else:
+                mbpp_cfg = {}
+            evaluators["mbpp_plus"] = EvaluatorMBPPPlus(
+                mode=mbpp_cfg.get("mode", "syntax"),
+                timeout=mbpp_cfg.get("timeout", 10),
+            )
 
         else:
             log.warning(f"Unknown evaluator type '{evaluator_name}', skipping")
