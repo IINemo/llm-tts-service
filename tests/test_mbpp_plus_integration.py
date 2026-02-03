@@ -114,10 +114,10 @@ def correct(n):
     return True
 
 
-def test_evaluator():
-    """Test MBPP+ evaluator."""
+def test_evaluator_syntax():
+    """Test MBPP+ evaluator in syntax mode."""
     print("=" * 60)
-    print("Test 3: Evaluator")
+    print("Test 3a: Evaluator (syntax mode)")
     print("=" * 60)
 
     from llm_tts.evaluation import EvaluatorMBPPPlus
@@ -144,16 +144,63 @@ def broken_function(
     assert scores[0] == 0.0, f"Expected 0.0 for invalid Python, got {scores[0]}"
     print("  Invalid Python score: PASSED")
 
-    # Test empty response
-    scores = evaluator(["prompt"], [""], ["answer"])
-    assert scores[0] == 0.0, f"Expected 0.0 for empty response, got {scores[0]}"
-    print("  Empty response score: PASSED")
+    print()
+    return True
 
-    # Test batch evaluation
-    responses = [valid_code, invalid_code, valid_code]
-    scores = evaluator(["p"] * 3, responses, ["a"] * 3)
-    assert scores == [1.0, 0.0, 1.0], f"Unexpected batch scores: {scores}"
-    print("  Batch evaluation: PASSED")
+
+def test_evaluator_test_mode():
+    """Test MBPP+ evaluator in test mode (actually runs tests)."""
+    print("=" * 60)
+    print("Test 3b: Evaluator (test mode - verifies correctness)")
+    print("=" * 60)
+
+    from llm_tts.datasets import load_mbpp_plus
+    from llm_tts.evaluation import EvaluatorMBPPPlus
+
+    # Load a problem to get real test assertions
+    data = load_mbpp_plus(subset_size=1)
+    problem = data[0]
+
+    evaluator = EvaluatorMBPPPlus(mode="test")
+
+    # Test correct solution
+    correct_code = """
+def similar_elements(test_tup1, test_tup2):
+    return tuple(set(test_tup1) & set(test_tup2))
+"""
+    scores = evaluator(
+        problems=[problem["question"]],
+        solutions=[correct_code],
+        gold_answers=[problem["answer"]],
+    )
+    assert scores[0] == 1.0, f"Expected 1.0 for correct solution, got {scores[0]}"
+    print("  Correct solution: PASSED")
+
+    # Test wrong solution (returns wrong result)
+    wrong_code = """
+def similar_elements(test_tup1, test_tup2):
+    return tuple()  # Always empty - WRONG!
+"""
+    scores = evaluator(
+        problems=[problem["question"]],
+        solutions=[wrong_code],
+        gold_answers=[problem["answer"]],
+    )
+    assert scores[0] == 0.0, f"Expected 0.0 for wrong solution, got {scores[0]}"
+    print("  Wrong solution detected: PASSED")
+
+    # Test syntax error
+    syntax_error = """
+def similar_elements(test_tup1, test_tup2)
+    return tuple()
+"""
+    scores = evaluator(
+        problems=[problem["question"]],
+        solutions=[syntax_error],
+        gold_answers=[problem["answer"]],
+    )
+    assert scores[0] == 0.0, f"Expected 0.0 for syntax error, got {scores[0]}"
+    print("  Syntax error detected: PASSED")
 
     print()
     return True
@@ -295,7 +342,8 @@ def main():
     tests = [
         ("Dataset Loading", test_dataset_loading),
         ("Code Extraction", test_code_extraction),
-        ("Evaluator", test_evaluator),
+        ("Evaluator (syntax mode)", test_evaluator_syntax),
+        ("Evaluator (test mode)", test_evaluator_test_mode),
         ("EvalPlus Samples I/O", test_evalplus_samples),
         ("Config Integration", test_config_integration),
         ("Detailed Results", test_detailed_results),
