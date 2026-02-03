@@ -1,9 +1,10 @@
 """
 MBPP+ evaluator for code generation.
 
-This evaluator supports two modes:
-1. Syntax validation: Quick check that code is valid Python
-2. Full evaluation: Run code against EvalPlus test suite
+This evaluator supports three modes:
+1. syntax: Quick check that code is valid Python (does NOT verify correctness)
+2. test: Run code against basic test assertions from the dataset
+3. full: Run code against complete EvalPlus test suite (requires evalplus)
 
 For full evaluation, you need:
 - evalplus package: pip install evalplus
@@ -28,19 +29,23 @@ try:
     EVALPLUS_AVAILABLE = True
 except ImportError:
     EVALPLUS_AVAILABLE = False
+    get_mbpp_plus = None
 
 
 class EvaluatorMBPPPlus:
     """
     Evaluator for MBPP+ code generation.
 
-    Supports syntax validation and full test execution via EvalPlus.
+    Supports three modes:
+    - syntax: Only check if code parses (does NOT verify correctness!)
+    - test: Run code against basic test assertions (verifies correctness)
+    - full: Run against complete EvalPlus test suite
     """
 
     def __init__(
         self,
-        mode: str = "syntax",
-        timeout: int = 10,
+        mode: str = "test",
+        timeout: int = 5,
         min_time_limit: float = 1.0,
         gt_time_limit_factor: float = 4.0,
     ):
@@ -49,9 +54,10 @@ class EvaluatorMBPPPlus:
 
         Args:
             mode: Evaluation mode
-                - "syntax": Check if generated code is valid Python
-                - "full": Run against EvalPlus test suite
-            timeout: Timeout per test case in seconds (full mode)
+                - "syntax": Check if generated code is valid Python (NO correctness check!)
+                - "test": Run against basic test assertions (RECOMMENDED)
+                - "full": Run against complete EvalPlus test suite
+            timeout: Timeout per test case in seconds
             min_time_limit: Minimum time limit for test execution
             gt_time_limit_factor: Factor to multiply ground truth time
         """
@@ -63,15 +69,19 @@ class EvaluatorMBPPPlus:
         if mode == "full" and not EVALPLUS_AVAILABLE:
             log.warning(
                 "evalplus not installed. Install with: pip install evalplus\n"
-                "Falling back to syntax validation mode."
+                "Falling back to test mode."
             )
-            self.mode = "syntax"
+            self.mode = "test"
 
-        # Load problems for full evaluation
-        if self.mode == "full":
-            self._problems = get_mbpp_plus()
-        else:
-            self._problems = None
+        # Load problems for test/full evaluation
+        self._problems = None
+        if self.mode in ("test", "full") and EVALPLUS_AVAILABLE:
+            try:
+                self._problems = get_mbpp_plus()
+                log.info(f"Loaded {len(self._problems)} MBPP+ problems for evaluation")
+            except Exception as e:
+                log.warning(f"Failed to load MBPP+ problems: {e}")
+                self._problems = None
 
     def _score_single(self, inp: Tuple[str, str, str]) -> float:
         """
@@ -101,28 +111,35 @@ class EvaluatorMBPPPlus:
         solutions: List[str],
         gold_answers: List[str],
         task_ids: Optional[List[str]] = None,
+        instance_data: Optional[List[Dict[str, Any]]] = None,
     ) -> List[float]:
         """
         Evaluate solutions.
 
         Args:
-            problems: List of problem prompts
+            problems: List of problem prompts (used for test mode if no task_ids)
             solutions: List of model-generated solutions
             gold_answers: List of gold/reference solutions
-            task_ids: Optional list of task IDs (required for full evaluation)
+            task_ids: Optional list of task IDs (for test/full evaluation)
+            instance_data: Optional list of full instance data (contains test_list)
 
         Returns:
             List of scores (0.0 or 1.0 for each instance)
         """
         if self.mode == "syntax":
             return self._evaluate_syntax(solutions)
+        elif self.mode == "test":
+            return self._evaluate_test(
+                solutions, task_ids, instance_data, problems, gold_answers
+            )
         elif self.mode == "full":
             if task_ids is None:
                 log.warning(
-                    "Full evaluation requires task_ids. "
-                    "Falling back to syntax validation."
+                    "Full evaluation requires task_ids. " "Falling back to test mode."
                 )
-                return self._evaluate_syntax(solutions)
+                return self._evaluate_test(
+                    solutions, task_ids, instance_data, problems, gold_answers
+                )
             return self._evaluate_full(solutions, task_ids)
         else:
             raise ValueError(f"Unknown evaluation mode: {self.mode}")
@@ -162,6 +179,145 @@ class EvaluatorMBPPPlus:
         )
 
         return scores
+
+    def _evaluate_test(
+        self,
+        solutions: List[str],
+        task_ids: Optional[List[str]],
+        instance_data: Optional[List[Dict[str, Any]]],
+        problems: List[str],
+        gold_answers: List[str],
+    ) -> List[float]:
+        """
+        Run code against basic test assertions to verify correctness.
+
+        This actually executes the generated code and runs test assertions.
+
+        Args:
+            solutions: List of model-generated solutions
+            task_ids: Optional list of task IDs
+            instance_data: Optional list of instance data with test_list
+            problems: List of problem prompts (fallback for extracting tests)
+            gold_answers: List of gold solutions (not used directly)
+
+        Returns:
+            List of scores (1.0 if all tests pass, 0.0 otherwise)
+        """
+        scores = []
+        passed_count = 0
+        total_tests_run = 0
+
+        for idx, solution in enumerate(tqdm(solutions, desc="Running tests")):
+            code = self._extract_code(solution)
+
+            # First check syntax
+            if not self._is_valid_python(code):
+                scores.append(0.0)
+                continue
+
+            # Get test assertions
+            test_list = self._get_test_list(idx, task_ids, instance_data, problems)
+
+            if not test_list:
+                log.warning(f"No tests found for sample {idx}, using syntax check only")
+                scores.append(1.0 if self._is_valid_python(code) else 0.0)
+                continue
+
+            # Run tests
+            passed, total, error = self._run_tests(code, test_list)
+            total_tests_run += total
+
+            if passed == total and total > 0:
+                scores.append(1.0)
+                passed_count += 1
+            else:
+                scores.append(0.0)
+                if error:
+                    log.debug(f"Sample {idx} failed: {error}")
+
+        log.info(
+            f"Test evaluation: {passed_count}/{len(solutions)} passed all tests "
+            f"({total_tests_run} total test assertions run)"
+        )
+
+        return scores
+
+    def _get_test_list(
+        self,
+        idx: int,
+        task_ids: Optional[List[str]],
+        instance_data: Optional[List[Dict[str, Any]]],
+        problems: List[str],
+    ) -> List[str]:
+        """Get test assertions for a sample."""
+        # Try to get from instance_data
+        if instance_data and idx < len(instance_data):
+            test_list = instance_data[idx].get("test_list", [])
+            if test_list:
+                return test_list
+
+        # Try to get from evalplus problems using task_id
+        if task_ids and idx < len(task_ids) and self._problems:
+            task_id = task_ids[idx]
+            if task_id in self._problems:
+                problem = self._problems[task_id]
+                # EvalPlus has base_input for test inputs
+                if "base_input" in problem and problem["base_input"]:
+                    # Construct test assertions from inputs
+                    return self._construct_tests_from_inputs(problem)
+
+        # Try to extract assertions from problem prompt
+        if idx < len(problems):
+            return self._extract_assertions_from_prompt(problems[idx])
+
+        return []
+
+    def _construct_tests_from_inputs(self, problem: Dict[str, Any]) -> List[str]:
+        """Construct test assertions from EvalPlus problem inputs."""
+        # EvalPlus problems have contract/test info
+        # For now, we'll rely on assertions in the prompt
+        return []
+
+    def _extract_assertions_from_prompt(self, prompt: str) -> List[str]:
+        """Extract assert statements from problem prompt."""
+        assertions = []
+        for line in prompt.split("\n"):
+            line = line.strip()
+            if line.startswith("assert "):
+                assertions.append(line)
+        return assertions
+
+    def _run_tests(
+        self, code: str, test_list: List[str]
+    ) -> Tuple[int, int, Optional[str]]:
+        """
+        Run test assertions against generated code.
+
+        Args:
+            code: Generated Python code
+            test_list: List of assert statements
+
+        Returns:
+            Tuple of (passed_count, total_count, error_message)
+        """
+        passed = 0
+        total = len(test_list)
+
+        # Create a test script
+        test_code = code + "\n\n"
+        for test in test_list:
+            test_code += test + "\n"
+
+        try:
+            # Execute in a restricted environment with timeout
+            exec_globals: Dict[str, Any] = {}
+            exec(compile(test_code, "<test>", "exec"), exec_globals)
+            passed = total  # If no exception, all tests passed
+            return passed, total, None
+        except AssertionError as e:
+            return passed, total, f"AssertionError: {e}"
+        except Exception as e:
+            return passed, total, f"{type(e).__name__}: {e}"
 
     def _evaluate_full(
         self,

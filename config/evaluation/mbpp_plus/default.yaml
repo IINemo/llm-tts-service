@@ -1,14 +1,16 @@
 # @package evaluation.mbpp_plus
 # MBPP+ evaluator configuration
 #
-# Supports two modes:
-# - syntax: Quick check that code is valid Python (no execution)
-# - full: Run against EvalPlus test suite (requires evalplus package)
+# Supports three modes:
+# - syntax: Quick check that code is valid Python (does NOT verify correctness!)
+# - test: Run code against basic test assertions (RECOMMENDED - verifies correctness)
+# - full: Run against complete EvalPlus test suite (requires evalplus package)
 
 # Evaluation mode
-# - "syntax": Validate Python syntax only (fast, no dependencies)
-# - "full": Execute tests using EvalPlus (requires: pip install evalplus)
-mode: syntax
+# - "syntax": Validate Python syntax only (fast, but NO correctness check!)
+# - "test": Run basic test assertions (RECOMMENDED - actually checks correctness)
+# - "full": Execute full EvalPlus tests (requires: pip install evalplus)
+mode: test
 
-# Timeout per test case in seconds (full mode only)
-timeout: 10
+# Timeout per test case in seconds
+timeout: 5
