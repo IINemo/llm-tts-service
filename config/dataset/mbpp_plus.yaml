@@ -1,0 +1,27 @@
+# @package dataset
+# MBPP+ dataset configuration
+#
+# MBPP+ (Mostly Basic Python Problems Plus) is an enhanced version of MBPP
+# with 35x more test cases for rigorous evaluation of code generation.
+#
+# Dataset: https://huggingface.co/datasets/evalplus/mbppplus
+# EvalPlus: https://github.com/evalplus/evalplus
+# - 378 coding problems (test split)
+# - Each problem: prompt -> function implementation
+
+dataset_path: "evalplus/mbppplus"
+dataset_split: "test"  # 378 problems
+subset: null  # Only process first N samples (null for all)
+prompt_file: ./config/prompts/mbpp_plus.txt
+answer_format: "code"  # Code generation format
+question_field: "prompt"  # Field containing the problem prompt
+answer_field: "code"  # Field containing the reference solution
+data_name: "mbpp_plus"  # Used for evaluation routing
+
+# Additional fields available in each instance:
+# - task_id: Unique identifier (e.g., "Mbpp/2")
+# - code: Reference solution
+# - prompt: Problem description
+# - test: Complete test code (from EvalPlus)
+# - test_list: List of basic test assertions
+# - test_imports: Required imports for tests
