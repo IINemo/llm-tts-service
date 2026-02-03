@@ -70,7 +70,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
             "api_key": openai_api_key,
             "timeout": Timeout(
                 connect=10.0,  # 10s to establish connection
-                read=60.0,  # 60s to receive response/next chunk
+                read=300.0,  # 60s to receive response/next chunk
                 write=10.0,  # 10s to send request
                 pool=10.0,  # 10s to get connection from pool
             ),
@@ -115,7 +115,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
         # Create new client with same parameters
         client_kwargs = {
             "api_key": self._api_key,
-            "timeout": Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
+            "timeout": Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0),
             "max_retries": 0,
         }
         if self._base_url:

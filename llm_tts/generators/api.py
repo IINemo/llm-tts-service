@@ -15,7 +15,6 @@ import copy
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from llm_tts.generators.base import (
@@ -34,85 +33,17 @@ log = logging.getLogger(__name__)
 
 
 # =========================================================================
-# Logprob conversion: API format → lm-polygraph format
+# Logprob conversion and uncertainty scoring from lm-polygraph
 # =========================================================================
 
+from lm_polygraph.utils.api_with_uncertainty import (
+    APILogprobData,
+    APIWithUncertainty,
+    convert_api_logprobs,
+)
 
-@dataclass
-class APILogprobData:
-    """Mimics vLLM logprob entry so that lm-polygraph stat calculators
-    can access .logprob and .token attributes identically."""
-
-    logprob: float
-    token: str
-
-
-def convert_api_logprobs(api_logprobs: List[Dict]) -> tuple:
-    """Convert OpenAI API logprobs to lm-polygraph/vLLM format.
-
-    API returns: [{token: str, logprob: float, top_logprobs: [{token, logprob}]}]
-    lm-polygraph expects: (List[int], List[Dict[int → obj_with_logprob_attr]])
-
-    Uses hash-based pseudo token IDs since API doesn't provide real IDs.
-
-    Args:
-        api_logprobs: List of logprob entries from OpenAI API.
-
-    Returns:
-        Tuple of (pseudo_token_ids, vllm_format_logprobs).
-    """
-    token_ids = []
-    logprobs = []
-
-    for entry in api_logprobs:
-        main_id = hash(entry["token"]) & 0xFFFFFFFF
-        token_ids.append(main_id)
-        logprob_dict = {main_id: APILogprobData(entry["logprob"], entry["token"])}
-        for top in entry.get("top_logprobs", []):
-            tid = hash(top["token"]) & 0xFFFFFFFF
-            logprob_dict[tid] = APILogprobData(top["logprob"], top["token"])
-        logprobs.append(logprob_dict)
-
-    return token_ids, logprobs
-
-
-# =========================================================================
-# Uncertainty scorer for API models
-# =========================================================================
-
-
-class APIUncertaintyScorer:
-    """Computes uncertainty scores from API logprobs using lm-polygraph components.
-
-    Wraps lm-polygraph stat_calculators and estimator to score token sequences
-    from API logprobs, mirroring VLLMWithUncertainty.score().
-
-    Args:
-        stat_calculators: List of lm-polygraph stat calculators (e.g., VLLMLogprobsCalculator).
-        estimator: lm-polygraph estimator (e.g., MeanTokenEntropy, Perplexity).
-    """
-
-    def __init__(self, stat_calculators, estimator):
-        self.stat_calculators = stat_calculators
-        self.estimator = estimator
-
-    def score(self, token_ids: List[int], logprobs: List[Dict]) -> float:
-        """Compute uncertainty score from token IDs and logprobs.
-
-        Args:
-            token_ids: Pseudo token IDs from convert_api_logprobs.
-            logprobs: Logprob dicts in vLLM format from convert_api_logprobs.
-
-        Returns:
-            Uncertainty score (float). Higher = more uncertain.
-        """
-        if not token_ids:
-            return 0.0
-
-        deps = {"token_ids": token_ids, "logprobs": logprobs}
-        for calc in self.stat_calculators:
-            deps.update(calc(deps))
-        return float(self.estimator(deps)[0])
+# Backward compatibility alias
+APIUncertaintyScorer = APIWithUncertainty
 
 
 # =========================================================================
@@ -149,12 +80,11 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         prefill_mode: If True, use assistant prefill for trajectory continuation.
         disable_thinking_mode: Controls enable_thinking in chat template.
         supports_logprobs: Whether the API supports logprobs.
-        uncertainty_scorer: Optional APIUncertaintyScorer for uncertainty scoring.
     """
 
     def __init__(
         self,
-        model: "BlackboxModelWithStreaming",
+        model,
         thinking_mode: bool = False,
         detector: Optional[ThinkingMarkerDetector] = None,
         answer_patterns: Optional[List[str]] = None,
@@ -169,7 +99,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         prefill_mode: bool = False,
         disable_thinking_mode: Optional[bool] = None,
         supports_logprobs: bool = True,
-        uncertainty_scorer: Optional[APIUncertaintyScorer] = None,
     ):
         super().__init__(generation_batch_size=1024, flop_calculator=flop_calculator)
 
@@ -178,7 +107,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self.disable_thinking_mode = disable_thinking_mode
         self.prefill_mode = prefill_mode
         self.supports_logprobs = supports_logprobs
-        self.uncertainty_scorer = uncertainty_scorer
 
         # Store generation parameters
         self.max_new_tokens = max_new_tokens
@@ -472,15 +400,28 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         # client-side early stopping. Without this, n=1 calls would take the
         # model's streaming path and BoundaryEarlyStopping would cut generation
         # at the first step boundary — breaking baseline, answer generation, etc.
-        results = self.model.generate_texts(
-            [request_messages],
-            max_new_tokens=max_tokens,
-            temperature=self.temperature,
-            n=n,
-            output_scores=self.supports_logprobs,
-            stop=stop,
-            early_stopping=None,
-        )
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                results = self.model.generate_texts(
+                    [request_messages],
+                    max_new_tokens=max_tokens,
+                    temperature=self.temperature,
+                    n=n,
+                    output_scores=self.supports_logprobs,
+                    stop=stop,
+                    early_stopping=None,
+                    timeout=300,
+                )
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    log.warning(f"API call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait}s...")
+                    import time
+                    time.sleep(wait)
+                else:
+                    raise
 
         if not results or len(results) == 0:
             raise ValueError("No result returned from batch generation")
@@ -507,9 +448,10 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         Returns:
             Dict with uncertainty_score, validity_score, token_ids, logprobs.
         """
-        if api_logprobs and self.uncertainty_scorer is not None:
+        has_scorer = hasattr(self.model, "estimator")
+        if api_logprobs and has_scorer:
             token_ids, logprobs = convert_api_logprobs(api_logprobs)
-            uncertainty_score = self.uncertainty_scorer.score(token_ids, logprobs)
+            uncertainty_score = self.model.score(token_ids, logprobs)
             flat_logprobs = []
             for tid, lp_dict in zip(token_ids, logprobs):
                 if tid in lp_dict:

@@ -523,7 +523,7 @@ def create_model(config):
         else:
             # Other strategies use boundary detection via early stopping
             from llm_tts.early_stopping import BoundaryEarlyStopping
-            from llm_tts.generators.api import APIUncertaintyScorer
+            from lm_polygraph.utils import APIWithUncertainty
 
             # Determine thinking mode (same logic as vLLM)
             disable_thinking_mode = config.model.get("disable_thinking_mode", None)
@@ -564,7 +564,6 @@ def create_model(config):
             )
 
             # Set up uncertainty scorer if logprobs are supported and scorer is configured
-            uncertainty_scorer = None
             scorer_type = config.scorer.type if config.scorer else None
             if supports_logprobs and scorer_type and POLYGRAPH_UNCERTAINTY_AVAILABLE:
                 if scorer_type == "perplexity":
@@ -590,12 +589,14 @@ def create_model(config):
                     estimator = None
 
                 if stat_calculators and estimator:
-                    uncertainty_scorer = APIUncertaintyScorer(
+                    # Wrap model with uncertainty scorer (same pattern as VLLMWithUncertainty)
+                    model = APIWithUncertainty(
+                        model=model,
                         stat_calculators=stat_calculators,
                         estimator=estimator,
                     )
                     log.info(
-                        f"Created APIUncertaintyScorer with {type(estimator).__name__}"
+                        f"Wrapped model with APIWithUncertainty({type(estimator).__name__})"
                     )
 
             step_generator = StepCandidateGeneratorThroughAPI(
@@ -616,12 +617,11 @@ def create_model(config):
                 prefill_mode=config.model.get("prefill_mode", False),
                 disable_thinking_mode=disable_thinking_mode,
                 supports_logprobs=supports_logprobs,
-                uncertainty_scorer=uncertainty_scorer,
             )
 
             log.info(
                 f"Created API step generator: thinking_mode={thinking_mode}, "
-                f"uncertainty_scorer={'yes' if uncertainty_scorer else 'no'}"
+                f"uncertainty={'APIWithUncertainty' if hasattr(model, 'estimator') else 'no'}"
             )
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
