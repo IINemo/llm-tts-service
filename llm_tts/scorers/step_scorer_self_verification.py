@@ -99,6 +99,7 @@ class StepScorerSelfVerification(StepScorerBase):
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.use_vllm = use_vllm
+        self.use_local = False
 
         # Load prompts: priority is direct string > custom file > default file
         self.value_prompt = self._load_prompt(
@@ -164,11 +165,12 @@ class StepScorerSelfVerification(StepScorerBase):
             f"Expected at: config/prompts/{default_file}"
         )
 
-    def set_model(self, model, use_vllm: bool = None):
+    def set_model(self, model, use_vllm: bool = None, use_local: bool = False):
         """Set or update the model for evaluation."""
         self.model = model
         if use_vllm is not None:
             self.use_vllm = use_vllm
+        self.use_local = use_local
 
     def score_candidates_detailed(
         self,
@@ -388,6 +390,8 @@ class StepScorerSelfVerification(StepScorerBase):
 
         if self.use_vllm:
             return self._call_vllm(prompt)
+        elif self.use_local:
+            return self._call_local(prompt)
         else:
             return self._call_api(prompt)
 
@@ -407,6 +411,21 @@ class StepScorerSelfVerification(StepScorerBase):
 
         if outputs and outputs[0].outputs:
             return outputs[0].outputs[0].text
+        return ""
+
+    def _call_local(self, prompt: str) -> str:
+        """Call local WhiteboxModel (lm_polygraph) for evaluation."""
+        messages = [{"role": "user", "content": prompt}]
+        formatted = self.model.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        results = self.model.generate_texts(
+            input_texts=[formatted],
+            max_new_tokens=self.max_tokens,
+            temperature=self.temperature,
+        )
+        if results and results[0]:
+            return results[0]
         return ""
 
     def _call_api(self, prompt: str) -> str:
