@@ -17,6 +17,11 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from lm_polygraph.utils.api_with_uncertainty import (
+    APIWithUncertainty,
+    convert_api_logprobs,
+)
+
 from llm_tts.generators.base import (
     CompletionReason,
     StepCandidate,
@@ -24,11 +29,6 @@ from llm_tts.generators.base import (
     convert_trajectory_to_string,
 )
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
-
-from lm_polygraph.utils.api_with_uncertainty import (  # noqa: E402
-    APIWithUncertainty,
-    convert_api_logprobs,
-)
 
 if TYPE_CHECKING:
     from llm_tts.models.blackboxmodel_with_streaming import (  # noqa: F401
@@ -324,18 +324,20 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         path_idx: Optional[int] = None,
         candidate_idx: Optional[int] = None,
         sample_id: Optional[int] = None,
+        validity_score: Optional[float] = None,
     ) -> str:
         """Format scoring details for a generated step into a single log line.
 
         Args:
             token_ids: List of generated token IDs (pseudo-IDs for API).
             stop_reason: Stop reason string.
-            raw_text: Raw text from API output.
+            raw_text: Raw text from API output (full accumulated text).
             step_text: Processed step text (after boundary detection).
             scoring_token_count: Number of tokens used for scoring.
             path_idx: Path index for batch generation (0-indexed, displayed as 1-indexed).
             candidate_idx: Candidate index for single-path generation.
             sample_id: Sample ID for identification in logs.
+            validity_score: Validity score from uncertainty scoring.
         """
         original_token_count = len(token_ids)
         effective_token_count = scoring_token_count or original_token_count
@@ -362,19 +364,22 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         else:
             token_str = f"{effective_token_count} tokens"
 
-        # Show all three texts like vLLM: Full tokens decoded, Raw text, Step text
-        if raw_text is not None and step_text is not None:
-            return (
-                f"  {prefix}: {token_str}, stop={repr(stop_reason)}\n"
-                f"    Full tokens decoded: {repr(raw_text)}\n"
-                f"    Raw text (stripped): {repr(step_text)}\n"
-                f"    Step text:           {repr(step_text)}"
-            )
-        else:
-            return (
-                f"  {prefix}: {token_str}, stop={repr(stop_reason)}\n"
-                f"    Text: {repr(raw_text or '')}"
-            )
+        # Extract actual stop token from raw_text vs step_text difference
+        stop_token_repr = repr(stop_reason)
+        if raw_text and step_text and raw_text != step_text:
+            actual_stop = raw_text[len(step_text) :]
+            if actual_stop:
+                stop_token_repr = repr(actual_stop)
+
+        # Score string
+        score_str = (
+            f", score={validity_score:.3f}" if validity_score is not None else ""
+        )
+
+        return (
+            f"  {prefix}: {token_str}, stop={stop_token_repr}{score_str}\n"
+            f"    Step text: {repr(step_text or raw_text or '')}"
+        )
 
     # =========================================================================
     # Core generation implementation
@@ -812,19 +817,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             with _count_lock:
                 _completed_count[0] += 1
                 count = _completed_count[0]
-            cand_lines = []
-            for ci, r in enumerate(results):
-                r_text = r.get("text", r.get("raw_collected", ""))
-                r_tokens = len(r.get("logprobs", []))
-                r_reason = r.get("finish_reason", r.get("reason", ""))
-                cand_lines.append(
-                    f"  candidate {ci}: {r_tokens} tokens, "
-                    f"stop={repr(r_reason)}, "
-                    f"text={repr(r_text)}"
-                )
             log.info(
                 f"[{count}/{total_active}] Sample {sample_id} generated "
-                f"{len(results)} candidate(s):\n" + "\n".join(cand_lines)
+                f"{len(results)} candidate(s)"
             )
             return traj_idx, results
 
@@ -926,9 +921,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     stop_reason = raw["finish_reason"]
 
                 # Collect scoring log line for this candidate
-                # Pass original token count so log shows truncation
-                # raw_text param = full text (like vLLM "Full tokens decoded")
-                # step_text param = boundary-truncated text (like vLLM "Raw text (stripped)")
                 scoring_log_lines.append(
                     self._format_step_scoring(
                         token_ids=list(range(original_logprob_count)),
@@ -941,6 +933,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                             cand_idx if len(active_indices) <= 1 else cand_idx
                         ),
                         sample_id=sample_id,
+                        validity_score=scoring_data["validity_score"],
                     )
                 )
 

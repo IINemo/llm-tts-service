@@ -210,7 +210,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         Args:
             token_ids: Full list of generated token IDs
-            stop_reason: vLLM stop reason (e.g., 'length', '<end of response>')
+            stop_reason: vLLM stop reason (e.g., 'length', '\\n\\n')
             raw_text: Raw text from model output (non-thinking mode)
             step_text: Full step text with prefix (non-thinking mode)
             scoring_token_count: Number of tokens used for scoring (after truncation)
@@ -218,7 +218,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             candidate_idx: Candidate index for single-path generation
         """
         original_token_count = len(token_ids)
-        full_decoded = self.tokenizer.decode(token_ids, skip_special_tokens=True)
         effective_token_count = scoring_token_count or original_token_count
         is_truncated = (
             scoring_token_count is not None
@@ -242,13 +241,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         else:
             token_str = f"{effective_token_count} tokens"
 
-        # non-thinking mode: show raw_text and step_text
+        # non-thinking mode: show step_text only
         if raw_text is not None and step_text is not None:
             log.info(
                 f"{prefix}: {token_str}, stop={repr(stop_reason)}\n"
-                f"  Full tokens decoded: {repr(full_decoded)}\n"
-                f"  Raw text (stripped): {repr(raw_text)}\n"
-                f"  Step text:           {repr(step_text)}"
+                f"  Step text: {repr(step_text)}"
             )
         # Thinking mode with truncation
         elif is_truncated:
@@ -256,17 +253,15 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 token_ids[:scoring_token_count], skip_special_tokens=True
             )
             log.info(
-                f"{prefix}: {token_str}\n"
-                f"  Stop reason: {repr(stop_reason)}\n"
-                f"  Full tokens decoded:      {repr(full_decoded)}\n"
-                f"  Truncated tokens decoded: {repr(scoring_text)}"
+                f"{prefix}: {token_str}, stop={repr(stop_reason)}\n"
+                f"  Step text: {repr(scoring_text)}"
             )
         # Thinking mode without truncation
         else:
+            full_decoded = self.tokenizer.decode(token_ids, skip_special_tokens=True)
             log.info(
-                f"{prefix}: {token_str} (full, no truncation)\n"
-                f"  Stop reason: {repr(stop_reason)}\n"
-                f"  Text: {repr(full_decoded)}"
+                f"{prefix}: {token_str}, stop={repr(stop_reason)}\n"
+                f"  Step text: {repr(full_decoded)}"
             )
 
     def _create_sampling_params(

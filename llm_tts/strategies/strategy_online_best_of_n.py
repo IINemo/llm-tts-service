@@ -143,8 +143,13 @@ class StrategyOnlineBestOfN(StrategyBase):
             best_idx, selected_candidate = self._select_best_candidate(
                 candidates, candidate_validity_scores
             )
+            all_scores_str = ", ".join(
+                f"c{i}={s:.3f}" for i, s in enumerate(candidate_validity_scores)
+            )
             log.info(
-                f"\nSelected candidate {best_idx}\nText:\n{selected_candidate.text}"
+                f"\nSelected candidate {best_idx} "
+                f"(score={candidate_validity_scores[best_idx]:.3f}), "
+                f"all scores=[{all_scores_str}]"
             )
 
             # Update trajectory
@@ -479,9 +484,12 @@ class StrategyOnlineBestOfN(StrategyBase):
                         f"marking complete"
                     )
 
+                all_scores_str = ", ".join(
+                    f"c{i}={s:.3f}" for i, s in enumerate(scores)
+                )
                 log.info(
                     f"Sample {sample_indices[sample_id]}: Selected candidate {best_idx} "
-                    f"(score={scores[best_idx]:.3f})"
+                    f"(score={scores[best_idx]:.3f}), all scores=[{all_scores_str}]"
                 )
 
                 # Track token count
