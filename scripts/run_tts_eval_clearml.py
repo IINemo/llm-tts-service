@@ -132,11 +132,43 @@ except Exception:
     traceback.print_exc()
     sys.stdout.flush()
 
-# Step 5: create small vLLM LLM to test
-print('[diag] Step 5: importing vllm.LLM and SamplingParams...', flush=True)
+# Step 5: granular vLLM sub-imports to find crash point
+print('[diag] Step 5a: importing vllm.config...', flush=True)
 try:
-    from vllm import LLM, SamplingParams
-    print('[diag] LLM, SamplingParams imported OK', flush=True)
+    import vllm.config
+    print('[diag] vllm.config imported OK', flush=True)
+except Exception:
+    traceback.print_exc()
+    sys.stdout.flush()
+
+print('[diag] Step 5b: importing vllm.sampling_params...', flush=True)
+try:
+    from vllm import SamplingParams
+    print('[diag] SamplingParams imported OK', flush=True)
+except Exception:
+    traceback.print_exc()
+    sys.stdout.flush()
+
+print('[diag] Step 5c: importing vllm.engine...', flush=True)
+try:
+    import vllm.engine
+    print('[diag] vllm.engine imported OK', flush=True)
+except Exception:
+    traceback.print_exc()
+    sys.stdout.flush()
+
+print('[diag] Step 5d: importing vllm.engine.llm_engine...', flush=True)
+try:
+    import vllm.engine.llm_engine
+    print('[diag] vllm.engine.llm_engine imported OK', flush=True)
+except Exception:
+    traceback.print_exc()
+    sys.stdout.flush()
+
+print('[diag] Step 5e: importing vllm.entrypoints.llm (LLM class)...', flush=True)
+try:
+    from vllm.entrypoints.llm import LLM
+    print('[diag] LLM imported OK', flush=True)
 except Exception:
     traceback.print_exc()
     sys.stdout.flush()
