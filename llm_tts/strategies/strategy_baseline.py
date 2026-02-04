@@ -294,7 +294,7 @@ class StrategyBaseline(StrategyBase):
                     "thinking_num_steps": thinking_num_steps,
                     "response_num_steps": response_num_steps,
                     "validity_scores": [
-                        candidate.other_data.get("validity_score", 1.0)
+                        (candidate.other_data or {}).get("validity_score", 1.0)
                     ],
                     "completed": candidate.is_trajectory_complete,
                     "token_stats": token_stats,

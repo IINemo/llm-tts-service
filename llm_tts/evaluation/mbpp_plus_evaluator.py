@@ -377,11 +377,41 @@ class EvaluatorMBPPPlus:
                 for task_id in task_ids:
                     task_id_str = self._normalize_task_id(task_id)
                     task_results = results.get("eval", {}).get(task_id_str, [])
+
                     # Check if any solution passed (for greedy, there's only one)
                     if task_results and task_results[0].get("base_status") == "pass":
                         scores.append(1.0)
                     else:
                         scores.append(0.0)
+
+                        # Log detailed failure information
+                        if task_results:
+                            result = task_results[0]
+                            base_status = result.get("base_status", "unknown")
+                            plus_status = result.get("plus_status", "unknown")
+
+                            log.info(
+                                f"Task {task_id_str} failed: "
+                                f"base={base_status}, plus={plus_status}"
+                            )
+
+                            # Log which specific tests failed
+                            base_tests = result.get("base", [])
+                            for i, test in enumerate(base_tests):
+                                if test.get("status") == "fail":
+                                    details = test.get("details", "No details")
+                                    log.info(
+                                        f"  Base test {i+1} failed: {details[:200]}"
+                                    )
+
+                            plus_tests = result.get("plus", [])
+                            for i, test in enumerate(plus_tests):
+                                if test.get("status") == "fail":
+                                    details = test.get("details", "No details")
+                                    log.info(
+                                        f"  Plus test {i+1} failed: {details[:200]}"
+                                    )
+
                 return scores
             except Exception as e:
                 log.warning(f"Failed to parse results file: {e}")
