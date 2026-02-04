@@ -297,15 +297,15 @@ class StrategyOnlineBestOfN(StrategyBase):
             self.scorer.reset_prm_stats()
 
         # Context limit for trajectories
-        max_model_len = getattr(self.step_generator, "max_model_len", 4096)
+        max_context_budget = getattr(self.step_generator, "max_context_budget", 4096)
         max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
         max_trajectory_tokens = min(
-            max_model_len - self.prompt_buffer,
+            max_context_budget - self.prompt_buffer,
             self.max_steps * max_step_tokens,
         )
         log.info(
             f"Max trajectory tokens: {max_trajectory_tokens} "
-            f"(max_model_len={max_model_len}, prompt_buffer={self.prompt_buffer}, "
+            f"(max_context_budget={max_context_budget}, prompt_buffer={self.prompt_buffer}, "
             f"max_steps={self.max_steps}, max_step_tokens={max_step_tokens})"
         )
 

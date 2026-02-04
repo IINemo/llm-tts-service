@@ -1,19 +1,19 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gpqa_diamond/offline_bon_openai_gpt4o_mini_gpqa_diamond_entropy
-# Offline Best-of-N with GPT-4o-mini (OpenAI API) + Entropy scorer on GPQA-Diamond
-# Generates N complete trajectories, splits post-hoc, selects best based on min step entropy
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gpqa_diamond/offline_bon_openai_gpt4o_mini_gpqa_diamond_perplexity
+# Offline Best-of-N with GPT-4o-mini (OpenAI API) + Perplexity scorer on GPQA-Diamond
+# Generates N complete trajectories, splits post-hoc, selects best based on min step perplexity
 
 defaults:
   - /config
   - /model/openai
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/perplexity
   - /evaluation/default
   - _self_
 
 # Run naming
-run_name: "offline_bon_openai_gpt4o_mini_gpqa_diamond_entropy_${now:%H-%M-%S}"
+run_name: "offline_bon_openai_gpt4o_mini_gpqa_diamond_perplexity_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -59,9 +59,9 @@ strategy:
   use_reasoning: true
   use_correction: false
 
-# Entropy scorer configuration
+# Perplexity scorer configuration
 scorer:
-  type: entropy
+  type: perplexity
   batch_size: 1
 
 # Dataset configuration - GPQA-Diamond

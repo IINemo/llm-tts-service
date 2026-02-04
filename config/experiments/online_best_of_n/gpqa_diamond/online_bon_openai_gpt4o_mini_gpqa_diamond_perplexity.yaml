@@ -1,39 +1,34 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gpqa_diamond/offline_bon_openai_gpt4o_mini_gpqa_diamond_entropy
-# Offline Best-of-N with GPT-4o-mini (OpenAI API) + Entropy scorer on GPQA-Diamond
-# Generates N complete trajectories, splits post-hoc, selects best based on min step entropy
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/gpqa_diamond/online_bon_openai_gpt4o_mini_gpqa_diamond_perplexity
+# Online Best-of-N with GPT-4o-mini (OpenAI API) + Perplexity scorer on GPQA-Diamond
+# Generates N candidate steps at each iteration, selects best, continues
 
 defaults:
   - /config
   - /model/openai
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/perplexity
   - /evaluation/default
   - _self_
 
-# Run naming
-run_name: "offline_bon_openai_gpt4o_mini_gpqa_diamond_entropy_${now:%H-%M-%S}"
+run_name: "online_bon_openai_gpt4o_mini_gpqa_diamond_perplexity_${now:%H-%M-%S}"
 
-# Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gpqa-diamond
 
-# Model configuration (OpenAI API)
 model:
   type: "openai_api"
   model_path: "gpt-4o-mini"
   supports_logprobs: true
   prefill_mode: false
-  max_context_budget: 128000
+  max_context_budget: 8192
 
-# System configuration
 system:
   device: cpu
   seed: 42
 
-# Generation configuration
 generation:
   max_new_tokens: 16384
   temperature: 0.6
@@ -41,14 +36,10 @@ generation:
   top_k: 20
   batch_size: 1
 
-# Strategy - Offline Best-of-N
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8
-  max_steps: 100
-  score_aggregation: min
-  batch_generation: true
-  # Step boundary detector settings - used for post-hoc step splitting
+  type: online_best_of_n
+  candidates_per_step: 8
+  max_steps: 50
   min_step_tokens: 10
   max_step_tokens: 2048
   use_sequence: true
@@ -59,12 +50,10 @@ strategy:
   use_reasoning: true
   use_correction: false
 
-# Entropy scorer configuration
 scorer:
-  type: entropy
+  type: perplexity
   batch_size: 1
 
-# Dataset configuration - GPQA-Diamond
 dataset:
   dataset_path: "test-time-compute/test_gpqa_diamond"
   dataset_config: null

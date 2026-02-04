@@ -78,7 +78,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         max_new_tokens: Maximum tokens per generation
         temperature, top_p, top_k: Sampling parameters
         presence_penalty: Penalty for tokens that have already appeared (default 0.0)
-        max_model_len: Maximum context length for truncation
+        max_context_budget: Maximum context length for truncation
         flop_calculator: Optional FLOP calculator for token tracking
         disable_thinking_mode: If set (not None), controls whether to pass enable_thinking
                                to the chat template. True = enable_thinking=False, False = enable_thinking=True.
@@ -98,7 +98,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         top_p: float = 0.95,
         top_k: int = 20,
         presence_penalty: float = 0.0,
-        max_model_len: int = 32768,
+        max_context_budget: int = 32768,
         flop_calculator: Optional["FLOPCalculator"] = None,
         disable_thinking_mode: Optional[bool] = None,
     ):
@@ -121,7 +121,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.top_p = top_p
         self.top_k = top_k
         self.presence_penalty = presence_penalty
-        self.max_model_len = max_model_len
+        self.max_context_budget = max_context_budget
 
         # Stop token IDs (e.g., [151645, 151643] for Qwen EOS)
         self.stop_token_ids = list(stop_token_ids) if stop_token_ids else None
@@ -143,7 +143,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             f"presence_penalty={self.presence_penalty}, "
             f"max_new_tokens={self.max_new_tokens}, "
             f"max_answer_tokens={self.max_answer_tokens}, "
-            f"max_model_len={self.max_model_len}"
+            f"max_context_budget={self.max_context_budget}"
         )
 
     def _init_detector(self, detector: Optional[ThinkingMarkerDetector]):
@@ -784,7 +784,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
                 max_step = getattr(self, "max_step_tokens", 300)
                 tokens_needed = max_step + self.max_answer_tokens
-                remaining = self.max_model_len - total_tokens
+                remaining = self.max_context_budget - total_tokens
 
                 if remaining < tokens_needed:
                     log.warning(

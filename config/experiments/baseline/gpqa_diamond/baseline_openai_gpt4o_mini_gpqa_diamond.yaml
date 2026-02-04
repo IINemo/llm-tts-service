@@ -25,7 +25,7 @@ model:
   model_path: "gpt-4o-mini"
   supports_logprobs: true
   prefill_mode: false
-  max_model_len: 128000  # gpt-4o-mini context window
+  max_context_budget: 128000  # gpt-4o-mini context window
 
 # System configuration
 system:

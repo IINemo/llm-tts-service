@@ -75,7 +75,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         top_p: Nucleus sampling parameter.
         top_k: Top-k sampling parameter (note: not all API providers support this).
         presence_penalty: Presence penalty.
-        max_model_len: Maximum context length for truncation checks.
+        max_context_budget: Maximum context length for truncation checks.
         flop_calculator: Optional FLOP calculator.
         prefill_mode: If True, use assistant prefill for trajectory continuation.
         disable_thinking_mode: Controls enable_thinking in chat template.
@@ -94,7 +94,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         top_p: float = 0.95,
         top_k: int = 20,
         presence_penalty: float = 0.0,
-        max_model_len: int = 32768,
+        max_context_budget: int = 32768,
         flop_calculator: Optional["FLOPCalculator"] = None,
         prefill_mode: bool = False,
         disable_thinking_mode: Optional[bool] = None,
@@ -117,7 +117,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self.top_p = top_p
         self.top_k = top_k
         self.presence_penalty = presence_penalty
-        self.max_model_len = max_model_len
+        self.max_context_budget = max_context_budget
 
         # Answer patterns for response phase
         self.answer_patterns = (
@@ -142,7 +142,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             f"presence_penalty={self.presence_penalty}, "
             f"max_new_tokens={self.max_new_tokens}, "
             f"max_answer_tokens={self.max_answer_tokens}, "
-            f"max_model_len={self.max_model_len}"
+            f"max_context_budget={self.max_context_budget}"
         )
 
     # =========================================================================
@@ -933,7 +933,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
                 max_step = getattr(self, "max_step_tokens", 300)
                 tokens_needed = max_step + self.max_answer_tokens
-                remaining = self.max_model_len - total_tokens
+                remaining = self.max_context_budget - total_tokens
 
                 if remaining < tokens_needed:
                     log.warning(

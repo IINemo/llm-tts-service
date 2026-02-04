@@ -28,7 +28,7 @@ model:
   tensor_parallel_size: 1
   enable_prefix_caching: true  # Match official setting
   trust_remote_code: true
-  max_model_len: 4096  # Model's native limit
+  max_context_budget: 4096  # Model's native limit
 
 # System configuration
 system:
