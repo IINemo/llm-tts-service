@@ -64,19 +64,65 @@ def main():
         if key.startswith("CLEARML"):
             del env[key]
 
-    # Run import diagnostic first to catch detailed traceback
-    diag_cmd = [
-        sys.executable,
-        "-c",
-        "import traceback\n"
-        "try:\n"
-        "    from llm_tts.scorers import StepScorerPRM\n"
-        "    print('[diag] StepScorerPRM imported OK')\n"
-        "except Exception:\n"
-        "    traceback.print_exc()\n",
-    ]
+    # GPU diagnostics
+    print("[ClearML wrapper] === GPU Diagnostics ===", flush=True)
+    subprocess.run(["nvidia-smi"], env=env)
+    print("[ClearML wrapper] === CUDA_VISIBLE_DEVICES ===", flush=True)
+    print(
+        f"  CUDA_VISIBLE_DEVICES={env.get('CUDA_VISIBLE_DEVICES', '(not set)')}",
+        flush=True,
+    )
+    print(
+        f"  CUDA_MODULE_LOADING={env.get('CUDA_MODULE_LOADING', '(not set)')}",
+        flush=True,
+    )
+    print(f"  VLLM_USE_V1={env.get('VLLM_USE_V1', '(not set)')}", flush=True)
+    print(
+        f"  VLLM_ATTENTION_BACKEND={env.get('VLLM_ATTENTION_BACKEND', '(not set)')}",
+        flush=True,
+    )
+
+    # Granular import diagnostic to isolate std::bad_alloc
+    diag_code = """
+import sys, traceback, os
+print(f'[diag] Python: {sys.executable}', flush=True)
+print(f'[diag] CUDA_VISIBLE_DEVICES={os.environ.get("CUDA_VISIBLE_DEVICES", "(not set)")}', flush=True)
+
+# Step 1: basic torch
+try:
+    import torch
+    print(f'[diag] torch {torch.__version__} imported OK', flush=True)
+    print(f'[diag] CUDA available: {torch.cuda.is_available()}', flush=True)
+    if torch.cuda.is_available():
+        print(f'[diag] CUDA device count: {torch.cuda.device_count()}', flush=True)
+        for i in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(i)
+            mem_gb = props.total_mem / 1024**3
+            print(f'[diag] GPU {i}: {props.name}, {mem_gb:.1f} GB', flush=True)
+except Exception:
+    traceback.print_exc()
+
+# Step 2: vllm import
+try:
+    import vllm
+    print(f'[diag] vllm {vllm.__version__} imported OK', flush=True)
+except Exception:
+    traceback.print_exc()
+
+# Step 3: scorers import
+try:
+    from llm_tts.scorers import StepScorerPRM
+    print('[diag] StepScorerPRM imported OK', flush=True)
+except Exception:
+    traceback.print_exc()
+"""
     print("[ClearML wrapper] Running import diagnostic...", flush=True)
-    subprocess.run(diag_cmd, env=env, cwd=os.path.dirname(script_dir))
+    subprocess.run(
+        [sys.executable, "-c", diag_code],
+        env=env,
+        cwd=os.path.dirname(script_dir),
+        stderr=subprocess.STDOUT,
+    )
 
     print(f"[ClearML wrapper] Running: {' '.join(cmd)}", flush=True)
     # Merge stderr into stdout so ClearML captures errors

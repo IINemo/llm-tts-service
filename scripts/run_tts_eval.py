@@ -306,6 +306,7 @@ def create_model(config):
             enable_prefix_caching=config.model.get("enable_prefix_caching", True),
             trust_remote_code=config.model.get("trust_remote_code", True),
             max_model_len=config.model.get("max_model_len", 32768),
+            enforce_eager=config.model.get("enforce_eager", False),
             seed=config.system.seed,  # Reproducibility
         )
 
