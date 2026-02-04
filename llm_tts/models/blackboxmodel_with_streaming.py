@@ -165,9 +165,11 @@ class BlackboxModelWithStreaming(BlackboxModel):
         """
         n = args.get("n", 1)
         timeout = args.pop("timeout", 60)  # Extract timeout, default 60s
+        call_id = args.pop("call_id", "")  # Optional caller context for logging
 
+        tag = f" [{call_id}]" if call_id else ""
         log.info(
-            f"[CALL START] generate_texts with n={n} for {len(chats)} chat(s), timeout={timeout}s"
+            f"[CALL START]{tag} generate_texts with n={n} for {len(chats)} chat(s), timeout={timeout}s"
         )
 
         # Submit to executor with timeout enforcement
@@ -175,14 +177,14 @@ class BlackboxModelWithStreaming(BlackboxModel):
 
         try:
             result = future.result(timeout=timeout)
-            log.info(f"[CALL SUCCESS] Returning {len(result)} results")
+            log.info(f"[CALL SUCCESS]{tag} Returning {len(result)} results")
             return result
         except FuturesTimeoutError:
-            log.error(f"[TIMEOUT] API call exceeded {timeout}s timeout")
+            log.error(f"[TIMEOUT]{tag} API call exceeded {timeout}s timeout")
             future.cancel()  # Attempt to cancel (may not work if already running)
             raise openai.APITimeoutError(f"API call timed out after {timeout}s")
         except Exception as e:
-            log.error(f"[CALL ERROR] Exception: {type(e).__name__}: {e}")
+            log.error(f"[CALL ERROR]{tag} Exception: {type(e).__name__}: {e}")
             raise
 
     def _generate_texts_impl(

@@ -396,6 +396,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self,
         request_messages: List[Dict[str, str]],
         max_tokens: int,
+        call_id: str = "",
     ) -> Dict[str, Any]:
         """Generate a single response via streaming (n=1).
 
@@ -409,6 +410,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         Args:
             request_messages: Chat messages for the API call.
             max_tokens: Maximum tokens to generate.
+            call_id: Context string for logging (e.g. "sample=12 cand=3").
 
         Returns:
             Dict with text, logprobs, and metadata.
@@ -430,12 +432,13 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     output_scores=self.supports_logprobs,
                     early_stopping=early_stopping,
                     timeout=300,
+                    call_id=call_id,
                 )
                 break
             except Exception as e:
                 if attempt < max_retries - 1:
                     wait = 2 ** attempt
-                    log.warning(f"Streaming call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait}s...")
+                    log.warning(f"[{call_id}] Streaming call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait}s...")
                     import time
                     time.sleep(wait)
                 else:
@@ -465,6 +468,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         n: int,
         max_tokens: int,
         stop: Optional[List[str]] = None,
+        call_id: str = "",
     ) -> List[Dict[str, Any]]:
         """Generate n responses without step-boundary early stopping.
 
@@ -477,6 +481,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             n: Number of completions to generate.
             max_tokens: Maximum tokens to generate.
             stop: Optional stop sequences (passed to API, max 4).
+            call_id: Context string for logging (e.g. "sample=12").
 
         Returns:
             List of dicts, each with text, logprobs, and metadata.
@@ -498,12 +503,13 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     stop=stop,
                     early_stopping=None,
                     timeout=300,
+                    call_id=call_id,
                 )
                 break
             except Exception as e:
                 if attempt < max_retries - 1:
                     wait = 2 ** attempt
-                    log.warning(f"API call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait}s...")
+                    log.warning(f"[{call_id}] Batch call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait}s...")
                     import time
                     time.sleep(wait)
                 else:
@@ -766,6 +772,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         def _generate_for_trajectory(traj_idx):
             """Generate candidates for a single trajectory."""
             messages = prepared_requests[traj_idx]
+            sample_id = sample_ids[traj_idx] if sample_ids else traj_idx
 
             if use_streaming:
                 # N concurrent streaming calls — each with its own
@@ -774,6 +781,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 if candidates_per_step == 1:
                     results.append(self._generate_single_streaming(
                         messages, max_tokens=effective_max_tokens,
+                        call_id=f"sample={sample_id} cand=0",
                     ))
                 else:
                     # N concurrent streaming calls via ThreadPoolExecutor
@@ -784,8 +792,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                             cand_executor.submit(
                                 self._generate_single_streaming,
                                 messages, effective_max_tokens,
+                                f"sample={sample_id} cand={ci}",
                             )
-                            for _ in range(candidates_per_step)
+                            for ci in range(candidates_per_step)
                         ]
                         for future in as_completed(futures):
                             results.append(future.result())
@@ -796,13 +805,13 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     n=candidates_per_step,
                     max_tokens=effective_max_tokens,
                     stop=api_stop,
+                    call_id=f"sample={sample_id}",
                 )
 
             # Log progress and all candidates
             with _count_lock:
                 _completed_count[0] += 1
                 count = _completed_count[0]
-            sample_id = sample_ids[traj_idx] if sample_ids else traj_idx
             log.info(
                 f"[{count}/{total_active}] Sample {sample_id} generated "
                 f"{len(results)} candidate(s):"
