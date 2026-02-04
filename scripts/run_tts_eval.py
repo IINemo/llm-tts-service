@@ -617,6 +617,7 @@ def create_model(config):
                 prefill_mode=config.model.get("prefill_mode", False),
                 disable_thinking_mode=disable_thinking_mode,
                 supports_logprobs=supports_logprobs,
+                max_concurrent_requests=config.model.get("max_concurrent_requests", 256),
             )
 
             log.info(

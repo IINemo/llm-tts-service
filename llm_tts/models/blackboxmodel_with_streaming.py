@@ -84,9 +84,9 @@ class BlackboxModelWithStreaming(BlackboxModel):
         self.openai_api = self.client
 
         # Create thread pool executor for timeout enforcement
-        # Use max_workers=10 to handle concurrent requests in strategies
+        # High worker count is safe: threads are I/O-bound (waiting on HTTP responses)
         self._executor = ThreadPoolExecutor(
-            max_workers=10, thread_name_prefix="llm_api"
+            max_workers=256, thread_name_prefix="llm_api"
         )
 
         # Store early stopping configuration

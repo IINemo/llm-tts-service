@@ -646,6 +646,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                 f"scores=[{scores_str}], "
                 f"answer={extracted!r}"
             )
+            for step_idx, step in enumerate(selected_steps[idx]):
+                score = validity_scores[idx][step_idx] if step_idx < len(validity_scores[idx]) else 0.0
+                log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
 
             outputs.append(
                 {

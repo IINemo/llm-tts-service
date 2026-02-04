@@ -99,6 +99,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         prefill_mode: bool = False,
         disable_thinking_mode: Optional[bool] = None,
         supports_logprobs: bool = True,
+        max_concurrent_requests: int = 256,
     ):
         super().__init__(generation_batch_size=1024, flop_calculator=flop_calculator)
 
@@ -107,6 +108,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self.disable_thinking_mode = disable_thinking_mode
         self.prefill_mode = prefill_mode
         self.supports_logprobs = supports_logprobs
+        self.max_concurrent_requests = max_concurrent_requests
 
         # Store generation parameters
         self.max_new_tokens = max_new_tokens
@@ -131,7 +133,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         log.info(
             f"StepCandidateGeneratorThroughAPI initialized: thinking_mode={thinking_mode}, "
             f"{len(self.stop_tokens)} stop tokens, "
-            f"supports_logprobs={supports_logprobs}"
+            f"supports_logprobs={supports_logprobs}, "
+            f"max_concurrent_requests={max_concurrent_requests}"
         )
         log.info(
             f"Generation parameters: temperature={self.temperature}, "
@@ -315,6 +318,76 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         )
         return steps
 
+    def _log_step_scoring(
+        self,
+        token_ids: List[int],
+        stop_reason: Optional[str],
+        raw_text: Optional[str] = None,
+        step_text: Optional[str] = None,
+        scoring_token_count: Optional[int] = None,
+        path_idx: Optional[int] = None,
+        candidate_idx: Optional[int] = None,
+    ) -> None:
+        """Log scoring details for a generated step.
+
+        Mirrors VLLMStepGenerator._log_step_scoring() but uses text directly
+        instead of tokenizer.decode() (API doesn't have a local tokenizer).
+
+        Args:
+            token_ids: List of generated token IDs (pseudo-IDs for API).
+            stop_reason: Stop reason string.
+            raw_text: Raw text from API output.
+            step_text: Processed step text (after boundary detection).
+            scoring_token_count: Number of tokens used for scoring.
+            path_idx: Path index for batch generation (0-indexed, displayed as 1-indexed).
+            candidate_idx: Candidate index for single-path generation.
+        """
+        original_token_count = len(token_ids)
+        effective_token_count = scoring_token_count or original_token_count
+        is_truncated = (
+            scoring_token_count is not None
+            and scoring_token_count < original_token_count
+        )
+
+        # Build prefix for log message
+        if path_idx is not None:
+            prefix = f"Scoring [path {path_idx + 1}]"
+        elif candidate_idx is not None:
+            prefix = f"Scoring [{candidate_idx}]"
+        else:
+            prefix = "Scoring"
+
+        # Build token count string
+        if is_truncated:
+            token_str = (
+                f"{effective_token_count}/{original_token_count} tokens "
+                f"(truncated {original_token_count - effective_token_count})"
+            )
+        else:
+            token_str = f"{effective_token_count} tokens"
+
+        # non-thinking mode: show raw_text and step_text
+        if raw_text is not None and step_text is not None:
+            log.info(
+                f"{prefix}: {token_str}, stop={repr(stop_reason)}\n"
+                f"  Raw text (stripped): {repr(raw_text[:200])}\n"
+                f"  Step text:           {repr(step_text[:200])}"
+            )
+        # Thinking mode with truncation
+        elif is_truncated:
+            log.info(
+                f"{prefix}: {token_str}\n"
+                f"  Stop reason: {repr(stop_reason)}\n"
+                f"  Text: {repr((raw_text or '')[:200])}"
+            )
+        # Default
+        else:
+            log.info(
+                f"{prefix}: {token_str} (full, no truncation)\n"
+                f"  Stop reason: {repr(stop_reason)}\n"
+                f"  Text: {repr((raw_text or '')[:200])}"
+            )
+
     # =========================================================================
     # Core generation implementation
     # =========================================================================
@@ -346,14 +419,27 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         # across concurrent threads. The detector is stateless and safe to share.
         early_stopping = BoundaryEarlyStopping(detector=self.detector)
 
-        results = self.model.generate_texts(
-            [request_messages],
-            max_new_tokens=max_tokens,
-            temperature=self.temperature,
-            n=1,
-            output_scores=self.supports_logprobs,
-            early_stopping=early_stopping,
-        )
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                results = self.model.generate_texts(
+                    [request_messages],
+                    max_new_tokens=max_tokens,
+                    temperature=self.temperature,
+                    n=1,
+                    output_scores=self.supports_logprobs,
+                    early_stopping=early_stopping,
+                    timeout=300,
+                )
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    log.warning(f"Streaming call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait}s...")
+                    import time
+                    time.sleep(wait)
+                else:
+                    raise
 
         if not results or len(results) == 0:
             raise ValueError("No result returned from streaming generation")
@@ -692,7 +778,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 else:
                     # N concurrent streaming calls via ThreadPoolExecutor
                     with ThreadPoolExecutor(
-                        max_workers=min(candidates_per_step, 8)
+                        max_workers=candidates_per_step
                     ) as cand_executor:
                         futures = [
                             cand_executor.submit(
@@ -712,24 +798,41 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     stop=api_stop,
                 )
 
-            # Log progress
+            # Log progress and all candidates
             with _count_lock:
                 _completed_count[0] += 1
                 count = _completed_count[0]
             sample_id = sample_ids[traj_idx] if sample_ids else traj_idx
-            full_text = results[0].get("text", "") if results else ""
-            token_count = len(results[0].get("logprobs", [])) if results else 0
             log.info(
-                f"[{count}/{total_active}] Sample {sample_id} done, "
-                f"{len(results)} candidate(s), "
-                f"{token_count} tokens, "
-                f"text: {repr(full_text)}"
+                f"[{count}/{total_active}] Sample {sample_id} generated "
+                f"{len(results)} candidate(s):"
             )
+            for ci, r in enumerate(results):
+                r_text = r.get("text", r.get("raw_collected", ""))
+                r_tokens = len(r.get("logprobs", []))
+                r_reason = r.get("finish_reason", r.get("reason", ""))
+                log.info(
+                    f"  candidate {ci}: {r_tokens} tokens, "
+                    f"stop={repr(r_reason)}, "
+                    f"text={repr(r_text)}"
+                )
             return traj_idx, results
 
-        # Execute concurrently across trajectories
+        # Execute concurrently across trajectories.
+        # Cap outer workers so total concurrent connections stays within budget:
+        #   streaming: outer × candidates_per_step concurrent API calls
+        #   batch: outer × 1 concurrent API calls
+        if use_streaming and candidates_per_step > 1:
+            outer_workers = min(
+                self.max_concurrent_requests // candidates_per_step,
+                len(active_indices),
+            )
+            outer_workers = max(outer_workers, 1)
+        else:
+            outer_workers = min(self.max_concurrent_requests, len(active_indices))
+
         if len(active_indices) > 1:
-            with ThreadPoolExecutor(max_workers=min(len(active_indices), 8)) as executor:
+            with ThreadPoolExecutor(max_workers=outer_workers) as executor:
                 futures = {
                     executor.submit(_generate_for_trajectory, idx): idx
                     for idx in active_indices
@@ -780,6 +883,25 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
                 # Score candidate
                 scoring_data = self._score_candidate(text, api_logprobs)
+
+                # Determine stop reason string
+                stop_reason = None
+                if completion_reason:
+                    stop_reason = completion_reason.value if hasattr(completion_reason, 'value') else str(completion_reason)
+                elif raw.get("finish_reason"):
+                    stop_reason = raw["finish_reason"]
+
+                # Log scoring details per candidate
+                sample_id = sample_ids[traj_idx] if sample_ids else traj_idx
+                self._log_step_scoring(
+                    token_ids=scoring_data["token_ids"],
+                    stop_reason=stop_reason,
+                    raw_text=raw_text,
+                    step_text=text if text != raw_text else None,
+                    scoring_token_count=scoring_data["original_token_count"],
+                    path_idx=traj_idx if len(active_indices) > 1 else None,
+                    candidate_idx=cand_idx if len(active_indices) <= 1 else cand_idx,
+                )
 
                 candidate = StepCandidate(
                     text=text,
