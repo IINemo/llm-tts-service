@@ -22,7 +22,7 @@ wandb_project: llm-tts-mbpp-plus
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen2.5-Coder-0.5B-Instruct"  # Code-specialized model
+  model_path: "Qwen/Qwen2.5-Coder-7B-Instruct"  # Code-specialized model
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
@@ -32,7 +32,7 @@ model:
 
 # System configuration
 system:
-  device: cpu
+  device: cuda
   seed: 0
 
 # Generation configuration
