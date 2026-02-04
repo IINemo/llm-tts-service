@@ -346,18 +346,18 @@ class BlackboxModelWithStreaming(BlackboxModel):
                 detector = early_stopping.detector
                 result["raw_collected"] = accumulated_text
 
-                # extract_step_text truncates at the boundary marker and
-                # calls .strip(), losing trailing whitespace like \n\n.
-                # We replicate the same truncation but WITHOUT .strip()
-                # so ''.join(step.text) produces correct prompts.
-                step_text = detector.extract_step_text(accumulated_text)
+                # _step_boundary_pos is an index into the stripped text
+                # from _extract_thinking_content(). Map it back to
+                # accumulated_text to preserve leading \n\n whitespace.
                 boundary_pos = getattr(detector, "_step_boundary_pos", None)
                 if boundary_pos is not None and hasattr(
                     detector, "_extract_thinking_content"
                 ):
-                    start = getattr(detector, "_last_step_end_pos", 0)
-                    inner = detector._extract_thinking_content(accumulated_text)
-                    step_text = inner[start:boundary_pos]
+                    # boundary_pos is relative to stripped text; offset it
+                    leading_ws = len(accumulated_text) - len(accumulated_text.lstrip())
+                    step_text = accumulated_text[: leading_ws + boundary_pos]
+                else:
+                    step_text = detector.extract_step_text(accumulated_text)
                 result["step_text"] = step_text
 
                 result["trajectory_complete"] = detector.is_trajectory_complete(

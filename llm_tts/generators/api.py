@@ -25,22 +25,18 @@ from llm_tts.generators.base import (
 )
 from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
 
-if TYPE_CHECKING:
-    from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-    from llm_tts.utils.flops import FLOPCalculator
-
-log = logging.getLogger(__name__)
-
-
-# =========================================================================
-# Logprob conversion and uncertainty scoring from lm-polygraph
-# =========================================================================
-
-from lm_polygraph.utils.api_with_uncertainty import (
-    APILogprobData,
+from lm_polygraph.utils.api_with_uncertainty import (  # noqa: E402
     APIWithUncertainty,
     convert_api_logprobs,
 )
+
+if TYPE_CHECKING:
+    from llm_tts.models.blackboxmodel_with_streaming import (  # noqa: F401
+        BlackboxModelWithStreaming,
+    )
+    from llm_tts.utils.flops import FLOPCalculator
+
+log = logging.getLogger(__name__)
 
 # Backward compatibility alias
 APIUncertaintyScorer = APIWithUncertainty

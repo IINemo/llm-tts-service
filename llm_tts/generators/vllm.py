@@ -630,11 +630,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             min_tokens=self.min_step_tokens,
         )
 
-        if len(trajectories) == 1:
-            traj = trajectories[0]
+        for traj_i, traj in enumerate(trajectories):
             raw_traj = convert_trajectory_to_string(traj)
             log.info(
-                f"Step {len(traj) + 1}, "
+                f"Path {traj_i}: Step {len(traj) + 1}, "
                 f"stop={len(effective_stop_tokens)} tokens, min={self.min_step_tokens}\n"
                 f"  Raw trajectory ({len(traj)} steps): {repr(raw_traj)}"
             )
