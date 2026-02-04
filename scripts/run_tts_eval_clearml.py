@@ -79,7 +79,24 @@ def main():
     subprocess.run(diag_cmd, env=env, cwd=os.path.dirname(script_dir))
 
     print(f"[ClearML wrapper] Running: {' '.join(cmd)}", flush=True)
-    result = subprocess.run(cmd, env=env)
+    # Merge stderr into stdout so ClearML captures errors
+    # (run_tts_eval.py redirects sys.stderr to a file, hiding tracebacks)
+    result = subprocess.run(cmd, env=env, stderr=subprocess.STDOUT)
+    if result.returncode != 0:
+        print(
+            f"[ClearML wrapper] Process exited with code {result.returncode}",
+            flush=True,
+        )
+        # Try to print the stderr.log from the output directory
+        import glob
+
+        for stderr_log in glob.glob(
+            os.path.join(os.path.dirname(script_dir), "outputs", "**", "stderr.log"),
+            recursive=True,
+        ):
+            print(f"[ClearML wrapper] Contents of {stderr_log}:", flush=True)
+            with open(stderr_log) as f:
+                print(f.read(), flush=True)
     sys.exit(result.returncode)
 
 
