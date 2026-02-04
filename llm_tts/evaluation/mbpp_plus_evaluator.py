@@ -167,11 +167,37 @@ class EvaluatorMBPPPlus:
 
             # Create samples file in EvalPlus format
             samples = []
+            evaluated_task_ids = set()
+
             for task_id, solution in zip(task_ids, solutions):
                 code = self._extract_code(solution)
                 # Ensure task_id format is "Mbpp/X"
                 task_id_str = self._normalize_task_id(task_id)
                 samples.append({"task_id": task_id_str, "solution": code})
+                evaluated_task_ids.add(task_id_str)
+
+            # EvalPlus requires all problems to be in the samples file
+            # Add dummy entries for problems not being evaluated
+            try:
+                from evalplus.data import get_mbpp_plus
+
+                all_problems = get_mbpp_plus()
+
+                for full_task_id in all_problems.keys():
+                    if full_task_id not in evaluated_task_ids:
+                        # Add dummy entry with empty solution
+                        samples.append({"task_id": full_task_id, "solution": ""})
+
+                log.info(
+                    f"Created samples file with {len(evaluated_task_ids)} evaluated "
+                    f"+ {len(samples) - len(evaluated_task_ids)} dummy entries "
+                    f"= {len(samples)} total"
+                )
+            except ImportError:
+                log.warning(
+                    "Could not import evalplus.data.get_mbpp_plus, "
+                    "proceeding with partial samples (may fail)"
+                )
 
             with open(samples_path, "w") as f:
                 for sample in samples:
