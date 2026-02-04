@@ -1,4 +1,5 @@
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Dict, List, Optional
@@ -70,7 +71,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
             "api_key": openai_api_key,
             "timeout": Timeout(
                 connect=10.0,  # 10s to establish connection
-                read=60.0,  # 60s to receive response/next chunk
+                read=300.0,  # 60s to receive response/next chunk
                 write=10.0,  # 10s to send request
                 pool=10.0,  # 10s to get connection from pool
             ),
@@ -84,10 +85,12 @@ class BlackboxModelWithStreaming(BlackboxModel):
         self.openai_api = self.client
 
         # Create thread pool executor for timeout enforcement
-        # Use max_workers=10 to handle concurrent requests in strategies
+        # High worker count is safe: threads are I/O-bound (waiting on HTTP responses)
         self._executor = ThreadPoolExecutor(
-            max_workers=10, thread_name_prefix="llm_api"
+            max_workers=256, thread_name_prefix="llm_api"
         )
+        self._call_counter = 0
+        self._call_counter_lock = threading.Lock()
 
         # Store early stopping configuration
         self.early_stopping = early_stopping
@@ -115,7 +118,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
         # Create new client with same parameters
         client_kwargs = {
             "api_key": self._api_key,
-            "timeout": Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
+            "timeout": Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0),
             "max_retries": 0,
         }
         if self._base_url:
@@ -165,24 +168,28 @@ class BlackboxModelWithStreaming(BlackboxModel):
         """
         n = args.get("n", 1)
         timeout = args.pop("timeout", 60)  # Extract timeout, default 60s
+        caller_ctx = args.pop("call_id", "")  # Optional caller context for logging
 
-        log.info(
-            f"[CALL START] generate_texts with n={n} for {len(chats)} chat(s), timeout={timeout}s"
-        )
+        with self._call_counter_lock:
+            self._call_counter += 1
+            uid = self._call_counter
+
+        tag = f" [#{uid} {caller_ctx}]" if caller_ctx else f" [#{uid}]"
+        log.info(f"[CALL START]{tag} n={n}, timeout={timeout}s")
 
         # Submit to executor with timeout enforcement
         future = self._executor.submit(self._generate_texts_impl, chats, **args)
 
         try:
             result = future.result(timeout=timeout)
-            log.info(f"[CALL SUCCESS] Returning {len(result)} results")
+            log.info(f"[CALL SUCCESS]{tag} {len(result)} results")
             return result
         except FuturesTimeoutError:
-            log.error(f"[TIMEOUT] API call exceeded {timeout}s timeout")
+            log.error(f"[TIMEOUT]{tag} exceeded {timeout}s")
             future.cancel()  # Attempt to cancel (may not work if already running)
             raise openai.APITimeoutError(f"API call timed out after {timeout}s")
         except Exception as e:
-            log.error(f"[CALL ERROR] Exception: {type(e).__name__}: {e}")
+            log.error(f"[CALL ERROR]{tag} {type(e).__name__}: {e}")
             raise
 
     def _generate_texts_impl(
@@ -204,15 +211,55 @@ class BlackboxModelWithStreaming(BlackboxModel):
             "output_scores", False
         )  # Explicit request
 
-        # If n>1, use parent's non-streaming implementation which supports batched generation
+        # If n>1, call API directly with logprobs + stop support
+        # (parent's generate_texts returns plain strings without logprobs)
         if n > 1:
             log.info(f"[IMPL] Batched generation with n={n} for {len(chats)} chat(s)")
-            return super(BlackboxModelWithStreaming, self).generate_texts(chats, **args)
+            stop = args.get("stop", None)
+            results = []
+            for chat in chats:
+                response = self.client.chat.completions.create(
+                    model=self.model_path,
+                    messages=chat,
+                    max_tokens=max_new_tokens,
+                    temperature=temperature,
+                    n=n,
+                    stream=False,
+                    logprobs=needs_logprobs,
+                    top_logprobs=20 if needs_logprobs else None,
+                    stop=stop,
+                )
+                chat_results = []
+                for choice in response.choices:
+                    text = choice.message.content or ""
+                    logprobs_data = []
+                    if needs_logprobs and choice.logprobs and choice.logprobs.content:
+                        for token_info in choice.logprobs.content:
+                            logprobs_data.append(
+                                {
+                                    "token": token_info.token,
+                                    "logprob": token_info.logprob,
+                                    "top_logprobs": [
+                                        {"token": t.token, "logprob": t.logprob}
+                                        for t in token_info.top_logprobs
+                                    ],
+                                }
+                            )
+                    chat_results.append(
+                        {
+                            "text": text,
+                            "logprobs": logprobs_data,
+                            "finish_reason": choice.finish_reason,
+                        }
+                    )
+                results.append(chat_results)
+            return results
 
         # Otherwise use streaming implementation (n=1)
         results = []
         for chat in chats:
             # Create streaming request
+            stop = args.get("stop", None)
             response = self.client.chat.completions.create(
                 model=self.model_path,
                 messages=chat,
@@ -220,7 +267,8 @@ class BlackboxModelWithStreaming(BlackboxModel):
                 temperature=temperature,
                 stream=True,
                 logprobs=needs_logprobs,
-                top_logprobs=20 if needs_logprobs else None,  # TODO:
+                top_logprobs=20 if needs_logprobs else None,
+                stop=stop,
             )
 
             accumulated_text = ""
@@ -296,8 +344,22 @@ class BlackboxModelWithStreaming(BlackboxModel):
             # Add boundary detection info for Best-of-N
             if isinstance(early_stopping, BoundaryEarlyStopping):
                 detector = early_stopping.detector
-                result["step_text"] = detector.extract_step_text(accumulated_text)
                 result["raw_collected"] = accumulated_text
+
+                # _step_boundary_pos is an index into the stripped text
+                # from _extract_thinking_content(). Map it back to
+                # accumulated_text to preserve leading \n\n whitespace.
+                boundary_pos = getattr(detector, "_step_boundary_pos", None)
+                if boundary_pos is not None and hasattr(
+                    detector, "_extract_thinking_content"
+                ):
+                    # boundary_pos is relative to stripped text; offset it
+                    leading_ws = len(accumulated_text) - len(accumulated_text.lstrip())
+                    step_text = accumulated_text[: leading_ws + boundary_pos]
+                else:
+                    step_text = detector.extract_step_text(accumulated_text)
+                result["step_text"] = step_text
+
                 result["trajectory_complete"] = detector.is_trajectory_complete(
                     accumulated_text
                 )

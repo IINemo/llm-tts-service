@@ -29,7 +29,7 @@ model:
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 4096  # Qwen2.5-Math has 4K context limit
+  max_context_budget: 4096  # Qwen2.5-Math has 4K context limit
 
 # System configuration
 system:
@@ -53,7 +53,7 @@ strategy:
   max_steps: 30             # Maximum reasoning steps
   aggregation: mean         # How to aggregate scores: mean, sum, min, max, product
   batch_generation: true    # Process ALL samples in parallel (one vLLM call per step)
-  prompt_buffer: 500        # Tokens reserved for prompt (max_trajectory = max_model_len - prompt_buffer)
+  prompt_buffer: 500        # Tokens reserved for prompt (max_trajectory = max_context_budget - prompt_buffer)
   # Stop tokens derived from detector config
   stop_token_ids:
     - 151645  # <|im_end|>

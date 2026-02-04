@@ -295,17 +295,17 @@ class StrategyBeamSearch(StrategyBase):
 
         # Context limit for trajectories
         # Calculated as min of:
-        #   1. max_model_len - prompt_buffer (leave room for prompt)
+        #   1. max_context_budget - prompt_buffer (leave room for prompt)
         #   2. max_steps * max_step_tokens (theoretical max from step limits)
-        max_model_len = getattr(self.step_generator, "max_model_len", 4096)
+        max_context_budget = getattr(self.step_generator, "max_context_budget", 4096)
         max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
         max_trajectory_tokens = min(
-            max_model_len - self.prompt_buffer,
+            max_context_budget - self.prompt_buffer,
             self.max_steps * max_step_tokens,
         )
         log.info(
             f"Max trajectory tokens: {max_trajectory_tokens} "
-            f"(max_model_len={max_model_len}, prompt_buffer={self.prompt_buffer}, "
+            f"(max_context_budget={max_context_budget}, prompt_buffer={self.prompt_buffer}, "
             f"max_steps={self.max_steps}, max_step_tokens={max_step_tokens})"
         )
         completed_results: Dict[int, Dict[str, Any]] = {}

@@ -7,7 +7,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
     convert_trajectory_to_string,
 )
-from llm_tts.generators.vllm import CompletionReason
+from llm_tts.generators.base import CompletionReason
 from llm_tts.utils import extract_answer
 
 if TYPE_CHECKING:

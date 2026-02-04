@@ -94,14 +94,14 @@ class StrategyOfflineBestOfN(StrategyBase):
         Compute uncertainty score for each step independently.
 
         Maps step text boundaries to token boundaries, then scores each step's
-        tokens using VLLMWithUncertainty.score(). Works with any uncertainty
-        estimator (Perplexity, MeanTokenEntropy, etc.).
+        tokens using VLLMWithUncertainty.score() or APIUncertaintyScorer.score().
+        Works with any uncertainty estimator (Perplexity, MeanTokenEntropy, etc.).
 
         Args:
             steps: List of step text strings
             token_ids: Full trajectory token IDs
-            logprobs: Full trajectory logprobs from vLLM
-            uncertainty_wrapper: VLLMWithUncertainty instance
+            logprobs: Full trajectory logprobs from vLLM or API
+            uncertainty_wrapper: VLLMWithUncertainty or APIUncertaintyScorer instance
 
         Returns:
             List of validity scores (1/(1+uncertainty)) for each step
@@ -110,6 +110,10 @@ class StrategyOfflineBestOfN(StrategyBase):
             return [0.0] * len(steps) if steps else []
 
         tokenizer = uncertainty_wrapper.get_tokenizer()
+
+        # For API pseudo-tokenizer, set the trajectory context for positional lookup
+        if hasattr(tokenizer, "set_context"):
+            tokenizer.set_context(token_ids, logprobs)
 
         # Decode tokens incrementally to find step boundaries
         # We need to match step text to token positions
