@@ -12,6 +12,7 @@ import ast
 import json
 import logging
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -291,45 +292,44 @@ class EvaluatorMBPPPlus:
                 f"Running EvalPlus on {len(evaluated_task_ids)} actual problems..."
             )
 
-            # Run evalplus evaluation
-            import sys
-            from io import StringIO
-
-            # Import evaluate function from EvalPlus
-            from evalplus.evaluate import evaluate
-
-            # Capture stdout for logging
-            old_stdout = sys.stdout
-            old_stderr = sys.stderr
-            captured_stdout = StringIO()
-            captured_stderr = StringIO()
+            # Run evalplus evaluation via subprocess (for process isolation)
+            cmd = [
+                "evalplus.evaluate",
+                "--dataset",
+                "mbpp",
+                "--samples",
+                str(samples_path),
+                "--i-just-wanna-run",
+                "--parallel",
+                "1",  # Single-threaded for stability
+            ]
 
             try:
-                sys.stdout = captured_stdout
-                sys.stderr = captured_stderr
-
-                # Call evaluate directly (no subprocess!)
-                evaluate(
-                    dataset="mbpp",
-                    samples=str(samples_path),
-                    i_just_wanna_run=True,
-                    parallel=1,  # Single-threaded for macOS compatibility
-                    test_details=False,
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout * len(solutions) + 300,
+                    cwd=None,  # Don't inherit parent process state
                 )
 
-            finally:
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
+                log.info(f"EvalPlus stdout:\n{result.stdout}")
+                if result.stderr:
+                    log.warning(f"EvalPlus stderr:\n{result.stderr}")
 
-            stdout_str = captured_stdout.getvalue()
-            stderr_str = captured_stderr.getvalue()
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"EvalPlus failed with return code {result.returncode}"
+                    )
 
-            log.info(f"EvalPlus output:\n{stdout_str}")
-            if stderr_str:
-                log.warning(f"EvalPlus warnings:\n{stderr_str}")
+                # Parse results from EvalPlus JSON output file
+                return self._parse_evalplus_output(task_ids, tmpdir)
 
-            # Parse results from EvalPlus JSON output file
-            return self._parse_evalplus_output(task_ids, tmpdir)
+            except subprocess.TimeoutExpired:
+                raise TimeoutError(
+                    f"EvalPlus evaluation timed out after "
+                    f"{self.timeout * len(solutions) + 300} seconds"
+                )
 
     def _parse_evalplus_output(
         self,
