@@ -605,6 +605,10 @@ def create_tts_strategy(
         elif VLLM_AVAILABLE and isinstance(model, LLM):
             scorer.set_model(model, use_vllm=True)
             log.info("Self-verification scorer: using vLLM backend (raw)")
+        # For local WhiteboxModel (lm_polygraph)
+        elif isinstance(model, WhiteboxModel):
+            scorer.set_model(model, use_local=True)
+            log.info("Self-verification scorer: using local WhiteboxModel backend")
         else:
             log.warning(
                 "Self-verification scorer: unknown model type, may not work correctly"
