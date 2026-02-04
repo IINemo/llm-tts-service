@@ -87,8 +87,10 @@ def main():
 import sys, traceback, os
 print(f'[diag] Python: {sys.executable}', flush=True)
 print(f'[diag] CUDA_VISIBLE_DEVICES={os.environ.get("CUDA_VISIBLE_DEVICES", "(not set)")}', flush=True)
+print(f'[diag] VLLM_ATTENTION_BACKEND={os.environ.get("VLLM_ATTENTION_BACKEND", "(not set)")}', flush=True)
 
 # Step 1: basic torch
+print('[diag] Step 1: importing torch...', flush=True)
 try:
     import torch
     print(f'[diag] torch {torch.__version__} imported OK', flush=True)
@@ -97,24 +99,59 @@ try:
         print(f'[diag] CUDA device count: {torch.cuda.device_count()}', flush=True)
         for i in range(torch.cuda.device_count()):
             props = torch.cuda.get_device_properties(i)
-            mem_gb = props.total_mem / 1024**3
+            mem_gb = props.total_memory / 1024**3
             print(f'[diag] GPU {i}: {props.name}, {mem_gb:.1f} GB', flush=True)
 except Exception:
     traceback.print_exc()
+    sys.stdout.flush()
 
-# Step 2: vllm import
+# Step 2: xgrammar
+print('[diag] Step 2: importing xgrammar...', flush=True)
+try:
+    import xgrammar
+    print(f'[diag] xgrammar imported OK', flush=True)
+except Exception:
+    traceback.print_exc()
+    sys.stdout.flush()
+
+# Step 3: flashinfer
+print('[diag] Step 3: importing flashinfer...', flush=True)
+try:
+    import flashinfer
+    print(f'[diag] flashinfer imported OK', flush=True)
+except Exception:
+    traceback.print_exc()
+    sys.stdout.flush()
+
+# Step 4: vllm import
+print('[diag] Step 4: importing vllm...', flush=True)
 try:
     import vllm
     print(f'[diag] vllm {vllm.__version__} imported OK', flush=True)
 except Exception:
     traceback.print_exc()
+    sys.stdout.flush()
 
-# Step 3: scorers import
+# Step 5: create small vLLM LLM to test
+print('[diag] Step 5: importing vllm.LLM and SamplingParams...', flush=True)
 try:
-    from llm_tts.scorers import StepScorerPRM
-    print('[diag] StepScorerPRM imported OK', flush=True)
+    from vllm import LLM, SamplingParams
+    print('[diag] LLM, SamplingParams imported OK', flush=True)
 except Exception:
     traceback.print_exc()
+    sys.stdout.flush()
+
+# Step 6: lm_polygraph
+print('[diag] Step 6: importing lm_polygraph...', flush=True)
+try:
+    from lm_polygraph.model_adapters import WhiteboxModelvLLM
+    print('[diag] WhiteboxModelvLLM imported OK', flush=True)
+except Exception:
+    traceback.print_exc()
+    sys.stdout.flush()
+
+print('[diag] All imports OK, exiting cleanly', flush=True)
+os._exit(0)  # force exit to avoid cleanup crashes
 """
     print("[ClearML wrapper] Running import diagnostic...", flush=True)
     subprocess.run(
