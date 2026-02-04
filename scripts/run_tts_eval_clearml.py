@@ -64,6 +64,20 @@ def main():
         if key.startswith("CLEARML"):
             del env[key]
 
+    # Run import diagnostic first to catch detailed traceback
+    diag_cmd = [
+        sys.executable,
+        "-c",
+        "import traceback\n"
+        "try:\n"
+        "    from llm_tts.scorers import StepScorerPRM\n"
+        "    print('[diag] StepScorerPRM imported OK')\n"
+        "except Exception:\n"
+        "    traceback.print_exc()\n",
+    ]
+    print("[ClearML wrapper] Running import diagnostic...", flush=True)
+    subprocess.run(diag_cmd, env=env, cwd=os.path.dirname(script_dir))
+
     print(f"[ClearML wrapper] Running: {' '.join(cmd)}", flush=True)
     result = subprocess.run(cmd, env=env)
     sys.exit(result.returncode)
