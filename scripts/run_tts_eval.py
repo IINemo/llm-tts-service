@@ -222,7 +222,6 @@ def build_evaluators(config):
             evaluators["mbpp_plus"] = EvaluatorMBPPPlus(
                 mode=mbpp_cfg.get("mode", "syntax"),
                 timeout=mbpp_cfg.get("timeout", 10),
-                batch_only=mbpp_cfg.get("batch_only", True),
             )
 
         else:
@@ -1016,17 +1015,7 @@ def _generate_trajectories_batch(
                     }
                     continue
                 elif isinstance(evaluator, EvaluatorMBPPPlus):
-                    # MBPP+ evaluator: Check batch_only flag
-                    if evaluator.batch_only:
-                        # Skip in Phase 1, defer to Phase 2 batch evaluation
-                        # (more efficient - single EvalPlus call for all samples)
-                        log.debug(
-                            f"Skipping {eval_name} for sample {i} in phase 1 "
-                            "(batch_only=True), will evaluate in batch during phase 2"
-                        )
-                        continue
-
-                    # batch_only=False: Evaluate immediately for feedback
+                    # MBPP+ evaluator: evaluate immediately for feedback
                     task_ids = (
                         [instance.get("task_id")] if "task_id" in instance else None
                     )
