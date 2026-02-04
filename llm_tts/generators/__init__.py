@@ -16,6 +16,7 @@ from llm_tts.generators import api, huggingface
 # Re-export commonly used classes
 from llm_tts.generators.api import StepCandidateGeneratorThroughAPI
 from llm_tts.generators.base import (
+    CompletionReason,
     StepCandidate,
     StepCandidateGeneratorBase,
     convert_trajectory_to_string,
@@ -46,6 +47,7 @@ except ImportError:
 
 __all__ = [
     # Base classes
+    "CompletionReason",
     "StepCandidate",
     "StepCandidateGeneratorBase",
     "convert_trajectory_to_string",
