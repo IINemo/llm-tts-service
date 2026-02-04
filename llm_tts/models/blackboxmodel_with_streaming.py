@@ -1,4 +1,5 @@
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Dict, List, Optional
@@ -88,6 +89,8 @@ class BlackboxModelWithStreaming(BlackboxModel):
         self._executor = ThreadPoolExecutor(
             max_workers=256, thread_name_prefix="llm_api"
         )
+        self._call_counter = 0
+        self._call_counter_lock = threading.Lock()
 
         # Store early stopping configuration
         self.early_stopping = early_stopping
@@ -165,26 +168,28 @@ class BlackboxModelWithStreaming(BlackboxModel):
         """
         n = args.get("n", 1)
         timeout = args.pop("timeout", 60)  # Extract timeout, default 60s
-        call_id = args.pop("call_id", "")  # Optional caller context for logging
+        caller_ctx = args.pop("call_id", "")  # Optional caller context for logging
 
-        tag = f" [{call_id}]" if call_id else ""
-        log.info(
-            f"[CALL START]{tag} generate_texts with n={n} for {len(chats)} chat(s), timeout={timeout}s"
-        )
+        with self._call_counter_lock:
+            self._call_counter += 1
+            uid = self._call_counter
+
+        tag = f" [#{uid} {caller_ctx}]" if caller_ctx else f" [#{uid}]"
+        log.info(f"[CALL START]{tag} n={n}, timeout={timeout}s")
 
         # Submit to executor with timeout enforcement
         future = self._executor.submit(self._generate_texts_impl, chats, **args)
 
         try:
             result = future.result(timeout=timeout)
-            log.info(f"[CALL SUCCESS]{tag} Returning {len(result)} results")
+            log.info(f"[CALL SUCCESS]{tag} {len(result)} results")
             return result
         except FuturesTimeoutError:
-            log.error(f"[TIMEOUT]{tag} API call exceeded {timeout}s timeout")
+            log.error(f"[TIMEOUT]{tag} exceeded {timeout}s")
             future.cancel()  # Attempt to cancel (may not work if already running)
             raise openai.APITimeoutError(f"API call timed out after {timeout}s")
         except Exception as e:
-            log.error(f"[CALL ERROR]{tag} Exception: {type(e).__name__}: {e}")
+            log.error(f"[CALL ERROR]{tag} {type(e).__name__}: {e}")
             raise
 
     def _generate_texts_impl(
@@ -230,19 +235,23 @@ class BlackboxModelWithStreaming(BlackboxModel):
                     logprobs_data = []
                     if needs_logprobs and choice.logprobs and choice.logprobs.content:
                         for token_info in choice.logprobs.content:
-                            logprobs_data.append({
-                                "token": token_info.token,
-                                "logprob": token_info.logprob,
-                                "top_logprobs": [
-                                    {"token": t.token, "logprob": t.logprob}
-                                    for t in token_info.top_logprobs
-                                ],
-                            })
-                    chat_results.append({
-                        "text": text,
-                        "logprobs": logprobs_data,
-                        "finish_reason": choice.finish_reason,
-                    })
+                            logprobs_data.append(
+                                {
+                                    "token": token_info.token,
+                                    "logprob": token_info.logprob,
+                                    "top_logprobs": [
+                                        {"token": t.token, "logprob": t.logprob}
+                                        for t in token_info.top_logprobs
+                                    ],
+                                }
+                            )
+                    chat_results.append(
+                        {
+                            "text": text,
+                            "logprobs": logprobs_data,
+                            "finish_reason": choice.finish_reason,
+                        }
+                    )
                 results.append(chat_results)
             return results
 
@@ -335,8 +344,22 @@ class BlackboxModelWithStreaming(BlackboxModel):
             # Add boundary detection info for Best-of-N
             if isinstance(early_stopping, BoundaryEarlyStopping):
                 detector = early_stopping.detector
-                result["step_text"] = detector.extract_step_text(accumulated_text)
                 result["raw_collected"] = accumulated_text
+
+                # extract_step_text truncates at the boundary marker and
+                # calls .strip(), losing trailing whitespace like \n\n.
+                # We replicate the same truncation but WITHOUT .strip()
+                # so ''.join(step.text) produces correct prompts.
+                step_text = detector.extract_step_text(accumulated_text)
+                boundary_pos = getattr(detector, "_step_boundary_pos", None)
+                if boundary_pos is not None and hasattr(
+                    detector, "_extract_thinking_content"
+                ):
+                    start = getattr(detector, "_last_step_end_pos", 0)
+                    inner = detector._extract_thinking_content(accumulated_text)
+                    step_text = inner[start:boundary_pos]
+                result["step_text"] = step_text
+
                 result["trajectory_complete"] = detector.is_trajectory_complete(
                     accumulated_text
                 )

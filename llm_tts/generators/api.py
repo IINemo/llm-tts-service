@@ -318,7 +318,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         )
         return steps
 
-    def _log_step_scoring(
+    def _format_step_scoring(
         self,
         token_ids: List[int],
         stop_reason: Optional[str],
@@ -327,11 +327,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         scoring_token_count: Optional[int] = None,
         path_idx: Optional[int] = None,
         candidate_idx: Optional[int] = None,
-    ) -> None:
-        """Log scoring details for a generated step.
-
-        Mirrors VLLMStepGenerator._log_step_scoring() but uses text directly
-        instead of tokenizer.decode() (API doesn't have a local tokenizer).
+        sample_id: Optional[int] = None,
+    ) -> str:
+        """Format scoring details for a generated step into a single log line.
 
         Args:
             token_ids: List of generated token IDs (pseudo-IDs for API).
@@ -341,6 +339,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             scoring_token_count: Number of tokens used for scoring.
             path_idx: Path index for batch generation (0-indexed, displayed as 1-indexed).
             candidate_idx: Candidate index for single-path generation.
+            sample_id: Sample ID for identification in logs.
         """
         original_token_count = len(token_ids)
         effective_token_count = scoring_token_count or original_token_count
@@ -350,12 +349,13 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         )
 
         # Build prefix for log message
+        sample_tag = f"sample={sample_id} " if sample_id is not None else ""
         if path_idx is not None:
-            prefix = f"Scoring [path {path_idx + 1}]"
+            prefix = f"Scoring [{sample_tag}path {path_idx + 1}]"
         elif candidate_idx is not None:
-            prefix = f"Scoring [{candidate_idx}]"
+            prefix = f"Scoring [{sample_tag}cand={candidate_idx}]"
         else:
-            prefix = "Scoring"
+            prefix = f"Scoring [{sample_tag.rstrip()}]" if sample_tag else "Scoring"
 
         # Build token count string
         if is_truncated:
@@ -366,26 +366,18 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         else:
             token_str = f"{effective_token_count} tokens"
 
-        # non-thinking mode: show raw_text and step_text
+        # Show all three texts like vLLM: Full tokens decoded, Raw text, Step text
         if raw_text is not None and step_text is not None:
-            log.info(
-                f"{prefix}: {token_str}, stop={repr(stop_reason)}\n"
-                f"  Raw text (stripped): {repr(raw_text[:200])}\n"
-                f"  Step text:           {repr(step_text[:200])}"
+            return (
+                f"  {prefix}: {token_str}, stop={repr(stop_reason)}\n"
+                f"    Full tokens decoded: {repr(raw_text)}\n"
+                f"    Raw text (stripped): {repr(step_text)}\n"
+                f"    Step text:           {repr(step_text)}"
             )
-        # Thinking mode with truncation
-        elif is_truncated:
-            log.info(
-                f"{prefix}: {token_str}\n"
-                f"  Stop reason: {repr(stop_reason)}\n"
-                f"  Text: {repr((raw_text or '')[:200])}"
-            )
-        # Default
         else:
-            log.info(
-                f"{prefix}: {token_str} (full, no truncation)\n"
-                f"  Stop reason: {repr(stop_reason)}\n"
-                f"  Text: {repr((raw_text or '')[:200])}"
+            return (
+                f"  {prefix}: {token_str}, stop={repr(stop_reason)}\n"
+                f"    Text: {repr(raw_text or '')}"
             )
 
     # =========================================================================
@@ -437,9 +429,12 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 break
             except Exception as e:
                 if attempt < max_retries - 1:
-                    wait = 2 ** attempt
-                    log.warning(f"[{call_id}] Streaming call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait}s...")
+                    wait = 2**attempt
+                    log.warning(
+                        f"[{call_id}] Streaming call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait}s..."
+                    )
                     import time
+
                     time.sleep(wait)
                 else:
                     raise
@@ -508,9 +503,12 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 break
             except Exception as e:
                 if attempt < max_retries - 1:
-                    wait = 2 ** attempt
-                    log.warning(f"[{call_id}] Batch call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait}s...")
+                    wait = 2**attempt
+                    log.warning(
+                        f"[{call_id}] Batch call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait}s..."
+                    )
                     import time
+
                     time.sleep(wait)
                 else:
                     raise
@@ -641,8 +639,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                         break
 
             is_trajectory_complete = (
-                stopped_at_answer
-                or self.detector.is_trajectory_complete(text)
+                stopped_at_answer or self.detector.is_trajectory_complete(text)
             )
 
             if is_trajectory_complete:
@@ -699,9 +696,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
         for traj_idx, trajectory in enumerate(trajectories):
             if trajectory and trajectory[-1].is_trajectory_complete:
-                log.warning(
-                    f"Path {traj_idx}: trajectory already complete, skipping."
-                )
+                log.warning(f"Path {traj_idx}: trajectory already complete, skipping.")
                 already_complete[traj_idx] = [
                     StepCandidate(
                         text="",
@@ -734,11 +729,15 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         total_context_tokens = sum(context_token_counts.values())
 
         if len(active_indices) == 1:
-            traj = trajectories[active_indices[0]]
+            traj_idx_0 = active_indices[0]
+            traj = trajectories[traj_idx_0]
+            sid = sample_ids[traj_idx_0] if sample_ids else traj_idx_0
+            raw_traj = convert_trajectory_to_string(traj)
             log.info(
-                f"Step {len(traj) + 1}, "
+                f"Sample {sid}: Step {len(traj) + 1}, "
                 f"stop={len(effective_stop_tokens)} tokens, "
-                f"candidates={candidates_per_step}"
+                f"candidates={candidates_per_step}\n"
+                f"  Raw trajectory ({len(traj)} steps): {repr(raw_traj)}"
             )
 
         candidates_by_traj = {}
@@ -765,6 +764,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
         # Progress counter for concurrent generation
         import threading
+
         _completed_count = [0]
         _count_lock = threading.Lock()
         total_active = len(active_indices)
@@ -779,10 +779,13 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 # BoundaryEarlyStopping for correct step boundary detection
                 results = []
                 if candidates_per_step == 1:
-                    results.append(self._generate_single_streaming(
-                        messages, max_tokens=effective_max_tokens,
-                        call_id=f"sample={sample_id} cand=0",
-                    ))
+                    results.append(
+                        self._generate_single_streaming(
+                            messages,
+                            max_tokens=effective_max_tokens,
+                            call_id=f"sample={sample_id} cand=0",
+                        )
+                    )
                 else:
                     # N concurrent streaming calls via ThreadPoolExecutor
                     with ThreadPoolExecutor(
@@ -791,7 +794,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                         futures = [
                             cand_executor.submit(
                                 self._generate_single_streaming,
-                                messages, effective_max_tokens,
+                                messages,
+                                effective_max_tokens,
                                 f"sample={sample_id} cand={ci}",
                             )
                             for ci in range(candidates_per_step)
@@ -812,19 +816,20 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             with _count_lock:
                 _completed_count[0] += 1
                 count = _completed_count[0]
-            log.info(
-                f"[{count}/{total_active}] Sample {sample_id} generated "
-                f"{len(results)} candidate(s):"
-            )
+            cand_lines = []
             for ci, r in enumerate(results):
                 r_text = r.get("text", r.get("raw_collected", ""))
                 r_tokens = len(r.get("logprobs", []))
                 r_reason = r.get("finish_reason", r.get("reason", ""))
-                log.info(
+                cand_lines.append(
                     f"  candidate {ci}: {r_tokens} tokens, "
                     f"stop={repr(r_reason)}, "
                     f"text={repr(r_text)}"
                 )
+            log.info(
+                f"[{count}/{total_active}] Sample {sample_id} generated "
+                f"{len(results)} candidate(s):\n" + "\n".join(cand_lines)
+            )
             return traj_idx, results
 
         # Execute concurrently across trajectories.
@@ -859,57 +864,88 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         for traj_idx in active_indices:
             raw_list = raw_results[traj_idx]
             candidates = []
+            scoring_log_lines = []
+            sample_id = sample_ids[traj_idx] if sample_ids else traj_idx
 
             for cand_idx, raw in enumerate(raw_list):
                 raw_text = raw.get("text", "")
                 api_logprobs = raw.get("logprobs", [])
-                token_count = len(api_logprobs) if api_logprobs else self._count_tokens(raw_text)
+                token_count = (
+                    len(api_logprobs) if api_logprobs else self._count_tokens(raw_text)
+                )
 
-                # For streaming path, use pre-processed results from BoundaryEarlyStopping
+                # For streaming path, use pre-processed results from BoundaryEarlyStopping.
+                # step_text = text with stop token removed (like vLLM output.text)
+                # raw_collected = full accumulated text including stop token
                 if use_streaming:
-                    # Streaming result may have step_text from BoundaryEarlyStopping
                     step_text = raw.get("step_text", "")
                     raw_collected = raw.get("raw_collected", raw_text)
                     traj_complete = raw.get("trajectory_complete", False)
 
-                    if step_text:
-                        text = step_text
-                    else:
-                        text = raw_text
+                    # Use step_text as the candidate text (stop token already
+                    # removed, like vLLM's output.text)
+                    text = step_text or raw_text
 
                     # Additional completion checks
                     if not traj_complete:
-                        text, traj_complete, completion_reason = self._process_candidate_text(
-                            raw_collected or text, token_count, is_streaming=True
+                        _, traj_complete, completion_reason = (
+                            self._process_candidate_text(
+                                text, token_count, is_streaming=True
+                            )
                         )
                     else:
                         completion_reason = CompletionReason.EOS_PATTERN
                 else:
+                    step_text = ""
                     # Batch path — process text for completion
-                    text, traj_complete, completion_reason = self._process_candidate_text(
-                        raw_text, token_count, is_streaming=False
+                    text, traj_complete, completion_reason = (
+                        self._process_candidate_text(
+                            raw_text, token_count, is_streaming=False
+                        )
                     )
 
-                # Score candidate
-                scoring_data = self._score_candidate(text, api_logprobs)
+                # Truncate logprobs to match step text (without stop token).
+                # API logprobs cover all generated tokens including stop token,
+                # but scoring should only use content tokens (like vLLM).
+                original_logprob_count = len(api_logprobs) if api_logprobs else 0
+                raw_for_comparison = raw_collected if use_streaming else raw_text
+                if api_logprobs and text and text != raw_for_comparison:
+                    truncated_token_count = self._count_tokens(text)
+                    scoring_logprobs = api_logprobs[:truncated_token_count]
+                else:
+                    scoring_logprobs = api_logprobs
+
+                # Score candidate using truncated logprobs
+                scoring_data = self._score_candidate(text, scoring_logprobs)
 
                 # Determine stop reason string
                 stop_reason = None
                 if completion_reason:
-                    stop_reason = completion_reason.value if hasattr(completion_reason, 'value') else str(completion_reason)
+                    stop_reason = (
+                        completion_reason.value
+                        if hasattr(completion_reason, "value")
+                        else str(completion_reason)
+                    )
                 elif raw.get("finish_reason"):
                     stop_reason = raw["finish_reason"]
 
-                # Log scoring details per candidate
-                sample_id = sample_ids[traj_idx] if sample_ids else traj_idx
-                self._log_step_scoring(
-                    token_ids=scoring_data["token_ids"],
-                    stop_reason=stop_reason,
-                    raw_text=raw_text,
-                    step_text=text if text != raw_text else None,
-                    scoring_token_count=scoring_data["original_token_count"],
-                    path_idx=traj_idx if len(active_indices) > 1 else None,
-                    candidate_idx=cand_idx if len(active_indices) <= 1 else cand_idx,
+                # Collect scoring log line for this candidate
+                # Pass original token count so log shows truncation
+                # raw_text param = full text (like vLLM "Full tokens decoded")
+                # step_text param = boundary-truncated text (like vLLM "Raw text (stripped)")
+                scoring_log_lines.append(
+                    self._format_step_scoring(
+                        token_ids=list(range(original_logprob_count)),
+                        stop_reason=stop_reason,
+                        raw_text=raw_collected if use_streaming else raw_text,
+                        step_text=step_text if step_text else None,
+                        scoring_token_count=scoring_data["original_token_count"],
+                        path_idx=traj_idx if len(active_indices) > 1 else None,
+                        candidate_idx=(
+                            cand_idx if len(active_indices) <= 1 else cand_idx
+                        ),
+                        sample_id=sample_id,
+                    )
                 )
 
                 candidate = StepCandidate(
@@ -931,6 +967,13 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     candidate.other_data["completion_reason"] = completion_reason
 
                 candidates.append(candidate)
+
+            # Emit all scoring lines for this sample as one log message
+            if scoring_log_lines:
+                log.info(
+                    f"Sample {sample_id} scoring ({len(scoring_log_lines)} candidates):\n"
+                    + "\n".join(scoring_log_lines)
+                )
 
             # Context limit check
             if candidates and not candidates[0].is_trajectory_complete:
@@ -1058,7 +1101,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         # Generate with answer stop tokens
         # In thinking mode, use max_new_tokens (answer after </think> can be long)
         # In non-thinking mode, use max_answer_tokens (shorter direct answer)
-        answer_max_tokens = self.max_new_tokens if self.thinking_mode else self.max_answer_tokens
+        answer_max_tokens = (
+            self.max_new_tokens if self.thinking_mode else self.max_answer_tokens
+        )
         result = self._generate_step_candidates_impl(
             requests=[request],
             trajectories=[trajectory],

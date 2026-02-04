@@ -287,7 +287,9 @@ def create_model(config):
             tensor_parallel_size=config.model.get("tensor_parallel_size", 1),
             enable_prefix_caching=config.model.get("enable_prefix_caching", True),
             trust_remote_code=config.model.get("trust_remote_code", True),
-            max_model_len=config.model.get("max_context_budget", config.model.get("max_model_len", 32768)),
+            max_model_len=config.model.get(
+                "max_context_budget", config.model.get("max_model_len", 32768)
+            ),
             seed=config.system.seed,  # Reproducibility
         )
 
@@ -423,7 +425,9 @@ def create_model(config):
                     "detector_answer_patterns",
                     [],  # Empty by default - rely on EOS token IDs
                 ),
-                max_context_budget=config.model.get("max_context_budget", config.model.get("max_model_len", 32768)),
+                max_context_budget=config.model.get(
+                    "max_context_budget", config.model.get("max_model_len", 32768)
+                ),
                 disable_thinking_mode=config.model.get("disable_thinking_mode", None),
             )
 
@@ -522,8 +526,9 @@ def create_model(config):
             step_generator = None  # DeepConf doesn't use step generator
         else:
             # Other strategies use boundary detection via early stopping
-            from llm_tts.early_stopping import BoundaryEarlyStopping
             from lm_polygraph.utils import APIWithUncertainty
+
+            from llm_tts.early_stopping import BoundaryEarlyStopping
 
             # Determine thinking mode (same logic as vLLM)
             disable_thinking_mode = config.model.get("disable_thinking_mode", None)
@@ -613,11 +618,15 @@ def create_model(config):
                 top_p=config.generation.top_p,
                 top_k=config.generation.get("top_k", 20),
                 presence_penalty=config.generation.get("presence_penalty", 0.0),
-                max_context_budget=config.model.get("max_context_budget", config.model.get("max_model_len", 32768)),
+                max_context_budget=config.model.get(
+                    "max_context_budget", config.model.get("max_model_len", 32768)
+                ),
                 prefill_mode=config.model.get("prefill_mode", False),
                 disable_thinking_mode=disable_thinking_mode,
                 supports_logprobs=supports_logprobs,
-                max_concurrent_requests=config.model.get("max_concurrent_requests", 256),
+                max_concurrent_requests=config.model.get(
+                    "max_concurrent_requests", 256
+                ),
             )
 
             log.info(

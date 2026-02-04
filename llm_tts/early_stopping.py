@@ -82,7 +82,7 @@ class ConfidenceEarlyStopping(EarlyStopping):
 class BoundaryEarlyStopping(EarlyStopping):
     """Stop generation when text boundary is detected (Best-of-N style)."""
 
-    def __init__(self, detector: Optional[StructuredStepDetector] = None):
+    def __init__(self, detector=None):
         self.detector = detector or StructuredStepDetector(
             step_patterns=None, answer_patterns=None, max_tokens_per_step=512
         )
@@ -93,8 +93,9 @@ class BoundaryEarlyStopping(EarlyStopping):
         token_count = state.get("token_count", 0)
 
         if self.detector.is_step_complete(text, token_count):
-            # Determine specific reason
-            if self.detector.contains_answer_pattern(text):
+            if hasattr(
+                self.detector, "contains_answer_pattern"
+            ) and self.detector.contains_answer_pattern(text):
                 self._stop_reason = "answer-pattern"
             elif text.count("- Step") >= 2:
                 self._stop_reason = "step-boundary"

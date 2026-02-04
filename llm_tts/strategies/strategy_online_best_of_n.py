@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -290,6 +292,15 @@ class StrategyOnlineBestOfN(StrategyBase):
             hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
         )
         log.info(f"Using PRM scorer: {use_prm_scorer}")
+
+        # Dispatch to pipelined path for API + non-PRM (entropy/perplexity scoring)
+        from llm_tts.generators.api import StepCandidateGeneratorThroughAPI
+
+        is_api_generator = isinstance(
+            self.step_generator, StepCandidateGeneratorThroughAPI
+        )
+        if not use_prm_scorer and is_api_generator:
+            return self._generate_trajectories_pipelined(requests, sample_indices)
 
         # Reset per-sample token tracking in generator
         self.step_generator.reset_per_sample_stats()
@@ -647,7 +658,11 @@ class StrategyOnlineBestOfN(StrategyBase):
                 f"answer={extracted!r}"
             )
             for step_idx, step in enumerate(selected_steps[idx]):
-                score = validity_scores[idx][step_idx] if step_idx < len(validity_scores[idx]) else 0.0
+                score = (
+                    validity_scores[idx][step_idx]
+                    if step_idx < len(validity_scores[idx])
+                    else 0.0
+                )
                 log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
 
             outputs.append(
@@ -664,6 +679,331 @@ class StrategyOnlineBestOfN(StrategyBase):
             )
 
         return outputs
+
+    def _generate_trajectories_pipelined(
+        self,
+        requests: List[List[Dict[str, str]]],
+        sample_indices: List[int],
+    ) -> List[Dict[str, Any]]:
+        """
+        Pipelined trajectory generation for API + non-PRM scoring.
+
+        Each sample runs its full step loop independently. A shared semaphore
+        limits concurrent API calls so total connections stay within budget.
+        """
+        M = len(requests)
+        log.info(
+            f"Pipelined Online BoN: {M} samples, candidates_per_step={self.candidates_per_step}, "
+            f"max_steps={self.max_steps}"
+        )
+
+        # Reset per-sample token tracking
+        self.step_generator.reset_per_sample_stats()
+        # Pre-initialize per-sample stats keys so threads don't race on dict creation
+        for i in range(M):
+            self.step_generator._per_sample_stats[i] = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "generation_count": 0,
+            }
+
+        # Semaphore: each generate call uses candidates_per_step concurrent connections
+        max_concurrent = getattr(self.step_generator, "max_concurrent_requests", 256)
+        sem_slots = max(1, max_concurrent // self.candidates_per_step)
+        semaphore = threading.Semaphore(sem_slots)
+        log.info(
+            f"Pipelined concurrency: semaphore={sem_slots} slots "
+            f"(max_concurrent_requests={max_concurrent}, "
+            f"candidates_per_step={self.candidates_per_step})"
+        )
+
+        # Context limit
+        max_context_budget = getattr(self.step_generator, "max_context_budget", 4096)
+        max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
+        max_trajectory_tokens = min(
+            max_context_budget - self.prompt_buffer,
+            self.max_steps * max_step_tokens,
+        )
+
+        results: List[Optional[Dict[str, Any]]] = [None] * M
+        completed_count = [0]
+        completed_lock = threading.Lock()
+
+        def process_sample(sample_id: int) -> Dict[str, Any]:
+            return self._process_single_sample(
+                sample_id=sample_id,
+                sample_idx=sample_indices[sample_id],
+                request=requests[sample_id],
+                semaphore=semaphore,
+                max_trajectory_tokens=max_trajectory_tokens,
+            )
+
+        with ThreadPoolExecutor(max_workers=M) as executor:
+            future_to_id = {executor.submit(process_sample, i): i for i in range(M)}
+            for future in as_completed(future_to_id):
+                sid = future_to_id[future]
+                try:
+                    results[sid] = future.result()
+                except Exception:
+                    log.exception(
+                        f"Sample {sample_indices[sid]}: Unhandled exception in pipelined worker"
+                    )
+                    results[sid] = {
+                        "trajectory": "",
+                        "extracted_answer": None,
+                        "steps": [],
+                        "thinking_num_steps": 0,
+                        "response_num_steps": 0,
+                        "validity_scores": [],
+                        "completed": False,
+                        "token_stats": self.step_generator.get_sample_stats_for(sid),
+                    }
+                with completed_lock:
+                    completed_count[0] += 1
+                    n_done = completed_count[0]
+                r = results[sid]
+                n_steps = len(r["steps"]) if r else 0
+                log.info(
+                    f"Sample {sample_indices[sid]} done ({n_steps} steps) — "
+                    f"{n_done}/{M} completed, {M - n_done} active"
+                )
+
+        # Finalize stats
+        self.step_generator.finalize_sample_stats(num_samples=M)
+
+        # Batch-level logging
+        total_input = 0
+        total_output = 0
+        total_gens = 0
+        for idx in range(M):
+            s = self.step_generator.get_sample_stats_for(idx)
+            total_input += s["input_tokens"]
+            total_output += s["output_tokens"]
+            total_gens += s["generation_count"]
+        batch_total_tokens = total_input + total_output
+        batch_tflops = (
+            self.step_generator.flop_calculator.compute_tflops(batch_total_tokens)
+            if hasattr(self.step_generator, "flop_calculator")
+            and self.step_generator.flop_calculator
+            else None
+        )
+        log.info(
+            f"\n{'='*60}\n"
+            f"Pipelined batch complete: {M} samples\n"
+            f"Token stats (batch total): "
+            f"total_tokens={batch_total_tokens:,}, "
+            f"input_tokens={total_input:,}, "
+            f"output_tokens={total_output:,}, "
+            f"generations={total_gens}"
+            + (f", tflops={batch_tflops:.3f}" if batch_tflops else "")
+            + f"\n{'='*60}"
+        )
+
+        # Per-sample logging
+        for idx in range(M):
+            r = results[idx]
+            token_stats = r["token_stats"]
+            scores_str = ", ".join(f"{s:.3f}" for s in r["validity_scores"])
+            log.info(
+                f"Sample {sample_indices[idx]}: "
+                f"{len(r['steps'])} steps "
+                f"({r['thinking_num_steps']} thinking, {r['response_num_steps']} response), "
+                f"tokens={token_stats['total_tokens_this_sample']:,}, "
+                f"scores=[{scores_str}], "
+                f"answer={r['extracted_answer']!r}"
+            )
+            for step_idx, step in enumerate(r["steps"]):
+                score = (
+                    r["validity_scores"][step_idx]
+                    if step_idx < len(r["validity_scores"])
+                    else 0.0
+                )
+                log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
+
+        return results
+
+    def _process_single_sample(
+        self,
+        sample_id: int,
+        sample_idx: int,
+        request: List[Dict[str, str]],
+        semaphore: threading.Semaphore,
+        max_trajectory_tokens: int,
+    ) -> Dict[str, Any]:
+        """Run the full step loop for a single sample (called from a worker thread)."""
+        trajectory: List[StepCandidate] = []
+        selected_steps: List[StepCandidate] = []
+        validity_scores: List[float] = []
+        total_toks = 0
+
+        for step_num in range(self.max_steps):
+            # Context limit pre-check
+            if total_toks >= max_trajectory_tokens - 200:
+                log.info(
+                    f"Sample {sample_idx}: Context limit reached "
+                    f"(tokens: {total_toks} >= {max_trajectory_tokens - 200}), "
+                    f"generating final answer"
+                )
+                break
+
+            log.info(
+                f"Sample {sample_idx}: Step {step_num} "
+                f"(trajectory tokens: {total_toks})"
+            )
+
+            # Generate candidates (acquire semaphore for API budget)
+            semaphore.acquire()
+            try:
+                batch_results = self.step_generator.generate_step_candidates_batch(
+                    requests=[request],
+                    trajectories=[trajectory],
+                    candidates_per_step=self.candidates_per_step,
+                    compute_uncertainty=True,
+                    sample_ids=[sample_id],
+                )
+            finally:
+                semaphore.release()
+
+            candidates = batch_results[0] if batch_results else []
+            if not candidates:
+                log.info(f"Sample {sample_idx}: No candidates generated, stopping")
+                break
+
+            # Score from validity_score (instant, no external scorer call)
+            scores = [
+                c.other_data.get("validity_score", 0.0) if c.other_data else 0.0
+                for c in candidates
+            ]
+
+            best_idx = max(range(len(scores)), key=lambda i: scores[i])
+            selected = candidates[best_idx]
+
+            # Additional completion checks
+            forced_complete = False
+
+            if not selected.is_trajectory_complete:
+                full_traj_text = (
+                    convert_trajectory_to_string(trajectory) + selected.text
+                )
+                has_boxed = bool(extract_answer(full_traj_text, "boxed"))
+                if has_boxed:
+                    selected.is_trajectory_complete = True
+                    forced_complete = True
+                    log.info(f"Sample {sample_idx}: Boxed answer detected")
+
+            if not selected.is_trajectory_complete and _detect_garbage(selected.text):
+                selected.is_trajectory_complete = True
+                forced_complete = True
+                log.info(
+                    f"Sample {sample_idx}: Garbage output detected, marking complete"
+                )
+
+            all_scores_str = ", ".join(f"c{i}={s:.3f}" for i, s in enumerate(scores))
+            log.info(
+                f"Sample {sample_idx}: Selected candidate {best_idx} "
+                f"(score={scores[best_idx]:.3f}), all scores=[{all_scores_str}]"
+            )
+
+            new_tokens = len(selected.token_ids) if selected.token_ids else 0
+            total_toks += new_tokens
+
+            trajectory.append(selected)
+            selected_steps.append(selected)
+            validity_scores.append(scores[best_idx])
+
+            # Completion checks
+            if forced_complete:
+                break
+
+            if selected.is_trajectory_complete:
+                completion_reason = None
+                if selected.other_data:
+                    completion_reason = selected.other_data.get("completion_reason")
+
+                if completion_reason == CompletionReason.EOS_PATTERN:
+                    log.info(f"Sample {sample_idx}: Stopped at EOS")
+                    break
+                elif not self._has_answer_content(selected):
+                    log.info(
+                        f"Sample {sample_idx}: Answer pattern without content, "
+                        f"removing step and generating final answer"
+                    )
+                    trajectory.pop()
+                    selected_steps.pop()
+                    validity_scores.pop()
+                    break
+                else:
+                    log.info(f"Sample {sample_idx}: Answer pattern with content, done")
+                    break
+
+            # Context limit after appending
+            if total_toks >= max_trajectory_tokens:
+                log.info(
+                    f"Sample {sample_idx}: Context limit reached after step "
+                    f"(tokens: {total_toks})"
+                )
+                break
+
+        # Check if we need a final answer
+        needs_final = False
+        if not selected_steps:
+            needs_final = True
+        elif not selected_steps[-1].is_trajectory_complete:
+            needs_final = True
+
+        if needs_final:
+            log.info(f"Sample {sample_idx}: Generating final answer")
+            semaphore.acquire()
+            try:
+                answer_cands = self.step_generator.generate_answer_candidates(
+                    request,
+                    trajectory=trajectory,
+                    candidates_per_step=self.candidates_per_step,
+                )
+            finally:
+                semaphore.release()
+
+            if answer_cands:
+                # Record tokens for the final answer generation
+                ctx_tokens = self.step_generator.count_context_tokens(
+                    request, trajectory
+                )
+                self.step_generator.record_sample_tokens(
+                    sample_id, answer_cands, context_tokens=ctx_tokens
+                )
+
+                a_scores = [
+                    c.other_data.get("validity_score", 0.0) if c.other_data else 0.0
+                    for c in answer_cands
+                ]
+                best_a = max(range(len(a_scores)), key=lambda i: a_scores[i])
+
+                log.info(
+                    f"Sample {sample_idx}: Final answer selected "
+                    f"(score={a_scores[best_a]:.3f})"
+                )
+                trajectory.append(answer_cands[best_a])
+                selected_steps.append(answer_cands[best_a])
+                validity_scores.append(a_scores[best_a])
+
+        # Build result
+        final_trajectory = convert_trajectory_to_string(trajectory)
+        extracted = extract_answer(final_trajectory)
+        thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
+            selected_steps
+        )
+        token_stats = self.step_generator.get_sample_stats_for(sample_id)
+
+        return {
+            "trajectory": final_trajectory,
+            "extracted_answer": extracted,
+            "steps": selected_steps,
+            "thinking_num_steps": thinking_num_steps,
+            "response_num_steps": response_num_steps,
+            "validity_scores": validity_scores,
+            "completed": len(selected_steps) > 0,
+            "token_stats": token_stats,
+        }
 
     def _get_uncertainty_score(self, candidate: "StepCandidate") -> float:
         """Get uncertainty_score from candidate, logging error if missing."""
