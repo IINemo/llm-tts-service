@@ -35,7 +35,6 @@ class EvaluatorMBPPPlus:
         self,
         mode: str = "test",
         timeout: int = 10,
-        batch_only: bool = True,
     ):
         """
         Initialize the MBPP+ evaluator.
@@ -43,19 +42,13 @@ class EvaluatorMBPPPlus:
         Args:
             mode: "test" for basic assertions, "full" for EvalPlus evaluation
             timeout: Timeout per test case in seconds
-            batch_only: If True, skip Phase 1 (per-sample) evaluation and only run
-                       in Phase 2 (batch). More efficient for full mode (single EvalPlus
-                       call instead of N calls). Set to False for immediate feedback.
         """
         if mode not in ("test", "full"):
             raise ValueError(f"Unknown mode: {mode}. Use 'test' or 'full'.")
 
         self.mode = mode
         self.timeout = timeout
-        self.batch_only = batch_only
-        log.info(
-            f"MBPP+ Evaluator initialized with mode='{mode}', batch_only={batch_only}"
-        )
+        log.info(f"MBPP+ Evaluator initialized with mode='{mode}'")
 
     def __call__(
         self,
