@@ -152,6 +152,98 @@ class EvaluatorMBPPPlus:
         except Exception as e:
             return False, f"{type(e).__name__}: {e}"
 
+    # def _evaluate_full(
+    #     self,
+    #     solutions: List[str],
+    #     task_ids: List[str],
+    # ) -> List[float]:
+    #     """
+    #     Full evaluation using EvalPlus.
+
+    #     Creates a samples file and runs evalplus.evaluate command.
+    #     """
+    #     with tempfile.TemporaryDirectory() as tmpdir:
+    #         samples_path = Path(tmpdir) / "samples.jsonl"
+
+    #         # Create samples file in EvalPlus format
+    #         samples = []
+    #         evaluated_task_ids = set()
+
+    #         for task_id, solution in zip(task_ids, solutions):
+    #             code = self._extract_code(solution)
+    #             # Ensure task_id format is "Mbpp/X"
+    #             task_id_str = self._normalize_task_id(task_id)
+    #             samples.append({"task_id": task_id_str, "solution": code})
+    #             evaluated_task_ids.add(task_id_str)
+
+    #         # EvalPlus requires all problems to be in the samples file
+    #         # Add dummy entries for problems not being evaluated
+    #         try:
+    #             from evalplus.data import get_mbpp_plus
+
+    #             all_problems = get_mbpp_plus()
+
+    #             for full_task_id in all_problems.keys():
+    #                 if full_task_id not in evaluated_task_ids:
+    #                     # Add dummy entry with empty solution
+    #                     samples.append({"task_id": full_task_id, "solution": ""})
+
+    #             log.info(
+    #                 f"Created samples file with {len(evaluated_task_ids)} evaluated "
+    #                 f"+ {len(samples) - len(evaluated_task_ids)} dummy entries "
+    #                 f"= {len(samples)} total"
+    #             )
+    #         except ImportError:
+    #             log.warning(
+    #                 "Could not import evalplus.data.get_mbpp_plus, "
+    #                 "proceeding with partial samples (may fail)"
+    #             )
+
+    #         with open(samples_path, "w") as f:
+    #             for sample in samples:
+    #                 f.write(json.dumps(sample) + "\n")
+
+    #         log.info(f"Running EvalPlus on {len(samples)} samples...")
+    #         log.info(f"Samples file: {samples_path}")
+
+    #         # Run evalplus evaluation
+    #         try:
+    #             cmd = [
+    #                 "evalplus.evaluate",
+    #                 "--dataset",
+    #                 "mbpp",
+    #                 "--samples",
+    #                 str(samples_path),
+    #                 "--i-just-wanna-run",
+    #             ]
+
+    #             result = subprocess.run(
+    #                 cmd,
+    #                 capture_output=True,
+    #                 text=True,
+    #                 timeout=self.timeout * len(solutions) + 300,
+    #             )
+
+    #             log.info(f"EvalPlus stdout:\n{result.stdout}")
+    #             if result.stderr:
+    #                 log.warning(f"EvalPlus stderr:\n{result.stderr}")
+
+    #             if result.returncode != 0:
+    #                 log.error(f"EvalPlus failed with return code {result.returncode}")
+    #                 return [0.0] * len(solutions)
+
+    #             # Parse results from EvalPlus output
+    #             return self._parse_evalplus_output(result.stdout, task_ids, tmpdir)
+
+    #         except subprocess.TimeoutExpired:
+    #             log.error("EvalPlus evaluation timed out")
+    #             return [0.0] * len(solutions)
+    #         except FileNotFoundError:
+    #             log.error(
+    #                 "evalplus command not found. Install with: pip install evalplus"
+    #             )
+    #             return [0.0] * len(solutions)
+
     def _evaluate_full(
         self,
         solutions: List[str],
@@ -160,54 +252,76 @@ class EvaluatorMBPPPlus:
         """
         Full evaluation using EvalPlus.
 
-        Creates a samples file and runs evalplus.evaluate command.
+        Creates a minimal subset dataset containing only the problems being evaluated,
+        then uses MBPP_OVERRIDE_PATH to point EvalPlus at this subset.
+        This avoids running tests for problems we don't care about.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             samples_path = Path(tmpdir) / "samples.jsonl"
+            subset_dataset_path = Path(tmpdir) / "MbppPlus_subset.jsonl"
 
-            # Create samples file in EvalPlus format
-            samples = []
-            evaluated_task_ids = set()
+            # Normalize task IDs
+            normalized_task_ids = [self._normalize_task_id(tid) for tid in task_ids]
+            task_id_set = set(normalized_task_ids)  # noqa
 
-            for task_id, solution in zip(task_ids, solutions):
-                code = self._extract_code(solution)
-                # Ensure task_id format is "Mbpp/X"
-                task_id_str = self._normalize_task_id(task_id)
-                samples.append({"task_id": task_id_str, "solution": code})
-                evaluated_task_ids.add(task_id_str)
-
-            # EvalPlus requires all problems to be in the samples file
-            # Add dummy entries for problems not being evaluated
+            # Load the full MBPP+ dataset and create a subset
             try:
                 from evalplus.data import get_mbpp_plus
 
                 all_problems = get_mbpp_plus()
 
-                for full_task_id in all_problems.keys():
-                    if full_task_id not in evaluated_task_ids:
-                        # Add dummy entry with empty solution
-                        samples.append({"task_id": full_task_id, "solution": ""})
+                # Create subset dataset with only the problems we're evaluating
+                subset_problems = []
+                for task_id_str in normalized_task_ids:
+                    if task_id_str in all_problems:
+                        problem = all_problems[task_id_str].copy()
+                        problem["task_id"] = task_id_str
+                        subset_problems.append(problem)
+                    else:
+                        log.warning(f"Task {task_id_str} not found in MBPP+ dataset")
+
+                if not subset_problems:
+                    log.error("No valid problems found in MBPP+ dataset")
+                    return [0.0] * len(solutions)
+
+                # Write subset dataset
+                with open(subset_dataset_path, "w") as f:
+                    for problem in subset_problems:
+                        f.write(json.dumps(problem) + "\n")
 
                 log.info(
-                    f"Created samples file with {len(evaluated_task_ids)} evaluated "
-                    f"+ {len(samples) - len(evaluated_task_ids)} dummy entries "
-                    f"= {len(samples)} total"
+                    f"Created subset dataset with {len(subset_problems)} problems "
+                    f"(from {len(all_problems)} total)"
                 )
+
             except ImportError:
-                log.warning(
-                    "Could not import evalplus.data.get_mbpp_plus, "
-                    "proceeding with partial samples (may fail)"
+                log.error(
+                    "Could not import evalplus.data.get_mbpp_plus. "
+                    "Install with: pip install evalplus"
                 )
+                return [0.0] * len(solutions)
+
+            # Create samples file - only for tasks being evaluated
+            samples = []
+            for task_id, solution in zip(task_ids, solutions):
+                code = self._extract_code(solution)
+                task_id_str = self._normalize_task_id(task_id)
+                samples.append({"task_id": task_id_str, "solution": code})
 
             with open(samples_path, "w") as f:
                 for sample in samples:
                     f.write(json.dumps(sample) + "\n")
 
-            log.info(f"Running EvalPlus on {len(samples)} samples...")
-            log.info(f"Samples file: {samples_path}")
+            log.info(f"Created samples file with {len(samples)} entries")
+            log.info(f"Running EvalPlus on subset of {len(samples)} problems...")
 
-            # Run evalplus evaluation
+            # Run evalplus evaluation with overridden dataset
             try:
+                import os
+
+                env = os.environ.copy()
+                env["MBPP_OVERRIDE_PATH"] = str(subset_dataset_path)
+
                 cmd = [
                     "evalplus.evaluate",
                     "--dataset",
@@ -222,6 +336,7 @@ class EvaluatorMBPPPlus:
                     capture_output=True,
                     text=True,
                     timeout=self.timeout * len(solutions) + 300,
+                    env=env,
                 )
 
                 log.info(f"EvalPlus stdout:\n{result.stdout}")
