@@ -12,7 +12,6 @@ import ast
 import json
 import logging
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -265,41 +264,34 @@ class EvaluatorMBPPPlus:
             task_id_set = set(normalized_task_ids)  # noqa
 
             # Load the full MBPP+ dataset and create a subset
-            try:
-                from evalplus.data import get_mbpp_plus
+            from evalplus.data import get_mbpp_plus
 
-                all_problems = get_mbpp_plus()
+            all_problems = get_mbpp_plus()
 
-                # Create subset dataset with only the problems we're evaluating
-                subset_problems = []
-                for task_id_str in normalized_task_ids:
-                    if task_id_str in all_problems:
-                        problem = all_problems[task_id_str].copy()
-                        problem["task_id"] = task_id_str
-                        subset_problems.append(problem)
-                    else:
-                        log.warning(f"Task {task_id_str} not found in MBPP+ dataset")
+            # Create subset dataset with only the problems we're evaluating
+            subset_problems = []
+            for task_id_str in normalized_task_ids:
+                if task_id_str in all_problems:
+                    problem = all_problems[task_id_str].copy()
+                    problem["task_id"] = task_id_str
+                    subset_problems.append(problem)
+                else:
+                    log.warning(f"Task {task_id_str} not found in MBPP+ dataset")
 
-                if not subset_problems:
-                    log.error("No valid problems found in MBPP+ dataset")
-                    return [0.0] * len(solutions)
-
-                # Write subset dataset
-                with open(subset_dataset_path, "w") as f:
-                    for problem in subset_problems:
-                        f.write(json.dumps(problem) + "\n")
-
-                log.info(
-                    f"Created subset dataset with {len(subset_problems)} problems "
-                    f"(from {len(all_problems)} total)"
+            if not subset_problems:
+                raise ValueError(
+                    "No valid problems found in MBPP+ dataset for evaluation"
                 )
 
-            except ImportError:
-                log.error(
-                    "Could not import evalplus.data.get_mbpp_plus. "
-                    "Install with: pip install evalplus"
-                )
-                return [0.0] * len(solutions)
+            # Write subset dataset
+            with open(subset_dataset_path, "w") as f:
+                for problem in subset_problems:
+                    f.write(json.dumps(problem) + "\n")
+
+            log.info(
+                f"Created subset dataset with {len(subset_problems)} problems "
+                f"(from {len(all_problems)} total)"
+            )
 
             # Create samples file - only for tasks being evaluated
             samples = []
@@ -316,56 +308,55 @@ class EvaluatorMBPPPlus:
             log.info(f"Running EvalPlus on subset of {len(samples)} problems...")
 
             # Run evalplus evaluation with overridden dataset
+            import os
+            import sys
+            from io import StringIO
+
+            # Set environment variable for dataset override
+            os.environ["MBPP_OVERRIDE_PATH"] = str(subset_dataset_path)
+
+            # Import evaluate function from EvalPlus
+            from evalplus.evaluate import evaluate
+
+            # Capture stdout for logging
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            captured_stdout = StringIO()
+            captured_stderr = StringIO()
+
             try:
-                import os
+                sys.stdout = captured_stdout
+                sys.stderr = captured_stderr
 
-                env = os.environ.copy()
-                env["MBPP_OVERRIDE_PATH"] = str(subset_dataset_path)
-
-                cmd = [
-                    "evalplus.evaluate",
-                    "--dataset",
-                    "mbpp",
-                    "--samples",
-                    str(samples_path),
-                    "--i-just-wanna-run",
-                ]
-
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout * len(solutions) + 300,
-                    env=env,
+                # Call evaluate directly (no subprocess!)
+                evaluate(
+                    dataset="mbpp",
+                    samples=str(samples_path),
+                    i_just_wanna_run=True,
+                    parallel=1,  # Single-threaded for macOS compatibility
+                    test_details=False,
                 )
 
-                log.info(f"EvalPlus stdout:\n{result.stdout}")
-                if result.stderr:
-                    log.warning(f"EvalPlus stderr:\n{result.stderr}")
+            finally:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
 
-                if result.returncode != 0:
-                    log.error(f"EvalPlus failed with return code {result.returncode}")
-                    return [0.0] * len(solutions)
+            stdout_str = captured_stdout.getvalue()
+            stderr_str = captured_stderr.getvalue()
 
-                # Parse results from EvalPlus output
-                return self._parse_evalplus_output(result.stdout, task_ids, tmpdir)
+            log.info(f"EvalPlus output:\n{stdout_str}")
+            if stderr_str:
+                log.warning(f"EvalPlus warnings:\n{stderr_str}")
 
-            except subprocess.TimeoutExpired:
-                log.error("EvalPlus evaluation timed out")
-                return [0.0] * len(solutions)
-            except FileNotFoundError:
-                log.error(
-                    "evalplus command not found. Install with: pip install evalplus"
-                )
-                return [0.0] * len(solutions)
+            # Parse results from EvalPlus JSON output file
+            return self._parse_evalplus_output(task_ids, tmpdir)
 
     def _parse_evalplus_output(
         self,
-        stdout: str,
         task_ids: List[str],
         tmpdir: str,
     ) -> List[float]:
-        """Parse EvalPlus output to get per-task results."""
+        """Parse EvalPlus output to get per-task results from JSON file."""
         # Try to find the results JSON file
         results_pattern = Path(tmpdir).glob("*_eval_results.json")
         for results_file in results_pattern:
@@ -414,18 +405,14 @@ class EvaluatorMBPPPlus:
 
                 return scores
             except Exception as e:
-                log.warning(f"Failed to parse results file: {e}")
+                # Re-raise to fail fast
+                raise RuntimeError(f"Failed to parse EvalPlus results file: {e}") from e
 
-        # Fallback: parse pass@1 from stdout
-        match = re.search(r"pass@1:\s*([\d.]+)", stdout)
-        if match:
-            pass_rate = float(match.group(1))
-            log.info(f"EvalPlus pass@1: {pass_rate}")
-            # Can't get per-task scores, return overall rate for all
-            return [pass_rate] * len(task_ids)
-
-        log.warning("Could not parse EvalPlus results, defaulting to 0.0")
-        return [0.0] * len(task_ids)
+        # No results file found - this is an error condition
+        raise FileNotFoundError(
+            f"EvalPlus results file not found in {tmpdir}. "
+            f"Check EvalPlus output for errors."
+        )
 
     def _normalize_task_id(self, task_id: Any) -> str:
         """Ensure task_id is in 'Mbpp/X' format."""
