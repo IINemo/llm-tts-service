@@ -2120,10 +2120,21 @@ def main(config):
         log.info(
             "Using EvalPlus API for MBPP+ (provides correct prompt format with function name)"
         )
-        subset_size = config.dataset.get("subset", None)
         mbpp_data = load_mbpp_plus(subset_size=None)  # Load all, subset later
         # Convert to HuggingFace Dataset format
-        dataset = Dataset.from_list(mbpp_data)
+        # Remove fields that can't be serialized by Arrow (nested tuples)
+        serializable_data = []
+        for item in mbpp_data:
+            serializable_item = {
+                "question": item["question"],
+                "answer": item["answer"],
+                "task_id": item["task_id"],
+                "entry_point": item["entry_point"],
+                "test_list": item["test_list"],
+                "assertion": item["assertion"],
+            }
+            serializable_data.append(serializable_item)
+        dataset = Dataset.from_list(serializable_data)
     # Support loading local JSON/JSONL files via data_files parameter
     elif config.dataset.get("data_files", None):
         data_files = config.dataset.get("data_files", None)
