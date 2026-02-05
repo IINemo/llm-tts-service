@@ -1,9 +1,7 @@
 """
 MBPP+ evaluator for code generation using EvalPlus methodology.
 
-Two evaluation modes:
-1. test: Run code against basic test assertions (test_list field, 3 tests per problem)
-2. full: Run EvalPlus evaluation with full test suite (base + plus inputs, ~100+ tests per problem)
+Uses EvalPlus evaluation with full test suite (base + plus inputs, ~100+ tests per problem).
 
 Reference: https://github.com/evalplus/evalplus
 """
@@ -14,10 +12,9 @@ import logging
 import re
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
-from tqdm import tqdm
 
 log = logging.getLogger(__name__)
 
@@ -26,29 +23,40 @@ class EvaluatorMBPPPlus:
     """
     Evaluator for MBPP+ code generation following EvalPlus methodology.
 
-    Modes:
-    - test: Run against basic test assertions (test_list, quick evaluation)
-    - full: Run EvalPlus evaluation with complete test suite (thorough evaluation)
+    Uses EvalPlus evaluation with complete test suite for thorough evaluation.
     """
 
     def __init__(
         self,
-        mode: str = "test",
+        mode: str = "full",
         timeout: int = 10,
     ):
         """
         Initialize the MBPP+ evaluator.
 
         Args:
-            mode: "test" for basic assertions, "full" for EvalPlus evaluation
+            mode: Evaluation mode. Only "full" is supported. Other modes are deprecated.
             timeout: Timeout per test case in seconds
         """
-        if mode not in ("test", "full"):
-            raise ValueError(f"Unknown mode: {mode}. Use 'test' or 'full'.")
+        # Handle deprecated modes
+        if mode in ("test", "syntax"):
+            warnings.warn(
+                f"Mode '{mode}' is deprecated and will be removed in a future version. "
+                f"Using 'full' mode instead (EvalPlus evaluation).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            mode = "full"
+
+        if mode != "full":
+            raise ValueError(
+                f"Unknown mode: {mode}. Only 'full' mode is supported. "
+                f"Modes 'test' and 'syntax' are deprecated."
+            )
 
         self.mode = mode
         self.timeout = timeout
-        log.info(f"MBPP+ Evaluator initialized with mode='{mode}'")
+        log.info(f"MBPP+ Evaluator initialized with mode='{mode}' (EvalPlus)")
 
     def __call__(
         self,
@@ -59,98 +67,21 @@ class EvaluatorMBPPPlus:
         instance_data: Optional[List[Dict[str, Any]]] = None,
     ) -> List[float]:
         """
-        Evaluate solutions.
+        Evaluate solutions using EvalPlus.
 
         Args:
             problems: List of problem prompts
             solutions: List of model-generated solutions
-            gold_answers: List of gold/reference solutions
-            task_ids: List of task IDs (required for full mode)
-            instance_data: List of instance data (contains test_list for test mode)
+            gold_answers: List of gold/reference solutions (unused, kept for API compatibility)
+            task_ids: List of task IDs (required)
+            instance_data: List of instance data (unused, kept for API compatibility)
 
         Returns:
             List of scores (0.0 or 1.0 for each instance)
         """
-        if self.mode == "test":
-            return self._evaluate_test(solutions, instance_data)
-        elif self.mode == "full":
-            if task_ids is None:
-                raise ValueError("Full evaluation mode requires task_ids parameter.")
-            return self._evaluate_full(solutions, task_ids)
-
-    def _evaluate_test(
-        self,
-        solutions: List[str],
-        instance_data: Optional[List[Dict[str, Any]]],
-    ) -> List[float]:
-        """
-        Run code against basic test assertions (test_list).
-
-        This executes the generated code and runs the assertions from test_list.
-        """
-        if not instance_data:
-            raise ValueError("Test mode requires instance_data with test_list field.")
-
-        scores = []
-        passed_count = 0
-        total_tests = 0
-
-        for idx, solution in enumerate(tqdm(solutions, desc="Running tests")):
-            code = self._extract_code(solution)
-
-            # Check syntax first
-            if not self._is_valid_python(code):
-                log.debug(f"Sample {idx}: Invalid Python syntax")
-                scores.append(0.0)
-                continue
-
-            # Get test assertions
-            test_list = instance_data[idx].get("test_list", [])
-            if not test_list:
-                raise ValueError(
-                    f"No test_list found for sample {idx}. "
-                    f"Ensure instance_data contains test_list field."
-                )
-
-            # Run tests
-            passed, error = self._run_assertions(code, test_list)
-            total_tests += len(test_list)
-
-            if passed:
-                scores.append(1.0)
-                passed_count += 1
-            else:
-                scores.append(0.0)
-                log.debug(f"Sample {idx} failed: {error}")
-
-        log.info(
-            f"Test evaluation: {passed_count}/{len(solutions)} passed "
-            f"({total_tests} total assertions)"
-        )
-        return scores
-
-    def _run_assertions(
-        self, code: str, test_list: List[str]
-    ) -> Tuple[bool, Optional[str]]:
-        """
-        Run test assertions against generated code.
-
-        Returns:
-            Tuple of (passed: bool, error_message: Optional[str])
-        """
-        # Build test script: code + assertions
-        test_code = code + "\n\n"
-        for test in test_list:
-            test_code += test + "\n"
-
-        try:
-            exec_globals: Dict[str, Any] = {}
-            exec(compile(test_code, "<test>", "exec"), exec_globals)
-            return True, None
-        except AssertionError as e:
-            return False, f"AssertionError: {e}"
-        except Exception as e:
-            return False, f"{type(e).__name__}: {e}"
+        if task_ids is None:
+            raise ValueError("EvalPlus evaluation requires task_ids parameter.")
+        return self._evaluate_full(solutions, task_ids)
 
     # def _evaluate_full(
     #     self,
