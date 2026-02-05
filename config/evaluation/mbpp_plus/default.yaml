@@ -1,14 +1,10 @@
 # @package evaluation.mbpp_plus
 # MBPP+ evaluator configuration following EvalPlus methodology
-#
-# Two modes:
-# - test: Run code against basic test assertions (test_list, 3 tests per problem)
-# - full: Run EvalPlus evaluation with full test suite (~100+ tests per problem)
 
 # Evaluation mode
-# - "test": Run basic test assertions (quick, ~3 tests per problem)
 # - "full": Run EvalPlus full test suite (thorough, requires: pip install evalplus)
-mode: test
+# - other modes are depricated and will no work
+mode: full
 
 # Timeout per test case in seconds
 timeout: 10
