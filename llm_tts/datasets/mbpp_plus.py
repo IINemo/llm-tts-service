@@ -51,8 +51,18 @@ def load_mbpp_plus(
 
 
 def _load_from_evalplus(subset_size: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Load MBPP+ using evalplus API."""
+    """Load MBPP+ using evalplus API.
+
+    Formats prompts to match EvalPlus official methodology:
+    - instruction_prefix + code block with docstring
+    """
     log.info("Loading MBPP+ using evalplus API...")
+
+    # EvalPlus instruction prefix for chat/instruction models
+    INSTRUCTION_PREFIX = (
+        "Please provide a self-contained Python script that solves the "
+        "following problem in a markdown code block:"
+    )
 
     problems = get_mbpp_plus()
     formatted_data = []
@@ -66,9 +76,14 @@ def _load_from_evalplus(subset_size: Optional[int] = None) -> List[Dict[str, Any
             if line.strip() and line.strip().startswith("assert ")
         ]
 
+        # Format prompt exactly like EvalPlus does for chat models:
+        # instruction_prefix + "\n```python\n" + prompt + "\n```"
+        raw_prompt = problem["prompt"].strip()
+        formatted_prompt = f"{INSTRUCTION_PREFIX}\n```python\n{raw_prompt}\n```"
+
         formatted = {
             # Standard fields for the evaluation pipeline
-            "question": problem["prompt"],
+            "question": formatted_prompt,
             "answer": problem["canonical_solution"],
             # MBPP+ specific fields
             "task_id": task_id,
