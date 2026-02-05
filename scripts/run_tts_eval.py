@@ -1117,18 +1117,9 @@ def _generate_trajectories_batch(
                     }
                     continue
                 elif isinstance(evaluator, EvaluatorMBPPPlus):
-                    # MBPP+ evaluator: needs task_ids and instance_data
-                    solution = result["trajectory"]
-                    task_id = instance.get("task_id", i)
-                    scores = evaluator(
-                        problems=[question],
-                        solutions=[solution],
-                        gold_answers=[str(gold_answer_num)],
-                        task_ids=[task_id],
-                        instance_data=[dict(instance)],
-                    )
-                    is_correct_eval = scores[0] == 1.0 if scores else False
-                    eval_results[eval_name] = {"is_correct": is_correct_eval}
+                    # Skip MBPP+ in phase 1 - will run batch evaluation once in phase 2
+                    # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
+                    log.debug(f"Skipping MBPP+ evaluation for sample {i} in phase 1")
                     continue
                 else:
                     # Fallback: try __call__ with lists
@@ -1623,6 +1614,9 @@ def evaluate_results(
     evaluators = build_evaluators(config)
     log.info(f"Using evaluators: {list(evaluators.keys())}")
 
+    # Move MBPP+ to batch evaluation (running EvalPlus per-sample is inefficient)
+    mbpp_evaluator = evaluators.pop("mbpp_plus", None)
+
     # Build batch evaluators (from config.evaluation.batch_evaluators)
     batch_evaluator_names = config.evaluation.get("batch_evaluators", [])
     batch_evaluators = {}
@@ -1660,6 +1654,12 @@ def evaluate_results(
             sanitized_model = model_name.replace("/", "_").replace(":", "_")
             eval_key = f"llm_judge_{sanitized_model}"
             batch_evaluators[eval_key] = EvaluatorLLMAsAJudge(**llm_cfg)
+
+    # Add MBPP+ to batch evaluators (single EvalPlus run is much more efficient)
+    if mbpp_evaluator is not None:
+        batch_evaluators["mbpp_plus"] = mbpp_evaluator
+        log.info("MBPP+ moved to batch evaluation (single EvalPlus run)")
+
     if batch_evaluators:
         log.info(f"Batch evaluators: {list(batch_evaluators.keys())}")
 
@@ -1714,21 +1714,10 @@ def evaluate_results(
                         log.warning(
                             f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}"
                         )
-                elif eval_name == "mbpp_plus" and isinstance(
-                    evaluator_fn, EvaluatorMBPPPlus
-                ):
-                    # MBPP+ evaluator: needs task_ids and instance_data
-                    instance_data = result.get("instance_data", {})
-                    task_id = instance_data.get("task_id", result["index"])
-                    scores = evaluator_fn(
-                        problems=[result["question"]],
-                        solutions=[solution],
-                        gold_answers=[str(result["gold_answer"])],
-                        task_ids=[task_id],
-                        instance_data=[instance_data],
-                    )
-                    is_correct = scores[0] == 1.0 if scores else False
-                    annotation = 1.0 if is_correct else 0.0
+                elif isinstance(evaluator_fn, EvaluatorMBPPPlus):
+                    # Skip MBPP+ in per-sample loop - will run batch evaluation once
+                    # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
+                    continue
                 else:
                     # Other evaluators use __call__ with extracted answer
                     extracted_answer = result.get(
