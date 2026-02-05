@@ -32,12 +32,12 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 2048
+  max_new_tokens: 32768
   temperature: 0.6
   top_p: 0.95
   top_k: 20
   batch_size: 512
-  max_length: 2048
+  max_length: 32768
 
 # Strategy - Adaptive Scaling
 strategy:
@@ -49,13 +49,13 @@ strategy:
   adaptive_scaling_method: momentum  # momentum, random, average, always, threshold
   # Detector settings
   detector_type: structured
-  min_step_tokens: 50
-  max_step_tokens: 2048
+  min_step_tokens: 10
+  max_step_tokens: 1024
   use_sequence: true
   use_conclusion: true
-  use_thinking: false
+  use_thinking: true
   use_verification: true
-  use_structure: true
+  use_structure: false
   use_reasoning: true
   use_correction: false
   custom_words:

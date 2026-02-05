@@ -17,7 +17,7 @@ run_name: "adaptive_scaling_vllm_qwen25_7.5b_math500_perplexity_${now:%H-%M-%S}"
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
-  gpu_memory_utilization: 0.8
+  gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -31,12 +31,12 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 1024
+  max_new_tokens: 4096
   temperature: 0.7
   top_p: 0.8
   top_k: 20
   batch_size: 512
-  max_length: 4096
+  max_length: 8192
 
 # Strategy - Adaptive Scaling
 strategy:
@@ -48,13 +48,13 @@ strategy:
   adaptive_scaling_method: momentum  # momentum, random, average, always, threshold
   # Detector settings
   detector_type: structured
-  min_step_tokens: 50
+  min_step_tokens: 10
   max_step_tokens: 1024
   use_sequence: true
   use_conclusion: true
-  use_thinking: false
+  use_thinking: true
   use_verification: true
-  use_structure: true
+  use_structure: false
   use_reasoning: true
   use_correction: false
   custom_words:
@@ -64,9 +64,6 @@ strategy:
     - "step"
     - "therefore"
     - "thus"
-    - "```"
-    - "🌈"
-    - "\U0001F308"
 
   stop_token_ids:
     - 151645

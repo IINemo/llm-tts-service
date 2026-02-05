@@ -48,17 +48,17 @@ strategy:
   adaptive_scaling_method: momentum  # momentum, random, average, always, threshold
   # Detector settings
   detector_type: structured
-  min_step_tokens: 50
-  max_step_tokens: 2048
+  min_step_tokens: 10
+  max_step_tokens: 1024
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
   # Step boundary token limits
   use_sequence: true
   use_conclusion: true
-  use_thinking: false
+  use_thinking: true
   use_verification: true
-  use_structure: true
+  use_structure: false
   use_reasoning: true
   use_correction: false
   custom_words:
