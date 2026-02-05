@@ -82,7 +82,9 @@ class StrategyOfflineBestOfN(StrategyBase):
         if candidate.other_data and "uncertainty_score" in candidate.other_data:
             score = candidate.other_data["uncertainty_score"]
             if score is None:
-                log.warning("Candidate has uncertainty_score=None — no estimator configured?")
+                log.warning(
+                    "Candidate has uncertainty_score=None — no estimator configured?"
+                )
                 return 0.0
             return score
         return 0.0
@@ -482,7 +484,9 @@ class StrategyOfflineBestOfN(StrategyBase):
             for traj_idx, candidate in enumerate(candidates):
                 raw_text = candidate.raw_text or candidate.text
                 num_tokens = (
-                    candidate.other_data.get("original_token_count", len(candidate.token_ids))
+                    candidate.other_data.get(
+                        "original_token_count", len(candidate.token_ids)
+                    )
                     if candidate.other_data
                     else len(candidate.token_ids)
                 )
@@ -616,11 +620,15 @@ class StrategyOfflineBestOfN(StrategyBase):
                 token_stats["prm_tflops"] = prm_stats["prm_tflops"]
                 gen_tflops = token_stats.get("tflops")
                 if gen_tflops is None:
-                    log.warning(f"Sample {sample_idx}: missing 'tflops' in token_stats when merging PRM stats")
+                    log.warning(
+                        f"Sample {sample_idx}: missing 'tflops' in token_stats when merging PRM stats"
+                    )
                     gen_tflops = 0
                 prm_tflops = prm_stats["prm_tflops"]
                 if prm_tflops is None:
-                    log.warning(f"Sample {sample_idx}: missing 'prm_tflops' in PRM stats")
+                    log.warning(
+                        f"Sample {sample_idx}: missing 'prm_tflops' in PRM stats"
+                    )
                     prm_tflops = 0
                 token_stats["tflops"] = gen_tflops + prm_tflops
 

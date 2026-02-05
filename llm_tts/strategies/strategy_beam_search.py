@@ -114,7 +114,9 @@ class StrategyBeamSearch(StrategyBase):
         if beam_size <= 0:
             raise ValueError(f"beam_size must be > 0, got {beam_size}")
         if candidates_per_beam <= 0:
-            raise ValueError(f"candidates_per_beam must be > 0, got {candidates_per_beam}")
+            raise ValueError(
+                f"candidates_per_beam must be > 0, got {candidates_per_beam}"
+            )
         if max_steps <= 0:
             raise ValueError(f"max_steps must be > 0, got {max_steps}")
 
@@ -312,10 +314,13 @@ class StrategyBeamSearch(StrategyBase):
         #   2. max_steps * max_step_tokens (theoretical max from step limits)
         max_context_budget = getattr(self.step_generator, "max_context_budget", 4096)
         max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
-        max_trajectory_tokens = max(0, min(
-            max_context_budget - self.prompt_buffer,
-            self.max_steps * max_step_tokens,
-        ))
+        max_trajectory_tokens = max(
+            0,
+            min(
+                max_context_budget - self.prompt_buffer,
+                self.max_steps * max_step_tokens,
+            ),
+        )
         if max_trajectory_tokens == 0:
             log.warning(
                 f"max_trajectory_tokens is 0 (max_context_budget={max_context_budget}, "
@@ -432,11 +437,15 @@ class StrategyBeamSearch(StrategyBase):
                         data = candidate.other_data if candidate.other_data else {}
                         uncertainty = data.get("uncertainty_score")
                         if uncertainty is None:
-                            log.warning(f"Sample {sample_id}, beam {beam_idx}: missing 'uncertainty_score' in candidate other_data")
+                            log.warning(
+                                f"Sample {sample_id}, beam {beam_idx}: missing 'uncertainty_score' in candidate other_data"
+                            )
                             uncertainty = 0.0
                         validity = data.get("validity_score")
                         if validity is None:
-                            log.warning(f"Sample {sample_id}, beam {beam_idx}: missing 'validity_score' in candidate other_data")
+                            log.warning(
+                                f"Sample {sample_id}, beam {beam_idx}: missing 'validity_score' in candidate other_data"
+                            )
                             validity = 0.0
 
                         candidates_for_beam.append(
@@ -856,7 +865,9 @@ class StrategyBeamSearch(StrategyBase):
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
             gen_tflops = token_stats.get("tflops")
             if gen_tflops is None:
-                log.warning(f"Sample {sample_id}: missing 'tflops' in token_stats when merging PRM stats")
+                log.warning(
+                    f"Sample {sample_id}: missing 'tflops' in token_stats when merging PRM stats"
+                )
                 gen_tflops = 0
             prm_tflops = prm_stats["prm_tflops"]
             if prm_tflops is None:
@@ -865,9 +876,7 @@ class StrategyBeamSearch(StrategyBase):
             token_stats["tflops"] = gen_tflops + prm_tflops
 
         # Determine actual completion status from beam steps
-        is_completed = bool(
-            steps and steps[-1].is_trajectory_complete
-        )
+        is_completed = bool(steps and steps[-1].is_trajectory_complete)
 
         result = {
             "trajectory": trajectory_text,
@@ -890,7 +899,9 @@ class StrategyBeamSearch(StrategyBase):
             log.warning(f"All {len(scores)} scores are non-finite, returning 0.0")
             return 0.0
         if len(clean) < len(scores):
-            log.warning(f"Dropped {len(scores) - len(clean)} non-finite scores out of {len(scores)}")
+            log.warning(
+                f"Dropped {len(scores) - len(clean)} non-finite scores out of {len(scores)}"
+            )
         if self.aggregation == "last":
             return scores[-1]
         elif self.aggregation == "sum":

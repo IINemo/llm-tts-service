@@ -248,7 +248,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                         data = c.other_data if c.other_data else {}
                         v = data.get("validity_score")
                         if v is None:
-                            log.warning("Missing 'validity_score' in candidate other_data")
+                            log.warning(
+                                "Missing 'validity_score' in candidate other_data"
+                            )
                             v = 0.0
                         scores.append(v)
                     all_scores.append(scores)
@@ -484,11 +486,15 @@ class StrategyOnlineBestOfN(StrategyBase):
                 token_stats["prm_tflops"] = prm_stats["prm_tflops"]
                 gen_tflops = token_stats.get("tflops")
                 if gen_tflops is None:
-                    log.warning(f"Sample {sample_indices[idx]}: missing 'tflops' in token_stats when merging PRM stats")
+                    log.warning(
+                        f"Sample {sample_indices[idx]}: missing 'tflops' in token_stats when merging PRM stats"
+                    )
                     gen_tflops = 0
                 prm_tflops = prm_stats["prm_tflops"]
                 if prm_tflops is None:
-                    log.warning(f"Sample {sample_indices[idx]}: missing 'prm_tflops' in PRM stats")
+                    log.warning(
+                        f"Sample {sample_indices[idx]}: missing 'prm_tflops' in PRM stats"
+                    )
                     prm_tflops = 0
                 token_stats["tflops"] = gen_tflops + prm_tflops
 
@@ -517,7 +523,8 @@ class StrategyOnlineBestOfN(StrategyBase):
                     "thinking_num_steps": thinking_num_steps,
                     "response_num_steps": response_num_steps,
                     "validity_scores": validity_scores[idx],
-                    "completed": bool(selected_steps[idx]) and selected_steps[idx][-1].is_trajectory_complete,
+                    "completed": bool(selected_steps[idx])
+                    and selected_steps[idx][-1].is_trajectory_complete,
                     "token_stats": token_stats,
                 }
             )
@@ -719,7 +726,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                 data = c.other_data if c.other_data else {}
                 v = data.get("validity_score")
                 if v is None:
-                    log.warning(f"Sample {sample_idx}: missing 'validity_score' in candidate other_data")
+                    log.warning(
+                        f"Sample {sample_idx}: missing 'validity_score' in candidate other_data"
+                    )
                     v = 0.0
                 scores.append(v)
 
@@ -832,7 +841,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                     data = c.other_data if c.other_data else {}
                     v = data.get("validity_score")
                     if v is None:
-                        log.warning(f"Sample {sample_idx}: missing 'validity_score' in answer candidate other_data")
+                        log.warning(
+                            f"Sample {sample_idx}: missing 'validity_score' in answer candidate other_data"
+                        )
                         v = 0.0
                     a_scores.append(v)
 
@@ -867,7 +878,8 @@ class StrategyOnlineBestOfN(StrategyBase):
             "thinking_num_steps": thinking_num_steps,
             "response_num_steps": response_num_steps,
             "validity_scores": validity_scores,
-            "completed": bool(selected_steps) and selected_steps[-1].is_trajectory_complete,
+            "completed": bool(selected_steps)
+            and selected_steps[-1].is_trajectory_complete,
             "token_stats": token_stats,
         }
 

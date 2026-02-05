@@ -125,7 +125,9 @@ def _safe_tflops(stats: dict, key: str = "tflops") -> float:
     val = stats.get(key)
     if val is None:
         if key not in _tflops_warned:
-            log.warning(f"Missing '{key}' in token_stats — compute tracking may be broken")
+            log.warning(
+                f"Missing '{key}' in token_stats — compute tracking may be broken"
+            )
             _tflops_warned.add(key)
         return 0.0
     return val
@@ -1966,7 +1968,9 @@ def evaluate_results(
     # Token / FLOPs aggregates
     missing_stats_count = sum(1 for r in results if r.get("token_stats") is None)
     if missing_stats_count > 0:
-        log.warning(f"{missing_stats_count}/{len(results)} results missing 'token_stats'")
+        log.warning(
+            f"{missing_stats_count}/{len(results)} results missing 'token_stats'"
+        )
     all_token_stats = [r.get("token_stats") or {} for r in results]
     total_tokens = sum(ts.get("total_tokens_this_sample", 0) for ts in all_token_stats)
     total_input_tokens = sum(ts.get("input_tokens", 0) for ts in all_token_stats)
@@ -2152,7 +2156,7 @@ def main(config):
                 "task_id": item["task_id"],
                 "entry_point": item["entry_point"],
                 "test_list": item["test_list"],
-                "assertion": item["assertion"],
+                "assertion": item.get("assertion", ""),
             }
             serializable_data.append(serializable_item)
         dataset = Dataset.from_list(serializable_data)
