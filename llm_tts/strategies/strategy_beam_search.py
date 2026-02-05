@@ -222,9 +222,15 @@ class StrategyBeamSearch(StrategyBase):
             prm_stats = self.scorer.get_prm_total_stats()
             token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                prm_stats["prm_tflops"] or 0
-            )
+            gen_tflops = token_stats.get("tflops")
+            if gen_tflops is None:
+                log.warning("Missing 'tflops' in token_stats when merging PRM stats")
+                gen_tflops = 0
+            prm_tflops = prm_stats["prm_tflops"]
+            if prm_tflops is None:
+                log.warning("Missing 'prm_tflops' in PRM stats")
+                prm_tflops = 0
+            token_stats["tflops"] = gen_tflops + prm_tflops
 
         return {
             "trajectory": trajectory_text,
@@ -411,8 +417,15 @@ class StrategyBeamSearch(StrategyBase):
                         if _detect_garbage(text):
                             is_trajectory_complete = True
 
-                        uncertainty = candidate.other_data.get("uncertainty_score", 0.0)
-                        validity = candidate.other_data.get("validity_score", 0.0)
+                        data = candidate.other_data if candidate.other_data else {}
+                        uncertainty = data.get("uncertainty_score")
+                        if uncertainty is None:
+                            log.warning(f"Sample {sample_id}, beam {beam_idx}: missing 'uncertainty_score' in candidate other_data")
+                            uncertainty = 0.0
+                        validity = data.get("validity_score")
+                        if validity is None:
+                            log.warning(f"Sample {sample_id}, beam {beam_idx}: missing 'validity_score' in candidate other_data")
+                            validity = 0.0
 
                         candidates_for_beam.append(
                             {
@@ -829,9 +842,15 @@ class StrategyBeamSearch(StrategyBase):
             prm_stats = self.scorer.get_prm_stats_for(sample_id)
             token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                prm_stats["prm_tflops"] or 0
-            )
+            gen_tflops = token_stats.get("tflops")
+            if gen_tflops is None:
+                log.warning(f"Sample {sample_id}: missing 'tflops' in token_stats when merging PRM stats")
+                gen_tflops = 0
+            prm_tflops = prm_stats["prm_tflops"]
+            if prm_tflops is None:
+                log.warning(f"Sample {sample_id}: missing 'prm_tflops' in PRM stats")
+                prm_tflops = 0
+            token_stats["tflops"] = gen_tflops + prm_tflops
 
         result = {
             "trajectory": trajectory_text,
