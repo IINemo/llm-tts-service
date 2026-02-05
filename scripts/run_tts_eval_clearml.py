@@ -67,7 +67,9 @@ def main():
     # GPU diagnostics
     print("[ClearML wrapper] === GPU Diagnostics ===", flush=True)
     subprocess.run(["nvidia-smi"], env=env)
-    print("[ClearML wrapper] === CUDA_VISIBLE_DEVICES ===", flush=True)
+    print("[ClearML wrapper] === nvidia-smi -L ===", flush=True)
+    subprocess.run(["nvidia-smi", "-L"], env=env)
+    print("[ClearML wrapper] === Environment ===", flush=True)
     print(
         f"  CUDA_VISIBLE_DEVICES={env.get('CUDA_VISIBLE_DEVICES', '(not set)')}",
         flush=True,
@@ -82,6 +84,30 @@ def main():
         flush=True,
     )
 
+    # Auto-detect MIG UUID and set CUDA_VISIBLE_DEVICES
+    import re as _re
+
+    try:
+        result_smi = subprocess.run(
+            ["nvidia-smi", "-L"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        mig_uuids = _re.findall(r"(MIG-[0-9a-f-]+)", result_smi.stdout)
+        if mig_uuids:
+            mig_uuid = mig_uuids[0]
+            print(f"[ClearML wrapper] Detected MIG UUID: {mig_uuid}", flush=True)
+            env["CUDA_VISIBLE_DEVICES"] = mig_uuid
+            print(
+                f"[ClearML wrapper] Set CUDA_VISIBLE_DEVICES={mig_uuid}",
+                flush=True,
+            )
+        else:
+            print("[ClearML wrapper] No MIG UUID found in nvidia-smi -L", flush=True)
+    except Exception as e:
+        print(f"[ClearML wrapper] MIG UUID detection failed: {e}", flush=True)
+
     # Granular import diagnostic to isolate std::bad_alloc
     diag_code = """
 import sys, traceback, os
@@ -89,42 +115,25 @@ print(f'[diag] Python: {sys.executable}', flush=True)
 print(f'[diag] CUDA_VISIBLE_DEVICES={os.environ.get("CUDA_VISIBLE_DEVICES", "(not set)")}', flush=True)
 print(f'[diag] VLLM_ATTENTION_BACKEND={os.environ.get("VLLM_ATTENTION_BACKEND", "(not set)")}', flush=True)
 
-# Step 1: basic torch
-print('[diag] Step 1: importing torch...', flush=True)
+# Step 1: basic torch + CUDA init
+print('[diag] Step 1: importing torch and initializing CUDA...', flush=True)
 try:
     import torch
     print(f'[diag] torch {torch.__version__} imported OK', flush=True)
+    torch.cuda.init()
+    print(f'[diag] torch.cuda.init() OK', flush=True)
     print(f'[diag] CUDA available: {torch.cuda.is_available()}', flush=True)
     if torch.cuda.is_available():
-        print(f'[diag] CUDA device count: {torch.cuda.device_count()}', flush=True)
-        for i in range(torch.cuda.device_count()):
-            props = torch.cuda.get_device_properties(i)
-            mem_gb = props.total_memory / 1024**3
-            print(f'[diag] GPU {i}: {props.name}, {mem_gb:.1f} GB', flush=True)
+        print(f'[diag] device name: {torch.cuda.get_device_name(0)}', flush=True)
+        print(f'[diag] device count: {torch.cuda.device_count()}', flush=True)
+        free, total = torch.cuda.mem_get_info()
+        print(f'[diag] free GiB: {free/1024**3:.1f}, total GiB: {total/1024**3:.1f}', flush=True)
 except Exception:
     traceback.print_exc()
     sys.stdout.flush()
 
-# Step 2: xgrammar
-print('[diag] Step 2: importing xgrammar...', flush=True)
-try:
-    import xgrammar
-    print(f'[diag] xgrammar imported OK', flush=True)
-except Exception:
-    traceback.print_exc()
-    sys.stdout.flush()
-
-# Step 3: flashinfer
-print('[diag] Step 3: importing flashinfer...', flush=True)
-try:
-    import flashinfer
-    print(f'[diag] flashinfer imported OK', flush=True)
-except Exception:
-    traceback.print_exc()
-    sys.stdout.flush()
-
-# Step 4: vllm import
-print('[diag] Step 4: importing vllm...', flush=True)
+# Step 2: vllm import (lazy)
+print('[diag] Step 2: importing vllm...', flush=True)
 try:
     import vllm
     print(f'[diag] vllm {vllm.__version__} imported OK', flush=True)
@@ -132,8 +141,8 @@ except Exception:
     traceback.print_exc()
     sys.stdout.flush()
 
-# Step 5: granular vLLM sub-imports to find crash point
-print('[diag] Step 5a: importing vllm.config...', flush=True)
+# Step 3: vllm.config (triggers CUDA ops loading)
+print('[diag] Step 3: importing vllm.config...', flush=True)
 try:
     import vllm.config
     print('[diag] vllm.config imported OK', flush=True)
@@ -141,43 +150,11 @@ except Exception:
     traceback.print_exc()
     sys.stdout.flush()
 
-print('[diag] Step 5b: importing vllm.sampling_params...', flush=True)
+# Step 4: LLM class
+print('[diag] Step 4: importing LLM, SamplingParams...', flush=True)
 try:
-    from vllm import SamplingParams
-    print('[diag] SamplingParams imported OK', flush=True)
-except Exception:
-    traceback.print_exc()
-    sys.stdout.flush()
-
-print('[diag] Step 5c: importing vllm.engine...', flush=True)
-try:
-    import vllm.engine
-    print('[diag] vllm.engine imported OK', flush=True)
-except Exception:
-    traceback.print_exc()
-    sys.stdout.flush()
-
-print('[diag] Step 5d: importing vllm.engine.llm_engine...', flush=True)
-try:
-    import vllm.engine.llm_engine
-    print('[diag] vllm.engine.llm_engine imported OK', flush=True)
-except Exception:
-    traceback.print_exc()
-    sys.stdout.flush()
-
-print('[diag] Step 5e: importing vllm.entrypoints.llm (LLM class)...', flush=True)
-try:
-    from vllm.entrypoints.llm import LLM
-    print('[diag] LLM imported OK', flush=True)
-except Exception:
-    traceback.print_exc()
-    sys.stdout.flush()
-
-# Step 6: lm_polygraph
-print('[diag] Step 6: importing lm_polygraph...', flush=True)
-try:
-    from lm_polygraph.model_adapters import WhiteboxModelvLLM
-    print('[diag] WhiteboxModelvLLM imported OK', flush=True)
+    from vllm import LLM, SamplingParams
+    print('[diag] LLM, SamplingParams imported OK', flush=True)
 except Exception:
     traceback.print_exc()
     sys.stdout.flush()
