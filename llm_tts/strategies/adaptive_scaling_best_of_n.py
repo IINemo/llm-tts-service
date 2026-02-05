@@ -24,7 +24,10 @@ log = logging.getLogger(__name__)
 
 def calculate_perplexity_score(candidate: StepCandidate) -> float:
     """Calculate perplexity score from candidate's other_data."""
-    return -np.mean(candidate.other_data["logprobs"])
+    logprobs = candidate.other_data.get("logprobs", []) if candidate.other_data else []
+    if not logprobs:
+        return 0.0
+    return -np.mean(logprobs)
 
 
 class AdaptiveScalingBestOfN(StrategyBase):
@@ -128,7 +131,6 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 best_idx, selected_candidate = self._select_best_candidate(
                     candidates, all_candidate_scores
                 )
-                # cur_signal = all_candidate_scores[best_idx]
                 cur_signal = calculate_perplexity_score(selected_candidate)
 
             self.scale_discriminator.update(cur_signal)
@@ -482,22 +484,11 @@ class AdaptiveScalingBestOfN(StrategyBase):
             if not filtered_indices:
                 break
 
-            # 2) Score the single candidates
-            # scores_batch = _score_candidates_batch(
-            #     batch_results=filtered_cands,
-            #     batch_requests=filtered_reqs,
-            #     batch_trajectories=filtered_trajs,
-            #     batch_sample_ids=filtered_indices,
-            #     use_prm=False,
-            # )
-
-            # 3) Decide which samples should scale
+            # 2) Decide which samples should scale (using perplexity signal)
             scale_indices = []
             scale_reqs = []
             scale_trajs = []
             for pos, sample_idx in enumerate(filtered_indices):
-                # cur_signal = scores_batch[pos][0]
-                # always use perplexity score to select scaled step
                 if scale_discriminators[sample_idx].should_scale(
                     calculate_perplexity_score(filtered_cands[pos][0])
                 ):
@@ -540,12 +531,8 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     scores = scaled_scores[sample_idx]
                     best_idx = _select_best(scores)
                     chosen = cands[best_idx]
-                    # cur_signal = scores[best_idx]
                 else:
                     chosen = filtered_cands[pos][0]
-                    # cur_signal = scores_batch[pos][0]
-
-                # log.info(f"Cur signal: {1.0 / cur_signal - 1.0}")
 
                 scale_discriminators[sample_idx].update(
                     calculate_perplexity_score(chosen)
@@ -657,7 +644,9 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 trajectories[sample_idx].append(chosen)
                 selected_steps[sample_idx].append(chosen)
                 validity_scores[sample_idx].append(
-                    float(chosen.other_data["validity_score"])
+                    chosen.other_data.get("validity_score", 0.0)
+                    if chosen.other_data
+                    else 0.0
                 )
                 last_selected[sample_idx] = chosen
 
