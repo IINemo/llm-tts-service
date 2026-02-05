@@ -22,7 +22,7 @@ wandb_project: llm-tts-mbpp-plus
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen2.5-Coder-7B-Instruct"  # Code-specialized model
+  model_path: "Qwen/CodeQwen1.5-7B-Chat"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
@@ -82,5 +82,5 @@ evaluation:
   evaluators:
     - mbpp_plus
   mbpp_plus:
-    mode: test
+    mode: full # "test" and "syntax" modes are depricated, use "full" only
     timeout: 10
