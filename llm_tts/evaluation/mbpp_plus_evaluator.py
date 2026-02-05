@@ -278,8 +278,9 @@ class EvaluatorMBPPPlus:
                     task_id_str = self._normalize_task_id(task_id)
                     task_results = results.get("eval", {}).get(task_id_str, [])
 
-                    # Check if any solution passed (for greedy, there's only one)
-                    if task_results and task_results[0].get("base_status") == "pass":
+                    # Check if solution passed ALL tests (base + plus)
+                    # plus_status == "pass" means both base and extra tests passed
+                    if task_results and task_results[0].get("plus_status") == "pass":
                         scores.append(1.0)
                     else:
                         scores.append(0.0)
