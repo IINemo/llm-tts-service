@@ -33,7 +33,7 @@ class StepCandidate:
         is_trajectory_complete: bool,
         generation_scores: Optional[torch.Tensor] = None,
         raw_text: str = None,
-        other_data: Dict[str, any] = None,
+        other_data: Dict[str, Any] = None,
     ):
         self.text = text
         self.token_ids = token_ids
@@ -181,7 +181,7 @@ class StepCandidateGeneratorBase:
         self._total_output_tokens += self._sample_output_tokens
         self._total_samples += num_samples
 
-    def get_sample_stats(self) -> Dict[str, any]:
+    def get_sample_stats(self) -> Dict[str, Any]:
         """Get statistics for current sample.
 
         Returns:
@@ -207,7 +207,7 @@ class StepCandidateGeneratorBase:
 
         return stats
 
-    def get_total_stats(self) -> Dict[str, any]:
+    def get_total_stats(self) -> Dict[str, Any]:
         """Get cumulative statistics across all samples.
 
         Returns:

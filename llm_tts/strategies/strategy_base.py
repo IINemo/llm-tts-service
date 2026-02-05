@@ -106,7 +106,7 @@ class StrategyBase(ABC):
     """Abstract base class for TTS strategies with parallel generation support"""
 
     @abstractmethod
-    def generate_trajectory(self, input_chat: List[Dict[str, str]]) -> Dict[str, any]:
+    def generate_trajectory(self, input_chat: List[Dict[str, str]]) -> Dict[str, Any]:
         pass
 
     def _parallel_generate(

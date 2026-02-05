@@ -27,7 +27,7 @@ Token tracking (_record_generation):
 
 import inspect
 import logging
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 # Optional vLLM import (not available in CI)
 try:
@@ -1012,7 +1012,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         num_trajectories: int,
         max_tokens: Optional[int] = None,
         split_steps: bool = True,
-    ) -> List[Dict[str, any]]:
+    ) -> List[Dict[str, Any]]:
         """Generate N complete trajectories in a single batch call.
 
         This is optimized for offline best-of-n: instead of generating step-by-step

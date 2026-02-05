@@ -57,7 +57,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
 
     def generate_trajectory(
         self, request: List[Dict[str, str]], sample_idx: int = 0
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """
         Generate a trajectory step-by-step using specified criterion.
 
@@ -214,7 +214,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         )
 
         # Score answer candidates
-        answer_validity_scores = self.scorer.score_candidates(chat, answer_candidates)
+        answer_validity_scores = self.scorer.score_candidates(chat, answer_candidates, trajectory=trajectory)
 
         # Select best answer based on criterion
         best_idx, _ = self._select_best_candidate(

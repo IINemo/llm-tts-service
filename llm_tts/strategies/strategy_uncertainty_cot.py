@@ -46,7 +46,7 @@ class StrategyUncertaintyCoT:
 
     def generate_trajectory(
         self, prompt_or_chat: Union[str, List[Dict[str, str]]], sample_idx: int = 0
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """
         Uncertainty-guided decoding pipeline.
 

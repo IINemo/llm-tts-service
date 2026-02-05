@@ -19,7 +19,7 @@ Key difference from online best-of-n:
 import json
 import logging
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -198,7 +198,7 @@ class StrategyOfflineBestOfN(StrategyBase):
     def _generate_all_trajectories_single_call(
         self,
         request: List[Dict[str, str]],
-    ) -> List[Dict[str, any]]:
+    ) -> List[Dict[str, Any]]:
         """
         Generate all N trajectories in a SINGLE vLLM call.
 
@@ -243,7 +243,7 @@ class StrategyOfflineBestOfN(StrategyBase):
 
     def generate_trajectory(
         self, request: List[Dict[str, str]], sample_idx: int = 0
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """
         Generate N complete trajectories and return the best one.
 
@@ -357,7 +357,7 @@ class StrategyOfflineBestOfN(StrategyBase):
 
     def _save_trajectories_log(
         self,
-        all_results: List[Dict[str, any]],
+        all_results: List[Dict[str, Any]],
         best_idx: int,
     ):
         """Save all trajectories to JSON for analysis."""
@@ -395,7 +395,7 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         log.info(f"Saved trajectories log to {log_path}")
 
-    def get_token_stats(self) -> Dict[str, any]:
+    def get_token_stats(self) -> Dict[str, Any]:
         """Get token statistics from the generator."""
         return self.step_generator.get_sample_stats()
 
@@ -403,7 +403,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         self,
         requests: List[List[Dict[str, str]]],
         sample_indices: Optional[List[int]] = None,
-    ) -> List[Dict[str, any]]:
+    ) -> List[Dict[str, Any]]:
         """
         Generate N trajectories for each of M samples using generate_step_candidates_batch.
 
@@ -654,7 +654,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         )
         return results
 
-    def _empty_result(self) -> Dict[str, any]:
+    def _empty_result(self) -> Dict[str, Any]:
         """Return empty result for failed generation."""
         return {
             "trajectory": "",

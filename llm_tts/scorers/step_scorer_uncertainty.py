@@ -1,7 +1,10 @@
+import logging
 from collections.abc import Iterable
 from typing import Dict, List
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 from .step_scorer_reward_base import CandidateScore, StepScorerBase
 
@@ -22,11 +25,17 @@ class StepScorerUncertainty(StepScorerBase):
                 )
             validity_score = candidate.other_data["validity_score"]
 
-            if not isinstance(validity_score, Iterable):
+            if validity_score is None:
+                log.warning(
+                    "Candidate has validity_score=None — no estimator configured? "
+                    "Using neutral score 0.5."
+                )
+                validity_score = [0.5]
+            elif not isinstance(validity_score, Iterable):
                 validity_score = [validity_score]
 
             # since we're using validity score, we need to convert it to uncertainty score
-            claim_scores = np.asarray(validity_score)
+            claim_scores = np.asarray(validity_score, dtype=float)
             result.append(
                 CandidateScore(
                     candidate_text=candidate,
