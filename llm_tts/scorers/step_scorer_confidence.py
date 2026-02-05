@@ -15,11 +15,12 @@ class StepScorerConfidence(StepScorerBase):
     ) -> List[CandidateScore]:
         result = []
         for candidate in candidates:
-            # Handle case where other_data might be None or missing validity_score
-            if candidate.other_data is None:
-                validity_score = 0.0
-            else:
-                validity_score = candidate.other_data.get("validity_score", 0.0)
+            if not candidate.other_data or "validity_score" not in candidate.other_data:
+                raise ValueError(
+                    f"Candidate missing 'validity_score' in other_data. "
+                    f"Ensure generator is configured with an uncertainty estimator."
+                )
+            validity_score = candidate.other_data["validity_score"]
 
             if not isinstance(validity_score, Iterable):
                 validity_score = [validity_score]

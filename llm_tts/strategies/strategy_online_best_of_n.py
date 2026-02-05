@@ -92,6 +92,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         trajectory = []
         selected_steps = []
         validity_scores = []
+        selected_candidate = None
         for step_num in range(self.max_steps):
             log.info(f"\n=== Step {step_num} ===")
 
@@ -208,7 +209,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                     validity_scores.append(final_validity)
                 break
 
-        if not selected_candidate.is_trajectory_complete:
+        if selected_candidate is not None and not selected_candidate.is_trajectory_complete:
             final_answer, final_validity = self._generate_final_answer(
                 request, trajectory
             )
@@ -264,7 +265,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             "thinking_num_steps": thinking_num_steps,
             "response_num_steps": response_num_steps,
             "validity_scores": validity_scores,
-            "completed": len(selected_steps) > 0,
+            "completed": bool(selected_steps) and selected_steps[-1].is_trajectory_complete,
             "token_stats": token_stats,
         }
 
@@ -462,6 +463,15 @@ class StrategyOnlineBestOfN(StrategyBase):
                     needs_final_answer[sample_id] = True
                     continue
 
+                if not scores:
+                    log.warning(
+                        f"Sample {sample_indices[sample_id]}: Empty scores for "
+                        f"{len(candidates)} candidates, marking complete"
+                    )
+                    completed[sample_id] = True
+                    needs_final_answer[sample_id] = True
+                    continue
+
                 best_idx = max(range(len(scores)), key=lambda i: scores[i])
                 selected = candidates[best_idx]
 
@@ -603,6 +613,12 @@ class StrategyOnlineBestOfN(StrategyBase):
                 a_scores = self.scorer.score_candidates(
                     fin_reqs[pos], a_cands, trajectory=fin_trajs[pos]
                 )
+                if not a_scores:
+                    log.warning(
+                        f"Sample {sample_indices[sample_id]}: Empty scores for "
+                        f"{len(a_cands)} final answer candidates, skipping"
+                    )
+                    continue
                 best_idx = max(range(len(a_scores)), key=lambda i: a_scores[i])
 
                 log.info(
@@ -697,7 +713,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                     "thinking_num_steps": thinking_num_steps,
                     "response_num_steps": response_num_steps,
                     "validity_scores": validity_scores[idx],
-                    "completed": len(selected_steps[idx]) > 0,
+                    "completed": bool(selected_steps[idx]) and selected_steps[idx][-1].is_trajectory_complete,
                     "token_stats": token_stats,
                 }
             )
@@ -903,6 +919,13 @@ class StrategyOnlineBestOfN(StrategyBase):
                     v = 0.0
                 scores.append(v)
 
+            if not scores:
+                log.warning(
+                    f"Sample {sample_idx}: Empty scores for "
+                    f"{len(candidates)} candidates, stopping"
+                )
+                break
+
             best_idx = max(range(len(scores)), key=lambda i: scores[i])
             selected = candidates[best_idx]
 
@@ -1008,15 +1031,22 @@ class StrategyOnlineBestOfN(StrategyBase):
                         log.warning(f"Sample {sample_idx}: missing 'validity_score' in answer candidate other_data")
                         v = 0.0
                     a_scores.append(v)
-                best_a = max(range(len(a_scores)), key=lambda i: a_scores[i])
 
-                log.info(
-                    f"Sample {sample_idx}: Final answer selected "
-                    f"(score={a_scores[best_a]:.3f})"
-                )
-                trajectory.append(answer_cands[best_a])
-                selected_steps.append(answer_cands[best_a])
-                validity_scores.append(a_scores[best_a])
+                if not a_scores:
+                    log.warning(
+                        f"Sample {sample_idx}: Empty scores for "
+                        f"{len(answer_cands)} answer candidates, skipping final answer"
+                    )
+                else:
+                    best_a = max(range(len(a_scores)), key=lambda i: a_scores[i])
+
+                    log.info(
+                        f"Sample {sample_idx}: Final answer selected "
+                        f"(score={a_scores[best_a]:.3f})"
+                    )
+                    trajectory.append(answer_cands[best_a])
+                    selected_steps.append(answer_cands[best_a])
+                    validity_scores.append(a_scores[best_a])
 
         # Build result
         final_trajectory = convert_trajectory_to_string(trajectory)
@@ -1033,7 +1063,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             "thinking_num_steps": thinking_num_steps,
             "response_num_steps": response_num_steps,
             "validity_scores": validity_scores,
-            "completed": len(selected_steps) > 0,
+            "completed": bool(selected_steps) and selected_steps[-1].is_trajectory_complete,
             "token_stats": token_stats,
         }
 
@@ -1049,10 +1079,18 @@ class StrategyOnlineBestOfN(StrategyBase):
                 f"Text: {candidate.text[:100]}..."
             )
             return 0.0
-        return candidate.other_data["uncertainty_score"]
+        score = candidate.other_data["uncertainty_score"]
+        if score is None:
+            log.warning("Candidate has uncertainty_score=None — no estimator configured?")
+            return 0.0
+        return score
 
     def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
         """Select the best candidate based on scores"""
+
+        if not scores:
+            log.warning("Empty scores in _select_best_candidate, returning first candidate")
+            return 0, candidates[0]
 
         # Higher validity is better
         best_idx = max(range(len(scores)), key=lambda i: scores[i])

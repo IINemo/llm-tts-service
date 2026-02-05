@@ -567,8 +567,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 else:
                     flat_logprobs.append(-100.0)
             return {
-                "uncertainty_score": 0.0,
-                "validity_score": 1.0,
+                "uncertainty_score": None,
+                "validity_score": None,
                 "token_ids": token_ids,
                 "logprobs": flat_logprobs,
                 "raw_logprobs": logprobs,
@@ -578,8 +578,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             # No logprobs available
             pseudo_ids = list(range(self._count_tokens(text)))
             return {
-                "uncertainty_score": 0.0,
-                "validity_score": 1.0,
+                "uncertainty_score": None,
+                "validity_score": None,
                 "token_ids": pseudo_ids,
                 "logprobs": [],
                 "raw_logprobs": [],
@@ -707,7 +707,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                         token_ids=[],
                         is_complete=True,
                         is_trajectory_complete=True,
-                        other_data={"uncertainty_score": 0.0, "validity_score": 1.0},
+                        other_data={"uncertainty_score": None, "validity_score": None},
                         raw_text="",
                     )
                     for _ in range(candidates_per_step)

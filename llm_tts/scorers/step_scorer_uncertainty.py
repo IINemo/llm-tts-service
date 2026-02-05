@@ -15,6 +15,11 @@ class StepScorerUncertainty(StepScorerBase):
     ) -> List[CandidateScore]:
         result = []
         for candidate in candidates:
+            if not candidate.other_data or "validity_score" not in candidate.other_data:
+                raise ValueError(
+                    f"Candidate missing 'validity_score' in other_data. "
+                    f"Ensure generator is configured with an uncertainty estimator."
+                )
             validity_score = candidate.other_data["validity_score"]
 
             if not isinstance(validity_score, Iterable):
