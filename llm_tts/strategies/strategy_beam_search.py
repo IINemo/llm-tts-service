@@ -864,11 +864,16 @@ class StrategyBeamSearch(StrategyBase):
                 prm_tflops = 0
             token_stats["tflops"] = gen_tflops + prm_tflops
 
+        # Determine actual completion status from beam steps
+        is_completed = bool(
+            steps and steps[-1].is_trajectory_complete
+        )
+
         result = {
             "trajectory": trajectory_text,
             "steps": steps,
             "validity_scores": scores,
-            "completed": True,
+            "completed": is_completed,
             "extracted_answer": extracted,
         }
         if token_stats is not None:

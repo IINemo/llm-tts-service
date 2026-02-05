@@ -60,7 +60,7 @@ class StrategyOnlineBestOfN(StrategyBase):
 
     def generate_trajectory(
         self, request: List[Dict[str, str]], sample_idx: int = 0
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """
         Generate a trajectory for a single sample.
 
