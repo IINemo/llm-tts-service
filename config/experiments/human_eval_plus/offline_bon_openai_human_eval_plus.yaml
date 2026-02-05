@@ -80,7 +80,7 @@ dataset:
   answer_field: "answer"
   answer_format: "code"
   prompt_file: null
-  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
+  system_prompt: null  # EvalPlus doesn't use system prompt
 
 # Evaluation configuration
 evaluation:
