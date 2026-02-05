@@ -62,18 +62,18 @@ strategy:
   use_correction: false
 
 # Dataset configuration - MBPP+
-# Uses EvalPlus API loader which provides correct prompt format with function name
+# Uses EvalPlus API loader which provides correct prompt format matching official methodology
 dataset:
   data_name: "mbpp_plus"
   dataset_path: "evalplus/mbppplus"
   dataset_split: "test"  # 378 problems
   subset: null
   offset: 0
-  question_field: "question"  # EvalPlus loader field (includes docstring + example assertion)
+  question_field: "question"  # EvalPlus formatted prompt (instruction + code block)
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
-  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
+  system_prompt: ""  # No system prompt - matches EvalPlus official methodology
 
 # Evaluation configuration
 evaluation:
