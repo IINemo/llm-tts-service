@@ -1,0 +1,91 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/human_eval_plus/offline_bon_openai_human_eval_plus
+# Offline Best-of-N for HumanEval+ using OpenAI API with newline-based step boundaries
+# Uses Entropy scorer for step evaluation
+#
+# Environment variable required: OPENAI_API_KEY
+
+defaults:
+  - /config
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - /evaluation/human_eval_plus/default
+  - _self_
+
+# Run naming
+run_name: "offline_bon_openai_human_eval_plus_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-human-eval-plus
+
+# Model configuration (OpenAI API)
+model:
+  type: "openai_api"
+  model_path: "gpt-4o-mini"
+  api_key: null  # Set via OPENAI_API_KEY env var
+  supports_logprobs: true
+  prefill_mode: false
+
+# System configuration
+system:
+  device: cpu
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 512
+  temperature: 0.7
+  top_p: 0.95
+  top_k: 50
+  batch_size: 1
+
+# Strategy - Offline Best-of-N with newline-based step boundaries for code
+strategy:
+  type: offline_best_of_n
+  num_trajectories: 8
+  max_steps: 20
+  score_aggregation: mean
+  batch_generation: true
+  min_step_tokens: 5
+  max_step_tokens: 128
+  # Disable linguistic markers (not useful for code)
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  # Use newlines as step separators for code
+  custom_words:
+    - "\n"
+    - "\n\n"
+
+# Entropy scorer configuration
+scorer:
+  type: entropy
+  batch_size: 1
+
+# Dataset configuration - HumanEval+
+dataset:
+  data_name: "human_eval_plus"
+  dataset_path: "evalplus/humanevalplus"
+  dataset_split: "test"
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "code"
+  prompt_file: null
+  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - human_eval_plus
+  human_eval_plus:
+    mode: full
+    timeout: 10
