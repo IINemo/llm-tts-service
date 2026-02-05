@@ -64,6 +64,7 @@ from llm_tts.evaluation import (
     EvaluatorExactMatch,
     EvaluatorLLMAsAJudge,
 )
+from llm_tts.evaluation.grader import grade_answer
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
@@ -76,7 +77,10 @@ from llm_tts.scorers import (
     TotValueScorer,
     TotVoteScorer,
 )
-from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
+from llm_tts.step_boundary_detectors import (
+    StructuredStepDetector,
+    ThinkingMarkerDetector,
+)
 
 # vLLM step generator (optional)
 try:
@@ -492,6 +496,8 @@ def create_model(config):
             top_k=config.generation.top_k,
             disable_thinking_mode=config.model.disable_thinking_mode,
             generation_batch_size=config.generation.batch_size,
+            capture_hidden_states=config.generation.get("capture_hidden_states", False),
+            hidden_state_layers=config.generation.get("hidden_state_layers"),
         )
 
     elif config.model.type == "openai_api":

@@ -195,6 +195,8 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         disable_thinking_mode: bool,
         generation_batch_size: int,
         return_generation_scores: bool = False,
+        capture_hidden_states: bool = False,
+        hidden_state_layers: Optional[List[int]] = None,
         flop_calculator: Optional["FLOPCalculator"] = None,
     ):
         # Check thinking mode first to determine batch size
@@ -217,6 +219,9 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
         self.disable_thinking_mode = disable_thinking_mode
         self.return_generation_scores = return_generation_scores
         self.use_thinking_mode = use_thinking_mode
+        self.capture_hidden_states = capture_hidden_states
+        self.hidden_state_layers = hidden_state_layers
+        self._uses_uncertainty_wrapper = "lm_polygraph" in type(model).__module__
 
         # Thinking mode specific settings
         if self.use_thinking_mode:
@@ -260,6 +265,8 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             add_special_tokens=False,
             max_length=self.max_length,
         )
+        if "attention_mask" not in inputs:
+            inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
         input_length = inputs["input_ids"].shape[1]
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
@@ -279,7 +286,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             num_return_sequences: Number of sequences to generate (default: 1)
             output_scores: Whether to output scores. If None, uses self.return_generation_scores
         """
-        return {
+        params = {
             "max_new_tokens": max_new_tokens,
             "do_sample": True,
             "temperature": self.temperature,
@@ -295,6 +302,9 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             "pad_token_id": self.model.tokenizer.eos_token_id,
             "eos_token_id": self.model.tokenizer.eos_token_id,
         }
+        if self.capture_hidden_states and not self._uses_uncertainty_wrapper:
+            params["output_hidden_states"] = True
+        return params
 
     def _apply_chat_template(
         self,
@@ -362,6 +372,83 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 "uncertainty_score": outputs.uncertainty_score[index],
             }
         return None
+
+    def _get_hidden_state_summary(
+        self, outputs, index: int, input_length: int
+    ) -> Optional[Dict[str, any]]:
+        """Extract per-layer mean hidden states for generated tokens."""
+        if not self.capture_hidden_states:
+            return None
+
+        hidden_states = getattr(outputs, "hidden_states", None)
+        if not hidden_states and getattr(outputs, "deps", None):
+            log.warning(
+                "No hidden_states on outputs, deps keys: %s",
+                list(outputs.deps.keys()),
+            )
+            deps_out = outputs.deps.get("out")
+            hidden_states = (
+                getattr(deps_out, "hidden_states", None) if deps_out else None
+            )
+        if not hidden_states:
+            log.debug("No hidden_states in outputs")
+            return None
+        log.debug(
+            f"Hidden states structure: {len(hidden_states)} steps, first step has {len(hidden_states[0]) if hidden_states[0] else 0} layers"
+        )
+
+        if not hidden_states[0]:
+            return None
+
+        if self.hidden_state_layers is None:
+            layer_indices = range(len(hidden_states[0]))
+        else:
+            layer_indices = self.hidden_state_layers
+
+        per_layer_means = []
+        token_count = None
+
+        for layer_idx in layer_indices:
+            layer_steps = []
+            for step_states in hidden_states:
+                step_layer = step_states[layer_idx][index]
+                if step_layer.dim() == 3:
+                    step_layer = step_layer.squeeze(0)
+                layer_steps.append(step_layer)
+
+            full_layer_state = torch.cat(layer_steps, dim=0)
+            log.warning(
+                "Hidden state merged: input_length=%s, layer_idx=%s, full_shape=%s",
+                input_length,
+                layer_idx,
+                tuple(full_layer_state.shape),
+            )
+            if input_length >= full_layer_state.shape[0]:
+                generated_state = full_layer_state
+            else:
+                generated_state = full_layer_state[input_length:]
+            if generated_state.numel() == 0:
+                return None
+            if token_count is None:
+                token_count = generated_state.shape[0]
+            per_layer_means.append(
+                generated_state.mean(dim=0).detach().cpu().float().tolist()
+            )
+
+        return {
+            "hidden_state_mean_per_layer": per_layer_means,
+            "hidden_state_token_count": token_count,
+            "hidden_state_layers": list(layer_indices),
+        }
+
+    def _get_other_data(
+        self, outputs, index: int, input_length: int
+    ) -> Optional[Dict[str, any]]:
+        other_data = self._get_uncertainty_data(outputs, index) or {}
+        hidden_state_data = self._get_hidden_state_summary(outputs, index, input_length)
+        if hidden_state_data:
+            other_data.update(hidden_state_data)
+        return other_data or None
 
     # =========================================================================
     # Thinking mode helper methods
@@ -459,7 +546,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             )
 
         # Get uncertainty from model output
-        other_data = self._get_uncertainty_data(outputs, 0)
+        other_data = self._get_other_data(outputs, 0, input_length)
 
         return StepCandidate(
             text=generated_text.strip(),
@@ -502,7 +589,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
             generated_text = generated_text + self.answer_patterns[0]
 
         # Get uncertainty from model output
-        other_data = self._get_uncertainty_data(outputs, 0)
+        other_data = self._get_other_data(outputs, 0, input_length)
 
         return StepCandidate(
             text=generated_text.strip(),
@@ -623,7 +710,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 ),
                 generation_scores=self._get_generation_scores(outputs, i),
                 raw_text=raw_generated_text,
-                other_data=self._get_uncertainty_data(outputs, i),
+                other_data=self._get_other_data(outputs, i, input_length),
             )
             candidates.append(candidate)
 
@@ -721,7 +808,7 @@ class StepCandidateGeneratorThroughHuggingface(StepCandidateGeneratorBase):
                 is_trajectory_complete=True,
                 generation_scores=self._get_generation_scores(outputs, i),
                 raw_text=raw_generated_text,
-                other_data=self._get_uncertainty_data(outputs, i),
+                other_data=self._get_other_data(outputs, i, input_length),
             )
             candidates.append(candidate)
 

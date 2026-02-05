@@ -250,14 +250,38 @@ class StrategySTBoN(StrategyBase):
             active_indices = sorted(active_paths)
             active_trajectories = [trajectories[i] for i in active_indices]
 
-            step_candidates_nested = self.step_generator.generate_step_candidates(
-                request, active_trajectories, candidates_per_step=1
-            )
-            step_candidates = [cands[0] for cands in step_candidates_nested]
+            # Handle different generator APIs:
+            # - vLLM: accepts List[List[StepCandidate]], returns List[List[StepCandidate]]
+            # - HuggingFace: accepts List[StepCandidate], returns List[StepCandidate]
+            generator_name = type(self.step_generator).__name__.lower()
+            if "vllm" in generator_name:
+                # vLLM batch API
+                step_candidates_nested = self.step_generator.generate_step_candidates(
+                    request, active_trajectories, candidates_per_step=1
+                )
+                step_candidates = [cands[0] for cands in step_candidates_nested]
+            else:
+                # HuggingFace single-trajectory API - loop over trajectories
+                step_candidates = []
+                for traj in active_trajectories:
+                    cands = self.step_generator.generate_step_candidates(
+                        request, traj, candidates_per_step=1
+                    )
+                    step_candidates.append(cands[0])
 
             newly_completed = []
             for idx, path_idx in enumerate(active_indices):
                 candidate = step_candidates[idx]
+                if isinstance(candidate, list):
+                    candidate = candidate[0] if candidate else None
+                if candidate is None:
+                    log.warning(
+                        "ST-BoN: Empty candidate list for path %s at step %s",
+                        path_idx,
+                        step_num,
+                    )
+                    active_paths.discard(path_idx)
+                    continue
                 trajectories[path_idx].append(candidate)
 
                 step_tokens = len(candidate.token_ids) if candidate.token_ids else 0

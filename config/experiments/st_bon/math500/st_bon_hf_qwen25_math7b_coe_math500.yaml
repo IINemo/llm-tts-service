@@ -1,0 +1,78 @@
+# @package _global_
+# ST-BoN (Self-Truncation Best-of-N) with HuggingFace + CoE
+# Based on "Sampling-Efficient Test-Time Scaling: Self-Estimating the Best-of-N Sampling in Early Decoding"
+
+defaults:
+  - /config
+  - /dataset/math_500
+  - /model/hf_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - _self_
+
+run_name: "st_bon_hf_qwen25_math7b_coe_math500_${now:%H-%M-%S}"
+
+verbose: true
+report_to: null
+
+model:
+  type: "local"
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  disable_thinking_mode: true
+
+system:
+  device: cuda
+  seed: 42
+
+generation:
+  max_new_tokens: 4096
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  batch_size: 1
+  max_length: 4096
+  capture_hidden_states: true
+  hidden_state_layers: [0, 4, 8, 12, 16, 20, 24, 27]
+
+strategy:
+  type: st_bon
+  num_paths: 10
+  max_steps: 50
+  parallel: true
+  buffer_multiplier: 1.0
+  similarity_mode: "coe"
+  similarity_threshold: 0.6
+  min_prefix_tokens: 20
+  detector_type: structured
+  min_step_tokens: 50
+  max_step_tokens: 300
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: false
+  use_verification: true
+  use_structure: true
+  use_reasoning: true
+  use_correction: false
+  custom_words:
+    - "for example"
+    - "given that"
+    - "similarly"
+    - "step"
+    - "therefore"
+    - "thus"
+  detector_answer_patterns:
+    - "<Answer>:"
+    - "\n<Answer>:"
+  detector_eos_patterns:
+    - "<end of response>"
+
+dataset:
+  subset: 500
+  offset: 0
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
+  data_name: math500
+
+evaluation:
+  evaluators:
+    - exact_match
