@@ -300,8 +300,6 @@ class EvaluatorMBPPPlus:
                 "--samples",
                 str(samples_path),
                 "--i-just-wanna-run",
-                "--parallel",
-                "1",  # Single-threaded for stability
             ]
 
             try:
