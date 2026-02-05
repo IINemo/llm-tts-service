@@ -76,11 +76,11 @@ def count_thinking_and_response_steps(steps: list) -> Tuple[int, int]:
         if hasattr(step, "text"):
             text = step.text
             # Also check other_data for phase hint
-            other_data = getattr(step, "other_data", {}) or {}
+            other_data = getattr(step, "other_data", None) or {}
             phase = other_data.get("phase", "")
         elif isinstance(step, dict):
             text = step.get("text", "")
-            other_data = step.get("other_data", {}) or {}
+            other_data = step.get("other_data", None) or {}
             phase = other_data.get("phase", "")
         else:
             text = str(step)
@@ -106,7 +106,7 @@ class StrategyBase(ABC):
     """Abstract base class for TTS strategies with parallel generation support"""
 
     @abstractmethod
-    def generate_trajectory(self, input_chat: List[Dict[str, str]]) -> Dict[str, any]:
+    def generate_trajectory(self, input_chat: List[Dict[str, str]]) -> Dict[str, Any]:
         pass
 
     def _parallel_generate(

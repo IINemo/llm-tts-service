@@ -63,6 +63,7 @@ from llm_tts.evaluation import (
     EvaluatorAlignScore,
     EvaluatorExactMatch,
     EvaluatorLLMAsAJudge,
+    EvaluatorMBPPPlus,
 )
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
@@ -104,6 +105,21 @@ from llm_tts.utils.flops import FLOPCalculator
 load_dotenv()
 
 log = logging.getLogger(__name__)
+
+_tflops_warned = set()
+
+
+def _safe_tflops(stats: dict, key: str = "tflops") -> float:
+    """Extract tflops value from stats dict, warning once if missing."""
+    val = stats.get(key)
+    if val is None:
+        if key not in _tflops_warned:
+            log.warning(
+                f"Missing '{key}' in token_stats — compute tracking may be broken"
+            )
+            _tflops_warned.add(key)
+        return 0.0
+    return val
 
 
 def load_tokenizer(model_path: str):
@@ -210,6 +226,18 @@ def build_evaluators(config):
                 config.evaluation.alignscore, resolve=True
             )
             evaluators["alignscore"] = EvaluatorAlignScore(**align_cfg)
+
+        elif evaluator_name == "mbpp_plus":
+            # MBPP+ evaluator for code generation (uses EvalPlus)
+            mbpp_cfg = config.evaluation.get("mbpp_plus", {})
+            if mbpp_cfg:
+                mbpp_cfg = OmegaConf.to_container(mbpp_cfg, resolve=True)
+            else:
+                mbpp_cfg = {}
+            evaluators["mbpp_plus"] = EvaluatorMBPPPlus(
+                mode=mbpp_cfg.get("mode", "full"),
+                timeout=mbpp_cfg.get("timeout", 10),
+            )
 
         else:
             log.warning(f"Unknown evaluator type '{evaluator_name}', skipping")
@@ -896,9 +924,20 @@ def _generate_trajectories_batch(
     log.info(f"Batch generating {len(requests_to_process)} samples...")
 
     # Generate all responses in a single batch call
-    batch_results = strategy.generate_trajectories_batch(
-        requests_to_process, indices_to_process
-    )
+    try:
+        batch_results = strategy.generate_trajectories_batch(
+            requests_to_process, indices_to_process
+        )
+    except Exception as e:
+        log.error(f"Batch generation failed: {e}")
+        log.error("Returning partial results collected so far")
+        return results
+
+    if len(batch_results) != len(indices_to_process):
+        log.error(
+            f"Batch generation returned {len(batch_results)} results "
+            f"but expected {len(indices_to_process)}. Truncating to shorter list."
+        )
 
     # Save batch results immediately to avoid data loss
     batch_results_path = save_path_file.parent / "batch_results.jsonl"
@@ -1001,6 +1040,11 @@ def _generate_trajectories_batch(
                         "response": responses[0] if responses else "",
                     }
                     continue
+                elif isinstance(evaluator, EvaluatorMBPPPlus):
+                    # Skip MBPP+ in phase 1 - will run batch evaluation once in phase 2
+                    # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
+                    log.debug(f"Skipping MBPP+ evaluation for sample {i} in phase 1")
+                    continue
                 else:
                     # Fallback: try __call__ with lists
                     result_output = evaluator(
@@ -1017,8 +1061,13 @@ def _generate_trajectories_batch(
                         is_correct_eval = False
                 eval_results[eval_name] = {"is_correct": is_correct_eval}
             except Exception as e:
-                log.warning(f"Evaluator {eval_name} failed: {e}")
-                eval_results[eval_name] = {"is_correct": False, "error": str(e)}
+                log.error(f"Evaluator {eval_name} failed: {e}")
+                traceback.print_exc()
+                # Don't store failed evaluation - let it retry in batch phase
+                log.warning(
+                    f"Skipping {eval_name} for sample {i} in phase 1, "
+                    "will retry in batch evaluation phase"
+                )
 
         # Use exact_match as primary for logging (if available)
         is_correct = eval_results.get("exact_match", {}).get("is_correct", False)
@@ -1050,21 +1099,38 @@ def _generate_trajectories_batch(
             "completed": result["completed"],
             "is_correct": bool(is_correct),  # Primary (exact_match)
             "eval": eval_results,  # Per-evaluator results
+            "instance_data": dict(instance),  # Store full instance for MBPP+ evaluation
         }
 
         if "token_stats" in result:
             result_dict["token_stats"] = result["token_stats"]
 
+        # Store dataset-specific fields for evaluators (e.g., MBPP+ test_list, task_id)
+        if "task_id" in instance:
+            result_dict["task_id"] = instance["task_id"]
+        if "test_list" in instance:
+            result_dict["test_list"] = instance["test_list"]
+        if "entry_point" in instance:
+            result_dict["entry_point"] = instance["entry_point"]
+
         results.append(result_dict)
 
         # Compute running metrics
-        token_stats = result.get("token_stats") or {}
-        all_token_stats = [r.get("token_stats") or {} for r in results]
+        token_stats = result.get("token_stats")
+        if token_stats is None:
+            log.warning(f"Sample {i}: missing 'token_stats' in result")
+            token_stats = {}
+        all_token_stats = []
+        for r in results:
+            ts = r.get("token_stats")
+            if ts is None:
+                ts = {}
+            all_token_stats.append(ts)
 
         running_total_tokens = sum(
             ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
         )
-        running_total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
+        running_total_tflops = sum(_safe_tflops(ts, "tflops") for ts in all_token_stats)
 
         # Compute running accuracy per evaluator
         running_stats = {}
@@ -1092,9 +1158,9 @@ def _generate_trajectories_batch(
             "input_tokens_this_sample": token_stats.get("input_tokens", 0),
             "output_tokens_this_sample": token_stats.get("output_tokens", 0),
             "generations_this_sample": token_stats.get("generation_count", 0),
-            "tflops_this_sample": token_stats.get("tflops") or 0,
+            "tflops_this_sample": _safe_tflops(token_stats, "tflops"),
             "prm_tokens_this_sample": token_stats.get("prm_input_tokens", 0),
-            "prm_tflops_this_sample": token_stats.get("prm_tflops") or 0,
+            "prm_tflops_this_sample": _safe_tflops(token_stats, "prm_tflops"),
             "running_avg_tokens_per_sample": (
                 (running_total_tokens / len(results)) if results else 0.0
             ),
@@ -1321,6 +1387,7 @@ def generate_trajectories(
             "validity_scores": result.get("validity_scores", []),
             "completed": result["completed"],
             "is_correct": bool(is_correct),
+            "instance_data": dict(instance),  # Store full instance for MBPP+ evaluation
         }
 
         # Include all_traces if present (DeepConf generates multiple branches)
@@ -1342,8 +1409,16 @@ def generate_trajectories(
         log.info(f"Saved result for sample {i} to {save_path_file}")
 
         # Compute + persist per-sample metrics locally (and optionally log to wandb)
-        token_stats = result.get("token_stats") or {}
-        all_token_stats = [r.get("token_stats") or {} for r in results]
+        token_stats = result.get("token_stats")
+        if token_stats is None:
+            log.warning(f"Sample {i}: missing 'token_stats' in result")
+            token_stats = {}
+        all_token_stats = []
+        for r in results:
+            ts = r.get("token_stats")
+            if ts is None:
+                ts = {}
+            all_token_stats.append(ts)
 
         # Count number of traces for this sample
         num_traces = len(result.get("all_traces", result.get("steps", [])))
@@ -1357,7 +1432,7 @@ def generate_trajectories(
         running_total_gens = sum(
             ts.get("generation_count", 0) for ts in all_token_stats
         )
-        running_total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
+        running_total_tflops = sum(_safe_tflops(ts, "tflops") for ts in all_token_stats)
 
         # Use cached is_correct values (O(n) instead of O(n²))
         running_correct = sum(1 for r in results if r.get("is_correct", False))
@@ -1382,9 +1457,9 @@ def generate_trajectories(
             "input_tokens_this_sample": token_stats.get("input_tokens", 0),
             "output_tokens_this_sample": token_stats.get("output_tokens", 0),
             "generations_this_sample": token_stats.get("generation_count", 0),
-            "tflops_this_sample": token_stats.get("tflops") or 0,
+            "tflops_this_sample": _safe_tflops(token_stats, "tflops"),
             "prm_tokens_this_sample": token_stats.get("prm_input_tokens", 0),
-            "prm_tflops_this_sample": token_stats.get("prm_tflops") or 0,
+            "prm_tflops_this_sample": _safe_tflops(token_stats, "prm_tflops"),
             # Running totals
             "running_avg_tokens_per_sample": (
                 (running_total_tokens / len(results)) if results else 0.0
@@ -1479,6 +1554,9 @@ def evaluate_results(
     evaluators = build_evaluators(config)
     log.info(f"Using evaluators: {list(evaluators.keys())}")
 
+    # Move MBPP+ to batch evaluation (running EvalPlus per-sample is inefficient)
+    mbpp_evaluator = evaluators.pop("mbpp_plus", None)
+
     # Build batch evaluators (from config.evaluation.batch_evaluators)
     batch_evaluator_names = config.evaluation.get("batch_evaluators", [])
     batch_evaluators = {}
@@ -1516,6 +1594,12 @@ def evaluate_results(
             sanitized_model = model_name.replace("/", "_").replace(":", "_")
             eval_key = f"llm_judge_{sanitized_model}"
             batch_evaluators[eval_key] = EvaluatorLLMAsAJudge(**llm_cfg)
+
+    # Add MBPP+ to batch evaluators (single EvalPlus run is much more efficient)
+    if mbpp_evaluator is not None:
+        batch_evaluators["mbpp_plus"] = mbpp_evaluator
+        log.info("MBPP+ moved to batch evaluation (single EvalPlus run)")
+
     if batch_evaluators:
         log.info(f"Batch evaluators: {list(batch_evaluators.keys())}")
 
@@ -1570,6 +1654,10 @@ def evaluate_results(
                         log.warning(
                             f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}"
                         )
+                elif isinstance(evaluator_fn, EvaluatorMBPPPlus):
+                    # Skip MBPP+ in per-sample loop - will run batch evaluation once
+                    # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
+                    continue
                 else:
                     # Other evaluators use __call__ with extracted answer
                     extracted_answer = result.get(
@@ -1671,9 +1759,27 @@ def evaluate_results(
                 for r in samples_to_eval
             ]
 
+        # Prepare optional parameters for evaluators that need them (e.g., MBPP+)
+        task_ids = None
+        instance_data_list = None
+        if isinstance(evaluator_fn, EvaluatorMBPPPlus):
+            # Get task_ids from instance_data or direct field
+            task_ids = []
+            for r in samples_to_eval:
+                inst_data = r.get("instance_data", {})
+                task_id = inst_data.get("task_id") or r.get("task_id", r["index"])
+                task_ids.append(task_id)
+            # Get instance_data for each sample
+            instance_data_list = [r.get("instance_data", {}) for r in samples_to_eval]
+
         try:
-            # Batch evaluate
-            eval_result = evaluator_fn(problems, solutions, gold_answers)
+            # Batch evaluate - pass additional params if evaluator needs them
+            if isinstance(evaluator_fn, EvaluatorMBPPPlus):
+                eval_result = evaluator_fn(
+                    problems, solutions, gold_answers, task_ids, instance_data_list
+                )
+            else:
+                eval_result = evaluator_fn(problems, solutions, gold_answers)
             if isinstance(eval_result, tuple) and len(eval_result) == 3:
                 annotations, responses, consensus_scores = eval_result
             elif isinstance(eval_result, tuple) and len(eval_result) == 2:
@@ -1758,16 +1864,21 @@ def evaluate_results(
             all_response_steps.append(r.get("response_num_steps", 0))
 
     # Token / FLOPs aggregates
+    missing_stats_count = sum(1 for r in results if r.get("token_stats") is None)
+    if missing_stats_count > 0:
+        log.warning(
+            f"{missing_stats_count}/{len(results)} results missing 'token_stats'"
+        )
     all_token_stats = [r.get("token_stats") or {} for r in results]
     total_tokens = sum(ts.get("total_tokens_this_sample", 0) for ts in all_token_stats)
     total_input_tokens = sum(ts.get("input_tokens", 0) for ts in all_token_stats)
     total_output_tokens = sum(ts.get("output_tokens", 0) for ts in all_token_stats)
     total_generations = sum(ts.get("generation_count", 0) for ts in all_token_stats)
-    total_tflops = sum((ts.get("tflops") or 0) for ts in all_token_stats)
+    total_tflops = sum(_safe_tflops(ts, "tflops") for ts in all_token_stats)
 
     # PRM token/FLOP aggregates
     total_prm_tokens = sum(ts.get("prm_input_tokens", 0) for ts in all_token_stats)
-    total_prm_tflops = sum((ts.get("prm_tflops") or 0) for ts in all_token_stats)
+    total_prm_tflops = sum(_safe_tflops(ts, "prm_tflops") for ts in all_token_stats)
 
     log.info("Compute:")
     log.info(f"Total tokens: {total_tokens:,}")
@@ -1924,9 +2035,32 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
+    # Special handling for MBPP+ to use EvalPlus API (provides correct prompt format)
+    data_name = config.dataset.get("data_name", "")
+    if data_name == "mbpp_plus" or "mbppplus" in config.dataset.dataset_path.lower():
+        from llm_tts.datasets.mbpp_plus import load_mbpp_plus
+
+        log.info(
+            "Using EvalPlus API for MBPP+ (provides correct prompt format with function name)"
+        )
+        mbpp_data = load_mbpp_plus(subset_size=None)  # Load all, subset later
+        # Convert to HuggingFace Dataset format
+        # Remove fields that can't be serialized by Arrow (nested tuples)
+        serializable_data = []
+        for item in mbpp_data:
+            serializable_item = {
+                "question": item["question"],
+                "answer": item["answer"],
+                "task_id": item["task_id"],
+                "entry_point": item["entry_point"],
+                "test_list": item["test_list"],
+                "assertion": item.get("assertion", ""),
+            }
+            serializable_data.append(serializable_item)
+        dataset = Dataset.from_list(serializable_data)
     # Support loading local JSON/JSONL files via data_files parameter
-    data_files = config.dataset.get("data_files", None)
-    if data_files:
+    elif config.dataset.get("data_files", None):
+        data_files = config.dataset.get("data_files", None)
         log.info(f"Loading from local file: {data_files}")
         dataset = load_dataset(
             config.dataset.dataset_path,
@@ -1942,7 +2076,7 @@ def main(config):
             cache_dir=config.system.hf_cache,
         )
     # Apply offset and subset
-    offset = config.dataset.get("offset", 0) or 0
+    offset = config.dataset.get("offset", 0)
     subset = config.dataset.get("subset", None)
     if offset > 0 or subset:
         start_idx = offset

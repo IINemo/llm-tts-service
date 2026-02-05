@@ -1,0 +1,86 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/mbpp_plus/baseline_vllm_mbpp_plus
+# Baseline evaluation for MBPP+ using local vLLM model
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - /evaluation/mbpp_plus/default
+  - _self_
+
+# Run naming
+run_name: "baseline_vllm_mbpp_plus_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: null
+wandb_project: llm-tts-mbpp-plus
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/CodeQwen1.5-7B-Chat"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 8192
+  disable_thinking_mode: true
+
+# System configuration
+system:
+  device: cuda
+  seed: 0
+
+# Generation configuration
+generation:
+  max_new_tokens: 512  # Functions are typically short
+  temperature: 0.0  # Deterministic for reproducibility
+  top_p: 1.0
+  top_k: 20
+  batch_size: 1
+
+# Strategy - Baseline single-shot
+strategy:
+  type: baseline
+  batch_generation: true
+  # Stop tokens for Qwen models
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  # Step token limits
+  min_step_tokens: 0
+  max_step_tokens: 512
+  # Disable semantic markers for baseline
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+
+# Dataset configuration - MBPP+
+# Uses EvalPlus API loader which provides correct prompt format with function name
+dataset:
+  data_name: "mbpp_plus"
+  dataset_path: "evalplus/mbppplus"
+  dataset_split: "test"  # 378 problems
+  subset: null
+  offset: 0
+  question_field: "question"  # EvalPlus loader field (includes docstring + example assertion)
+  answer_field: "answer"  # EvalPlus loader field (canonical solution)
+  answer_format: "code"
+  prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
+  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - mbpp_plus
+  mbpp_plus:
+    mode: full # "test" and "syntax" modes are depricated, use "full" only
+    timeout: 10

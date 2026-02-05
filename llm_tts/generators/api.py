@@ -567,8 +567,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 else:
                     flat_logprobs.append(-100.0)
             return {
-                "uncertainty_score": 0.0,
-                "validity_score": 1.0,
+                "uncertainty_score": None,
+                "validity_score": None,
                 "token_ids": token_ids,
                 "logprobs": flat_logprobs,
                 "raw_logprobs": logprobs,
@@ -578,8 +578,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             # No logprobs available
             pseudo_ids = list(range(self._count_tokens(text)))
             return {
-                "uncertainty_score": 0.0,
-                "validity_score": 1.0,
+                "uncertainty_score": None,
+                "validity_score": None,
                 "token_ids": pseudo_ids,
                 "logprobs": [],
                 "raw_logprobs": [],
@@ -623,6 +623,11 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             # Truncate at sentence boundary if hit max tokens
             if not thinking_complete and token_count >= self.max_step_tokens:
                 text = self._truncate_at_sentence_boundary(text)
+                # Match vLLM behavior: mark trajectory complete when max tokens
+                # exhausted without </think> (model ran out of budget)
+                if not is_trajectory_complete:
+                    is_trajectory_complete = True
+                    completion_reason = CompletionReason.CONTEXT_LIMIT
         else:
             # Non-thinking mode
             truncated_text, was_truncated = self._truncate_repetitions(
@@ -707,7 +712,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                         token_ids=[],
                         is_complete=True,
                         is_trajectory_complete=True,
-                        other_data={"uncertainty_score": 0.0, "validity_score": 1.0},
+                        other_data={"uncertainty_score": None, "validity_score": None},
                         raw_text="",
                     )
                     for _ in range(candidates_per_step)
@@ -906,7 +911,15 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 original_logprob_count = len(api_logprobs) if api_logprobs else 0
                 raw_for_comparison = raw_collected if use_streaming else raw_text
                 if api_logprobs and text and text != raw_for_comparison:
-                    truncated_token_count = self._count_tokens(text)
+                    # Use token text from logprobs to find the exact boundary
+                    # rather than approximate _count_tokens which may mismatch
+                    accumulated = ""
+                    truncated_token_count = len(api_logprobs)
+                    for lp_idx, lp_entry in enumerate(api_logprobs):
+                        accumulated += lp_entry.get("token", "")
+                        if len(accumulated) >= len(text):
+                            truncated_token_count = lp_idx + 1
+                            break
                     scoring_logprobs = api_logprobs[:truncated_token_count]
                 else:
                     scoring_logprobs = api_logprobs

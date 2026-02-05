@@ -41,6 +41,7 @@ dependencies = [
     "plotly>=5.0.0",  # For interactive reasoning visualization
     "word2number>=1.1",  # For converting word numbers to digits in math normalization
     "wandb>=0.15.0",  # Weights & Biases for experiment tracking
+    "evalplus>=0.3.1",  # EvalPlus for MBPP+/HumanEval+ dataset loading and evaluation
 ]
 
 [project.optional-dependencies]

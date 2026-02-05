@@ -19,7 +19,7 @@ Key difference from online best-of-n:
 import json
 import logging
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -80,7 +80,13 @@ class StrategyOfflineBestOfN(StrategyBase):
     def _get_uncertainty_score(self, candidate: StepCandidate) -> float:
         """Get uncertainty score from candidate's other_data."""
         if candidate.other_data and "uncertainty_score" in candidate.other_data:
-            return candidate.other_data["uncertainty_score"]
+            score = candidate.other_data["uncertainty_score"]
+            if score is None:
+                log.warning(
+                    "Candidate has uncertainty_score=None — no estimator configured?"
+                )
+                return 0.0
+            return score
         return 0.0
 
     def _compute_per_step_uncertainty(
@@ -194,7 +200,7 @@ class StrategyOfflineBestOfN(StrategyBase):
     def _generate_all_trajectories_single_call(
         self,
         request: List[Dict[str, str]],
-    ) -> List[Dict[str, any]]:
+    ) -> List[Dict[str, Any]]:
         """
         Generate all N trajectories in a SINGLE vLLM call.
 
@@ -239,7 +245,7 @@ class StrategyOfflineBestOfN(StrategyBase):
 
     def generate_trajectory(
         self, request: List[Dict[str, str]], sample_idx: int = 0
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """
         Generate N complete trajectories and return the best one.
 
@@ -321,9 +327,15 @@ class StrategyOfflineBestOfN(StrategyBase):
             prm_stats = self.scorer.get_prm_total_stats()
             token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                prm_stats["prm_tflops"] or 0
-            )
+            gen_tflops = token_stats.get("tflops")
+            if gen_tflops is None:
+                log.warning("Missing 'tflops' in token_stats when merging PRM stats")
+                gen_tflops = 0
+            prm_tflops = prm_stats["prm_tflops"]
+            if prm_tflops is None:
+                log.warning("Missing 'prm_tflops' in PRM stats")
+                prm_tflops = 0
+            token_stats["tflops"] = gen_tflops + prm_tflops
 
         # Save logs if output_dir provided
         if self.output_dir:
@@ -347,7 +359,7 @@ class StrategyOfflineBestOfN(StrategyBase):
 
     def _save_trajectories_log(
         self,
-        all_results: List[Dict[str, any]],
+        all_results: List[Dict[str, Any]],
         best_idx: int,
     ):
         """Save all trajectories to JSON for analysis."""
@@ -385,7 +397,7 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         log.info(f"Saved trajectories log to {log_path}")
 
-    def get_token_stats(self) -> Dict[str, any]:
+    def get_token_stats(self) -> Dict[str, Any]:
         """Get token statistics from the generator."""
         return self.step_generator.get_sample_stats()
 
@@ -393,7 +405,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         self,
         requests: List[List[Dict[str, str]]],
         sample_indices: Optional[List[int]] = None,
-    ) -> List[Dict[str, any]]:
+    ) -> List[Dict[str, Any]]:
         """
         Generate N trajectories for each of M samples using generate_step_candidates_batch.
 
@@ -435,7 +447,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             self.scorer.reset_prm_stats()
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
-            trajectories=[[]] * M,
+            trajectories=[[] for _ in range(M)],
             candidates_per_step=N,
             stop_tokens_override=["<end of response>"],
             max_tokens_override=self.step_generator.max_new_tokens,
@@ -471,8 +483,12 @@ class StrategyOfflineBestOfN(StrategyBase):
 
             for traj_idx, candidate in enumerate(candidates):
                 raw_text = candidate.raw_text or candidate.text
-                num_tokens = candidate.other_data.get(
-                    "original_token_count", len(candidate.token_ids)
+                num_tokens = (
+                    candidate.other_data.get(
+                        "original_token_count", len(candidate.token_ids)
+                    )
+                    if candidate.other_data
+                    else len(candidate.token_ids)
                 )
 
                 # Split into steps post-hoc using step generator's detector
@@ -602,9 +618,19 @@ class StrategyOfflineBestOfN(StrategyBase):
                 prm_stats = self.scorer.get_prm_stats_for(sample_idx)
                 token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
                 token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-                token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                    prm_stats["prm_tflops"] or 0
-                )
+                gen_tflops = token_stats.get("tflops")
+                if gen_tflops is None:
+                    log.warning(
+                        f"Sample {sample_idx}: missing 'tflops' in token_stats when merging PRM stats"
+                    )
+                    gen_tflops = 0
+                prm_tflops = prm_stats["prm_tflops"]
+                if prm_tflops is None:
+                    log.warning(
+                        f"Sample {sample_idx}: missing 'prm_tflops' in PRM stats"
+                    )
+                    prm_tflops = 0
+                token_stats["tflops"] = gen_tflops + prm_tflops
 
             log.info(
                 f"Sample {sample_idx}: best trajectory {best_idx + 1}/{N}, "
@@ -636,7 +662,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         )
         return results
 
-    def _empty_result(self) -> Dict[str, any]:
+    def _empty_result(self) -> Dict[str, Any]:
         """Return empty result for failed generation."""
         return {
             "trajectory": "",
