@@ -660,6 +660,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         max_tokens_override: Optional[int] = None,
         compute_uncertainty: bool = True,
         sample_ids: Optional[List] = None,
+        beam_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Unified step candidate generation — mirrors VLLMStepGenerator._generate_step_candidates_impl.
 
@@ -674,6 +675,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             max_tokens_override: Override max tokens. None = use self.max_step_tokens.
             compute_uncertainty: If True, compute uncertainty scores.
             sample_ids: Optional sample IDs for per-sample token tracking.
+            beam_ids: Optional list mapping each trajectory index to a beam_id.
+                Used for logging to identify which beam each trajectory belongs to.
 
         Returns:
             List of candidate lists, one per trajectory.
@@ -733,9 +736,11 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             traj_idx_0 = active_indices[0]
             traj = trajectories[traj_idx_0]
             sid = sample_ids[traj_idx_0] if sample_ids else traj_idx_0
+            bid = beam_ids[traj_idx_0] if beam_ids else None
+            label = f"Sample {sid}" + (f"/Beam {bid}" if bid is not None else "")
             raw_traj = convert_trajectory_to_string(traj)
             log.info(
-                f"Sample {sid}: Step {len(traj) + 1}, "
+                f"{label}: Step {len(traj) + 1}, "
                 f"stop={len(effective_stop_tokens)} tokens, "
                 f"candidates={candidates_per_step}\n"
                 f"  Raw trajectory ({len(traj)} steps): {repr(raw_traj)}"
@@ -1041,6 +1046,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         max_tokens_override: Optional[int] = None,
         compute_uncertainty: bool = True,
         sample_ids: Optional[List] = None,
+        beam_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Generate step candidates with per-trajectory requests."""
         if len(requests) != len(trajectories):
@@ -1056,6 +1062,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             max_tokens_override=max_tokens_override,
             compute_uncertainty=compute_uncertainty,
             sample_ids=sample_ids,
+            beam_ids=beam_ids,
         )
 
     def generate_answer_candidates(
