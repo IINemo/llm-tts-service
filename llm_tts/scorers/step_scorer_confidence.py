@@ -4,9 +4,9 @@ from typing import Dict, List
 
 import numpy as np
 
-log = logging.getLogger(__name__)
-
 from .step_scorer_reward_base import CandidateScore, StepScorerBase
+
+log = logging.getLogger(__name__)
 
 
 class StepScorerConfidence(StepScorerBase):
@@ -20,8 +20,8 @@ class StepScorerConfidence(StepScorerBase):
         for candidate in candidates:
             if not candidate.other_data or "validity_score" not in candidate.other_data:
                 raise ValueError(
-                    f"Candidate missing 'validity_score' in other_data. "
-                    f"Ensure generator is configured with an uncertainty estimator."
+                    "Candidate missing 'validity_score' in other_data. "
+                    "Ensure generator is configured with an uncertainty estimator."
                 )
             validity_score = candidate.other_data["validity_score"]
 

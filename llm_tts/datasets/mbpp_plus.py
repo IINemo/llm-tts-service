@@ -13,41 +13,24 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
+from evalplus.data import get_mbpp_plus, write_jsonl
+
 log = logging.getLogger(__name__)
-
-# Try to import evalplus for direct API access
-try:
-    from evalplus.data import get_mbpp_plus, write_jsonl
-
-    EVALPLUS_AVAILABLE = True
-except ImportError:
-    EVALPLUS_AVAILABLE = False
-    log.warning(
-        "evalplus not installed. Install with: pip install evalplus\n"
-        "Falling back to HuggingFace datasets loading."
-    )
 
 
 def load_mbpp_plus(
     subset_size: Optional[int] = None,
-    cache_dir: Optional[str] = None,
-    use_evalplus_api: bool = True,
 ) -> List[Dict[str, Any]]:
     """
-    Load MBPP+ dataset.
+    Load MBPP+ dataset using evalplus API.
 
     Args:
         subset_size: If provided, only load first N examples
-        cache_dir: Cache directory for HuggingFace datasets
-        use_evalplus_api: If True and evalplus is installed, use its API
 
     Returns:
         List of dicts with formatted data for the evaluation pipeline
     """
-    if use_evalplus_api and EVALPLUS_AVAILABLE:
-        return _load_from_evalplus(subset_size)
-    else:
-        return _load_from_huggingface(subset_size, cache_dir)
+    return _load_from_evalplus(subset_size)
 
 
 def _load_from_evalplus(subset_size: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -103,46 +86,6 @@ def _load_from_evalplus(subset_size: Optional[int] = None) -> List[Dict[str, Any
             break
 
     log.info(f"Loaded {len(formatted_data)} MBPP+ problems via evalplus API")
-    return formatted_data
-
-
-def _load_from_huggingface(
-    subset_size: Optional[int] = None,
-    cache_dir: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """Load MBPP+ from HuggingFace datasets."""
-    from datasets import load_dataset
-
-    log.info("Loading MBPP+ from HuggingFace...")
-
-    dataset = load_dataset(
-        "evalplus/mbppplus",
-        split="test",
-        cache_dir=cache_dir,
-    )
-
-    if subset_size is not None:
-        dataset = dataset.select(range(min(subset_size, len(dataset))))
-
-    formatted_data = []
-    for item in dataset:
-        # Extract function name from prompt
-        entry_point = _extract_function_name(item["prompt"])
-
-        formatted = {
-            # Standard fields for the evaluation pipeline
-            "question": item["prompt"],
-            "answer": item["code"],
-            # MBPP+ specific fields
-            "task_id": f"Mbpp/{item['task_id']}",
-            "entry_point": entry_point,
-            "test": item.get("test", ""),
-            "test_list": item["test_list"],
-            "test_imports": item["test_imports"],
-        }
-        formatted_data.append(formatted)
-
-    log.info(f"Loaded {len(formatted_data)} MBPP+ problems from HuggingFace")
     return formatted_data
 
 
@@ -270,12 +213,7 @@ def create_evalplus_samples(
             }
         )
 
-    if EVALPLUS_AVAILABLE:
-        write_jsonl(output_path, samples)
-    else:
-        with open(output_path, "w", encoding="utf-8") as f:
-            for sample in samples:
-                f.write(json.dumps(sample, ensure_ascii=False) + "\n")
+    write_jsonl(output_path, samples)
 
     log.info(f"Samples saved to {output_path}")
 

@@ -214,7 +214,9 @@ class AdaptiveScalingBestOfN(StrategyBase):
         )
 
         # Score answer candidates
-        answer_validity_scores = self.scorer.score_candidates(chat, answer_candidates, trajectory=trajectory)
+        answer_validity_scores = self.scorer.score_candidates(
+            chat, answer_candidates, trajectory=trajectory
+        )
 
         # Select best answer based on criterion
         best_idx, _ = self._select_best_candidate(
