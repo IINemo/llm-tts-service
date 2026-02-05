@@ -224,14 +224,14 @@ def build_evaluators(config):
             evaluators["alignscore"] = EvaluatorAlignScore(**align_cfg)
 
         elif evaluator_name == "mbpp_plus":
-            # MBPP+ evaluator for code generation
+            # MBPP+ evaluator for code generation (uses EvalPlus)
             mbpp_cfg = config.evaluation.get("mbpp_plus", {})
             if mbpp_cfg:
                 mbpp_cfg = OmegaConf.to_container(mbpp_cfg, resolve=True)
             else:
                 mbpp_cfg = {}
             evaluators["mbpp_plus"] = EvaluatorMBPPPlus(
-                mode=mbpp_cfg.get("mode", "syntax"),
+                mode=mbpp_cfg.get("mode", "full"),
                 timeout=mbpp_cfg.get("timeout", 10),
             )
 
@@ -1117,27 +1117,17 @@ def _generate_trajectories_batch(
                     }
                     continue
                 elif isinstance(evaluator, EvaluatorMBPPPlus):
-                    # MBPP+ evaluator: evaluate immediately for feedback
-                    task_ids = (
-                        [instance.get("task_id")] if "task_id" in instance else None
-                    )
-                    instance_data = (
-                        [instance]
-                        if any(
-                            k in instance
-                            for k in ["test_list", "task_id", "entry_point"]
-                        )
-                        else None
-                    )
-
+                    # MBPP+ evaluator: needs task_ids and instance_data
+                    solution = result["trajectory"]
+                    task_id = instance.get("task_id", i)
                     scores = evaluator(
                         problems=[question],
-                        solutions=[result["trajectory"]],
+                        solutions=[solution],
                         gold_answers=[str(gold_answer_num)],
-                        task_ids=task_ids,
-                        instance_data=instance_data,
+                        task_ids=[task_id],
+                        instance_data=[dict(instance)],
                     )
-                    is_correct_eval = bool(scores[0]) if scores else False
+                    is_correct_eval = scores[0] == 1.0 if scores else False
                     eval_results[eval_name] = {"is_correct": is_correct_eval}
                     continue
                 else:
@@ -1194,6 +1184,7 @@ def _generate_trajectories_batch(
             "completed": result["completed"],
             "is_correct": bool(is_correct),  # Primary (exact_match)
             "eval": eval_results,  # Per-evaluator results
+            "instance_data": dict(instance),  # Store full instance for MBPP+ evaluation
         }
 
         if "token_stats" in result:
@@ -1473,6 +1464,7 @@ def generate_trajectories(
             "validity_scores": result.get("validity_scores", []),
             "completed": result["completed"],
             "is_correct": bool(is_correct),
+            "instance_data": dict(instance),  # Store full instance for MBPP+ evaluation
         }
 
         # Include all_traces if present (DeepConf generates multiple branches)
@@ -1722,26 +1714,21 @@ def evaluate_results(
                         log.warning(
                             f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}"
                         )
-                elif isinstance(evaluator_fn, EvaluatorMBPPPlus):
-                    # MBPP+ evaluator needs instance data with test_list
-                    task_ids = [result.get("task_id")] if "task_id" in result else None
-                    instance_data = (
-                        [result]
-                        if any(
-                            k in result for k in ["test_list", "task_id", "entry_point"]
-                        )
-                        else None
-                    )
-
-                    eval_result = evaluator_fn(
+                elif eval_name == "mbpp_plus" and isinstance(
+                    evaluator_fn, EvaluatorMBPPPlus
+                ):
+                    # MBPP+ evaluator: needs task_ids and instance_data
+                    instance_data = result.get("instance_data", {})
+                    task_id = instance_data.get("task_id", result["index"])
+                    scores = evaluator_fn(
                         problems=[result["question"]],
                         solutions=[solution],
                         gold_answers=[str(result["gold_answer"])],
-                        task_ids=task_ids,
-                        instance_data=instance_data,
+                        task_ids=[task_id],
+                        instance_data=[instance_data],
                     )
-                    annotation = eval_result[0] if eval_result else 0.0
-                    is_correct = annotation == 1.0
+                    is_correct = scores[0] == 1.0 if scores else False
+                    annotation = 1.0 if is_correct else 0.0
                 else:
                     # Other evaluators use __call__ with extracted answer
                     extracted_answer = result.get(
@@ -1845,19 +1832,22 @@ def evaluate_results(
 
         # Prepare optional parameters for evaluators that need them (e.g., MBPP+)
         task_ids = None
-        instance_data = None
+        instance_data_list = None
         if isinstance(evaluator_fn, EvaluatorMBPPPlus):
-            # Check if we have task_ids or test_list in the samples
-            if any("task_id" in r for r in samples_to_eval):
-                task_ids = [r.get("task_id") for r in samples_to_eval]
-            if any("test_list" in r or "entry_point" in r for r in samples_to_eval):
-                instance_data = samples_to_eval
+            # Get task_ids from instance_data or direct field
+            task_ids = []
+            for r in samples_to_eval:
+                inst_data = r.get("instance_data", {})
+                task_id = inst_data.get("task_id") or r.get("task_id", r["index"])
+                task_ids.append(task_id)
+            # Get instance_data for each sample
+            instance_data_list = [r.get("instance_data", {}) for r in samples_to_eval]
 
         try:
             # Batch evaluate - pass additional params if evaluator needs them
             if isinstance(evaluator_fn, EvaluatorMBPPPlus):
                 eval_result = evaluator_fn(
-                    problems, solutions, gold_answers, task_ids, instance_data
+                    problems, solutions, gold_answers, task_ids, instance_data_list
                 )
             else:
                 eval_result = evaluator_fn(problems, solutions, gold_answers)
