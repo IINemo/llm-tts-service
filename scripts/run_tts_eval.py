@@ -922,9 +922,20 @@ def _generate_trajectories_batch(
     log.info(f"Batch generating {len(requests_to_process)} samples...")
 
     # Generate all responses in a single batch call
-    batch_results = strategy.generate_trajectories_batch(
-        requests_to_process, indices_to_process
-    )
+    try:
+        batch_results = strategy.generate_trajectories_batch(
+            requests_to_process, indices_to_process
+        )
+    except Exception as e:
+        log.error(f"Batch generation failed: {e}")
+        log.error("Returning partial results collected so far")
+        return results
+
+    if len(batch_results) != len(indices_to_process):
+        log.error(
+            f"Batch generation returned {len(batch_results)} results "
+            f"but expected {len(indices_to_process)}. Truncating to shorter list."
+        )
 
     # Save batch results immediately to avoid data loss
     batch_results_path = save_path_file.parent / "batch_results.jsonl"

@@ -102,6 +102,13 @@ class StrategyBeamSearch(StrategyBase):
         self.batch_generation = batch_generation
         self.prompt_buffer = prompt_buffer
 
+        if beam_size <= 0:
+            raise ValueError(f"beam_size must be > 0, got {beam_size}")
+        if candidates_per_beam <= 0:
+            raise ValueError(f"candidates_per_beam must be > 0, got {candidates_per_beam}")
+        if max_steps <= 0:
+            raise ValueError(f"max_steps must be > 0, got {max_steps}")
+
         # Get stop tokens info for logging
         stop_tokens = getattr(step_generator, "stop_tokens", [])
         eos_token_ids = getattr(step_generator, "eos_token_ids", [151645, 151643])
@@ -166,13 +173,13 @@ class StrategyBeamSearch(StrategyBase):
 
                 # Expand with new candidates
                 for cand, score in zip(candidates, scores):
-                    scores = beam["scores"] + [score]
+                    updated_scores = beam["scores"] + [score]
                     new_beams.append(
-                        {"steps": beam["steps"] + [cand], "scores": scores}
+                        {"steps": beam["steps"] + [cand], "scores": updated_scores}
                     )
 
                     log.info(
-                        f"    Candidate: score={score:.3f}, aggregated score={self._aggregate_scores(scores):.3f}, text='{cand.text[:80]}'"
+                        f"    Candidate: score={score:.3f}, aggregated score={self._aggregate_scores(updated_scores):.3f}, text='{cand.text[:80]}'"
                     )
 
             if not new_beams:
@@ -290,10 +297,15 @@ class StrategyBeamSearch(StrategyBase):
         #   2. max_steps * max_step_tokens (theoretical max from step limits)
         max_context_budget = getattr(self.step_generator, "max_context_budget", 4096)
         max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
-        max_trajectory_tokens = min(
+        max_trajectory_tokens = max(0, min(
             max_context_budget - self.prompt_buffer,
             self.max_steps * max_step_tokens,
-        )
+        ))
+        if max_trajectory_tokens == 0:
+            log.warning(
+                f"max_trajectory_tokens is 0 (max_context_budget={max_context_budget}, "
+                f"prompt_buffer={self.prompt_buffer}) — all samples will complete immediately"
+            )
         log.info(
             f"Max trajectory tokens: {max_trajectory_tokens} "
             f"(max_context_budget={max_context_budget}, prompt_buffer={self.prompt_buffer}, "
@@ -762,17 +774,24 @@ class StrategyBeamSearch(StrategyBase):
     def _aggregate_scores(self, scores: list[float]) -> float:
         """Aggregate scores across steps according to selected strategy."""
         if len(scores) == 0:
-            return 0
+            return 0.0
+        # Filter out non-finite values (NaN, inf, -inf)
+        clean = [s for s in scores if np.isfinite(s)]
+        if not clean:
+            log.warning(f"All {len(scores)} scores are non-finite, returning 0.0")
+            return 0.0
+        if len(clean) < len(scores):
+            log.warning(f"Dropped {len(scores) - len(clean)} non-finite scores out of {len(scores)}")
         if self.aggregation == "sum":
-            return sum(scores)
+            return sum(clean)
         elif self.aggregation == "mean":
-            return np.mean(scores).item()
+            return np.mean(clean).item()
         elif self.aggregation == "product":
-            return np.prod(scores).item()
+            return np.prod(clean).item()
         elif self.aggregation == "max":
-            return np.max(scores).item()
+            return np.max(clean).item()
         elif self.aggregation == "min":
-            return np.min(scores).item()
+            return np.min(clean).item()
         else:
             raise Exception(f"Unknown aggregation {self.aggregation}")
 
@@ -790,7 +809,7 @@ class StrategyBeamSearch(StrategyBase):
     def _select_best_beam(self, beams: List[Dict]) -> Dict:
         """Select the highest scoring beam."""
         if not beams:
-            return {"steps": [], "scores": 0.0}
+            return {"steps": [], "scores": []}
         return max(beams, key=lambda b: self._aggregate_scores(b["scores"]))
 
     def cleanup(self):

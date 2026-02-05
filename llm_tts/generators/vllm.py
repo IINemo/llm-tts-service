@@ -445,8 +445,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 token_ids[:best_prefix_len],
                 logprobs[:best_prefix_len],
             )
+            validity_score = 1.0 / (1.0 + uncertainty_score)
         else:
-            uncertainty_score = 0.0
+            uncertainty_score = None
+            validity_score = None
 
         return StepCandidate(
             text=text,
@@ -455,7 +457,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             is_trajectory_complete=is_trajectory_complete,
             other_data={
                 "uncertainty_score": uncertainty_score,
-                "validity_score": 1.0 / (1.0 + uncertainty_score),
+                "validity_score": validity_score,
                 "logprobs": self._extract_logprobs(
                     token_ids[:best_prefix_len],
                     logprobs[:best_prefix_len],
@@ -578,7 +580,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                         token_ids=[],
                         is_complete=True,
                         is_trajectory_complete=True,
-                        other_data={"uncertainty_score": 0.0, "validity_score": 1.0},
+                        other_data={"uncertainty_score": None, "validity_score": None},
                         raw_text="",
                     )
                     for _ in range(candidates_per_step)

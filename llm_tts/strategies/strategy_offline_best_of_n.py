@@ -80,7 +80,11 @@ class StrategyOfflineBestOfN(StrategyBase):
     def _get_uncertainty_score(self, candidate: StepCandidate) -> float:
         """Get uncertainty score from candidate's other_data."""
         if candidate.other_data and "uncertainty_score" in candidate.other_data:
-            return candidate.other_data["uncertainty_score"]
+            score = candidate.other_data["uncertainty_score"]
+            if score is None:
+                log.warning("Candidate has uncertainty_score=None — no estimator configured?")
+                return 0.0
+            return score
         return 0.0
 
     def _compute_per_step_uncertainty(
@@ -441,7 +445,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             self.scorer.reset_prm_stats()
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
-            trajectories=[[]] * M,
+            trajectories=[[] for _ in range(M)],
             candidates_per_step=N,
             stop_tokens_override=["<end of response>"],
             max_tokens_override=self.step_generator.max_new_tokens,
@@ -477,8 +481,10 @@ class StrategyOfflineBestOfN(StrategyBase):
 
             for traj_idx, candidate in enumerate(candidates):
                 raw_text = candidate.raw_text or candidate.text
-                num_tokens = candidate.other_data.get(
-                    "original_token_count", len(candidate.token_ids)
+                num_tokens = (
+                    candidate.other_data.get("original_token_count", len(candidate.token_ids))
+                    if candidate.other_data
+                    else len(candidate.token_ids)
                 )
 
                 # Split into steps post-hoc using step generator's detector
