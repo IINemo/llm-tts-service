@@ -321,9 +321,15 @@ class StrategyOfflineBestOfN(StrategyBase):
             prm_stats = self.scorer.get_prm_total_stats()
             token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                prm_stats["prm_tflops"] or 0
-            )
+            gen_tflops = token_stats.get("tflops")
+            if gen_tflops is None:
+                log.warning("Missing 'tflops' in token_stats when merging PRM stats")
+                gen_tflops = 0
+            prm_tflops = prm_stats["prm_tflops"]
+            if prm_tflops is None:
+                log.warning("Missing 'prm_tflops' in PRM stats")
+                prm_tflops = 0
+            token_stats["tflops"] = gen_tflops + prm_tflops
 
         # Save logs if output_dir provided
         if self.output_dir:
@@ -602,9 +608,15 @@ class StrategyOfflineBestOfN(StrategyBase):
                 prm_stats = self.scorer.get_prm_stats_for(sample_idx)
                 token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
                 token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-                token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                    prm_stats["prm_tflops"] or 0
-                )
+                gen_tflops = token_stats.get("tflops")
+                if gen_tflops is None:
+                    log.warning(f"Sample {sample_idx}: missing 'tflops' in token_stats when merging PRM stats")
+                    gen_tflops = 0
+                prm_tflops = prm_stats["prm_tflops"]
+                if prm_tflops is None:
+                    log.warning(f"Sample {sample_idx}: missing 'prm_tflops' in PRM stats")
+                    prm_tflops = 0
+                token_stats["tflops"] = gen_tflops + prm_tflops
 
             log.info(
                 f"Sample {sample_idx}: best trajectory {best_idx + 1}/{N}, "

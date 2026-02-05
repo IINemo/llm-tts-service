@@ -233,9 +233,15 @@ class StrategyOnlineBestOfN(StrategyBase):
             prm_stats = self.scorer.get_prm_total_stats()
             token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                prm_stats["prm_tflops"] or 0
-            )
+            gen_tflops = token_stats.get("tflops")
+            if gen_tflops is None:
+                log.warning("Missing 'tflops' in token_stats when merging PRM stats")
+                gen_tflops = 0
+            prm_tflops = prm_stats["prm_tflops"]
+            if prm_tflops is None:
+                log.warning("Missing 'prm_tflops' in PRM stats")
+                prm_tflops = 0
+            token_stats["tflops"] = gen_tflops + prm_tflops
 
         log.info(
             f"Sample token stats: "
@@ -432,10 +438,14 @@ class StrategyOnlineBestOfN(StrategyBase):
                 # Use validity scores from generation
                 all_scores = []
                 for candidates in batch_results:
-                    scores = [
-                        c.other_data.get("validity_score", 0.0) if c.other_data else 0.0
-                        for c in candidates
-                    ]
+                    scores = []
+                    for c in candidates:
+                        data = c.other_data if c.other_data else {}
+                        v = data.get("validity_score")
+                        if v is None:
+                            log.warning("Missing 'validity_score' in candidate other_data")
+                            v = 0.0
+                        scores.append(v)
                     all_scores.append(scores)
 
             # 6. Select best candidate per sample (greedy max score)
@@ -652,9 +662,15 @@ class StrategyOnlineBestOfN(StrategyBase):
                 prm_stats = self.scorer.get_prm_stats_for(idx)
                 token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
                 token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-                token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                    prm_stats["prm_tflops"] or 0
-                )
+                gen_tflops = token_stats.get("tflops")
+                if gen_tflops is None:
+                    log.warning(f"Sample {sample_indices[idx]}: missing 'tflops' in token_stats when merging PRM stats")
+                    gen_tflops = 0
+                prm_tflops = prm_stats["prm_tflops"]
+                if prm_tflops is None:
+                    log.warning(f"Sample {sample_indices[idx]}: missing 'prm_tflops' in PRM stats")
+                    prm_tflops = 0
+                token_stats["tflops"] = gen_tflops + prm_tflops
 
             scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
             log.info(
@@ -878,10 +894,14 @@ class StrategyOnlineBestOfN(StrategyBase):
                 break
 
             # Score from validity_score (instant, no external scorer call)
-            scores = [
-                c.other_data.get("validity_score", 0.0) if c.other_data else 0.0
-                for c in candidates
-            ]
+            scores = []
+            for c in candidates:
+                data = c.other_data if c.other_data else {}
+                v = data.get("validity_score")
+                if v is None:
+                    log.warning(f"Sample {sample_idx}: missing 'validity_score' in candidate other_data")
+                    v = 0.0
+                scores.append(v)
 
             best_idx = max(range(len(scores)), key=lambda i: scores[i])
             selected = candidates[best_idx]
@@ -980,10 +1000,14 @@ class StrategyOnlineBestOfN(StrategyBase):
                     sample_id, answer_cands, context_tokens=ctx_tokens
                 )
 
-                a_scores = [
-                    c.other_data.get("validity_score", 0.0) if c.other_data else 0.0
-                    for c in answer_cands
-                ]
+                a_scores = []
+                for c in answer_cands:
+                    data = c.other_data if c.other_data else {}
+                    v = data.get("validity_score")
+                    if v is None:
+                        log.warning(f"Sample {sample_idx}: missing 'validity_score' in answer candidate other_data")
+                        v = 0.0
+                    a_scores.append(v)
                 best_a = max(range(len(a_scores)), key=lambda i: a_scores[i])
 
                 log.info(

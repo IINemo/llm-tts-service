@@ -121,8 +121,14 @@ class StrategyBaseline(StrategyBase):
         candidate = candidates[0]
 
         # Get uncertainty score from candidate
-        uncertainty_score = candidate.other_data.get("uncertainty_score", 0.0)
-        validity_score = candidate.other_data.get("validity_score", 1.0)
+        uncertainty_score = candidate.other_data.get("uncertainty_score")
+        if uncertainty_score is None:
+            log.warning(f"Sample {sample_idx}: missing 'uncertainty_score' in candidate other_data")
+            uncertainty_score = 0.0
+        validity_score = candidate.other_data.get("validity_score")
+        if validity_score is None:
+            log.warning(f"Sample {sample_idx}: missing 'validity_score' in candidate other_data")
+            validity_score = 1.0
 
         # Build trajectory from the single candidate
         trajectory = [candidate]
@@ -294,7 +300,7 @@ class StrategyBaseline(StrategyBase):
                     "thinking_num_steps": thinking_num_steps,
                     "response_num_steps": response_num_steps,
                     "validity_scores": [
-                        (candidate.other_data or {}).get("validity_score", 1.0)
+                        self._get_validity_score(candidate, sample_idx)
                     ],
                     "completed": candidate.is_trajectory_complete,
                     "token_stats": token_stats,
@@ -303,6 +309,15 @@ class StrategyBaseline(StrategyBase):
 
         log.info(f"Baseline batch: completed {len(results)} generations")
         return results
+
+    @staticmethod
+    def _get_validity_score(candidate, sample_idx: int) -> float:
+        data = candidate.other_data if candidate.other_data else {}
+        score = data.get("validity_score")
+        if score is None:
+            log.warning(f"Sample {sample_idx}: missing 'validity_score' in candidate other_data")
+            return 0.0
+        return score
 
     def cleanup(self):
         """Cleanup resources."""
