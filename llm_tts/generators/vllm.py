@@ -533,6 +533,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         max_tokens_override: Optional[int] = None,
         compute_uncertainty: bool = True,
         sample_ids: Optional[List] = None,
+        beam_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Unified step candidate generation for both thinking and non-thinking modes.
 
@@ -548,6 +549,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             max_tokens_override: Override max tokens. If None, uses self.max_step_tokens.
             compute_uncertainty: If True and model supports it, compute uncertainty scores.
                 Set to False when using PRM scorer (scores computed separately).
+            beam_ids: Optional list mapping each trajectory index to a beam_id.
+                Used for logging to identify which beam each trajectory belongs to.
 
         Returns:
             List of candidate lists, one per trajectory. Each inner list contains
@@ -627,8 +630,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         for traj_i, traj in enumerate(trajectories):
             raw_traj = convert_trajectory_to_string(traj)
+            sid = sample_ids[traj_i] if sample_ids else traj_i
+            bid = beam_ids[traj_i] if beam_ids else None
+            label = f"Sample {sid}" + (f"/Beam {bid}" if bid is not None else "")
             log.info(
-                f"Path {traj_i}: Step {len(traj) + 1}, "
+                f"{label}: Step {len(traj) + 1}, "
                 f"stop={len(effective_stop_tokens)} tokens, min={self.min_step_tokens}\n"
                 f"  Raw trajectory ({len(traj)} steps): {repr(raw_traj)}"
             )
@@ -1263,6 +1269,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         max_tokens_override: Optional[int] = None,
         compute_uncertainty: bool = True,
         sample_ids: Optional[List] = None,
+        beam_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Generate step candidates with per-trajectory requests.
 
@@ -1280,6 +1287,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             sample_ids: Optional list mapping each trajectory index to a sample_id.
                 If provided, per-sample token stats are recorded via record_sample_tokens().
                 Multiple trajectories can map to the same sample_id (e.g., beam search).
+            beam_ids: Optional list mapping each trajectory index to a beam_id.
+                Used for logging to identify which beam each trajectory belongs to.
 
         Returns:
             List of candidate lists, one per trajectory.
@@ -1297,6 +1306,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             max_tokens_override=max_tokens_override,
             compute_uncertainty=compute_uncertainty,
             sample_ids=sample_ids,
+            beam_ids=beam_ids,
         )
 
     def generate_step_candidates(
