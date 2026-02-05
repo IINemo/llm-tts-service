@@ -234,8 +234,21 @@ def get_stop_tokens(
         words.extend(REASONING_WORDS)
     if use_correction:
         words.extend(CORRECTION_WORDS)
+
+    # Process custom_words: literal tokens (starting with \n or non-alphanumeric) added directly
+    literal_tokens = []
     if custom_words:
-        words.extend(custom_words)
+        for cw in custom_words:
+            # Detect literal tokens vs words to expand
+            if (
+                not cw
+                or not cw.strip()
+                or cw.startswith("\n")
+                or not any(c.isalnum() for c in cw)
+            ):
+                literal_tokens.append(cw)
+            else:
+                words.append(cw)
 
     # Expand each word to stop tokens
     for word in words:
@@ -245,6 +258,10 @@ def get_stop_tokens(
     # Add structure tokens (already literal)
     if use_structure:
         all_tokens.update(STRUCTURE_TOKENS)
+
+    # Add literal tokens from custom_words (e.g., "\n", "\n\n")
+    if literal_tokens:
+        all_tokens.update(literal_tokens)
 
     # Add answer tokens
     if include_answer_tokens:
@@ -298,8 +315,21 @@ def get_stop_tokens_compact(
         words.extend(REASONING_WORDS)
     if use_correction:
         words.extend(CORRECTION_WORDS)
+
+    # Process custom_words: literal tokens (starting with \n or non-alphanumeric) added directly
+    literal_tokens = []
     if custom_words:
-        words.extend(custom_words)
+        for cw in custom_words:
+            # Detect literal tokens vs words to expand
+            if (
+                not cw
+                or not cw.strip()
+                or cw.startswith("\n")
+                or not any(c.isalnum() for c in cw)
+            ):
+                literal_tokens.append(cw)
+            else:
+                words.append(cw)
 
     # Only generate newline-prefixed variants
     for word in words:
@@ -318,6 +348,10 @@ def get_stop_tokens_compact(
     # Add structure tokens
     if use_structure:
         all_tokens.update(STRUCTURE_TOKENS)
+
+    # Add literal tokens from custom_words (e.g., "\n", "\n\n")
+    if literal_tokens:
+        all_tokens.update(literal_tokens)
 
     # Always add answer tokens
     all_tokens.update(ANSWER_TOKENS)
@@ -366,8 +400,20 @@ def get_stop_tokens_sentence_start(
         words.extend(REASONING_WORDS)
     if use_correction:
         words.extend(CORRECTION_WORDS)
+    # Process custom_words: literal tokens (starting with \n or non-alphanumeric) added directly
+    literal_tokens = []
     if custom_words:
-        words.extend(custom_words)
+        for cw in custom_words:
+            # Detect literal tokens vs words to expand
+            if (
+                not cw
+                or not cw.strip()
+                or cw.startswith("\n")
+                or not any(c.isalnum() for c in cw)
+            ):
+                literal_tokens.append(cw)
+            else:
+                words.append(cw)
 
     # Only use newline prefixes to preserve sentence-ending punctuation
     # DO NOT use ". ", "? ", "! " - these eat the punctuation from previous sentence
@@ -390,6 +436,10 @@ def get_stop_tokens_sentence_start(
     # Add structure tokens
     if use_structure:
         all_tokens.update(STRUCTURE_TOKENS)
+
+    # Add literal tokens from custom_words (e.g., "\n", "\n\n")
+    if literal_tokens:
+        all_tokens.update(literal_tokens)
 
     # Always add answer tokens
     all_tokens.update(ANSWER_TOKENS)
