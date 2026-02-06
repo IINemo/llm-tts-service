@@ -170,18 +170,88 @@ class FLOPCalculator:
         self.model_name = model_name
         self.method = method
 
-        # Look up architecture in known models
-        self.arch = None
-        for known_name, known_arch in self.KNOWN_MODELS.items():
-            if known_name.lower() in model_name.lower():
-                self.arch = known_arch
-                log.info(f"Using known architecture for {known_name}")
-                break
+        # Look up architecture: exact match first, then substring fallback
+        self.arch = self.KNOWN_MODELS.get(model_name)
+        if self.arch is not None:
+            log.info(f"Using known architecture for {model_name}")
+        else:
+            for known_name, known_arch in self.KNOWN_MODELS.items():
+                if known_name.lower() in model_name.lower():
+                    self.arch = known_arch
+                    log.info(
+                        f"Using known architecture for {known_name} "
+                        f"(substring match for '{model_name}')"
+                    )
+                    break
+
+        # Auto-detect from HuggingFace config if not in KNOWN_MODELS
+        if self.arch is None:
+            self.arch = self._try_load_from_hf(model_name)
 
         if self.arch is None:
             raise ValueError(
-                f"Unknown model '{model_name}'. Add it to FLOPCalculator.KNOWN_MODELS."
+                f"Unknown model '{model_name}'. Add it to FLOPCalculator.KNOWN_MODELS "
+                f"or ensure it's available on HuggingFace."
             )
+
+    @staticmethod
+    def _try_load_from_hf(model_name: str) -> Optional[ModelArchitecture]:
+        """Try to auto-detect model architecture from HuggingFace config."""
+        try:
+            from transformers import AutoConfig
+
+            config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+
+            h = config.hidden_size
+            L = config.num_hidden_layers
+            V = config.vocab_size
+            n_heads = config.num_attention_heads
+            n_kv_heads = getattr(config, "num_key_value_heads", n_heads)
+            ffn = getattr(config, "intermediate_size", 4 * h)
+            head_dim = h // n_heads
+
+            # Attention: Q proj (h * h) + K proj (h * n_kv * head_dim)
+            #          + V proj (h * n_kv * head_dim) + O proj (h * h)
+            attn_params = h * h + 2 * h * n_kv_heads * head_dim + h * h
+
+            # FFN: SwiGLU has 3 matrices (gate, up, down), standard has 2
+            # Heuristic: if hidden_act contains "silu"/"swiglu"/"gelu" with
+            # intermediate_size != 4*h, likely gated (3 matrices)
+            hidden_act = getattr(config, "hidden_act", "")
+            if hidden_act in ("silu", "swiglu") or ffn != 4 * h:
+                ffn_params = 3 * h * ffn  # gate_proj + up_proj + down_proj
+            else:
+                ffn_params = 2 * h * ffn
+
+            # Layer norms: 2 per layer (pre-attn + pre-ffn), h params each
+            norm_params = 2 * h
+
+            # Per-layer total
+            per_layer = attn_params + ffn_params + norm_params
+
+            # Embeddings
+            tie = getattr(config, "tie_word_embeddings", False)
+            embed_params = V * h if tie else 2 * V * h
+
+            num_params = L * per_layer + embed_params
+
+            arch = ModelArchitecture(
+                num_parameters=int(num_params),
+                hidden_size=h,
+                num_hidden_layers=L,
+                num_attention_heads=n_heads,
+                intermediate_size=ffn,
+                vocab_size=V,
+            )
+            log.info(
+                f"Auto-detected architecture for '{model_name}' from HuggingFace: "
+                f"~{arch.num_parameters / 1e9:.1f}B params, "
+                f"h={h}, L={L}, n_kv_heads={n_kv_heads}"
+            )
+            return arch
+        except Exception as e:
+            log.warning(f"Could not auto-detect architecture for '{model_name}': {e}")
+            return None
 
     def compute_flops(
         self,
