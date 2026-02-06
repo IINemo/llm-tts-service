@@ -2005,7 +2005,8 @@ def main(config):
 
     hostname = socket.gethostname()
     ip_addr = socket.gethostbyname(hostname)
-    log.info(f"Host: {hostname} ({ip_addr})")
+    machine_name = os.environ.get("MACHINE_NAME", hostname)
+    log.info(f"Host: {machine_name} ({ip_addr})")
 
     cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
     log.info(f"Command: CUDA_VISIBLE_DEVICES={cuda_devices} {' '.join(sys.argv)}")
