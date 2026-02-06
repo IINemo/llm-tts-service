@@ -6,6 +6,6 @@ run_name: "${strategy.type}_${now:%H-%M-%S}"
 # Hydra output directory configuration
 hydra:
   run:
-    dir: outputs/${now:%Y-%m-%d}/${dataset.data_name}/${strategy.type}/${run_name}
+    dir: outputs/${now:%Y-%m-%d}/${dataset.data_name}/${strategy.type}/${output_name:${run_name},${strategy.type},${dataset.data_name}}
   job:
     chdir: false  # Don't change working directory

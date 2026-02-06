@@ -32,6 +32,55 @@ from lm_polygraph import WhiteboxModel
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 from tqdm import tqdm
+
+
+def _make_output_name(run_name: str, strategy_type: str, data_name: str) -> str:
+    """Strip strategy prefix and dataset name from run_name for shorter output dirs."""
+    name = run_name
+    # Strip known strategy prefixes (longest first to avoid partial matches)
+    for prefix in [
+        "adaptive_scaling_",
+        "self_consistency_",
+        "offline_bon_",
+        "online_bon_",
+        "beam_search_",
+        "uncert_cot_",
+        "deepconf_",
+        "baseline_",
+        "sc_",
+        "test_",
+        "run_",
+    ]:
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    # Strip dataset name (try exact data_name and common abbreviations)
+    variants = [data_name]
+    abbrevs = {
+        "aime2024": ["aime24", "aime_2024"],
+        "aime2025": ["aime25", "aime_2025"],
+        "gaokao2023en": ["gaokao2023en", "gaokao2023"],
+        "minerva_math": ["minerva"],
+        "gpqa_diamond": ["gpqadiamon"],
+    }
+    variants.extend(abbrevs.get(data_name, []))
+    for v in variants:
+        if f"_{v}_" in name:
+            name = name.replace(f"_{v}_", "_", 1)
+            break
+        elif name.endswith(f"_{v}"):
+            name = name[: -len(f"_{v}")]
+            break
+        elif name.startswith(f"{v}_"):
+            name = name[len(f"{v}_") :]
+            break
+    # Clean up double underscores and edge underscores
+    while "__" in name:
+        name = name.replace("__", "_")
+    return name.strip("_")
+
+
+OmegaConf.register_new_resolver("output_name", _make_output_name)
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # vLLM imports (optional, only if vLLM is installed)
