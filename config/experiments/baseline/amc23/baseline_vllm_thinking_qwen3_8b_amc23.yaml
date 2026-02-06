@@ -1,6 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/gpqa_diamond/baseline_vllm_qwen3_8b_thinking_gpqa_diamond
-# Baseline evaluation for Qwen3-8B (Thinking Mode) on GPQA-Diamond (graduate-level science multiple choice)
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/amc23/baseline_vllm_thinking_qwen3_8b_amc23
+# Baseline evaluation for Qwen3-8B (Thinking Mode) on AMC 2023
 
 defaults:
   - /config
@@ -12,12 +12,12 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "baseline_qwen3_8b_gpqa_diamond_${now:%H-%M-%S}"
+run_name: "baseline_qwen3_8b_thinking_amc23_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-gpqa-diamond
+wandb_project: llm-tts-eval-amc23
 
 # Model configuration (vLLM backend)
 model:
@@ -61,17 +61,17 @@ strategy:
   use_correction: false
   detector_answer_patterns: []
 
-# Dataset configuration - GPQA-Diamond (graduate-level science multiple choice)
+# Dataset configuration - AMC 2023 (40 problems)
 dataset:
-  data_name: "gpqa_diamond"
-  dataset_path: "test-time-compute/test_gpqa_diamond"
+  dataset_path: "test-time-compute/test_amc23"
   dataset_config: null
   dataset_split: "test"
-  subset: null
+  subset: 40
   offset: 0
   question_field: "question"
   answer_field: "answer"
-  answer_format: "char"
-  system_prompt: "Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
+  answer_format: "numeric"
+  data_name: "amc23"
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null

@@ -34,6 +34,18 @@ SCORED_STRATEGIES = {
 
 KNOWN_SCORERS = {"entropy", "perplexity", "sequence_prob", "prm", "pd"}
 
+# Canonical model keys (backend_mode_model format)
+KNOWN_MODEL_KEYS = {
+    "vllm_nothink_qwen25_7b",
+    "vllm_thinking_qwen3_8b",
+    "vllm_qwen3_8b",
+    "vllm_qwen25_math_7b_instruct",
+    "vllm_qwen25_math_15b_instruct",
+    "vllm_qwen25_math_7b",
+    "vllm_qwen25_7.5b",
+    "openai_gpt4o_mini",
+}
+
 KNOWN_DATASETS = {
     "amc23",
     "aime2024",
@@ -98,6 +110,48 @@ def test_filename_contains_dataset_dir_name():
     assert not violations, (
         "Config files where dataset directory name doesn't appear in filename "
         "(no abbreviations allowed):\n" + "\n".join(violations)
+    )
+
+
+def test_filename_uses_known_model_key():
+    """Verify that the model portion of the filename uses a canonical model key.
+
+    The model key is the part between the strategy prefix and the dataset name.
+    E.g. in 'beam_search_vllm_thinking_qwen3_8b_aime2024_entropy', the model
+    key is 'vllm_thinking_qwen3_8b'.
+    """
+    configs = _collect_configs()
+    violations = []
+    for strategy, config_path in sorted(configs, key=lambda x: x[1]):
+        stem = config_path.stem
+        dataset_dir = config_path.parent.name
+        prefix = STRATEGY_PREFIXES[strategy] + "_"
+
+        if not stem.startswith(prefix):
+            continue  # caught by other test
+
+        after_prefix = stem[len(prefix):]
+
+        # Find where dataset starts
+        idx = after_prefix.find(f"_{dataset_dir}")
+        if idx == -1:
+            idx = after_prefix.find(dataset_dir)
+            if idx == -1:
+                continue  # caught by other test
+            model_part = after_prefix[:idx].rstrip("_")
+        else:
+            model_part = after_prefix[:idx]
+
+        if model_part and model_part not in KNOWN_MODEL_KEYS:
+            rel = config_path.relative_to(CONFIGS_DIR.parent.parent)
+            violations.append(
+                f"  {rel}: model key '{model_part}' not in KNOWN_MODEL_KEYS"
+            )
+
+    assert not violations, (
+        "Config files with unrecognized model key "
+        "(update KNOWN_MODEL_KEYS if adding a new model):\n"
+        + "\n".join(violations)
     )
 
 

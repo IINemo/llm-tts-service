@@ -43,7 +43,7 @@ Optional:
   --scorers <list>       Scorers: all, prm, entropy, perplexity, sequence_prob
   --seed <n>             Starting seed (default: 42)
   --seeds <n>            Number of seeds to run (default: 1; queues seed, seed+1, ...)
-  --gpu <id>             GPU id(s) to use (default: 0; use "0,1" for multi-gpu)
+  --gpu <id>             GPU id(s) to use (default: auto via tsp; use "0,1" for multi-gpu)
   --timeout <seconds>    Timeout in seconds (default: auto based on strategy)
   --label <name>         Custom label for tsp job
   --dry-run              Show commands without submitting
@@ -137,7 +137,7 @@ SCORER_CONFIGS[prm]="prm"
 
 declare -A MODEL_CONFIGS
 MODEL_CONFIGS[qwen25_7b]="vllm_nothink_qwen25_7b"
-MODEL_CONFIGS[qwen3_8b_thinking]="vllm_qwen3_8b_thinking"
+MODEL_CONFIGS[qwen3_8b_thinking]="vllm_thinking_qwen3_8b"
 MODEL_CONFIGS[qwen3_8b]="vllm_qwen3_8b"
 MODEL_CONFIGS[qwen25_math_7b]="vllm_qwen25_math_7b_instruct"
 MODEL_CONFIGS[qwen25_math_15b]="vllm_qwen25_math_15b_instruct"
@@ -272,7 +272,9 @@ else
 fi
 # Tell tsp which GPUs are available and allow parallel jobs
 export TS_VISIBLE_DEVICES="$AVAILABLE_GPUS"
-tsp -S "$NUM_GPUS" 2>/dev/null
+if [[ "$DRY_RUN" != "yes" ]]; then
+    tsp -S "$NUM_GPUS" 2>/dev/null
+fi
 
 echo "============================================"
 echo "Local Experiment Submission (Task Spooler)"

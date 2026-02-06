@@ -1,5 +1,5 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/aime2024/baseline_vllm_qwen3_8b_thinking_aime2024
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/aime2024/baseline_vllm_thinking_qwen3_8b_aime2024
 # Baseline evaluation for Qwen3-8B (Thinking Mode) on AIME 2024
 
 defaults:
