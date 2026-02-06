@@ -22,8 +22,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np
-
 from .step_scorer_base import CandidateScore, StepScorerBase
 
 log = logging.getLogger(__name__)
@@ -215,22 +213,38 @@ class StepScorerSelfVerification(StepScorerBase):
 
         From ToT paper: "V(pθ, S)(s) ∼ p_value_θ(v|s)"
         Prompts LLM to classify each state as sure/likely/unlikely/impossible.
+
+        Note: Uses SUM aggregation as in original ToT paper (not mean).
+        Duplicate candidates in the same batch get score 0 to avoid redundancy.
         """
         results = []
+        # Track duplicates within this batch (as in original ToT implementation)
+        local_seen_texts: Dict[str, bool] = {}
 
         for cand_idx, candidate in enumerate(candidates):
             step_text = self._get_step_text(candidate)
 
-            # Check cache
-            cache_key = f"{problem}|||{trajectory_text}|||{step_text}"
-            if cache_key in self.cache:
-                score = self.cache[cache_key]
-                log.debug(f"Cache hit for candidate {cand_idx}: score={score:.3f}")
+            # Handle duplicates within same batch (return 0 as in original ToT)
+            if step_text in local_seen_texts:
+                score = 0.0
+                log.debug(
+                    f"Duplicate candidate {cand_idx}: score=0 (duplicate in batch)"
+                )
             else:
-                # Evaluate step
-                score = self._evaluate_single_step(problem, trajectory_text, step_text)
-                self.cache[cache_key] = score
-                self.total_evaluations += 1
+                local_seen_texts[step_text] = True
+
+                # Check global cache
+                cache_key = f"{problem}|||{trajectory_text}|||{step_text}"
+                if cache_key in self.cache:
+                    score = self.cache[cache_key]
+                    log.debug(f"Cache hit for candidate {cand_idx}: score={score:.3f}")
+                else:
+                    # Evaluate step
+                    score = self._evaluate_single_step(
+                        problem, trajectory_text, step_text
+                    )
+                    self.cache[cache_key] = score
+                    self.total_evaluations += 1
 
             results.append(
                 CandidateScore(
@@ -311,7 +325,13 @@ class StepScorerSelfVerification(StepScorerBase):
         """
         Evaluate a single step using value method.
 
-        Calls the LLM n_evaluate_sample times and aggregates scores.
+        Calls the LLM n_evaluate_sample times and aggregates scores using SUM.
+
+        From original ToT paper (game24.py:86-92):
+            value = sum(value * value_names.count(name) for name, value in value_map.items())
+
+        This means with n_evaluate_sample=3 and all "sure" responses:
+            score = 20 + 20 + 20 = 60 (not 20 as with mean)
         """
         # Build prompt
         prompt = self.value_prompt.format(
@@ -332,10 +352,10 @@ class StepScorerSelfVerification(StepScorerBase):
                 )
             except Exception as e:
                 log.warning(f"Evaluation {i+1} failed: {e}")
-                scores.append(1.0)
+                scores.append(1.0)  # Default to "likely" on failure
 
-        # Aggregate scores (mean as in paper)
-        return float(np.mean(scores)) if scores else 1.0
+        # Aggregate scores using SUM (as in original ToT paper, not mean)
+        return float(sum(scores)) if scores else float(self.n_evaluate_sample)
 
     def _run_voting(
         self,
