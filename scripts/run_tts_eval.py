@@ -2001,6 +2001,12 @@ def main(config):
     """Main evaluation function"""
     stderr_file = None  # Initialize for cleanup
 
+    import socket
+
+    hostname = socket.gethostname()
+    ip_addr = socket.gethostbyname(hostname)
+    log.info(f"Host: {hostname} ({ip_addr})")
+
     cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
     log.info(f"Command: CUDA_VISIBLE_DEVICES={cuda_devices} {' '.join(sys.argv)}")
     config_dir = [
