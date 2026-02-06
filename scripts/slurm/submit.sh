@@ -352,6 +352,7 @@ else
     echo \"qwen-eval environment found\"
 fi
 
+SEED=${seed}
 python scripts/run_tts_eval.py \\
     --config-path=../config \\
     --config-name=${config_name} \\
