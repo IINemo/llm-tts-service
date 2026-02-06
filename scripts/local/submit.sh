@@ -165,14 +165,23 @@ get_config_name() {
     fi
 }
 
-get_gpu_ids() {
+detect_gpus() {
+    # Returns comma-separated list of GPU ids (e.g. "0,1,2")
+    nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | tr '\n' ',' | sed 's/,$//'
+}
+
+AVAILABLE_GPUS=""
+NUM_GPUS=1
+
+get_num_gpus_for_job() {
     local scorer=$1
     if [[ -n "$GPU" ]]; then
-        echo "$GPU"
+        # Count commas + 1
+        echo $(( $(echo "$GPU" | tr -cd ',' | wc -c) + 1 ))
     elif [[ "$scorer" == "prm" ]]; then
-        echo "0,1"
+        echo "2"
     else
-        echo "0"
+        echo "1"
     fi
 }
 
@@ -203,50 +212,67 @@ get_job_label() {
 
 submit_tsp_job() {
     local config_name=$1
-    local gpu_ids=$2
+    local num_gpus=$2
     local timeout=$3
     local label=$4
     local seed=$5
 
-    local run_cmd="CUDA_VISIBLE_DEVICES=${gpu_ids} python scripts/run_tts_eval.py --config-path=../config --config-name=${config_name} system.seed=${seed}"
-
     if [[ "$DRY_RUN" == "yes" ]]; then
         echo "  Config:  $config_name"
         echo "  Seed:    $seed"
-        echo "  GPU:     $gpu_ids"
+        echo "  GPUs:    $num_gpus"
         echo "  Timeout: ${timeout}s"
         echo "  Label:   $label"
-        echo "  Command: cd ${PROJECT_DIR} && ${run_cmd}"
+        echo "  Command: python scripts/run_tts_eval.py --config-path=../config --config-name=${config_name} system.seed=${seed}"
         echo ""
     else
         local wrapper="/tmp/tsp_${label}_${seed}.sh"
+        # TS_VISIBLE_DEVICES is set by tsp at runtime with the assigned GPU ids
         cat > "$wrapper" << WRAPPER_EOF
 #!/bin/bash
 eval "\$(grep '^export ' ~/.bashrc 2>/dev/null)"
+export CUDA_VISIBLE_DEVICES=\${CUDA_VISIBLE_DEVICES:-\$TS_VISIBLE_DEVICES}
 cd "${PROJECT_DIR}" || exit 1
 
 echo "============================================"
 echo "Label: ${label}"
 echo "Seed: ${seed}"
 echo "Host: \$(hostname)"
-echo "GPUs: ${gpu_ids}"
+echo "GPUs: \$CUDA_VISIBLE_DEVICES"
 echo "Start: \$(date)"
 echo "============================================"
 
-${run_cmd}
+python scripts/run_tts_eval.py --config-path=../config --config-name=${config_name} system.seed=${seed}
 
 echo "============================================"
 echo "End: \$(date)"
 echo "============================================"
 WRAPPER_EOF
         chmod +x "$wrapper"
+        local tsp_args="-L $label -G $num_gpus"
+        if [[ -n "$GPU" ]]; then
+            tsp_args="-L $label -g $GPU"
+        fi
         local job_id
-        job_id=$(tsp -L "$label" timeout ${timeout} bash ${wrapper})
-        echo "Queued job $job_id: $label (seed=$seed, GPU=$gpu_ids, timeout=${timeout}s)"
+        job_id=$(tsp $tsp_args timeout ${timeout} bash ${wrapper})
+        echo "Queued job $job_id: $label (seed=$seed, gpus=$num_gpus, timeout=${timeout}s)"
     fi
 }
 
 # --- Main ---
+
+# Detect GPUs and configure tsp
+AVAILABLE_GPUS=$(detect_gpus)
+if [[ -z "$AVAILABLE_GPUS" ]]; then
+    AVAILABLE_GPUS="0"
+    NUM_GPUS=1
+else
+    IFS=',' read -ra _gpu_arr <<< "$AVAILABLE_GPUS"
+    NUM_GPUS=${#_gpu_arr[@]}
+fi
+# Tell tsp which GPUs are available and allow parallel jobs
+export TS_VISIBLE_DEVICES="$AVAILABLE_GPUS"
+tsp -S "$NUM_GPUS" 2>/dev/null
 
 echo "============================================"
 echo "Local Experiment Submission (Task Spooler)"
@@ -254,6 +280,7 @@ echo "============================================"
 echo "Strategy: $STRATEGY"
 echo "Dataset:  $DATASET"
 echo "Model:    $MODEL"
+echo "GPUs:     $AVAILABLE_GPUS ($NUM_GPUS available)"
 if [[ "$SEEDS" -gt 1 ]]; then
     echo "Seeds:    $SEED..$((SEED + SEEDS - 1)) ($SEEDS runs)"
 else
@@ -291,22 +318,22 @@ for scorer in "${scorer_list[@]}"; do
         config_name=$(get_config_name "$STRATEGY" "$DATASET" "$scorer" "$MODEL")
     fi
 
-    gpu_ids=$(get_gpu_ids "$scorer")
     timeout=$(get_timeout)
     base_label=$(get_job_label "$STRATEGY" "$DATASET" "$scorer")
 
     for ((s=0; s<SEEDS; s++)); do
         seed_val=$((SEED + s))
+        num_gpus=$(get_num_gpus_for_job "$scorer")
         if [[ "$SEEDS" -gt 1 ]]; then
             label="${base_label}_s${seed_val}"
         else
             label="$base_label"
         fi
-        submit_tsp_job "$config_name" "$gpu_ids" "$timeout" "$label" "$seed_val"
+        submit_tsp_job "$config_name" "$num_gpus" "$timeout" "$label" "$seed_val"
     done
 done
 
 if [[ "$DRY_RUN" != "yes" ]]; then
     echo ""
-    echo "Run 'tsp' to view queue status."
+    echo "Parallel slots: $NUM_GPUS (one per GPU). Run 'tsp' to view queue status."
 fi
