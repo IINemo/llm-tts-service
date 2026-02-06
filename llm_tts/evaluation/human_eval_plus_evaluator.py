@@ -12,7 +12,6 @@ import logging
 import re
 import subprocess
 import tempfile
-import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,16 +37,6 @@ class EvaluatorHumanEvalPlus:
             mode: Evaluation mode. Only "full" is supported. Other modes are deprecated.
             timeout: Timeout per test case in seconds
         """
-        # Handle deprecated modes
-        if mode in ("test", "syntax"):
-            warnings.warn(
-                f"Mode '{mode}' is deprecated and will be removed in a future version. "
-                f"Using 'full' mode instead (EvalPlus evaluation).",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            mode = "full"
-
         if mode != "full":
             raise ValueError(
                 f"Unknown mode: {mode}. Only 'full' mode is supported. "
@@ -56,7 +45,7 @@ class EvaluatorHumanEvalPlus:
 
         self.mode = mode
         self.timeout = timeout
-        log.info(f"HumanEval+ Evaluator initialized with mode='{mode}' (EvalPlus)")
+        log.info(f"HumanEval+ Evaluator initialized with mode='{mode}'")
 
     def __call__(
         self,

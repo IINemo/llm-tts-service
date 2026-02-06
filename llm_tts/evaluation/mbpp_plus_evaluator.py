@@ -12,7 +12,6 @@ import logging
 import re
 import subprocess
 import tempfile
-import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,16 +37,6 @@ class EvaluatorMBPPPlus:
             mode: Evaluation mode. Only "full" is supported. Other modes are deprecated.
             timeout: Timeout per test case in seconds
         """
-        # Handle deprecated modes
-        if mode in ("test", "syntax"):
-            warnings.warn(
-                f"Mode '{mode}' is deprecated and will be removed in a future version. "
-                f"Using 'full' mode instead (EvalPlus evaluation).",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            mode = "full"
-
         if mode != "full":
             raise ValueError(
                 f"Unknown mode: {mode}. Only 'full' mode is supported. "
@@ -56,7 +45,7 @@ class EvaluatorMBPPPlus:
 
         self.mode = mode
         self.timeout = timeout
-        log.info(f"MBPP+ Evaluator initialized with mode='{mode}' (EvalPlus)")
+        log.info(f"MBPP+ Evaluator initialized with mode='{mode}'")
 
     def __call__(
         self,
@@ -82,98 +71,6 @@ class EvaluatorMBPPPlus:
         if task_ids is None:
             raise ValueError("EvalPlus evaluation requires task_ids parameter.")
         return self._evaluate_full(solutions, task_ids)
-
-    # def _evaluate_full(
-    #     self,
-    #     solutions: List[str],
-    #     task_ids: List[str],
-    # ) -> List[float]:
-    #     """
-    #     Full evaluation using EvalPlus.
-
-    #     Creates a samples file and runs evalplus.evaluate command.
-    #     """
-    #     with tempfile.TemporaryDirectory() as tmpdir:
-    #         samples_path = Path(tmpdir) / "samples.jsonl"
-
-    #         # Create samples file in EvalPlus format
-    #         samples = []
-    #         evaluated_task_ids = set()
-
-    #         for task_id, solution in zip(task_ids, solutions):
-    #             code = self._extract_code(solution)
-    #             # Ensure task_id format is "Mbpp/X"
-    #             task_id_str = self._normalize_task_id(task_id)
-    #             samples.append({"task_id": task_id_str, "solution": code})
-    #             evaluated_task_ids.add(task_id_str)
-
-    #         # EvalPlus requires all problems to be in the samples file
-    #         # Add dummy entries for problems not being evaluated
-    #         try:
-    #             from evalplus.data import get_mbpp_plus
-
-    #             all_problems = get_mbpp_plus()
-
-    #             for full_task_id in all_problems.keys():
-    #                 if full_task_id not in evaluated_task_ids:
-    #                     # Add dummy entry with empty solution
-    #                     samples.append({"task_id": full_task_id, "solution": ""})
-
-    #             log.info(
-    #                 f"Created samples file with {len(evaluated_task_ids)} evaluated "
-    #                 f"+ {len(samples) - len(evaluated_task_ids)} dummy entries "
-    #                 f"= {len(samples)} total"
-    #             )
-    #         except ImportError:
-    #             log.warning(
-    #                 "Could not import evalplus.data.get_mbpp_plus, "
-    #                 "proceeding with partial samples (may fail)"
-    #             )
-
-    #         with open(samples_path, "w") as f:
-    #             for sample in samples:
-    #                 f.write(json.dumps(sample) + "\n")
-
-    #         log.info(f"Running EvalPlus on {len(samples)} samples...")
-    #         log.info(f"Samples file: {samples_path}")
-
-    #         # Run evalplus evaluation
-    #         try:
-    #             cmd = [
-    #                 "evalplus.evaluate",
-    #                 "--dataset",
-    #                 "mbpp",
-    #                 "--samples",
-    #                 str(samples_path),
-    #                 "--i-just-wanna-run",
-    #             ]
-
-    #             result = subprocess.run(
-    #                 cmd,
-    #                 capture_output=True,
-    #                 text=True,
-    #                 timeout=self.timeout * len(solutions) + 300,
-    #             )
-
-    #             log.info(f"EvalPlus stdout:\n{result.stdout}")
-    #             if result.stderr:
-    #                 log.warning(f"EvalPlus stderr:\n{result.stderr}")
-
-    #             if result.returncode != 0:
-    #                 log.error(f"EvalPlus failed with return code {result.returncode}")
-    #                 return [0.0] * len(solutions)
-
-    #             # Parse results from EvalPlus output
-    #             return self._parse_evalplus_output(result.stdout, task_ids, tmpdir)
-
-    #         except subprocess.TimeoutExpired:
-    #             log.error("EvalPlus evaluation timed out")
-    #             return [0.0] * len(solutions)
-    #         except FileNotFoundError:
-    #             log.error(
-    #                 "evalplus command not found. Install with: pip install evalplus"
-    #             )
-    #             return [0.0] * len(solutions)
 
     def _evaluate_full(
         self,
