@@ -9,3 +9,4 @@ prompt_file: ./config/prompts/default.txt  # Path to prompt template file (optio
 question_field: "question"  # Field containing the question/problem
 answer_field: "answer"  # Field containing the gold answer
 answer_format: "numeric"
+data_name: "default"

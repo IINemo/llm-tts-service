@@ -1956,16 +1956,40 @@ def evaluate_results(
         log.warning(f"Failed to save metrics to {metrics_path}: {e}")
 
     # Log key metrics to wandb if enabled
+    wandb_url = None
     try:
         import wandb
 
         if wandb.run is not None:
             wandb.log(metrics)
             log.info("Logged metrics to wandb")
+            wandb_url = wandb.run.get_url()
     except ImportError:
         pass  # wandb not installed
     except Exception as e:
         log.warning(f"Failed to log metrics to wandb: {e}")
+
+    # Print tab-separated summary for spreadsheet copy-paste
+    # Format: wandb_url \t exact_match \t llm_judge \t total_tflops
+    em_acc = None
+    llm_judge_acc = None
+    for name in all_evaluator_names:
+        acc = metrics.get(f"{name}/accuracy")
+        if name == "exact_match":
+            em_acc = acc
+        elif name.startswith("llm_judge_"):
+            llm_judge_acc = acc
+
+    spreadsheet_parts = [
+        wandb_url or "",
+        f"{em_acc:.3f}" if em_acc is not None else "",
+        f"{llm_judge_acc:.3f}" if llm_judge_acc is not None else "",
+        f"{total_tflops:.0f}",
+    ]
+    log.info("=" * 60)
+    log.info("SPREADSHEET (wandb_url | exact_match | llm_judge | tflops):")
+    log.info("\t".join(spreadsheet_parts))
+    log.info("=" * 60)
 
 
 @hydra.main(
@@ -1976,6 +2000,13 @@ def evaluate_results(
 def main(config):
     """Main evaluation function"""
     stderr_file = None  # Initialize for cleanup
+
+    import socket
+
+    hostname = socket.gethostname()
+    ip_addr = socket.gethostbyname(hostname)
+    machine_name = os.environ.get("MACHINE_NAME", hostname)
+    log.info(f"Host: {machine_name} ({ip_addr})")
 
     cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
     log.info(f"Command: CUDA_VISIBLE_DEVICES={cuda_devices} {' '.join(sys.argv)}")
