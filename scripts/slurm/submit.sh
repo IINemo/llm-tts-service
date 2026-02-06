@@ -162,7 +162,7 @@ SCORER_CONFIGS[prm]="prm"
 
 declare -A MODEL_CONFIGS
 MODEL_CONFIGS[qwen25_7b]="vllm_nothink_qwen25_7b"
-MODEL_CONFIGS[qwen3_8b_thinking]="vllm_qwen3_8b_thinking"
+MODEL_CONFIGS[qwen3_8b_thinking]="vllm_thinking_qwen3_8b"
 MODEL_CONFIGS[qwen3_8b]="vllm_qwen3_8b"
 MODEL_CONFIGS[qwen25_math_7b]="vllm_qwen25_math_7b_instruct"
 MODEL_CONFIGS[qwen25_math_15b]="vllm_qwen25_math_15b_instruct"
