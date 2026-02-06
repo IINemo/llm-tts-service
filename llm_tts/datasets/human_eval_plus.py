@@ -114,7 +114,16 @@ def extract_code_from_response(response: str) -> str:
 
     if code_blocks:
         # Return the last code block (usually the final solution)
-        return code_blocks[-1].strip()
+        code = code_blocks[-1].strip()
+        # Handle malformed code blocks where "python" appears on its own line
+        # Some models output "```\npython\n..." instead of "```python\n..."
+        if code.startswith("python\n"):
+            code = code[7:]  # Remove "python\n"
+        elif code.startswith("python3\n"):
+            code = code[8:]  # Remove "python3\n"
+        elif code.startswith("Python\n"):
+            code = code[7:]  # Remove "Python\n"
+        return code.strip()
 
     # Try to find function definition
     # Look for def ... up to the next blank line or end

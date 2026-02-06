@@ -236,10 +236,20 @@ class EvaluatorMBPPPlus:
             return ""
 
         # Try to extract from code blocks
+        # Pattern handles both ```python and ``` followed by python on next line
         code_block_pattern = r"```(?:python)?\s*\n(.*?)```"
         code_blocks = re.findall(code_block_pattern, solution, re.DOTALL)
         if code_blocks:
-            return code_blocks[-1].strip()
+            code = code_blocks[-1].strip()
+            # Handle malformed code blocks where "python" appears on its own line
+            # Some models output "```\npython\n..." instead of "```python\n..."
+            if code.startswith("python\n"):
+                code = code[7:]  # Remove "python\n"
+            elif code.startswith("python3\n"):
+                code = code[8:]  # Remove "python3\n"
+            elif code.startswith("Python\n"):
+                code = code[7:]  # Remove "Python\n"
+            return code.strip()
 
         # Try to find function definition
         func_pattern = r"(def \w+\s*\([^)]*\):.*?)(?:\n\n|\Z)"
