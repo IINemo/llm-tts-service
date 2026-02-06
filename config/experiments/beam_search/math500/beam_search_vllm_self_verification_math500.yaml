@@ -43,19 +43,19 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 2048
+  max_new_tokens: 4096
   temperature: 0.7
   top_p: 0.8
   top_k: 20
   batch_size: 1
-  max_length: 4096
+  max_length: 8192
 
 # Strategy - Beam Search
 strategy:
   type: beam_search
   beam_size: 5
-  candidates_per_beam: 5
-  max_steps: 20
+  candidates_per_beam: 8
+  max_steps: 30
   aggregation: mean
   batch_generation: true
   prompt_buffer: 500
@@ -71,6 +71,14 @@ strategy:
   use_structure: false
   use_reasoning: true
   use_correction: false
+  # Custom words for stop tokens
+  custom_words:
+    - "for example"
+    - "given that"
+    - "similarly"
+    - "step"
+    - "therefore"
+    - "thus"
 
 # Self-Verification Scorer (Tree of Thoughts)
 # Note: For vLLM, the same model is used for both generation and evaluation

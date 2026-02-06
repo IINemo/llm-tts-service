@@ -22,6 +22,15 @@ from llm_tts.generators import (
 from llm_tts.generators.base import StepCandidate
 from llm_tts.utils.answer_extraction import extract_answer
 
+# Self-verification scorer (optional import)
+try:
+    from llm_tts.scorers.step_scorer_self_verification import StepScorerSelfVerification
+
+    SELF_VERIFICATION_AVAILABLE = True
+except ImportError:
+    SELF_VERIFICATION_AVAILABLE = False
+    StepScorerSelfVerification = None
+
 from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
@@ -263,6 +272,12 @@ class StrategyBeamSearch(StrategyBase):
         )
         log.info(f"Using PRM scorer: {use_prm_scorer}")
 
+        # Check if scorer is a Self-Verification scorer (Tree of Thoughts style)
+        use_self_verification_scorer = SELF_VERIFICATION_AVAILABLE and isinstance(
+            self.scorer, StepScorerSelfVerification
+        )
+        log.info(f"Using Self-Verification scorer: {use_self_verification_scorer}")
+
         # Reset per-sample token tracking in generator
         self.step_generator.reset_per_sample_stats()
         if hasattr(self.scorer, "reset_prm_stats"):
@@ -419,6 +434,12 @@ class StrategyBeamSearch(StrategyBase):
                         requests, all_candidates_data, prompt_metadata
                     )
 
+                # 6) Self-Verification scoring (optional, Tree of Thoughts style)
+                if use_self_verification_scorer:
+                    all_candidates_data = self._batch_score_with_self_verification(
+                        requests, all_candidates_data, prompt_metadata
+                    )
+
             # 7) Update beams for each sample
             new_sample_beams = {i: [] for i in active_samples}
 
@@ -437,7 +458,11 @@ class StrategyBeamSearch(StrategyBase):
                         },
                     )
 
-                    score = cand_data.get("prm_score", cand_data["validity"])
+                    # Priority: PRM score > Self-verification score > Validity score
+                    score = cand_data.get(
+                        "prm_score",
+                        cand_data.get("self_verification_score", cand_data["validity"]),
+                    )
 
                     new_tokens = len(cand_data["token_ids"])
                     new_total_tokens = parent_beam.get("total_tokens", 0) + new_tokens
@@ -700,6 +725,85 @@ class StrategyBeamSearch(StrategyBase):
         # Map scores back to candidates
         for (prompt_idx, cand_idx), score in zip(candidate_map, scores):
             all_candidates_data[prompt_idx][cand_idx]["prm_score"] = score
+
+        return all_candidates_data
+
+    def _batch_score_with_self_verification(
+        self,
+        requests: List[List[Dict[str, str]]],
+        all_candidates_data: List[List[Dict]],
+        prompt_metadata: List[tuple],
+    ) -> List[List[Dict]]:
+        """
+        Batch score all candidates using Self-Verification scorer (Tree of Thoughts).
+
+        Groups candidates by (sample_id, beam) and calls the scorer's
+        score_candidates_detailed method for each group.
+
+        Args:
+            requests: Original requests for each sample
+            all_candidates_data: List of candidate lists (one per prompt)
+            prompt_metadata: List of (sample_id, beam_idx, parent_beam) tuples
+
+        Returns:
+            all_candidates_data with 'self_verification_score' added to each candidate
+        """
+        total_candidates = sum(len(cands) for cands in all_candidates_data)
+        log.info(f"Batch Self-Verification scoring {total_candidates} candidates")
+
+        # Process each (sample, beam) group
+        for prompt_idx, candidates in enumerate(all_candidates_data):
+            if not candidates:
+                continue
+
+            sample_id, beam_idx, parent_beam = prompt_metadata[prompt_idx]
+            request = requests[sample_id]
+            trajectory = parent_beam["steps"]
+
+            # Create StepCandidate objects for scoring
+            step_candidates = []
+            for cand_data in candidates:
+                step_candidate = StepCandidate(
+                    text=cand_data["text"],
+                    token_ids=cand_data.get("token_ids", []),
+                    is_complete=True,
+                    is_trajectory_complete=cand_data.get("is_complete", False),
+                )
+                step_candidates.append(step_candidate)
+
+            # Call self-verification scorer
+            try:
+                scored_results = self.scorer.score_candidates_detailed(
+                    chat=request,
+                    candidates=step_candidates,
+                    trajectory=trajectory,
+                )
+
+                # Extract scores and update candidate data
+                for cand_idx, (cand_data, score_result) in enumerate(
+                    zip(candidates, scored_results)
+                ):
+                    # Get the aggregate score (value method returns 'value', vote returns 'votes')
+                    if hasattr(score_result, "aggregate_scores"):
+                        agg_scores = score_result.aggregate_scores
+                        score = agg_scores.get("value", agg_scores.get("votes", 1.0))
+                    else:
+                        score = 1.0
+
+                    cand_data["self_verification_score"] = score
+
+                    log.debug(
+                        f"Sample {sample_id}, beam {beam_idx}, cand {cand_idx}: "
+                        f"self_verification_score={score:.3f}"
+                    )
+
+            except Exception as e:
+                log.warning(
+                    f"Self-verification scoring failed for sample {sample_id}, "
+                    f"beam {beam_idx}: {e}. Using default score 1.0"
+                )
+                for cand_data in candidates:
+                    cand_data["self_verification_score"] = 1.0
 
         return all_candidates_data
 

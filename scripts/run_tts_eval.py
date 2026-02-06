@@ -341,12 +341,17 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            # Self-consistency and baseline don't need uncertainty wrapper
-            # (self-consistency uses majority voting, baseline uses raw vLLM batch generation)
-            if config.strategy.type in ("self_consistency", "baseline"):
+            # Self-consistency, baseline, and self_verification don't need uncertainty wrapper
+            # (self-consistency uses majority voting, baseline uses raw vLLM batch generation,
+            # self_verification uses the LLM directly for evaluation)
+            scorer_type = config.scorer.type if config.scorer else "entropy"
+            if (
+                config.strategy.type in ("self_consistency", "baseline")
+                or scorer_type == "self_verification"
+            ):
                 vllm_model = llm
                 log.info(
-                    f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
+                    f"Strategy={config.strategy.type}, scorer={scorer_type}: using raw vLLM (no uncertainty wrapper)"
                 )
             else:
                 if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
@@ -356,7 +361,6 @@ def create_model(config):
                     )
 
                 # Select estimator based on scorer config
-                scorer_type = config.scorer.type if config.scorer else "entropy"
                 if scorer_type == "perplexity":
                     stat_calculators = [VLLMLogprobsCalculator()]
                     estimator = Perplexity()
@@ -593,10 +597,14 @@ def create_tts_strategy(
         if isinstance(model, BlackboxModelWithStreaming):
             scorer.set_model(model, use_vllm=False)
             log.info("Self-verification scorer: using API backend")
-        # For vLLM models, use the underlying vLLM engine
+        # For vLLM models wrapped with VLLMWithUncertainty
         elif hasattr(model, "vllm_engine"):
             scorer.set_model(model.vllm_engine, use_vllm=True)
-            log.info("Self-verification scorer: using vLLM backend")
+            log.info("Self-verification scorer: using vLLM backend (wrapped)")
+        # For raw vLLM LLM instance (when uncertainty wrapper is skipped)
+        elif VLLM_AVAILABLE and isinstance(model, LLM):
+            scorer.set_model(model, use_vllm=True)
+            log.info("Self-verification scorer: using vLLM backend (raw)")
         else:
             log.warning(
                 "Self-verification scorer: unknown model type, may not work correctly"
