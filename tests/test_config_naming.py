@@ -36,10 +36,9 @@ KNOWN_SCORERS = {"entropy", "perplexity", "sequence_prob", "prm", "pd"}
 
 # Canonical model keys (backend_mode_model format)
 KNOWN_MODEL_KEYS = {
-    "vllm_nothink_qwen25_7b",
+    "vllm_qwen25_math_7b_instruct",
     "vllm_thinking_qwen3_8b",
     "vllm_qwen3_8b",
-    "vllm_qwen25_math_7b_instruct",
     "vllm_qwen25_math_15b_instruct",
     "vllm_qwen25_math_7b",
     "vllm_qwen25_7.5b",
