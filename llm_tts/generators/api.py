@@ -1059,56 +1059,60 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             beam_ids=beam_ids,
         )
 
-    def generate_answer_candidates(
+    def generate_answer_candidates_batch(
         self,
-        request: List[Dict[str, str]],
-        trajectory: List[StepCandidate],
+        requests: List[List[Dict[str, str]]],
+        trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
-    ) -> List[StepCandidate]:
-        """Generate N final answer candidates.
+    ) -> List[List[StepCandidate]]:
+        """Generate answer candidates for multiple trajectories in one call."""
+        if len(requests) != len(trajectories):
+            raise ValueError(
+                f"requests and trajectories must have same length, "
+                f"got {len(requests)} and {len(trajectories)}"
+            )
 
-        Uses response_stop_tokens to stop at answer boundaries.
-        All returned candidates are marked as trajectory complete.
-        """
-        trajectory = trajectory or []
+        if not requests:
+            return []
 
-        # For thinking mode, ensure </think> is present
+        # Pre-process: close </think> if needed
         model_supports_thinking = self.disable_thinking_mode is False
-        if self.thinking_mode and model_supports_thinking:
-            full_trajectory = convert_trajectory_to_string(trajectory)
-            if "</think>" not in full_trajectory:
-                log.warning(
-                    "generate_answer_candidates called without </think>. Adding it."
-                )
-                close_thinking_step = StepCandidate(
-                    text="\n</think>\n\n<start of response>\nReasoning Steps:\n",
-                    token_ids=[],
-                    is_complete=True,
-                    is_trajectory_complete=True,
-                )
-                trajectory = trajectory + [close_thinking_step]
+        processed_trajectories = []
+        for trajectory in trajectories:
+            trajectory = trajectory or []
+            if self.thinking_mode and model_supports_thinking:
+                full_trajectory = convert_trajectory_to_string(trajectory)
+                if "</think>" not in full_trajectory:
+                    log.warning(
+                        "generate_answer_candidates_batch: trajectory missing "
+                        "</think>. Adding closing step."
+                    )
+                    close_thinking_step = StepCandidate(
+                        text="\n</think>\n\n<start of response>\nReasoning Steps:\n",
+                        token_ids=[],
+                        is_complete=True,
+                        is_trajectory_complete=True,
+                    )
+                    trajectory = trajectory + [close_thinking_step]
+            processed_trajectories.append(trajectory)
 
-        # Generate with answer stop tokens
-        # In thinking mode, use max_new_tokens (answer after </think> can be long)
-        # In non-thinking mode, use max_answer_tokens (shorter direct answer)
         answer_max_tokens = (
             self.max_new_tokens if self.thinking_mode else self.max_answer_tokens
         )
-        result = self._generate_step_candidates_impl(
-            requests=[request],
-            trajectories=[trajectory],
+        results = self._generate_step_candidates_impl(
+            requests=requests,
+            trajectories=processed_trajectories,
             candidates_per_step=candidates_per_step,
             stop_tokens_override=self.response_stop_tokens,
             max_tokens_override=answer_max_tokens,
         )
 
-        candidates = result[0] if result else []
-
         # Mark all as trajectory complete
-        for c in candidates:
-            c.is_trajectory_complete = True
+        for candidates in results:
+            for c in candidates:
+                c.is_trajectory_complete = True
 
-        return candidates
+        return results
 
     def count_context_tokens(
         self,

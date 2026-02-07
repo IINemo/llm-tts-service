@@ -836,95 +836,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         return result
 
-    def _generate_answer_candidates_impl(
-        self,
-        request: List[Dict[str, str]],
-        trajectory: List[StepCandidate],
-        candidates_per_step: int = 1,
-    ) -> List[StepCandidate]:
-        """Unified answer candidate generation for both thinking and non-thinking modes.
-
-        Generates N final answer candidates after reasoning is complete.
-        Uses self.thinking_mode to branch on mode-specific behavior.
-
-        Args:
-            request: Chat messages
-            trajectory: Current trajectory (reasoning steps so far)
-            candidates_per_step: Number of answer candidates to generate
-
-        Returns:
-            List of answer candidates
-        """
-        trajectory = trajectory or []
-        candidates = []
-
-        # Build prompt and sampling params (mode-specific)
-        if self.thinking_mode:
-            prompt = self._build_prompt(request, trajectory)
-            sampling_params = self._create_sampling_params(
-                stop_tokens=self.response_stop_tokens,
-                n=candidates_per_step,
-                max_tokens=self.max_new_tokens,
-                min_tokens=0,
-            )
-        else:
-            # non-thinking mode: generate answer directly
-            prompt = self._apply_chat_template(request, enable_thinking=False)
-            if trajectory:
-                trajectory_text = convert_trajectory_to_string(trajectory)
-                prompt = prompt + trajectory_text
-
-            sampling_params = SamplingParams(
-                n=candidates_per_step,
-                max_tokens=self.max_answer_tokens,
-                min_tokens=1,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k,
-                logprobs=20,
-                stop=self.response_stop_tokens,
-                presence_penalty=self.presence_penalty,
-            )
-            log.info("Generating final answer")
-
-        context_tokens = len(self.tokenizer.encode(prompt))
-
-        # Generate
-        outputs = self.model.generate([prompt], sampling_params)
-        request_output = outputs[0]
-
-        # Process outputs
-        for idx, output in enumerate(request_output.outputs):
-            raw_text = output.text
-
-            if self.thinking_mode:
-                # Append answer pattern if not present
-                text = raw_text
-                for pattern in self.answer_patterns:
-                    if pattern not in text:
-                        text = text + pattern
-                        break
-                final_text = text.strip()
-                target_text = None
-            else:
-                # non-thinking mode: use raw text directly
-                final_text = raw_text.strip()
-                target_text = raw_text
-
-            candidate = self._process_generation_output(
-                output=output,
-                final_text=final_text,
-                is_trajectory_complete=True,
-                idx=idx,
-                target_text=target_text,
-                raw_text_for_log=raw_text if not self.thinking_mode else None,
-                step_text_for_log=final_text if not self.thinking_mode else None,
-            )
-            candidates.append(candidate)
-
-        self._record_generation(candidates, context_tokens=context_tokens)
-        return candidates
-
     def generate_full_thinking(
         self,
         request: List[Dict[str, str]],
@@ -1231,66 +1142,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             beam_ids=beam_ids,
         )
 
-    def generate_answer_candidates(
-        self,
-        request: List[Dict[str, str]],
-        trajectory: List[StepCandidate],
-        candidates_per_step: int = 1,
-    ) -> List[StepCandidate]:
-        """Generate N final answer candidates.
-
-        PUBLIC API - Force generation of final answer even if model hasn't
-        naturally reached end-of-response marker.
-
-        In thinking mode, ensures </think> is present before generating answer.
-        In non-thinking mode, injects <Answer>: prefix to force answer generation.
-        """
-        trajectory = trajectory or []
-
-        # Only add </think> when model explicitly supports thinking mode
-        # disable_thinking_mode=None means model doesn't support thinking (e.g., Qwen2.5-Math)
-        # disable_thinking_mode=False means thinking is enabled, expect </think>
-        # disable_thinking_mode=True means thinking is disabled
-        model_supports_thinking = self.disable_thinking_mode is False
-        if self.thinking_mode and model_supports_thinking:
-            full_trajectory = convert_trajectory_to_string(trajectory)
-            if "</think>" not in full_trajectory:
-                log.warning(
-                    "generate_answer_candidates called without </think> in trajectory. "
-                    "Adding </think> to close thinking phase."
-                )
-                close_thinking_step = StepCandidate(
-                    text="\n</think>\n\n<start of response>\nReasoning Steps:\n",
-                    token_ids=[],
-                    is_complete=True,
-                    is_trajectory_complete=True,
-                )
-                trajectory = trajectory + [close_thinking_step]
-
-        return self._generate_answer_candidates_impl(
-            request, trajectory, candidates_per_step
-        )
-
     def generate_answer_candidates_batch(
         self,
         requests: List[List[Dict[str, str]]],
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
     ) -> List[List[StepCandidate]]:
-        """Generate answer candidates for multiple trajectories in a single vLLM call.
-
-        Batched version of generate_answer_candidates. Applies the same
-        </think> closing and answer pattern appending logic, but sends all
-        prompts to vLLM in one batch for efficiency.
-
-        Args:
-            requests: Per-trajectory chat messages.
-            trajectories: Per-trajectory step lists.
-            candidates_per_step: Number of answer candidates per trajectory.
-
-        Returns:
-            List of candidate lists, one per trajectory.
-        """
+        """Generate answer candidates for multiple trajectories in one call."""
         if len(requests) != len(trajectories):
             raise ValueError(
                 f"requests and trajectories must have same length, "
@@ -1300,23 +1158,17 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         if not requests:
             return []
 
+        # Pre-process: close </think> if needed
         model_supports_thinking = self.disable_thinking_mode is False
-
-        # Phase 1: Pre-process trajectories (close </think> if needed) and build prompts
-        prompts = []
-        total_context_tokens = 0
         processed_trajectories = []
-
-        for request, trajectory in zip(requests, trajectories):
+        for trajectory in trajectories:
             trajectory = trajectory or []
-
-            # Same </think> closing logic as generate_answer_candidates
             if self.thinking_mode and model_supports_thinking:
                 full_trajectory = convert_trajectory_to_string(trajectory)
                 if "</think>" not in full_trajectory:
                     log.warning(
-                        "generate_answer_candidates_batch: trajectory missing </think>. "
-                        "Adding closing step."
+                        "generate_answer_candidates_batch: trajectory missing "
+                        "</think>. Adding closing step."
                     )
                     close_thinking_step = StepCandidate(
                         text="\n</think>\n\n<start of response>\nReasoning Steps:\n",
@@ -1325,89 +1177,30 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                         is_trajectory_complete=True,
                     )
                     trajectory = trajectory + [close_thinking_step]
-
             processed_trajectories.append(trajectory)
 
-            # Build prompt (same as _generate_answer_candidates_impl)
-            if self.thinking_mode:
-                prompt = self._build_prompt(request, trajectory)
-            else:
-                prompt = self._apply_chat_template(request, enable_thinking=False)
-                if trajectory:
-                    trajectory_text = convert_trajectory_to_string(trajectory)
-                    prompt = prompt + trajectory_text
-
-            prompts.append(prompt)
-            total_context_tokens += len(self.tokenizer.encode(prompt))
-
-        # Phase 2: Build sampling params and generate all in one call
-        if self.thinking_mode:
-            sampling_params = self._create_sampling_params(
-                stop_tokens=self.response_stop_tokens,
-                n=candidates_per_step,
-                max_tokens=self.max_new_tokens,
-                min_tokens=0,
-            )
-        else:
-            sampling_params = SamplingParams(
-                n=candidates_per_step,
-                max_tokens=self.max_answer_tokens,
-                min_tokens=1,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k,
-                logprobs=20,
-                stop=self.response_stop_tokens,
-                presence_penalty=self.presence_penalty,
-            )
-
-        log.info(
-            f"Batch generating answers for {len(prompts)} trajectories "
-            f"(candidates_per_step={candidates_per_step})"
+        answer_max_tokens = (
+            self.max_new_tokens if self.thinking_mode else self.max_answer_tokens
         )
-        outputs = self.model.generate(prompts, sampling_params)
+        results = self._generate_step_candidates_impl(
+            requests=requests,
+            trajectories=processed_trajectories,
+            candidates_per_step=candidates_per_step,
+            stop_tokens_override=self.response_stop_tokens,
+            max_tokens_override=answer_max_tokens,
+        )
 
-        # Phase 3: Process outputs per trajectory
-        all_candidates = []
-        all_flat_candidates = []
-
-        for req_idx, request_output in enumerate(outputs):
-            candidates = []
-            for idx, output in enumerate(request_output.outputs):
-                raw_text = output.text
-
+        # Post-process: mark complete and append answer patterns for thinking mode
+        for candidates in results:
+            for c in candidates:
+                c.is_trajectory_complete = True
                 if self.thinking_mode:
-                    # Append answer pattern if not present
-                    text = raw_text
                     for pattern in self.answer_patterns:
-                        if pattern not in text:
-                            text = text + pattern
+                        if pattern not in c.text:
+                            c.text = c.text + pattern
                             break
-                    final_text = text.strip()
-                    target_text = None
-                else:
-                    final_text = raw_text.strip()
-                    target_text = raw_text
 
-                candidate = self._process_generation_output(
-                    output=output,
-                    final_text=final_text,
-                    is_trajectory_complete=True,
-                    idx=idx,
-                    target_text=target_text,
-                    raw_text_for_log=raw_text if not self.thinking_mode else None,
-                    step_text_for_log=final_text if not self.thinking_mode else None,
-                    path_idx=req_idx,
-                )
-                candidates.append(candidate)
-                all_flat_candidates.append(candidate)
-
-            all_candidates.append(candidates)
-
-        self._record_generation(
-            all_flat_candidates, context_tokens=total_context_tokens
-        )
-        return all_candidates
+        return results
 
     def __call__(
         self,
