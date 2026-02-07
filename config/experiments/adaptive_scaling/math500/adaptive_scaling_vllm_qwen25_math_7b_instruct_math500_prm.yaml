@@ -10,7 +10,7 @@ defaults:
   - /scorer/prm
   - _self_
 
-run_name: "adaptive_scaling_vllm_qwen25_7.5b_math500_prm_${system.seed}_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen25_7.5b_math500_prm_seed${system.seed}_${now:%H-%M-%S}"
 
 # Model configuration
 model:

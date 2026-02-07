@@ -13,7 +13,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "uncert_cot_vllm_qwen25_7b_entropy_aime2025_${system.seed}_${now:%H-%M-%S}"
+run_name: "uncert_cot_vllm_qwen25_7b_entropy_aime2025_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true

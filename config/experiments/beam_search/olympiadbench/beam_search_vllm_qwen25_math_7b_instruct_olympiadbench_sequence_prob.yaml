@@ -14,7 +14,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_nothink_qwen25_7b_olympiadbench_sequence_prob_${system.seed}_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_nothink_qwen25_7b_olympiadbench_sequence_prob_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true

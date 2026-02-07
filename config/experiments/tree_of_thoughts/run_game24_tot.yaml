@@ -15,7 +15,7 @@ defaults:
   - _self_
 
 # Run naming for descriptive outputs
-run_name: "run_game24_tot_${system.seed}_${now:%H-%M-%S}"
+run_name: "run_game24_tot_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: false
