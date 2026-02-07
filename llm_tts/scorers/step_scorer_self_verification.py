@@ -248,6 +248,8 @@ class StepScorerSelfVerification(StepScorerBase):
                     self.cache[cache_key] = score
                     self.total_evaluations += 1
 
+            local_seen_texts[step_text] = True
+
             results.append(
                 CandidateScore(
                     candidate_text=step_text,
