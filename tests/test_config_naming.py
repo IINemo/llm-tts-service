@@ -41,7 +41,6 @@ KNOWN_MODEL_KEYS = {
     "vllm_qwen3_8b",
     "vllm_qwen25_math_15b_instruct",
     "vllm_qwen25_math_7b",
-    "vllm_qwen25_7.5b",
     "openai_gpt4o_mini",
 }
 
