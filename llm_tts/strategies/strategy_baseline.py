@@ -140,6 +140,8 @@ class StrategyBaseline(StrategyBase):
                 trajectory = [thinking_step, answer_step]
                 final_trajectory = convert_trajectory_to_string(trajectory)
                 extracted = extract_answer(final_trajectory)
+                # Store answer text separately for logging
+                answer_text = answer_step.raw_text or answer_step.text
 
                 self.step_generator.finalize_sample_stats()
                 token_stats = self.step_generator.get_sample_stats()
@@ -153,6 +155,7 @@ class StrategyBaseline(StrategyBase):
                     "trajectory": final_trajectory,
                     "extracted_answer": extracted,
                     "steps": trajectory,
+                    "answer_step": answer_text,  # Final answer text (thinking mode only)
                     "reasoning_steps": reasoning_steps,
                     "validity_scores": [
                         candidate.other_data.get("validity_score", 1.0)

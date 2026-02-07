@@ -1099,7 +1099,13 @@ def _generate_trajectories_batch(
                     log.info(step_text)
 
             # Log separate answer step for thinking mode (offline BoN, online BoN, etc.)
-            if result.get("answer_step"):
+            # Only log if answer_step exists AND steps are strings (not StepCandidate objects)
+            # For baseline, steps are StepCandidate objects and answer is already labeled in loop
+            if (
+                result.get("answer_step")
+                and result.get("steps")
+                and isinstance(result["steps"][-1], str)
+            ):
                 log.info("\nGenerated Answer (confidence: N/A):")
                 log.info(result["answer_step"])
             else:
@@ -1483,7 +1489,13 @@ def generate_trajectories(
                 log.info(step_text)
 
         # Log separate answer step for thinking mode (offline BoN, online BoN, etc.)
-        if result.get("answer_step"):
+        # Only log if answer_step exists AND steps are strings (not StepCandidate objects)
+        # For baseline, steps are StepCandidate objects and answer is already labeled in loop
+        if (
+            result.get("answer_step")
+            and result.get("steps")
+            and isinstance(result["steps"][-1], str)
+        ):
             log.info("\nGenerated Answer (confidence: N/A):")
             log.info(result["answer_step"])
         else:
