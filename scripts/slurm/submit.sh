@@ -352,7 +352,12 @@ else
     echo \"qwen-eval environment found\"
 fi
 
-SEED=${seed}
+# For array jobs, SEED is already set from the array
+# For single jobs, set SEED from the seed parameter
+if [[ -z \"\${SEED+x}\" ]]; then
+    SEED=${seed}
+fi
+
 python scripts/run_tts_eval.py \\
     --config-path=../config \\
     --config-name=${config_name} \\

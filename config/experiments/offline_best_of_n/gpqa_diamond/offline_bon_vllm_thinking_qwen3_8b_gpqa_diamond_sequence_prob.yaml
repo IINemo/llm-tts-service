@@ -13,7 +13,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_thinking_qwen3_8b_gpqa_diamond_sequence_prob_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_thinking_qwen3_8b_gpqa_diamond_sequence_prob_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
