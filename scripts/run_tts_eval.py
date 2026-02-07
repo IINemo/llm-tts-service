@@ -1073,7 +1073,10 @@ def _generate_trajectories_batch(
             log.info("-" * 60)
 
             if result["steps"] and isinstance(result["steps"], list):
-                for step_idx, step in enumerate(result["steps"]):
+                # In thinking mode with answer_step, skip the last step (answer) — it's logged separately
+                has_answer_step = bool(result.get("answer_step"))
+                steps_to_log = result["steps"][:-1] if has_answer_step and len(result["steps"]) > 1 else result["steps"]
+                for step_idx, step in enumerate(steps_to_log):
                     validity = (
                         result.get("validity_scores", [])[step_idx]
                         if "validity_scores" in result
@@ -1085,23 +1088,11 @@ def _generate_trajectories_batch(
                         if isinstance(validity, (int, float))
                         else validity
                     )
-                    # Label last step as "Generated Answer" in thinking mode for clarity
-                    is_last_step = step_idx == len(result["steps"]) - 1
-                    is_thinking_mode = getattr(
-                        getattr(strategy, "step_generator", None), "thinking_mode", False
-                    )
-                    step_label = (
-                        "Generated Answer"
-                        if is_last_step and is_thinking_mode
-                        else f"Step {step_idx + 1}"
-                    )
-                    log.info(f"\n{step_label} (confidence: {confidence_str}):")
+                    log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
                     step_text = step.text if hasattr(step, "text") else str(step)
                     log.info(step_text)
 
-            # Log separate answer step for thinking mode
-            # If answer_step exists (thinking mode: baseline, self-consistency, offline/online BoN), log it
-            # Otherwise (non-thinking mode), log full trajectory
+            # Log answer step separately for thinking mode, or full trajectory for non-thinking
             if result.get("answer_step"):
                 log.info("\nGenerated Answer (confidence: N/A):")
                 log.info(result["answer_step"])
@@ -1457,7 +1448,10 @@ def generate_trajectories(
 
         # For DeepConf, steps contain the individual traces
         if result["steps"] and isinstance(result["steps"], list):
-            for step_idx, step in enumerate(result["steps"]):
+            # In thinking mode with answer_step, skip the last step (answer) — it's logged separately
+            has_answer_step = bool(result.get("answer_step"))
+            steps_to_log = result["steps"][:-1] if has_answer_step and len(result["steps"]) > 1 else result["steps"]
+            for step_idx, step in enumerate(steps_to_log):
                 validity = (
                     result.get("validity_scores", [])[step_idx]
                     if "validity_scores" in result
@@ -1470,37 +1464,16 @@ def generate_trajectories(
                     if isinstance(validity, (int, float))
                     else validity
                 )
-                # Label last step as "Generated Answer" in thinking mode for clarity
-                is_last_step = step_idx == len(result["steps"]) - 1
-                is_thinking_mode = getattr(
-                    getattr(strategy, "step_generator", None), "thinking_mode", False
-                )
-                step_label = (
-                    "Generated Answer"
-                    if is_last_step and is_thinking_mode
-                    else f"Step {step_idx + 1}"
-                )
-                log.info(f"\n{step_label} (confidence: {confidence_str}):")
+                log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
                 # Log full step text, not truncated repr
                 step_text = step.text if hasattr(step, "text") else str(step)
                 log.info(step_text)
 
-        # Log separate answer step for thinking mode
-        # Conditions:
-        # - answer_step must exist
-        # - steps must be strings (not StepCandidate objects)
-        # - Either: len > 1 (offline/online BoN with multiple thinking steps)
-        #         OR: thinking_mode is True (self-consistency with single step containing full trajectory)
-        if (
-            result.get("answer_step")
-            and result.get("steps")
-            and isinstance(result["steps"][-1], str)
-            and (len(result["steps"]) > 1 or is_thinking_mode)
-        ):
+        # Log answer step separately for thinking mode, or full trajectory for non-thinking
+        if result.get("answer_step"):
             log.info("\nGenerated Answer (confidence: N/A):")
             log.info(result["answer_step"])
         else:
-            # Fallback: show full trajectory
             log.info(f"\nFull trajectory:\n{result['trajectory']}")
 
         log.info("\n" + "=" * 60)

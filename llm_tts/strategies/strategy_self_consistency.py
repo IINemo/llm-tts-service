@@ -283,6 +283,7 @@ class StrategySelfConsistency(StrategyBase):
         if not reasoning_paths:
             return {
                 "best_path": "",
+                "best_steps": [],
                 "best_answer": "no_answer",
                 "consensus_score": 0.0,
                 "all_answers": [],
@@ -302,6 +303,7 @@ class StrategySelfConsistency(StrategyBase):
         best_idx = int(np.argmax(scores))
         best_path = path_texts[best_idx]
         best_score = float(scores[best_idx])
+        best_steps = reasoning_paths[best_idx].get("steps", [best_path])
 
         # Extract the best answer
         best_answer = self.scorer.extract_answer(best_path)
@@ -340,6 +342,7 @@ class StrategySelfConsistency(StrategyBase):
 
         return {
             "best_path": best_path,
+            "best_steps": best_steps,
             "best_answer": best_answer,
             "consensus_score": best_score,
             "all_answers": all_answers,
@@ -425,7 +428,7 @@ class StrategySelfConsistency(StrategyBase):
         # Format output to match expected interface
         return {
             "trajectory": result["best_path"],
-            "steps": [result["best_path"]],  # Single step containing full reasoning
+            "steps": result["best_steps"],
             "validity_scores": [result["consensus_score"]],  # Consensus as validity
             "completed": bool(reasoning_paths),
             "strategy": "self_consistency",
@@ -524,7 +527,7 @@ class StrategySelfConsistency(StrategyBase):
             results.append(
                 {
                     "trajectory": result["best_path"],
-                    "steps": [result["best_path"]],
+                    "steps": result["best_steps"],
                     "validity_scores": [result["consensus_score"]],
                     "completed": bool(paths),
                     "strategy": "self_consistency",
