@@ -106,39 +106,49 @@ class StrategySelfConsistency(StrategyBase):
                 log.info(f"  Path {i + 1}: thinking complete, generating answer phase")
                 thinking_step = candidate
                 answer_candidates = self.step_generator.generate_answer_candidates(
-                    request, [thinking_step], candidates_per_step=1,
+                    request,
+                    [thinking_step],
+                    candidates_per_step=1,
                 )
                 if answer_candidates:
                     answer_step = answer_candidates[0]
                     answer_step.is_trajectory_complete = True
                     trajectory = [thinking_step, answer_step]
                     full_text = convert_trajectory_to_string(trajectory)
-                    answer_tokens = len(answer_step.token_ids) if answer_step.token_ids else 0
+                    answer_tokens = (
+                        len(answer_step.token_ids) if answer_step.token_ids else 0
+                    )
                     num_tokens += answer_tokens
-                    thinking_num, response_num = count_thinking_and_response_steps(trajectory)
-                    paths.append({
-                        "text": full_text,
-                        "num_tokens": num_tokens,
-                        "steps": [thinking_step.text, answer_step.text],
-                        "is_complete": True,
-                        "thinking_steps": thinking_num,
-                        "response_steps": response_num,
-                        "validity_scores": [],
-                        "avg_validity": 0.0,
-                    })
+                    thinking_num, response_num = count_thinking_and_response_steps(
+                        trajectory
+                    )
+                    paths.append(
+                        {
+                            "text": full_text,
+                            "num_tokens": num_tokens,
+                            "steps": [thinking_step.text, answer_step.text],
+                            "is_complete": True,
+                            "thinking_steps": thinking_num,
+                            "response_steps": response_num,
+                            "validity_scores": [],
+                            "avg_validity": 0.0,
+                        }
+                    )
                     continue
 
             # Non-thinking or no </think>: single-step path
-            paths.append({
-                "text": text,
-                "num_tokens": num_tokens,
-                "steps": [text],
-                "is_complete": candidate.is_trajectory_complete,
-                "thinking_steps": 0,
-                "response_steps": 1,
-                "validity_scores": [],
-                "avg_validity": 0.0,
-            })
+            paths.append(
+                {
+                    "text": text,
+                    "num_tokens": num_tokens,
+                    "steps": [text],
+                    "is_complete": candidate.is_trajectory_complete,
+                    "thinking_steps": 0,
+                    "response_steps": 1,
+                    "validity_scores": [],
+                    "avg_validity": 0.0,
+                }
+            )
 
         return paths
 
@@ -164,7 +174,10 @@ class StrategySelfConsistency(StrategyBase):
 
         # Build stop tokens list, including </think> for thinking mode
         stop_tokens = ["<end of response>"]
-        if getattr(self.step_generator, "thinking_mode", False) and "</think>" not in stop_tokens:
+        if (
+            getattr(self.step_generator, "thinking_mode", False)
+            and "</think>" not in stop_tokens
+        ):
             stop_tokens.append("</think>")
 
         # Single vLLM call generates all N trajectories
@@ -430,7 +443,10 @@ class StrategySelfConsistency(StrategyBase):
 
         # Build stop tokens list, including </think> for thinking mode
         stop_tokens = ["<end of response>"]
-        if getattr(self.step_generator, "thinking_mode", False) and "</think>" not in stop_tokens:
+        if (
+            getattr(self.step_generator, "thinking_mode", False)
+            and "</think>" not in stop_tokens
+        ):
             stop_tokens.append("</think>")
 
         # Reset per-sample tracking and generate all M×N trajectories

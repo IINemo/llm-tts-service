@@ -673,9 +673,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
                     # Check if thinking phase is complete
                     # vLLM strips stop strings from output, so check stop_reason too
-                    thinking_complete = (
-                        "</think>" in text or stop_reason == "</think>"
-                    )
+                    thinking_complete = "</think>" in text or stop_reason == "</think>"
                     # Don't mark trajectory complete — answer phase still needs to run.
                     # Append </think> back to text so downstream can detect it
                     if stop_reason == "</think>" and "</think>" not in text:
@@ -702,9 +700,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                         stop_reason is None and len(token_ids) < self.max_step_tokens
                     )
 
-                    is_trajectory_complete = (
-                        repetition_detected or stopped_at_eos
-                    )
+                    is_trajectory_complete = repetition_detected or stopped_at_eos
                     step_text = text.strip()
                     target_text = text.strip()
 
@@ -795,11 +791,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 # After thinking is complete, we only need room for the answer
                 thinking_done = self.thinking_mode and any(
                     "</think>" in c.text
-                    or c.other_data.get("completion_reason") == CompletionReason.THINKING_COMPLETE
+                    or c.other_data.get("completion_reason")
+                    == CompletionReason.THINKING_COMPLETE
                     for c in candidates
                 )
                 tokens_needed = (
-                    self.max_answer_tokens if thinking_done
+                    self.max_answer_tokens
+                    if thinking_done
                     else max_step + self.max_answer_tokens
                 )
                 remaining = self.max_context_budget - total_tokens

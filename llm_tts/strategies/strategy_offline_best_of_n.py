@@ -30,7 +30,7 @@ from llm_tts.generators.base import (
 )
 from llm_tts.utils.answer_extraction import extract_answer
 
-from .strategy_base import StrategyBase, count_response_steps, count_thinking_and_response_steps
+from .strategy_base import StrategyBase, count_response_steps
 
 log = logging.getLogger(__name__)
 
@@ -327,7 +327,9 @@ class StrategyOfflineBestOfN(StrategyBase):
         # Distribute answers back to trajectory data
         for batch_idx, traj_idx in enumerate(answer_indices):
             traj_data = traj_datas[traj_idx]
-            candidates = answer_results[batch_idx] if batch_idx < len(answer_results) else []
+            candidates = (
+                answer_results[batch_idx] if batch_idx < len(answer_results) else []
+            )
 
             if candidates:
                 answer_step = candidates[0]
@@ -335,7 +337,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                 thinking_step = traj_data["candidate"]
                 trajectory = [thinking_step, answer_step]
                 traj_data["full_text"] = convert_trajectory_to_string(trajectory)
-                answer_tokens = len(answer_step.token_ids) if answer_step.token_ids else 0
+                answer_tokens = (
+                    len(answer_step.token_ids) if answer_step.token_ids else 0
+                )
                 traj_data["num_tokens"] += answer_tokens
                 traj_data["is_complete"] = True
                 answer_text = answer_step.raw_text or answer_step.text
@@ -368,7 +372,10 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         # Build stop tokens list, including </think> for thinking mode
         stop_tokens = ["<end of response>"]
-        if getattr(self.step_generator, "thinking_mode", False) and "</think>" not in stop_tokens:
+        if (
+            getattr(self.step_generator, "thinking_mode", False)
+            and "</think>" not in stop_tokens
+        ):
             stop_tokens.append("</think>")
 
         # Single vLLM call generates all N trajectories
@@ -500,7 +507,9 @@ class StrategyOfflineBestOfN(StrategyBase):
             "extracted_answer": extracted,
             "steps": best_result["steps"],  # List of step strings
             "thinking_num_steps": best_result.get("thinking_num_steps", 0),
-            "response_num_steps": best_result.get("response_num_steps", best_result["num_steps"]),
+            "response_num_steps": best_result.get(
+                "response_num_steps", best_result["num_steps"]
+            ),
             "validity_scores": best_result["step_scores"],
             "aggregated_score": best_result["aggregated_score"],
             "all_trajectories": [r["full_text"] for r in all_trajectory_results],
@@ -601,7 +610,10 @@ class StrategyOfflineBestOfN(StrategyBase):
             self.scorer.reset_prm_stats()
         # Build stop tokens list, including </think> for thinking mode
         stop_tokens = ["<end of response>"]
-        if getattr(self.step_generator, "thinking_mode", False) and "</think>" not in stop_tokens:
+        if (
+            getattr(self.step_generator, "thinking_mode", False)
+            and "</think>" not in stop_tokens
+        ):
             stop_tokens.append("</think>")
 
         batch_results = self.step_generator.generate_step_candidates_batch(
@@ -795,7 +807,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "extracted_answer": extracted,
                     "steps": best_result.get("steps", []),
                     "thinking_num_steps": best_result.get("thinking_num_steps", 0),
-                    "response_num_steps": best_result.get("response_num_steps", best_result.get("num_steps", 0)),
+                    "response_num_steps": best_result.get(
+                        "response_num_steps", best_result.get("num_steps", 0)
+                    ),
                     "validity_scores": best_result.get("step_scores", []),
                     "aggregated_score": best_result.get("aggregated_score", 0.0),
                     "all_trajectories": [t["full_text"] for t in trajectories],

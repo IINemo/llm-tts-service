@@ -129,7 +129,9 @@ class StrategyBaseline(StrategyBase):
             log.info("Thinking phase complete, generating final answer (step 2)")
             thinking_step = candidate
             answer_candidates = self.step_generator.generate_answer_candidates(
-                request, [thinking_step], candidates_per_step=1,
+                request,
+                [thinking_step],
+                candidates_per_step=1,
             )
             if answer_candidates:
                 answer_step = answer_candidates[0]
@@ -141,7 +143,9 @@ class StrategyBaseline(StrategyBase):
 
                 self.step_generator.finalize_sample_stats()
                 token_stats = self.step_generator.get_sample_stats()
-                thinking_num_steps, response_num_steps = count_thinking_and_response_steps(trajectory)
+                thinking_num_steps, response_num_steps = (
+                    count_thinking_and_response_steps(trajectory)
+                )
 
                 log.info(f"Response:\n{final_trajectory}")
                 return {
@@ -150,8 +154,12 @@ class StrategyBaseline(StrategyBase):
                     "steps": trajectory,
                     "thinking_num_steps": thinking_num_steps,
                     "response_num_steps": response_num_steps,
-                    "validity_scores": [candidate.other_data.get("validity_score", 1.0)],
-                    "uncertainty_scores": [candidate.other_data.get("uncertainty_score", 0.0)],
+                    "validity_scores": [
+                        candidate.other_data.get("validity_score", 1.0)
+                    ],
+                    "uncertainty_scores": [
+                        candidate.other_data.get("uncertainty_score", 0.0)
+                    ],
                     "completed": True,
                     "token_stats": token_stats,
                 }
@@ -285,7 +293,10 @@ class StrategyBaseline(StrategyBase):
         # Reset per-sample tracking and generate all responses
         self.step_generator.reset_per_sample_stats()
         stop_tokens = list(self.eos_patterns)
-        if getattr(self.step_generator, "thinking_mode", False) and "</think>" not in stop_tokens:
+        if (
+            getattr(self.step_generator, "thinking_mode", False)
+            and "</think>" not in stop_tokens
+        ):
             stop_tokens.append("</think>")
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
@@ -325,10 +336,14 @@ class StrategyBaseline(StrategyBase):
                 getattr(self.step_generator, "thinking_mode", False)
                 and "</think>" in candidate.text
             ):
-                log.info(f"Sample {sample_idx}: thinking complete, generating final answer")
+                log.info(
+                    f"Sample {sample_idx}: thinking complete, generating final answer"
+                )
                 thinking_step = candidate
                 answer_candidates = self.step_generator.generate_answer_candidates(
-                    requests[idx], [thinking_step], candidates_per_step=1,
+                    requests[idx],
+                    [thinking_step],
+                    candidates_per_step=1,
                 )
                 if answer_candidates:
                     answer_step = answer_candidates[0]
