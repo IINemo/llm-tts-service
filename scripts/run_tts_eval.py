@@ -1084,7 +1084,17 @@ def _generate_trajectories_batch(
                         if isinstance(validity, (int, float))
                         else validity
                     )
-                    log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
+                    # Label last step as "Generated Answer" in thinking mode for clarity
+                    is_last_step = step_idx == len(result["steps"]) - 1
+                    is_thinking_mode = getattr(
+                        getattr(strategy, "step_generator", None), "thinking_mode", False
+                    )
+                    step_label = (
+                        "Generated Answer"
+                        if is_last_step and is_thinking_mode
+                        else f"Step {step_idx + 1}"
+                    )
+                    log.info(f"\n{step_label} (confidence: {confidence_str}):")
                     step_text = step.text if hasattr(step, "text") else str(step)
                     log.info(step_text)
 
@@ -1457,7 +1467,17 @@ def generate_trajectories(
                     if isinstance(validity, (int, float))
                     else validity
                 )
-                log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
+                # Label last step as "Generated Answer" in thinking mode for clarity
+                is_last_step = step_idx == len(result["steps"]) - 1
+                is_thinking_mode = getattr(
+                    getattr(strategy, "step_generator", None), "thinking_mode", False
+                )
+                step_label = (
+                    "Generated Answer"
+                    if is_last_step and is_thinking_mode
+                    else f"Step {step_idx + 1}"
+                )
+                log.info(f"\n{step_label} (confidence: {confidence_str}):")
                 # Log full step text, not truncated repr
                 step_text = step.text if hasattr(step, "text") else str(step)
                 log.info(step_text)
