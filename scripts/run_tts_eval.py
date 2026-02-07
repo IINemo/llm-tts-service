@@ -1038,6 +1038,7 @@ def _generate_trajectories_batch(
                         s.text if hasattr(s, "text") else str(s)
                         for s in result.get("steps", [])
                     ],
+                    "answer_step": result.get("answer_step"),  # Final answer text (thinking mode)
                     "validity_scores": result.get("validity_scores", []),
                     "all_step_scores": result.get("all_step_scores", []),
                     "all_scores": result.get("all_scores", []),
