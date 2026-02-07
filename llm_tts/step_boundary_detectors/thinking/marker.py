@@ -233,14 +233,16 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
         Returns:
             List of step strings
         """
-        text = self._extract_thinking_content(text)
-
         if not text.strip():
             return []
 
         # Use stop tokens for splitting (matches online vLLM behavior)
+        # Don't extract thinking content — preserve raw text with <think>/</ think> tags
         if use_stop_tokens:
             return self._split_by_stop_tokens(text)
+
+        # For marker-based splitting, extract inner content (no tags)
+        text = self._extract_thinking_content(text)
 
         if not self.pattern:
             return [text]

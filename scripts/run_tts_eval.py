@@ -1073,9 +1073,11 @@ def _generate_trajectories_batch(
             log.info("-" * 60)
 
             if result["steps"] and isinstance(result["steps"], list):
-                # In thinking mode with answer_step, skip the last step (answer) — it's logged separately
-                has_answer_step = bool(result.get("answer_step"))
-                steps_to_log = result["steps"][:-1] if has_answer_step and len(result["steps"]) > 1 else result["steps"]
+                # Skip last step only if it duplicates the answer_step (e.g. self-consistency)
+                answer_step_text = result.get("answer_step") or ""
+                last_step_text = result["steps"][-1].text if hasattr(result["steps"][-1], "text") else str(result["steps"][-1])
+                skip_last = bool(answer_step_text) and len(result["steps"]) > 1 and last_step_text.strip() in answer_step_text.strip()
+                steps_to_log = result["steps"][:-1] if skip_last else result["steps"]
                 for step_idx, step in enumerate(steps_to_log):
                     validity = (
                         result.get("validity_scores", [])[step_idx]
@@ -1448,9 +1450,11 @@ def generate_trajectories(
 
         # For DeepConf, steps contain the individual traces
         if result["steps"] and isinstance(result["steps"], list):
-            # In thinking mode with answer_step, skip the last step (answer) — it's logged separately
-            has_answer_step = bool(result.get("answer_step"))
-            steps_to_log = result["steps"][:-1] if has_answer_step and len(result["steps"]) > 1 else result["steps"]
+            # Skip last step only if it duplicates the answer_step (e.g. self-consistency)
+            answer_step_text = result.get("answer_step") or ""
+            last_step_text = result["steps"][-1].text if hasattr(result["steps"][-1], "text") else str(result["steps"][-1])
+            skip_last = bool(answer_step_text) and len(result["steps"]) > 1 and last_step_text.strip() in answer_step_text.strip()
+            steps_to_log = result["steps"][:-1] if skip_last else result["steps"]
             for step_idx, step in enumerate(steps_to_log):
                 validity = (
                     result.get("validity_scores", [])[step_idx]

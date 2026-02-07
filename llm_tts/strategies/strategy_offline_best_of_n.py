@@ -233,13 +233,15 @@ class StrategyOfflineBestOfN(StrategyBase):
             getattr(self.step_generator, "thinking_mode", False)
             and "</think>" in candidate.text
         ):
-            # Split thinking text into steps for scoring
+            # Use candidate.text for splitting — it has </think> appended back
+            # (candidate.raw_text is vLLM output which strips stop strings)
+            thinking_text = candidate.text
             if hasattr(self.step_generator, "detector"):
                 thinking_steps = self.step_generator.detector.detect_steps(
-                    raw_text, use_stop_tokens=True
+                    thinking_text, use_stop_tokens=True
                 )
             else:
-                thinking_steps = [raw_text]
+                thinking_steps = [thinking_text]
 
             return {
                 "steps": thinking_steps,  # Only thinking steps (for scoring)
