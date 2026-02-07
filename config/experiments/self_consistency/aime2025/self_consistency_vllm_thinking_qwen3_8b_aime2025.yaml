@@ -14,7 +14,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "self_consistency_vllm_thinking_qwen3_8b_aime2025_${now:%H-%M-%S}"
+run_name: "self_consistency_vllm_thinking_qwen3_8b_aime2025_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true

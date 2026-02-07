@@ -13,7 +13,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_nothink_qwen25_7b_amc23_prm_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_nothink_qwen25_7b_amc23_prm_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true

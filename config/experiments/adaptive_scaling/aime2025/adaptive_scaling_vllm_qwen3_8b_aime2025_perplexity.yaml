@@ -11,7 +11,7 @@ defaults:
   - /evaluation/default
   - _self_
 
-run_name: "adaptive_scaling_vllm_qwen3_8b_aime2025_perplexity_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen3_8b_aime2025_perplexity_seed${system.seed}_${now:%H-%M-%S}"
 
 # Model configuration
 model:
