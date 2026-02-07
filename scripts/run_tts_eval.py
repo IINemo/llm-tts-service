@@ -1099,14 +1099,17 @@ def _generate_trajectories_batch(
                     step_text = step.text if hasattr(step, "text") else str(step)
                     log.info(step_text)
 
-            # Log separate answer step for thinking mode (offline BoN, online BoN, etc.)
-            # Only log if answer_step exists AND steps are strings (not StepCandidate objects)
-            # For baseline/self-consistency, steps are StepCandidate objects and answer is already labeled in loop
+            # Log separate answer step for thinking mode
+            # Conditions:
+            # - answer_step must exist
+            # - steps must be strings (not StepCandidate objects)
+            # - Either: len > 1 (offline/online BoN with multiple thinking steps)
+            #         OR: thinking_mode is True (self-consistency with single step containing full trajectory)
             if (
                 result.get("answer_step")
                 and result.get("steps")
-                and len(result["steps"]) > 1
                 and isinstance(result["steps"][-1], str)
+                and (len(result["steps"]) > 1 or is_thinking_mode)
             ):
                 log.info("\nGenerated Answer (confidence: N/A):")
                 log.info(result["answer_step"])
@@ -1490,14 +1493,17 @@ def generate_trajectories(
                 step_text = step.text if hasattr(step, "text") else str(step)
                 log.info(step_text)
 
-        # Log separate answer step for thinking mode (offline BoN, online BoN, etc.)
-        # Only log if answer_step exists AND steps are strings (not StepCandidate objects)
-        # For baseline/self-consistency, steps are StepCandidate objects and answer is already labeled in loop
+        # Log separate answer step for thinking mode
+        # Conditions:
+        # - answer_step must exist
+        # - steps must be strings (not StepCandidate objects)
+        # - Either: len > 1 (offline/online BoN with multiple thinking steps)
+        #         OR: thinking_mode is True (self-consistency with single step containing full trajectory)
         if (
             result.get("answer_step")
             and result.get("steps")
-            and len(result["steps"]) > 1
             and isinstance(result["steps"][-1], str)
+            and (len(result["steps"]) > 1 or is_thinking_mode)
         ):
             log.info("\nGenerated Answer (confidence: N/A):")
             log.info(result["answer_step"])
