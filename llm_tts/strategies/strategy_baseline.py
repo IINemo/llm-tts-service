@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 from llm_tts.generators.base import convert_trajectory_to_string
 from llm_tts.utils.answer_extraction import extract_answer
 
-from .strategy_base import StrategyBase, count_thinking_and_response_steps
+from .strategy_base import StrategyBase, count_reasoning_steps
 
 log = logging.getLogger(__name__)
 
@@ -109,8 +109,7 @@ class StrategyBaseline(StrategyBase):
                 "trajectory": "",
                 "extracted_answer": "",
                 "steps": [],
-                "thinking_num_steps": 0,
-                "response_num_steps": 0,
+                "reasoning_steps": 0,
                 "validity_scores": [],
                 "uncertainty_scores": [],
                 "completed": False,
@@ -143,8 +142,9 @@ class StrategyBaseline(StrategyBase):
 
                 self.step_generator.finalize_sample_stats()
                 token_stats = self.step_generator.get_sample_stats()
-                thinking_num_steps, response_num_steps = (
-                    count_thinking_and_response_steps(trajectory)
+                reasoning_steps = count_reasoning_steps(
+                    trajectory,
+                    getattr(self.step_generator, "thinking_mode", False),
                 )
 
                 log.info(f"Response:\n{final_trajectory}")
@@ -152,8 +152,7 @@ class StrategyBaseline(StrategyBase):
                     "trajectory": final_trajectory,
                     "extracted_answer": extracted,
                     "steps": trajectory,
-                    "thinking_num_steps": thinking_num_steps,
-                    "response_num_steps": response_num_steps,
+                    "reasoning_steps": reasoning_steps,
                     "validity_scores": [
                         candidate.other_data.get("validity_score", 1.0)
                     ],
@@ -210,17 +209,17 @@ class StrategyBaseline(StrategyBase):
             )
         )
 
-        # Count thinking and response steps
-        thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-            trajectory
+        # Count reasoning steps
+        reasoning_steps = count_reasoning_steps(
+            trajectory,
+            getattr(self.step_generator, "thinking_mode", False),
         )
 
         return {
             "trajectory": final_trajectory,
             "extracted_answer": extracted,
             "steps": trajectory,
-            "thinking_num_steps": thinking_num_steps,
-            "response_num_steps": response_num_steps,
+            "reasoning_steps": reasoning_steps,
             "validity_scores": [validity_score],
             "uncertainty_scores": [uncertainty_score],
             "completed": candidate.is_trajectory_complete,
@@ -349,8 +348,7 @@ class StrategyBaseline(StrategyBase):
                         "trajectory": "",
                         "extracted_answer": "",
                         "steps": [],
-                        "thinking_num_steps": 0,
-                        "response_num_steps": 0,
+                        "reasoning_steps": 0,
                         "validity_scores": [],
                         "completed": False,
                         "token_stats": {},
@@ -374,9 +372,10 @@ class StrategyBaseline(StrategyBase):
             # Token stats from generator's per-sample tracking
             token_stats = self.step_generator.get_sample_stats_for(idx)
 
-            # Count thinking and response steps
-            thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-                trajectory
+            # Count reasoning steps
+            reasoning_steps = count_reasoning_steps(
+                trajectory,
+                getattr(self.step_generator, "thinking_mode", False),
             )
 
             results.append(
@@ -384,8 +383,7 @@ class StrategyBaseline(StrategyBase):
                     "trajectory": final_trajectory,
                     "extracted_answer": extracted,
                     "steps": trajectory,
-                    "thinking_num_steps": thinking_num_steps,
-                    "response_num_steps": response_num_steps,
+                    "reasoning_steps": reasoning_steps,
                     "validity_scores": [
                         self._get_validity_score(candidate, sample_idx)
                     ],

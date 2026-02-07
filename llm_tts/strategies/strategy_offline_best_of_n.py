@@ -30,7 +30,7 @@ from llm_tts.generators.base import (
 )
 from llm_tts.utils.answer_extraction import extract_answer
 
-from .strategy_base import StrategyBase, count_response_steps
+from .strategy_base import StrategyBase, count_reasoning_steps
 
 log = logging.getLogger(__name__)
 
@@ -219,7 +219,7 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         Returns:
             Dict with steps, full_text, num_steps, is_complete, num_tokens,
-            thinking_num_steps, response_num_steps, needs_answer, candidate
+            reasoning_steps, needs_answer, candidate
         """
         raw_text = candidate.raw_text or candidate.text
         num_tokens = (
@@ -247,8 +247,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                 "num_steps": len(thinking_steps),
                 "is_complete": False,  # Not yet — answer still needed
                 "num_tokens": num_tokens,
-                "thinking_num_steps": len(thinking_steps),
-                "response_num_steps": 0,
+                "reasoning_steps": len(thinking_steps),
                 "needs_answer": True,
                 "candidate": candidate,
             }
@@ -267,8 +266,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             "num_steps": len(steps),
             "is_complete": candidate.is_trajectory_complete,
             "num_tokens": num_tokens,
-            "thinking_num_steps": 0,
-            "response_num_steps": len(steps),
+            "reasoning_steps": len(steps),
             "needs_answer": False,
             "candidate": candidate,
         }
@@ -288,8 +286,8 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         Args:
             traj_datas: List of trajectory dicts from _split_thinking_candidate.
-                        Modified in-place: full_text, is_complete, num_tokens,
-                        response_num_steps are updated for candidates needing answers.
+                        Modified in-place: full_text, is_complete, num_tokens
+                        are updated for candidates needing answers.
             requests: Corresponding request for each traj_data.
         """
         # Collect candidates needing answer generation
@@ -333,9 +331,6 @@ class StrategyOfflineBestOfN(StrategyBase):
                 )
                 traj_data["num_tokens"] += answer_tokens
                 traj_data["is_complete"] = True
-                answer_text = answer_step.raw_text or answer_step.text
-                response_num_steps = count_response_steps(answer_text)
-                traj_data["response_num_steps"] = max(response_num_steps, 1)
             else:
                 log.warning(f"No answer generated for trajectory {traj_idx}")
                 traj_data["is_complete"] = False
@@ -497,10 +492,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             "trajectory": best_result["full_text"],
             "extracted_answer": extracted,
             "steps": best_result["steps"],  # List of step strings
-            "thinking_num_steps": best_result.get("thinking_num_steps", 0),
-            "response_num_steps": best_result.get(
-                "response_num_steps", best_result["num_steps"]
-            ),
+            "reasoning_steps": best_result.get("reasoning_steps", 0),
             "validity_scores": best_result["step_scores"],
             "aggregated_score": best_result["aggregated_score"],
             "all_trajectories": [r["full_text"] for r in all_trajectory_results],
@@ -797,10 +789,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "trajectory": best_result.get("full_text", ""),
                     "extracted_answer": extracted,
                     "steps": best_result.get("steps", []),
-                    "thinking_num_steps": best_result.get("thinking_num_steps", 0),
-                    "response_num_steps": best_result.get(
-                        "response_num_steps", best_result.get("num_steps", 0)
-                    ),
+                    "reasoning_steps": best_result.get("reasoning_steps", 0),
                     "validity_scores": best_result.get("step_scores", []),
                     "aggregated_score": best_result.get("aggregated_score", 0.0),
                     "all_trajectories": [t["full_text"] for t in trajectories],
@@ -824,8 +813,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             "trajectory": "",
             "extracted_answer": "",
             "steps": [],
-            "thinking_num_steps": 0,
-            "response_num_steps": 0,
+            "reasoning_steps": 0,
             "validity_scores": [],
             "aggregated_score": 0.0,
             "all_trajectories": [],

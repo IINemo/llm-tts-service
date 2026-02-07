@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 from llm_tts.scale_discriminator import ScaleDiscriminator
 
-from .strategy_base import StrategyBase, count_thinking_and_response_steps
+from .strategy_base import StrategyBase, count_reasoning_steps
 
 log = logging.getLogger(__name__)
 
@@ -206,9 +206,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
             f"generations={token_stats['generation_count']}"
             + (f", tflops={token_stats['tflops']:.3f}" if token_stats["tflops"] else "")
         )
-        # Count thinking and response steps separately
-        thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-            selected_steps
+        # Count reasoning steps
+        reasoning_steps = count_reasoning_steps(
+            selected_steps,
+            getattr(self.step_generator, "thinking_mode", False),
         )
 
         return {
@@ -217,8 +218,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,
-            "thinking_num_steps": thinking_num_steps,
-            "response_num_steps": response_num_steps,
+            "reasoning_steps": reasoning_steps,
             "token_stats": token_stats,
         }
 
@@ -689,8 +689,9 @@ class AdaptiveScalingBestOfN(StrategyBase):
             final_trajectory = convert_trajectory_to_string(trajectories[idx])
             extracted = extract_answer(final_trajectory)
 
-            thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-                selected_steps[idx]
+            reasoning_steps = count_reasoning_steps(
+                selected_steps[idx],
+                getattr(self.step_generator, "thinking_mode", False),
             )
 
             # Get per-sample token stats from generator's tracking
@@ -709,7 +710,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
             log.info(
                 f"Sample {sample_idxs[idx]}: "
                 f"{len(selected_steps[idx])} steps "
-                f"({thinking_num_steps} thinking, {response_num_steps} response), "
+                f"({reasoning_steps} reasoning steps), "
                 f"tokens={sample_total:,}, "
                 f"scores=[{scores_str}], "
                 f"answer={extracted!r}"
@@ -720,8 +721,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     "trajectory": final_trajectory,
                     "extracted_answer": extracted,
                     "steps": selected_steps[idx],
-                    "thinking_num_steps": thinking_num_steps,
-                    "response_num_steps": response_num_steps,
+                    "reasoning_steps": reasoning_steps,
                     "validity_scores": validity_scores[idx],
                     "completed": len(selected_steps[idx]) > 0,
                     "token_stats": token_stats,

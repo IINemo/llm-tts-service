@@ -12,7 +12,7 @@ from llm_tts.generators import (
 from llm_tts.generators.base import CompletionReason
 from llm_tts.utils.answer_extraction import extract_answer
 
-from .strategy_base import StrategyBase, count_thinking_and_response_steps
+from .strategy_base import StrategyBase, count_reasoning_steps
 
 log = logging.getLogger(__name__)
 
@@ -484,8 +484,9 @@ class StrategyOnlineBestOfN(StrategyBase):
             final_trajectory = convert_trajectory_to_string(trajectories[idx])
             extracted = extract_answer(final_trajectory)
 
-            thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-                selected_steps[idx]
+            reasoning_steps = count_reasoning_steps(
+                selected_steps[idx],
+                getattr(self.step_generator, "thinking_mode", False),
             )
 
             token_stats = self.step_generator.get_sample_stats_for(idx)
@@ -513,7 +514,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             log.info(
                 f"Sample {sample_indices[idx]}: "
                 f"{len(selected_steps[idx])} steps "
-                f"({thinking_num_steps} thinking, {response_num_steps} response), "
+                f"({reasoning_steps} reasoning steps), "
                 f"tokens={token_stats['total_tokens_this_sample']:,}, "
                 f"scores=[{scores_str}], "
                 f"answer={extracted!r}"
@@ -531,8 +532,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                     "trajectory": final_trajectory,
                     "extracted_answer": extracted,
                     "steps": selected_steps[idx],
-                    "thinking_num_steps": thinking_num_steps,
-                    "response_num_steps": response_num_steps,
+                    "reasoning_steps": reasoning_steps,
                     "validity_scores": validity_scores[idx],
                     "completed": bool(selected_steps[idx])
                     and selected_steps[idx][-1].is_trajectory_complete,
@@ -614,8 +614,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                         "trajectory": "",
                         "extracted_answer": None,
                         "steps": [],
-                        "thinking_num_steps": 0,
-                        "response_num_steps": 0,
+                        "reasoning_steps": 0,
                         "validity_scores": [],
                         "completed": False,
                         "token_stats": self.step_generator.get_sample_stats_for(sid),
@@ -669,7 +668,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             log.info(
                 f"Sample {sample_indices[idx]}: "
                 f"{len(r['steps'])} steps "
-                f"({r['thinking_num_steps']} thinking, {r['response_num_steps']} response), "
+                f"({r['reasoning_steps']} reasoning steps), "
                 f"tokens={token_stats['total_tokens_this_sample']:,}, "
                 f"scores=[{scores_str}], "
                 f"answer={r['extracted_answer']!r}"
@@ -877,8 +876,9 @@ class StrategyOnlineBestOfN(StrategyBase):
         # Build result
         final_trajectory = convert_trajectory_to_string(trajectory)
         extracted = extract_answer(final_trajectory)
-        thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-            selected_steps
+        reasoning_steps = count_reasoning_steps(
+            selected_steps,
+            getattr(self.step_generator, "thinking_mode", False),
         )
         token_stats = self.step_generator.get_sample_stats_for(sample_id)
 
@@ -886,8 +886,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             "trajectory": final_trajectory,
             "extracted_answer": extracted,
             "steps": selected_steps,
-            "thinking_num_steps": thinking_num_steps,
-            "response_num_steps": response_num_steps,
+            "reasoning_steps": reasoning_steps,
             "validity_scores": validity_scores,
             "completed": bool(selected_steps)
             and selected_steps[-1].is_trajectory_complete,

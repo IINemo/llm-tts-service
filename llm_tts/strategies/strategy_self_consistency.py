@@ -21,7 +21,7 @@ from llm_tts.scorers.majority_voting import ChainMajorityVotingScorer
 from llm_tts.utils import extract_answer
 
 from .metadata_builder import StrategyMetadataBuilder
-from .strategy_base import StrategyBase, count_thinking_and_response_steps
+from .strategy_base import StrategyBase, count_reasoning_steps
 
 if TYPE_CHECKING:
     from llm_tts.generators import StepCandidateGeneratorBase
@@ -135,8 +135,9 @@ class StrategySelfConsistency(StrategyBase):
                     len(answer_step.token_ids) if answer_step.token_ids else 0
                 )
                 num_tokens += answer_tokens
-                thinking_num, response_num = count_thinking_and_response_steps(
-                    trajectory
+                reasoning_steps = count_reasoning_steps(
+                    trajectory,
+                    getattr(self.step_generator, "thinking_mode", False),
                 )
                 paths.append(
                     {
@@ -144,8 +145,7 @@ class StrategySelfConsistency(StrategyBase):
                         "num_tokens": num_tokens,
                         "steps": [candidate.text, answer_step.text],
                         "is_complete": True,
-                        "thinking_steps": thinking_num,
-                        "response_steps": response_num,
+                        "reasoning_steps": reasoning_steps,
                         "validity_scores": [],
                         "avg_validity": 0.0,
                     }
@@ -159,8 +159,10 @@ class StrategySelfConsistency(StrategyBase):
                     "num_tokens": num_tokens,
                     "steps": [text],
                     "is_complete": candidate.is_trajectory_complete,
-                    "thinking_steps": 0,
-                    "response_steps": 1,
+                    "reasoning_steps": count_reasoning_steps(
+                        [candidate],
+                        getattr(self.step_generator, "thinking_mode", False),
+                    ),
                     "validity_scores": [],
                     "avg_validity": 0.0,
                 }
@@ -313,8 +315,7 @@ class StrategySelfConsistency(StrategyBase):
                     "text": path_data["text"],
                     "num_tokens": path_data["num_tokens"],
                     "num_steps": len(path_data.get("steps", [])),
-                    "thinking_steps": path_data.get("thinking_steps", 0),
-                    "response_steps": path_data.get("response_steps", 0),
+                    "reasoning_steps": path_data.get("reasoning_steps", 0),
                     "avg_validity": path_data.get("avg_validity", 0),
                     "answer": answer,
                     "score": float(scores[i]),
@@ -404,12 +405,9 @@ class StrategySelfConsistency(StrategyBase):
         # Log summary to console
         builder.log_summary(log)
 
-        # Calculate average thinking/response steps
-        avg_thinking_steps = sum(
-            t.get("thinking_steps", 0) for t in result.get("all_traces", [])
-        ) / max(len(result.get("all_traces", [])), 1)
-        avg_response_steps = sum(
-            t.get("response_steps", 0) for t in result.get("all_traces", [])
+        # Calculate average reasoning steps
+        avg_reasoning_steps = sum(
+            t.get("reasoning_steps", 0) for t in result.get("all_traces", [])
         ) / max(len(result.get("all_traces", [])), 1)
 
         # Format output to match expected interface
@@ -424,8 +422,7 @@ class StrategySelfConsistency(StrategyBase):
             "all_traces": result.get("all_traces", []),
             "total_tokens": result.get("total_tokens", 0),
             "token_stats": token_stats,
-            "thinking_num_steps": avg_thinking_steps,
-            "response_num_steps": avg_response_steps,
+            "reasoning_steps": avg_reasoning_steps,
         }
 
     def generate_trajectories_batch(
@@ -506,12 +503,9 @@ class StrategySelfConsistency(StrategyBase):
                 answer_distribution=result["answer_distribution"],
             )
 
-            # Calculate avg steps
-            avg_thinking_steps = sum(
-                t.get("thinking_steps", 0) for t in result.get("all_traces", [])
-            ) / max(len(result.get("all_traces", [])), 1)
-            avg_response_steps = sum(
-                t.get("response_steps", 0) for t in result.get("all_traces", [])
+            # Calculate avg reasoning steps
+            avg_reasoning_steps = sum(
+                t.get("reasoning_steps", 0) for t in result.get("all_traces", [])
             ) / max(len(result.get("all_traces", [])), 1)
 
             results.append(
@@ -526,8 +520,7 @@ class StrategySelfConsistency(StrategyBase):
                     "all_traces": result.get("all_traces", []),
                     "total_tokens": result.get("total_tokens", 0),
                     "token_stats": token_stats,
-                    "thinking_num_steps": avg_thinking_steps,
-                    "response_num_steps": avg_response_steps,
+                    "reasoning_steps": avg_reasoning_steps,
                 }
             )
 
@@ -550,8 +543,7 @@ class StrategySelfConsistency(StrategyBase):
             "all_traces": [],
             "total_tokens": 0,
             "token_stats": {},
-            "thinking_num_steps": 0,
-            "response_num_steps": 0,
+            "reasoning_steps": 0,
         }
 
     def cleanup(self):

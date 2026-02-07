@@ -109,7 +109,7 @@ Per-sample metrics logged to WandB:
 | `input_tokens_this_sample` | Context tokens processed |
 | `output_tokens_this_sample` | Generated tokens |
 | `generations_this_sample` | Number of generation calls |
-| `thinking_num_steps` | Number of thinking steps |
+| `reasoning_steps` | Number of reasoning steps |
 | `tflops_this_sample` | Estimated TFLOPs for this sample |
 
 Running totals:
