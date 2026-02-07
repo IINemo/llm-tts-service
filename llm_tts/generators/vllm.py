@@ -673,9 +673,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
                     # Check if thinking phase is complete
                     thinking_complete = "</think>" in text
-                    if thinking_complete:
-                        think_pos = text.find("</think>")
-                        text = text[: think_pos + len("</think>")]
+                    # NOTE: We DON't truncate at "" because the final answer comes AFTER it.
+                    # The model generates: <|thinking|>...</thinking><final answer>
+                    # We need both parts for proper answer extraction.
 
                     # Handle max tokens - only truncate if we actually hit the limit
                     # stop_reason=None can mean EOS token ID stop (complete) or max tokens
