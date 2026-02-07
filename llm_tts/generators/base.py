@@ -245,6 +245,32 @@ class StepCandidateGeneratorBase:
         """Generate answer for a given trajectory"""
         pass
 
+    def generate_answer_candidates_batch(
+        self,
+        requests: List[List[Dict[str, str]]],
+        trajectories: List[List[StepCandidate]],
+        candidates_per_step: int = 1,
+    ) -> List[List[StepCandidate]]:
+        """Generate answer candidates for multiple trajectories.
+
+        Default implementation calls generate_answer_candidates sequentially.
+        Subclasses (e.g. vLLM) can override for true batched generation.
+
+        Args:
+            requests: Per-trajectory chat messages.
+            trajectories: Per-trajectory step lists.
+            candidates_per_step: Number of answer candidates per trajectory.
+
+        Returns:
+            List of candidate lists, one per trajectory.
+        """
+        return [
+            self.generate_answer_candidates(
+                req, trajectory=traj, candidates_per_step=candidates_per_step
+            )
+            for req, traj in zip(requests, trajectories)
+        ]
+
     def __call__(
         self,
         request: List[Dict[str, str]],

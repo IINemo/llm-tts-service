@@ -331,6 +331,20 @@ class StrategyOnlineBestOfN(StrategyBase):
                 if forced_complete:
                     # Boxed answer or garbage: keep the step, just mark done
                     completed[sample_id] = True
+                elif (
+                    getattr(self.step_generator, "thinking_mode", False)
+                    and "</think>" in selected.text
+                    and not selected.is_trajectory_complete
+                ):
+                    # Thinking phase complete: generate answer via
+                    # generate_answer_candidates (proper stop tokens, not
+                    # step-level splitting)
+                    log.info(
+                        f"Sample {sample_indices[sample_id]}: "
+                        f"thinking complete, marking for answer generation"
+                    )
+                    completed[sample_id] = True
+                    needs_final_answer[sample_id] = True
                 elif selected.is_trajectory_complete:
                     completion_reason = None
                     if selected.other_data:
@@ -386,15 +400,12 @@ class StrategyOnlineBestOfN(StrategyBase):
             fin_reqs = [requests[i] for i in to_finalize]
             fin_trajs = [trajectories[i] for i in to_finalize]
 
-            # Generate answer candidates per sample (no batch API available)
-            answer_cands_batch = [
-                self.step_generator.generate_answer_candidates(
-                    req,
-                    trajectory=traj,
-                    candidates_per_step=self.candidates_per_step,
-                )
-                for req, traj in zip(fin_reqs, fin_trajs)
-            ]
+            # Batch generate answer candidates in single call
+            answer_cands_batch = self.step_generator.generate_answer_candidates_batch(
+                fin_reqs,
+                trajectories=fin_trajs,
+                candidates_per_step=self.candidates_per_step,
+            )
 
             # 11. Record tokens for final answer generation
             for pos, sample_id in enumerate(to_finalize):

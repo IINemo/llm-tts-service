@@ -273,17 +273,18 @@ class StrategyOfflineBestOfN(StrategyBase):
             "candidate": candidate,
         }
 
-    def _generate_answers_batch(
+    def _generate_answers(
         self,
         traj_datas: List[Dict[str, Any]],
         requests: List[List[Dict[str, str]]],
     ) -> None:
         """
-        Batch-generate answer phases for all thinking candidates that need them.
+        Generate answer phases for all thinking candidates that need them.
 
-        Uses generate_step_candidates_batch to generate all answers in a single
-        vLLM call, same as reasoning phase. Only thinking steps are scored —
-        answer phase is appended to full_text but excluded from scoring.
+        Uses generate_answer_candidates (the proper answer generation API) which
+        handles </think> closing and answer pattern appending. Only thinking
+        steps are scored — answer phase is appended to full_text but excluded
+        from scoring.
 
         Args:
             traj_datas: List of trajectory dicts from _split_thinking_candidate.
@@ -292,36 +293,26 @@ class StrategyOfflineBestOfN(StrategyBase):
             requests: Corresponding request for each traj_data.
         """
         # Collect candidates needing answer generation
-        answer_indices = []  # indices into traj_datas
-        answer_requests = []
-        answer_trajectories = []
-
+        answer_indices = []
         for i, traj_data in enumerate(traj_datas):
             if traj_data.get("needs_answer"):
                 answer_indices.append(i)
-                answer_requests.append(requests[i])
-                answer_trajectories.append([traj_data["candidate"]])
 
         if not answer_indices:
             return
 
         log.info(
-            f"Generating {len(answer_indices)} answer phases in single batched call "
+            f"Generating {len(answer_indices)} answer phases in batched call "
             f"(only thinking steps are scored, answers excluded from scoring)"
         )
 
         # Batch generate all answers in one vLLM call
-        answer_stop_tokens = list(
-            getattr(self.step_generator, "response_stop_tokens", ["<end of response>"])
-        )
-        answer_results = self.step_generator.generate_step_candidates_batch(
-            requests=answer_requests,
-            trajectories=answer_trajectories,
+        batch_requests = [requests[i] for i in answer_indices]
+        batch_trajectories = [[traj_datas[i]["candidate"]] for i in answer_indices]
+        answer_results = self.step_generator.generate_answer_candidates_batch(
+            batch_requests,
+            batch_trajectories,
             candidates_per_step=1,
-            stop_tokens_override=answer_stop_tokens,
-            max_tokens_override=self.step_generator.max_new_tokens,
-            compute_uncertainty=False,
-            sample_ids=list(range(len(answer_indices))),
         )
 
         # Distribute answers back to trajectory data
@@ -400,7 +391,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             results.append(traj_data)
 
         # Batch-generate answer phases for all thinking candidates in one vLLM call
-        self._generate_answers_batch(results, [request] * len(results))
+        self._generate_answers(results, [request] * len(results))
 
         return results
 
@@ -672,7 +663,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             )
 
         # Phase 1b: Batch-generate answer phases for ALL thinking candidates in one vLLM call
-        self._generate_answers_batch(all_traj_datas, all_traj_requests)
+        self._generate_answers(all_traj_datas, all_traj_requests)
 
         # Phase 1c: Compute uncertainty scores and build scoring lists
         for sample_data_idx, data in enumerate(sample_data):

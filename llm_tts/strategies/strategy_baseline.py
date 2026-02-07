@@ -308,6 +308,35 @@ class StrategyBaseline(StrategyBase):
             sample_ids=list(range(M)),
         )
 
+        # Identify thinking-mode candidates that need answer generation
+        thinking_indices = []  # indices into batch_results
+        for idx, candidates in enumerate(batch_results):
+            if candidates:
+                candidate = candidates[0]
+                if (
+                    getattr(self.step_generator, "thinking_mode", False)
+                    and "</think>" in candidate.text
+                    and not candidate.is_trajectory_complete
+                ):
+                    thinking_indices.append(idx)
+
+        # Batch generate all answer phases in one call
+        answer_map = {}  # idx -> answer_step
+        if thinking_indices:
+            log.info(
+                f"Generating {len(thinking_indices)} answer phases in batched call"
+            )
+            batch_answer_reqs = [requests[i] for i in thinking_indices]
+            batch_answer_trajs = [[batch_results[i][0]] for i in thinking_indices]
+            answer_results = self.step_generator.generate_answer_candidates_batch(
+                batch_answer_reqs,
+                batch_answer_trajs,
+                candidates_per_step=1,
+            )
+            for batch_idx, orig_idx in enumerate(thinking_indices):
+                if answer_results[batch_idx]:
+                    answer_map[orig_idx] = answer_results[batch_idx][0]
+
         # Process StepCandidates into result dicts
         results = []
         for idx, (candidates, sample_idx) in enumerate(
@@ -331,26 +360,10 @@ class StrategyBaseline(StrategyBase):
 
             candidate = candidates[0]  # candidates_per_step=1
 
-            # Thinking mode: generation stopped at </think>, now generate final answer
-            if (
-                getattr(self.step_generator, "thinking_mode", False)
-                and "</think>" in candidate.text
-            ):
-                log.info(
-                    f"Sample {sample_idx}: thinking complete, generating final answer"
-                )
-                thinking_step = candidate
-                answer_candidates = self.step_generator.generate_answer_candidates(
-                    requests[idx],
-                    [thinking_step],
-                    candidates_per_step=1,
-                )
-                if answer_candidates:
-                    answer_step = answer_candidates[0]
-                    answer_step.is_trajectory_complete = True
-                    trajectory = [thinking_step, answer_step]
-                else:
-                    trajectory = [candidate]
+            if idx in answer_map:
+                answer_step = answer_map[idx]
+                answer_step.is_trajectory_complete = True
+                trajectory = [candidate, answer_step]
             else:
                 trajectory = [candidate]
             final_trajectory = convert_trajectory_to_string(trajectory)

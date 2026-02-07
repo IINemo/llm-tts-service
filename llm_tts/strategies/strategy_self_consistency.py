@@ -91,6 +91,34 @@ class StrategySelfConsistency(StrategyBase):
         Returns:
             List of path dictionaries with text, tokens, steps info
         """
+        # Identify which candidates need answer generation
+        thinking_indices = []
+        for i, candidate in enumerate(candidates):
+            if (
+                getattr(self.step_generator, "thinking_mode", False)
+                and "</think>" in candidate.text
+                and not candidate.is_trajectory_complete
+            ):
+                thinking_indices.append(i)
+
+        # Batch generate all answer phases in one call
+        answer_map = {}  # candidate index -> answer_step
+        if thinking_indices:
+            log.info(
+                f"Generating {len(thinking_indices)} answer phases in batched call"
+            )
+            batch_requests = [request] * len(thinking_indices)
+            batch_trajectories = [[candidates[i]] for i in thinking_indices]
+            answer_results = self.step_generator.generate_answer_candidates_batch(
+                batch_requests,
+                batch_trajectories,
+                candidates_per_step=1,
+            )
+            for batch_idx, cand_idx in enumerate(thinking_indices):
+                if answer_results[batch_idx]:
+                    answer_map[cand_idx] = answer_results[batch_idx][0]
+
+        # Build paths from candidates + answers
         paths = []
         for i, candidate in enumerate(candidates):
             text = candidate.raw_text or candidate.text
@@ -98,43 +126,31 @@ class StrategySelfConsistency(StrategyBase):
                 "original_token_count", len(candidate.token_ids)
             )
 
-            # Thinking mode: stopped at </think>, generate answer as step 2
-            if (
-                getattr(self.step_generator, "thinking_mode", False)
-                and "</think>" in candidate.text
-            ):
-                log.info(f"  Path {i + 1}: thinking complete, generating answer phase")
-                thinking_step = candidate
-                answer_candidates = self.step_generator.generate_answer_candidates(
-                    request,
-                    [thinking_step],
-                    candidates_per_step=1,
+            if i in answer_map:
+                answer_step = answer_map[i]
+                answer_step.is_trajectory_complete = True
+                trajectory = [candidate, answer_step]
+                full_text = convert_trajectory_to_string(trajectory)
+                answer_tokens = (
+                    len(answer_step.token_ids) if answer_step.token_ids else 0
                 )
-                if answer_candidates:
-                    answer_step = answer_candidates[0]
-                    answer_step.is_trajectory_complete = True
-                    trajectory = [thinking_step, answer_step]
-                    full_text = convert_trajectory_to_string(trajectory)
-                    answer_tokens = (
-                        len(answer_step.token_ids) if answer_step.token_ids else 0
-                    )
-                    num_tokens += answer_tokens
-                    thinking_num, response_num = count_thinking_and_response_steps(
-                        trajectory
-                    )
-                    paths.append(
-                        {
-                            "text": full_text,
-                            "num_tokens": num_tokens,
-                            "steps": [thinking_step.text, answer_step.text],
-                            "is_complete": True,
-                            "thinking_steps": thinking_num,
-                            "response_steps": response_num,
-                            "validity_scores": [],
-                            "avg_validity": 0.0,
-                        }
-                    )
-                    continue
+                num_tokens += answer_tokens
+                thinking_num, response_num = count_thinking_and_response_steps(
+                    trajectory
+                )
+                paths.append(
+                    {
+                        "text": full_text,
+                        "num_tokens": num_tokens,
+                        "steps": [candidate.text, answer_step.text],
+                        "is_complete": True,
+                        "thinking_steps": thinking_num,
+                        "response_steps": response_num,
+                        "validity_scores": [],
+                        "avg_validity": 0.0,
+                    }
+                )
+                continue
 
             # Non-thinking or no </think>: single-step path
             paths.append(
