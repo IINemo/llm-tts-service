@@ -12,7 +12,7 @@ from llm_tts.generators import (
 from llm_tts.generators.base import CompletionReason
 from llm_tts.utils.answer_extraction import extract_answer
 
-from .strategy_base import StrategyBase, count_thinking_and_response_steps
+from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +142,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         validity_scores: List[List[float]] = [[] for _ in range(M)]
         completed: List[bool] = [False] * M
         needs_final_answer: List[bool] = [False] * M
+        answer_steps: List[Optional[str]] = [None] * M
         total_tokens: List[int] = [0] * M
 
         for step_num in range(self.max_steps):
@@ -328,7 +329,23 @@ class StrategyOnlineBestOfN(StrategyBase):
                 validity_scores[sample_id].append(scores[best_idx])
 
                 # 8. Completion checks
-                if forced_complete:
+                if (
+                    getattr(self.step_generator, "thinking_mode", False)
+                    and "</think>" in selected.text
+                ):
+                    # Thinking phase complete: generate answer via
+                    # generate_answer_candidates (proper stop tokens, not
+                    # step-level splitting).
+                    # Reset is_trajectory_complete — boxed answer inside <think>
+                    # is not the final response, answer phase still needed.
+                    selected.is_trajectory_complete = False
+                    log.info(
+                        f"Sample {sample_indices[sample_id]}: "
+                        f"thinking complete, marking for answer generation"
+                    )
+                    completed[sample_id] = True
+                    needs_final_answer[sample_id] = True
+                elif forced_complete:
                     # Boxed answer or garbage: keep the step, just mark done
                     completed[sample_id] = True
                 elif selected.is_trajectory_complete:
@@ -386,15 +403,12 @@ class StrategyOnlineBestOfN(StrategyBase):
             fin_reqs = [requests[i] for i in to_finalize]
             fin_trajs = [trajectories[i] for i in to_finalize]
 
-            # Generate answer candidates per sample (no batch API available)
-            answer_cands_batch = [
-                self.step_generator.generate_answer_candidates(
-                    req,
-                    trajectory=traj,
-                    candidates_per_step=self.candidates_per_step,
-                )
-                for req, traj in zip(fin_reqs, fin_trajs)
-            ]
+            # Batch generate answer candidates in single call
+            answer_cands_batch = self.step_generator.generate_answer_candidates_batch(
+                fin_reqs,
+                trajectories=fin_trajs,
+                candidates_per_step=self.candidates_per_step,
+            )
 
             # 11. Record tokens for final answer generation
             for pos, sample_id in enumerate(to_finalize):
@@ -433,8 +447,11 @@ class StrategyOnlineBestOfN(StrategyBase):
                 )
 
                 trajectories[sample_id].append(a_cands[best_idx])
-                selected_steps[sample_id].append(a_cands[best_idx])
-                validity_scores[sample_id].append(a_scores[best_idx])
+                # Don't append to selected_steps/validity_scores —
+                # answer is stored separately, same as offline BoN
+                answer_steps[sample_id] = (
+                    a_cands[best_idx].raw_text or a_cands[best_idx].text
+                )
 
         # Finalize stats
         self.step_generator.finalize_sample_stats(num_samples=M)
@@ -473,9 +490,9 @@ class StrategyOnlineBestOfN(StrategyBase):
             final_trajectory = convert_trajectory_to_string(trajectories[idx])
             extracted = extract_answer(final_trajectory)
 
-            thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-                selected_steps[idx]
-            )
+            # Answer step is stored separately (not in selected_steps),
+            # so selected_steps contains only reasoning steps
+            reasoning_steps = len(selected_steps[idx])
 
             token_stats = self.step_generator.get_sample_stats_for(idx)
 
@@ -502,7 +519,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             log.info(
                 f"Sample {sample_indices[idx]}: "
                 f"{len(selected_steps[idx])} steps "
-                f"({thinking_num_steps} thinking, {response_num_steps} response), "
+                f"({reasoning_steps} reasoning steps), "
                 f"tokens={token_stats['total_tokens_this_sample']:,}, "
                 f"scores=[{scores_str}], "
                 f"answer={extracted!r}"
@@ -520,8 +537,8 @@ class StrategyOnlineBestOfN(StrategyBase):
                     "trajectory": final_trajectory,
                     "extracted_answer": extracted,
                     "steps": selected_steps[idx],
-                    "thinking_num_steps": thinking_num_steps,
-                    "response_num_steps": response_num_steps,
+                    "answer_step": answer_steps[idx],
+                    "reasoning_steps": reasoning_steps,
                     "validity_scores": validity_scores[idx],
                     "completed": bool(selected_steps[idx])
                     and selected_steps[idx][-1].is_trajectory_complete,
@@ -603,8 +620,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                         "trajectory": "",
                         "extracted_answer": None,
                         "steps": [],
-                        "thinking_num_steps": 0,
-                        "response_num_steps": 0,
+                        "reasoning_steps": 0,
                         "validity_scores": [],
                         "completed": False,
                         "token_stats": self.step_generator.get_sample_stats_for(sid),
@@ -658,7 +674,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             log.info(
                 f"Sample {sample_indices[idx]}: "
                 f"{len(r['steps'])} steps "
-                f"({r['thinking_num_steps']} thinking, {r['response_num_steps']} response), "
+                f"({r['reasoning_steps']} reasoning steps), "
                 f"tokens={token_stats['total_tokens_this_sample']:,}, "
                 f"scores=[{scores_str}], "
                 f"answer={r['extracted_answer']!r}"
@@ -776,6 +792,20 @@ class StrategyOnlineBestOfN(StrategyBase):
             validity_scores.append(scores[best_idx])
 
             # Completion checks
+            if (
+                getattr(self.step_generator, "thinking_mode", False)
+                and "</think>" in selected.text
+            ):
+                # Thinking phase complete: need answer generation.
+                # Reset is_trajectory_complete — boxed answer inside <think>
+                # is not the final response, answer phase still needed.
+                selected.is_trajectory_complete = False
+                log.info(
+                    f"Sample {sample_idx}: "
+                    f"thinking complete, marking for answer generation"
+                )
+                break
+
             if forced_complete:
                 break
 
@@ -810,9 +840,17 @@ class StrategyOnlineBestOfN(StrategyBase):
 
         # Check if we need a final answer
         needs_final = False
+        answer_text = None
         if not selected_steps:
             needs_final = True
         elif not selected_steps[-1].is_trajectory_complete:
+            needs_final = True
+        elif (
+            getattr(self.step_generator, "thinking_mode", False)
+            and selected_steps
+            and "</think>" in selected_steps[-1].text
+        ):
+            # Thinking complete but still need answer phase
             needs_final = True
 
         if needs_final:
@@ -860,23 +898,26 @@ class StrategyOnlineBestOfN(StrategyBase):
                         f"(score={a_scores[best_a]:.3f})"
                     )
                     trajectory.append(answer_cands[best_a])
-                    selected_steps.append(answer_cands[best_a])
-                    validity_scores.append(a_scores[best_a])
+                    # Don't append to selected_steps/validity_scores —
+                    # answer is stored separately, same as offline BoN
+                    answer_text = (
+                        answer_cands[best_a].raw_text or answer_cands[best_a].text
+                    )
 
         # Build result
         final_trajectory = convert_trajectory_to_string(trajectory)
         extracted = extract_answer(final_trajectory)
-        thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-            selected_steps
-        )
+        # Answer step is stored separately (not in selected_steps),
+        # so selected_steps contains only reasoning steps
+        reasoning_steps = len(selected_steps)
         token_stats = self.step_generator.get_sample_stats_for(sample_id)
 
         return {
             "trajectory": final_trajectory,
             "extracted_answer": extracted,
             "steps": selected_steps,
-            "thinking_num_steps": thinking_num_steps,
-            "response_num_steps": response_num_steps,
+            "answer_step": answer_text,
+            "reasoning_steps": reasoning_steps,
             "validity_scores": validity_scores,
             "completed": bool(selected_steps)
             and selected_steps[-1].is_trajectory_complete,

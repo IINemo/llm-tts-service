@@ -23,7 +23,11 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from llm_tts.generators.base import StepCandidate, StepCandidateGeneratorBase
+from llm_tts.generators.base import (
+    StepCandidate,
+    StepCandidateGeneratorBase,
+    convert_trajectory_to_string,
+)
 from llm_tts.utils.answer_extraction import extract_answer
 
 from .strategy_base import StrategyBase
@@ -197,6 +201,145 @@ class StrategyOfflineBestOfN(StrategyBase):
             log.warning(f"Unknown aggregation '{self.score_aggregation}', using mean")
             return float(np.mean(step_scores))
 
+    def _split_thinking_candidate(
+        self,
+        candidate: StepCandidate,
+    ) -> Dict[str, Any]:
+        """
+        Split a candidate into steps with thinking-mode awareness (no generation).
+
+        For thinking-mode candidates (containing </think>):
+        - Splits thinking text into steps via detector
+        - Marks as needs_answer=True so answer can be batched later
+
+        For non-thinking candidates: split full text via detector as before.
+
+        Args:
+            candidate: StepCandidate from generation
+
+        Returns:
+            Dict with steps, full_text, num_steps, is_complete, num_tokens,
+            reasoning_steps, needs_answer, candidate
+        """
+        raw_text = candidate.raw_text or candidate.text
+        num_tokens = (
+            candidate.other_data.get("original_token_count", len(candidate.token_ids))
+            if candidate.other_data
+            else len(candidate.token_ids)
+        )
+
+        # Thinking mode: stopped at </think>, needs answer generation
+        if (
+            getattr(self.step_generator, "thinking_mode", False)
+            and "</think>" in candidate.text
+        ):
+            # Use candidate.text for splitting — it has </think> appended back
+            # (candidate.raw_text is vLLM output which strips stop strings)
+            thinking_text = candidate.text
+            if hasattr(self.step_generator, "detector"):
+                thinking_steps = self.step_generator.detector.detect_steps(
+                    thinking_text, use_stop_tokens=True
+                )
+            else:
+                thinking_steps = [thinking_text]
+
+            return {
+                "steps": thinking_steps,  # Only thinking steps (for scoring)
+                "full_text": raw_text,  # Will be updated after answer generation
+                "num_steps": len(thinking_steps),
+                "is_complete": False,  # Not yet — answer still needed
+                "num_tokens": num_tokens,
+                "reasoning_steps": len(thinking_steps),
+                "needs_answer": True,
+                "candidate": candidate,
+            }
+
+        # Non-thinking mode: split full text via detector
+        if hasattr(self.step_generator, "detector"):
+            steps = self.step_generator.detector.detect_steps(
+                raw_text, use_stop_tokens=True
+            )
+        else:
+            steps = [raw_text]
+
+        return {
+            "steps": steps,
+            "full_text": raw_text,
+            "num_steps": len(steps),
+            "is_complete": candidate.is_trajectory_complete,
+            "num_tokens": num_tokens,
+            "reasoning_steps": len(steps),
+            "needs_answer": False,
+            "candidate": candidate,
+        }
+
+    def _generate_answers(
+        self,
+        traj_datas: List[Dict[str, Any]],
+        requests: List[List[Dict[str, str]]],
+    ) -> None:
+        """
+        Generate answer phases for all thinking candidates that need them.
+
+        Uses generate_answer_candidates (the proper answer generation API) which
+        handles </think> closing and answer pattern appending. Only thinking
+        steps are scored — answer phase is appended to full_text but excluded
+        from scoring.
+
+        Args:
+            traj_datas: List of trajectory dicts from _split_thinking_candidate.
+                        Modified in-place: full_text, is_complete, num_tokens
+                        are updated for candidates needing answers.
+            requests: Corresponding request for each traj_data.
+        """
+        # Collect candidates needing answer generation
+        answer_indices = []
+        for i, traj_data in enumerate(traj_datas):
+            if traj_data.get("needs_answer"):
+                answer_indices.append(i)
+
+        if not answer_indices:
+            return
+
+        log.info(
+            f"Generating {len(answer_indices)} answer phases in batched call "
+            f"(only thinking steps are scored, answers excluded from scoring)"
+        )
+
+        # Batch generate all answers in one vLLM call
+        batch_requests = [requests[i] for i in answer_indices]
+        batch_trajectories = [[traj_datas[i]["candidate"]] for i in answer_indices]
+        answer_results = self.step_generator.generate_answer_candidates_batch(
+            batch_requests,
+            batch_trajectories,
+            candidates_per_step=1,
+        )
+
+        # Distribute answers back to trajectory data
+        for batch_idx, traj_idx in enumerate(answer_indices):
+            traj_data = traj_datas[traj_idx]
+            candidates = (
+                answer_results[batch_idx] if batch_idx < len(answer_results) else []
+            )
+
+            if candidates:
+                answer_step = candidates[0]
+                answer_step.is_trajectory_complete = True
+                thinking_step = traj_data["candidate"]
+                trajectory = [thinking_step, answer_step]
+                traj_data["full_text"] = convert_trajectory_to_string(trajectory)
+                answer_tokens = (
+                    len(answer_step.token_ids) if answer_step.token_ids else 0
+                )
+                traj_data["num_tokens"] += answer_tokens
+                traj_data["is_complete"] = True
+                # Store answer text for logging
+                answer_text = answer_step.raw_text or answer_step.text
+                traj_data["answer_step"] = answer_text
+            else:
+                log.warning(f"No answer generated for trajectory {traj_idx}")
+                traj_data["is_complete"] = False
+
     def _generate_all_trajectories_single_call(
         self,
         request: List[Dict[str, str]],
@@ -204,12 +347,9 @@ class StrategyOfflineBestOfN(StrategyBase):
         """
         Generate all N trajectories in a SINGLE vLLM call.
 
-        Uses generate_full_trajectories() which:
-        1. Generates N complete trajectories with n=num_trajectories
-        2. Splits each into steps post-hoc using the same stop tokens
-
-        This is much faster than step-by-step generation because there's
-        no stopping at step boundaries during generation.
+        Uses generate_step_candidates_batch with proper stop tokens (including
+        </think> for thinking mode). For thinking-mode candidates, generates
+        the answer phase separately and scores only thinking steps.
 
         Args:
             request: Chat messages for the request
@@ -221,25 +361,37 @@ class StrategyOfflineBestOfN(StrategyBase):
             f"\n--- Generating {self.num_trajectories} trajectories (single call) ---"
         )
 
+        # Build stop tokens list, including </think> for thinking mode
+        stop_tokens = ["<end of response>"]
+        if (
+            getattr(self.step_generator, "thinking_mode", False)
+            and "</think>" not in stop_tokens
+        ):
+            stop_tokens.append("</think>")
+
         # Single vLLM call generates all N trajectories
-        raw_results = self.step_generator.generate_full_trajectories(
-            request=request,
-            num_trajectories=self.num_trajectories,
+        batch_results = self.step_generator.generate_step_candidates_batch(
+            requests=[request],
+            trajectories=[[]],
+            candidates_per_step=self.num_trajectories,
+            stop_tokens_override=stop_tokens,
+            max_tokens_override=self.step_generator.max_new_tokens,
+            compute_uncertainty=False,
+            sample_ids=[0],
         )
 
-        # Convert to expected format
+        candidates = batch_results[0] if batch_results else []
+
+        # Split candidates into steps (no generation yet)
         results = []
-        for i, raw in enumerate(raw_results):
-            results.append(
-                {
-                    "steps": raw["steps"],  # List of step strings
-                    "step_scores": [],  # Will be filled after scoring
-                    "aggregated_score": 0.0,  # Will be filled after scoring
-                    "full_text": raw["full_text"],
-                    "num_steps": len(raw["steps"]),
-                    "is_complete": raw["is_complete"],
-                }
-            )
+        for i, candidate in enumerate(candidates):
+            traj_data = self._split_thinking_candidate(candidate)
+            traj_data["step_scores"] = []  # Will be filled after scoring
+            traj_data["aggregated_score"] = 0.0  # Will be filled after scoring
+            results.append(traj_data)
+
+        # Batch-generate answer phases for all thinking candidates in one vLLM call
+        self._generate_answers(results, [request] * len(results))
 
         return results
 
@@ -345,8 +497,8 @@ class StrategyOfflineBestOfN(StrategyBase):
             "trajectory": best_result["full_text"],
             "extracted_answer": extracted,
             "steps": best_result["steps"],  # List of step strings
-            "thinking_num_steps": 0,  # Not tracked in single-call mode
-            "response_num_steps": best_result["num_steps"],
+            "answer_step": best_result.get("answer_step", None),
+            "reasoning_steps": best_result.get("reasoning_steps", 0),
             "validity_scores": best_result["step_scores"],
             "aggregated_score": best_result["aggregated_score"],
             "all_trajectories": [r["full_text"] for r in all_trajectory_results],
@@ -445,11 +597,19 @@ class StrategyOfflineBestOfN(StrategyBase):
         self.step_generator.reset_per_sample_stats()
         if hasattr(self.scorer, "reset_prm_stats"):
             self.scorer.reset_prm_stats()
+        # Build stop tokens list, including </think> for thinking mode
+        stop_tokens = ["<end of response>"]
+        if (
+            getattr(self.step_generator, "thinking_mode", False)
+            and "</think>" not in stop_tokens
+        ):
+            stop_tokens.append("</think>")
+
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
             trajectories=[[] for _ in range(M)],
             candidates_per_step=N,
-            stop_tokens_override=["<end of response>"],
+            stop_tokens_override=stop_tokens,
             max_tokens_override=self.step_generator.max_new_tokens,
             compute_uncertainty=use_uncertainty_wrapper,
             sample_ids=list(range(M)),
@@ -462,6 +622,10 @@ class StrategyOfflineBestOfN(StrategyBase):
         all_sample_ids_for_scoring = []  # Sample IDs for logging
         all_trajectory_ids_for_scoring = []  # Trajectory IDs within sample for logging
         trajectory_to_sample_map = []  # (sample_data_idx, traj_idx_within_sample)
+
+        # Phase 1a: Split all candidates into steps (no answer generation yet)
+        all_traj_datas = []  # Flat list of all traj_datas across all samples
+        all_traj_requests = []  # Corresponding request for each traj_data
 
         for idx, (candidates, request, sample_idx) in enumerate(
             zip(batch_results, requests, sample_indices)
@@ -478,59 +642,14 @@ class StrategyOfflineBestOfN(StrategyBase):
                 )
                 continue
 
-            # Build trajectory results from the N StepCandidates
             trajectories = []
-
             for traj_idx, candidate in enumerate(candidates):
-                raw_text = candidate.raw_text or candidate.text
-                num_tokens = (
-                    candidate.other_data.get(
-                        "original_token_count", len(candidate.token_ids)
-                    )
-                    if candidate.other_data
-                    else len(candidate.token_ids)
-                )
-
-                # Split into steps post-hoc using step generator's detector
-                if hasattr(self.step_generator, "detector"):
-                    steps = self.step_generator.detector.detect_steps(
-                        raw_text, use_stop_tokens=True
-                    )
-                else:
-                    steps = [raw_text]  # Fallback: treat as single step
-
-                # Compute per-step uncertainty if using uncertainty wrapper
-                # Score each step independently using its token logprobs
-                if use_uncertainty_wrapper and candidate.other_data.get("raw_logprobs"):
-                    step_scores = self._compute_per_step_uncertainty(
-                        steps=steps,
-                        token_ids=list(candidate.token_ids),
-                        logprobs=candidate.other_data["raw_logprobs"],
-                        uncertainty_wrapper=self.step_generator.model,
-                    )
-                    aggregated = self._aggregate_scores(step_scores)
-                else:
-                    step_scores = []
-                    aggregated = 0.0
-
-                traj_data = {
-                    "steps": steps,
-                    "step_scores": step_scores,
-                    "aggregated_score": aggregated,
-                    "full_text": raw_text,
-                    "num_steps": len(steps),
-                    "is_complete": candidate.is_trajectory_complete,
-                    "num_tokens": num_tokens,
-                }
+                traj_data = self._split_thinking_candidate(candidate)
+                traj_data["step_scores"] = []
+                traj_data["aggregated_score"] = 0.0
                 trajectories.append(traj_data)
-
-                # Add to flat lists for batch scoring (only if has steps AND no pre-computed scores)
-                if steps and not use_uncertainty_wrapper:
-                    all_chats_for_scoring.append(request)
-                    all_trajectories_for_scoring.append(steps)
-                    all_sample_ids_for_scoring.append(sample_idx)
-                    all_trajectory_ids_for_scoring.append(traj_idx)
-                    trajectory_to_sample_map.append((len(sample_data), traj_idx))
+                all_traj_datas.append(traj_data)
+                all_traj_requests.append(request)
 
             sample_data.append(
                 {
@@ -540,6 +659,39 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "failed": False,
                 }
             )
+
+        # Phase 1b: Batch-generate answer phases for ALL thinking candidates in one vLLM call
+        self._generate_answers(all_traj_datas, all_traj_requests)
+
+        # Phase 1c: Compute uncertainty scores and build scoring lists
+        for sample_data_idx, data in enumerate(sample_data):
+            if data["failed"]:
+                continue
+            sample_idx = data["sample_idx"]
+            request = data["request"]
+            for traj_idx, traj_data in enumerate(data["trajectories"]):
+                candidate = traj_data["candidate"]
+
+                # Compute per-step uncertainty if using uncertainty wrapper
+                # Score ONLY thinking steps using original candidate's token_ids/logprobs
+                if use_uncertainty_wrapper and candidate.other_data.get("raw_logprobs"):
+                    step_scores = self._compute_per_step_uncertainty(
+                        steps=traj_data["steps"],
+                        token_ids=list(candidate.token_ids),
+                        logprobs=candidate.other_data["raw_logprobs"],
+                        uncertainty_wrapper=self.step_generator.model,
+                    )
+                    aggregated = self._aggregate_scores(step_scores)
+                    traj_data["step_scores"] = step_scores
+                    traj_data["aggregated_score"] = aggregated
+
+                # Add to flat lists for batch scoring (only if has steps AND no pre-computed scores)
+                if traj_data["steps"] and not use_uncertainty_wrapper:
+                    all_chats_for_scoring.append(request)
+                    all_trajectories_for_scoring.append(traj_data["steps"])
+                    all_sample_ids_for_scoring.append(sample_idx)
+                    all_trajectory_ids_for_scoring.append(traj_idx)
+                    trajectory_to_sample_map.append((sample_data_idx, traj_idx))
 
         # Phase 2: Batch score ALL trajectories in single call
         # Skip if using uncertainty wrapper (scores already computed during generation)
@@ -643,8 +795,8 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "trajectory": best_result.get("full_text", ""),
                     "extracted_answer": extracted,
                     "steps": best_result.get("steps", []),
-                    "thinking_num_steps": 0,
-                    "response_num_steps": best_result.get("num_steps", 0),
+                    "answer_step": best_result.get("answer_step", None),
+                    "reasoning_steps": best_result.get("reasoning_steps", 0),
                     "validity_scores": best_result.get("step_scores", []),
                     "aggregated_score": best_result.get("aggregated_score", 0.0),
                     "all_trajectories": [t["full_text"] for t in trajectories],
@@ -668,8 +820,8 @@ class StrategyOfflineBestOfN(StrategyBase):
             "trajectory": "",
             "extracted_answer": "",
             "steps": [],
-            "thinking_num_steps": 0,
-            "response_num_steps": 0,
+            "answer_step": None,
+            "reasoning_steps": 0,
             "validity_scores": [],
             "aggregated_score": 0.0,
             "all_trajectories": [],
