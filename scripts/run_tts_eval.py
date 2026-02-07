@@ -1056,11 +1056,10 @@ def _generate_trajectories_batch(
             if "extracted_answer" in result and result["extracted_answer"]:
                 generated_text = result["extracted_answer"]
             else:
-                generated_text = result["trajectory"]
-                if question in generated_text:
-                    generated_text = generated_text.replace(question, "").strip()
-                if "<Answer>:" in generated_text:
-                    generated_text = generated_text.split("<Answer>:")[-1].strip()
+                log.warning(
+                    f"Sample {i}: no extracted_answer found, answer extraction may have failed"
+                )
+                generated_text = ""
 
             # Log result
             log.info("\n" + "=" * 60)
@@ -1184,6 +1183,10 @@ def _generate_trajectories_batch(
                 "generated_trajectory": result["trajectory"],
                 "generated_answer": generated_text,
                 "steps": result["steps"],
+                "thinking_num_steps": result.get(
+                    "thinking_num_steps", len(result["steps"])
+                ),
+                "response_num_steps": result.get("response_num_steps", 0),
                 "validity_scores": result.get("validity_scores", []),
                 "completed": result["completed"],
                 "is_correct": bool(is_correct),  # Primary (exact_match)
@@ -1430,12 +1433,10 @@ def generate_trajectories(
         if "extracted_answer" in result and result["extracted_answer"]:
             generated_text = result["extracted_answer"]
         else:
-            # Fallback: extract from trajectory
-            generated_text = result["trajectory"]
-            if question in generated_text:
-                generated_text = generated_text.replace(question, "").strip()
-            if "<Answer>:" in generated_text:
-                generated_text = generated_text.split("<Answer>:")[-1].strip()
+            log.warning(
+                f"Sample {i}: no extracted_answer found, answer extraction may have failed"
+            )
+            generated_text = ""
 
         # Log detailed traces
         log.info("\n" + "-" * 60)
@@ -1495,6 +1496,10 @@ def generate_trajectories(
             "generated_trajectory": result["trajectory"],
             "generated_answer": generated_text,
             "steps": result["steps"],
+            "thinking_num_steps": result.get(
+                "thinking_num_steps", len(result["steps"])
+            ),
+            "response_num_steps": result.get("response_num_steps", 0),
             "validity_scores": result.get("validity_scores", []),
             "completed": result["completed"],
             "is_correct": bool(is_correct),
