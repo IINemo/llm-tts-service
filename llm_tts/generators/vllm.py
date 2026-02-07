@@ -672,10 +672,14 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     text = raw_text
 
                     # Check if thinking phase is complete
-                    thinking_complete = "</think>" in text
-                    # NOTE: We DON't truncate at "" because the final answer comes AFTER it.
-                    # The model generates: <|thinking|>...</thinking><final answer>
-                    # We need both parts for proper answer extraction.
+                    # vLLM strips stop strings from output, so check stop_reason too
+                    thinking_complete = (
+                        "</think>" in text or stop_reason == "</think>"
+                    )
+                    # Don't mark trajectory complete — answer phase still needs to run.
+                    # Append </think> back to text so downstream can detect it
+                    if stop_reason == "</think>" and "</think>" not in text:
+                        text = text + "</think>"
 
                     # Handle max tokens - only truncate if we actually hit the limit
                     # stop_reason=None can mean EOS token ID stop (complete) or max tokens
@@ -699,7 +703,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     )
 
                     is_trajectory_complete = (
-                        thinking_complete or repetition_detected or stopped_at_eos
+                        repetition_detected or stopped_at_eos
                     )
                     step_text = text.strip()
                     target_text = text.strip()
@@ -788,7 +792,16 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 total_tokens = context_tokens + max_gen
 
                 max_step = getattr(self, "max_step_tokens", 300)
-                tokens_needed = max_step + self.max_answer_tokens
+                # After thinking is complete, we only need room for the answer
+                thinking_done = self.thinking_mode and any(
+                    "</think>" in c.text
+                    or c.other_data.get("completion_reason") == CompletionReason.THINKING_COMPLETE
+                    for c in candidates
+                )
+                tokens_needed = (
+                    self.max_answer_tokens if thinking_done
+                    else max_step + self.max_answer_tokens
+                )
                 remaining = self.max_context_budget - total_tokens
 
                 if remaining < tokens_needed:
