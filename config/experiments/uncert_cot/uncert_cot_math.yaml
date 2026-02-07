@@ -3,7 +3,7 @@
 
 hydra:
   run:
-    dir: ${save_dir}/eval/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: ${save_dir}/eval/${now:%Y-%m-%d}/${system.seed}_${now:%H-%M-%S}
 
 save_dir: "./workdir"
 

@@ -14,7 +14,7 @@ defaults:
   - _self_
 
 # Run naming for descriptive outputs
-run_name: "run_math_tot_${now:%H-%M-%S}"
+run_name: "run_math_tot_${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: false

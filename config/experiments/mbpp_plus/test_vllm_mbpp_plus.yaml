@@ -18,7 +18,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "test_vllm_mbpp_plus_${now:%H-%M-%S}"
+run_name: "test_vllm_mbpp_plus_${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true

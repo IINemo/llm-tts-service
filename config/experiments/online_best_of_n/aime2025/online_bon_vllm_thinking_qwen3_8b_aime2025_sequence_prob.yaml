@@ -13,7 +13,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_thinking_qwen3_8b_aime2025_sequence_prob_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_thinking_qwen3_8b_aime2025_sequence_prob_${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
