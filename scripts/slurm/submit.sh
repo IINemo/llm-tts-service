@@ -14,6 +14,7 @@ SCORERS=""
 SEEDS=1
 SEED=42
 MODE="parallel"  # parallel or sequential
+SUBSET=""  # dataset subset (empty = full dataset)
 DRY_RUN="no"
 GPUS=""
 TIME_LIMIT=""
@@ -38,6 +39,7 @@ Optional:
   --sequential           Alias for --mode sequential
   --gpus <n>             Number of GPUs (default: auto)
   --time <hh:mm:ss>      Time limit (default: auto)
+  --subset <n>           Dataset subset size (default: full dataset)
   --dry-run              Show commands without submitting
   -h, --help             Show this help
 
@@ -109,6 +111,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --time)
             TIME_LIMIT="$2"
+            shift 2
+            ;;
+        --subset)
+            SUBSET="$2"
             shift 2
             ;;
         --dry-run)
@@ -361,7 +367,8 @@ fi
 python scripts/run_tts_eval.py \\
     --config-path=../config \\
     --config-name=${config_name} \\
-    system.seed=\${SEED}
+    system.seed=\${SEED} \\
+    ${SUBSET:+dataset.subset=${SUBSET}}
 "
 
     # Write to temp file and submit
