@@ -448,7 +448,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                 selected_steps[sample_id].append(a_cands[best_idx])
                 validity_scores[sample_id].append(a_scores[best_idx])
                 # Store answer text for logging (thinking mode)
-                answer_steps[sample_id] = a_cands[best_idx].raw_text or a_cands[best_idx].text
+                answer_steps[sample_id] = (
+                    a_cands[best_idx].raw_text or a_cands[best_idx].text
+                )
 
         # Finalize stats
         self.step_generator.finalize_sample_stats(num_samples=M)
@@ -877,7 +879,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                     trajectory.append(answer_cands[best_a])
                     selected_steps.append(answer_cands[best_a])
                     validity_scores.append(a_scores[best_a])
-                    answer_text = answer_cands[best_a].raw_text or answer_cands[best_a].text
+                    answer_text = (
+                        answer_cands[best_a].raw_text or answer_cands[best_a].text
+                    )
 
         # Build result
         final_trajectory = convert_trajectory_to_string(trajectory)

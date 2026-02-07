@@ -533,7 +533,9 @@ class StrategySelfConsistency(StrategyBase):
                     "total_tokens": result.get("total_tokens", 0),
                     "token_stats": token_stats,
                     "reasoning_steps": avg_reasoning_steps,
-                    "answer_step": _get_answer_step_from_traces(result.get("all_traces", [])),
+                    "answer_step": _get_answer_step_from_traces(
+                        result.get("all_traces", [])
+                    ),
                 }
             )
 
