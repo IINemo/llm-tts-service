@@ -1140,6 +1140,9 @@ def _generate_trajectories_batch(
                         s.text if hasattr(s, "text") else str(s)
                         for s in result.get("steps", [])
                     ],
+                    "answer_step": result.get(
+                        "answer_step"
+                    ),  # Final answer text (thinking mode)
                     "validity_scores": result.get("validity_scores", []),
                     "all_step_scores": result.get("all_step_scores", []),
                     "all_scores": result.get("all_scores", []),
@@ -1158,11 +1161,10 @@ def _generate_trajectories_batch(
             if "extracted_answer" in result and result["extracted_answer"]:
                 generated_text = result["extracted_answer"]
             else:
-                generated_text = result["trajectory"]
-                if question in generated_text:
-                    generated_text = generated_text.replace(question, "").strip()
-                if "<Answer>:" in generated_text:
-                    generated_text = generated_text.split("<Answer>:")[-1].strip()
+                log.warning(
+                    f"Sample {i}: no extracted_answer found, answer extraction may have failed"
+                )
+                generated_text = ""
 
             # Log result
             log.info("\n" + "=" * 60)
@@ -1175,7 +1177,21 @@ def _generate_trajectories_batch(
             log.info("-" * 60)
 
             if result["steps"] and isinstance(result["steps"], list):
-                for step_idx, step in enumerate(result["steps"]):
+                # Skip last step if it duplicates the answer_step content
+                # (online BoN / self-consistency append answer to steps AND store in answer_step)
+                answer_step_text = result.get("answer_step") or ""
+                last_step_text = (
+                    result["steps"][-1].text
+                    if hasattr(result["steps"][-1], "text")
+                    else str(result["steps"][-1])
+                )
+                skip_last = (
+                    bool(answer_step_text)
+                    and len(result["steps"]) > 1
+                    and last_step_text.strip()[:200] == answer_step_text.strip()[:200]
+                )
+                steps_to_log = result["steps"][:-1] if skip_last else result["steps"]
+                for step_idx, step in enumerate(steps_to_log):
                     validity = (
                         result.get("validity_scores", [])[step_idx]
                         if "validity_scores" in result
@@ -1190,6 +1206,11 @@ def _generate_trajectories_batch(
                     log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
                     step_text = step.text if hasattr(step, "text") else str(step)
                     log.info(step_text)
+
+            # Log answer step separately for thinking mode, or full trajectory for non-thinking
+            if result.get("answer_step"):
+                log.info("\nGenerated Answer (confidence: N/A):")
+                log.info(result["answer_step"])
             else:
                 log.info(f"\nFull trajectory:\n{result['trajectory']}")
 
@@ -1286,6 +1307,7 @@ def _generate_trajectories_batch(
                 "generated_trajectory": result["trajectory"],
                 "generated_answer": generated_text,
                 "steps": result["steps"],
+                "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
                 "validity_scores": result.get("validity_scores", []),
                 "completed": result["completed"],
                 "is_correct": bool(is_correct),  # Primary (exact_match)
@@ -1347,10 +1369,7 @@ def _generate_trajectories_batch(
             sample_metrics = {
                 "sample_index": i,
                 "is_correct": bool(is_correct),
-                "thinking_num_steps": result.get(
-                    "thinking_num_steps", len(result["steps"])
-                ),
-                "response_num_steps": result.get("response_num_steps", 0),
+                "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
                 "samples_completed": len(results),
                 "total_tokens_this_sample": token_stats.get(
                     "total_tokens_this_sample", 0
@@ -1532,12 +1551,10 @@ def generate_trajectories(
         if "extracted_answer" in result and result["extracted_answer"]:
             generated_text = result["extracted_answer"]
         else:
-            # Fallback: extract from trajectory
-            generated_text = result["trajectory"]
-            if question in generated_text:
-                generated_text = generated_text.replace(question, "").strip()
-            if "<Answer>:" in generated_text:
-                generated_text = generated_text.split("<Answer>:")[-1].strip()
+            log.warning(
+                f"Sample {i}: no extracted_answer found, answer extraction may have failed"
+            )
+            generated_text = ""
 
         # Log detailed traces
         log.info("\n" + "-" * 60)
@@ -1546,7 +1563,21 @@ def generate_trajectories(
 
         # For DeepConf, steps contain the individual traces
         if result["steps"] and isinstance(result["steps"], list):
-            for step_idx, step in enumerate(result["steps"]):
+            # Skip last step if it duplicates the answer_step content
+            # (online BoN / self-consistency append answer to steps AND store in answer_step)
+            answer_step_text = result.get("answer_step") or ""
+            last_step_text = (
+                result["steps"][-1].text
+                if hasattr(result["steps"][-1], "text")
+                else str(result["steps"][-1])
+            )
+            skip_last = (
+                bool(answer_step_text)
+                and len(result["steps"]) > 1
+                and last_step_text.strip()[:200] == answer_step_text.strip()[:200]
+            )
+            steps_to_log = result["steps"][:-1] if skip_last else result["steps"]
+            for step_idx, step in enumerate(steps_to_log):
                 validity = (
                     result.get("validity_scores", [])[step_idx]
                     if "validity_scores" in result
@@ -1563,8 +1594,12 @@ def generate_trajectories(
                 # Log full step text, not truncated repr
                 step_text = step.text if hasattr(step, "text") else str(step)
                 log.info(step_text)
+
+        # Log answer step separately for thinking mode, or full trajectory for non-thinking
+        if result.get("answer_step"):
+            log.info("\nGenerated Answer (confidence: N/A):")
+            log.info(result["answer_step"])
         else:
-            # Fallback: show full trajectory
             log.info(f"\nFull trajectory:\n{result['trajectory']}")
 
         log.info("\n" + "=" * 60)
@@ -1597,6 +1632,7 @@ def generate_trajectories(
             "generated_trajectory": result["trajectory"],
             "generated_answer": generated_text,
             "steps": result["steps"],
+            "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
             "validity_scores": result.get("validity_scores", []),
             "completed": result["completed"],
             "is_correct": bool(is_correct),
@@ -1657,10 +1693,7 @@ def generate_trajectories(
         sample_metrics = {
             "sample_index": i,
             "is_correct": bool(is_correct),
-            "thinking_num_steps": result.get(
-                "thinking_num_steps", len(result["steps"])
-            ),
-            "response_num_steps": result.get("response_num_steps", 0),
+            "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
             "num_traces": num_traces,
             "running_correct": running_correct,
             "running_accuracy": running_accuracy,
@@ -2068,13 +2101,11 @@ def evaluate_results(
 
     # Average statistics
     all_validities = []
-    all_thinking_steps = []
-    all_response_steps = []
+    all_reasoning_steps = []
     for r in results:
         if "validity_scores" in r and r["validity_scores"]:
             all_validities.extend(r["validity_scores"])
-            all_thinking_steps.append(r.get("thinking_num_steps", len(r["steps"])))
-            all_response_steps.append(r.get("response_num_steps", 0))
+            all_reasoning_steps.append(r.get("reasoning_steps", len(r["steps"])))
 
     # Token / FLOPs aggregates
     missing_stats_count = sum(1 for r in results if r.get("token_stats") is None)
@@ -2105,8 +2136,7 @@ def evaluate_results(
     log.info(f"Avg output tokens per sample: {total_output_tokens / len(results):,.0f}")
     log.info(f"Avg TFLOPs per sample: {total_tflops / len(results):.4f}")
     log.info("Step Statistics:")
-    log.info(f"Avg thinking steps per trajectory: {np.mean(all_thinking_steps):.1f}")
-    log.info(f"Avg response steps per trajectory: {np.mean(all_response_steps):.1f}")
+    log.info(f"Avg reasoning steps per trajectory: {np.mean(all_reasoning_steps):.1f}")
     log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
 
     # Build final metrics (also saved locally)
@@ -2129,13 +2159,9 @@ def evaluate_results(
         metrics[f"{name}/accuracy"] = correct / len(results) if results else 0.0
 
     # Add step statistics
-    if all_thinking_steps:
-        metrics["avg_thinking_steps_per_trajectory"] = float(
-            np.mean(all_thinking_steps)
-        )
-    if all_response_steps:
-        metrics["avg_response_steps_per_trajectory"] = float(
-            np.mean(all_response_steps)
+    if all_reasoning_steps:
+        metrics["avg_reasoning_steps_per_trajectory"] = float(
+            np.mean(all_reasoning_steps)
         )
     if all_validities:
         metrics["avg_validity_score"] = float(np.mean(all_validities))

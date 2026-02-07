@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 from llm_tts.generators.base import convert_trajectory_to_string
 from llm_tts.utils.answer_extraction import extract_answer
 
-from .strategy_base import StrategyBase, count_thinking_and_response_steps
+from .strategy_base import StrategyBase, count_reasoning_steps
 
 log = logging.getLogger(__name__)
 
@@ -109,8 +109,8 @@ class StrategyBaseline(StrategyBase):
                 "trajectory": "",
                 "extracted_answer": "",
                 "steps": [],
-                "thinking_num_steps": 0,
-                "response_num_steps": 0,
+                "answer_step": None,
+                "reasoning_steps": 0,
                 "validity_scores": [],
                 "uncertainty_scores": [],
                 "completed": False,
@@ -119,6 +119,53 @@ class StrategyBaseline(StrategyBase):
 
         # Take the single generated candidate
         candidate = candidates[0]
+
+        # Thinking mode: step 1 produces <think>...</think>, step 2 generates final answer
+        if (
+            getattr(self.step_generator, "thinking_mode", False)
+            and "</think>" in candidate.text
+            and not candidate.is_trajectory_complete
+        ):
+            log.info("Thinking phase complete, generating final answer (step 2)")
+            thinking_step = candidate
+            answer_candidates = self.step_generator.generate_answer_candidates(
+                request,
+                [thinking_step],
+                candidates_per_step=1,
+            )
+            if answer_candidates:
+                answer_step = answer_candidates[0]
+                answer_step.is_trajectory_complete = True
+                # Return both steps in trajectory
+                trajectory = [thinking_step, answer_step]
+                final_trajectory = convert_trajectory_to_string(trajectory)
+                extracted = extract_answer(final_trajectory)
+                # Store answer text separately for logging
+                answer_text = answer_step.raw_text or answer_step.text
+
+                self.step_generator.finalize_sample_stats()
+                token_stats = self.step_generator.get_sample_stats()
+                reasoning_steps = count_reasoning_steps(
+                    trajectory,
+                    getattr(self.step_generator, "thinking_mode", False),
+                )
+
+                log.info(f"Response:\n{final_trajectory}")
+                return {
+                    "trajectory": final_trajectory,
+                    "extracted_answer": extracted,
+                    "steps": trajectory,
+                    "answer_step": answer_text,  # Final answer text (thinking mode only)
+                    "reasoning_steps": reasoning_steps,
+                    "validity_scores": [
+                        candidate.other_data.get("validity_score", 1.0)
+                    ],
+                    "uncertainty_scores": [
+                        candidate.other_data.get("uncertainty_score", 0.0)
+                    ],
+                    "completed": True,
+                    "token_stats": token_stats,
+                }
 
         # Get uncertainty score from candidate
         uncertainty_score = candidate.other_data.get("uncertainty_score")
@@ -166,17 +213,18 @@ class StrategyBaseline(StrategyBase):
             )
         )
 
-        # Count thinking and response steps
-        thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-            trajectory
+        # Count reasoning steps
+        reasoning_steps = count_reasoning_steps(
+            trajectory,
+            getattr(self.step_generator, "thinking_mode", False),
         )
 
         return {
             "trajectory": final_trajectory,
             "extracted_answer": extracted,
             "steps": trajectory,
-            "thinking_num_steps": thinking_num_steps,
-            "response_num_steps": response_num_steps,
+            "answer_step": None,
+            "reasoning_steps": reasoning_steps,
             "validity_scores": [validity_score],
             "uncertainty_scores": [uncertainty_score],
             "completed": candidate.is_trajectory_complete,
@@ -248,15 +296,50 @@ class StrategyBaseline(StrategyBase):
 
         # Reset per-sample tracking and generate all responses
         self.step_generator.reset_per_sample_stats()
+        stop_tokens = list(self.eos_patterns)
+        if (
+            getattr(self.step_generator, "thinking_mode", False)
+            and "</think>" not in stop_tokens
+        ):
+            stop_tokens.append("</think>")
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
             trajectories=[[]] * M,
             candidates_per_step=1,
-            stop_tokens_override=self.eos_patterns,
+            stop_tokens_override=stop_tokens,
             max_tokens_override=self.step_generator.max_new_tokens,
             compute_uncertainty=False,
             sample_ids=list(range(M)),
         )
+
+        # Identify thinking-mode candidates that need answer generation
+        thinking_indices = []  # indices into batch_results
+        for idx, candidates in enumerate(batch_results):
+            if candidates:
+                candidate = candidates[0]
+                if (
+                    getattr(self.step_generator, "thinking_mode", False)
+                    and "</think>" in candidate.text
+                    and not candidate.is_trajectory_complete
+                ):
+                    thinking_indices.append(idx)
+
+        # Batch generate all answer phases in one call
+        answer_map = {}  # idx -> answer_step
+        if thinking_indices:
+            log.info(
+                f"Generating {len(thinking_indices)} answer phases in batched call"
+            )
+            batch_answer_reqs = [requests[i] for i in thinking_indices]
+            batch_answer_trajs = [[batch_results[i][0]] for i in thinking_indices]
+            answer_results = self.step_generator.generate_answer_candidates_batch(
+                batch_answer_reqs,
+                batch_answer_trajs,
+                candidates_per_step=1,
+            )
+            for batch_idx, orig_idx in enumerate(thinking_indices):
+                if answer_results[batch_idx]:
+                    answer_map[orig_idx] = answer_results[batch_idx][0]
 
         # Process StepCandidates into result dicts
         results = []
@@ -270,8 +353,8 @@ class StrategyBaseline(StrategyBase):
                         "trajectory": "",
                         "extracted_answer": "",
                         "steps": [],
-                        "thinking_num_steps": 0,
-                        "response_num_steps": 0,
+                        "answer_step": None,
+                        "reasoning_steps": 0,
                         "validity_scores": [],
                         "completed": False,
                         "token_stats": {},
@@ -281,8 +364,14 @@ class StrategyBaseline(StrategyBase):
 
             candidate = candidates[0]  # candidates_per_step=1
 
-            # Build trajectory from the single candidate
-            trajectory = [candidate]
+            if idx in answer_map:
+                answer_step = answer_map[idx]
+                answer_step.is_trajectory_complete = True
+                trajectory = [candidate, answer_step]
+                answer_text = answer_step.raw_text or answer_step.text
+            else:
+                trajectory = [candidate]
+                answer_text = None
             final_trajectory = convert_trajectory_to_string(trajectory)
 
             # Extract answer from trajectory
@@ -291,9 +380,10 @@ class StrategyBaseline(StrategyBase):
             # Token stats from generator's per-sample tracking
             token_stats = self.step_generator.get_sample_stats_for(idx)
 
-            # Count thinking and response steps
-            thinking_num_steps, response_num_steps = count_thinking_and_response_steps(
-                trajectory
+            # Count reasoning steps
+            reasoning_steps = count_reasoning_steps(
+                trajectory,
+                getattr(self.step_generator, "thinking_mode", False),
             )
 
             results.append(
@@ -301,12 +391,12 @@ class StrategyBaseline(StrategyBase):
                     "trajectory": final_trajectory,
                     "extracted_answer": extracted,
                     "steps": trajectory,
-                    "thinking_num_steps": thinking_num_steps,
-                    "response_num_steps": response_num_steps,
+                    "answer_step": answer_text,
+                    "reasoning_steps": reasoning_steps,
                     "validity_scores": [
                         self._get_validity_score(candidate, sample_idx)
                     ],
-                    "completed": candidate.is_trajectory_complete,
+                    "completed": trajectory[-1].is_trajectory_complete,
                     "token_stats": token_stats,
                 }
             )
