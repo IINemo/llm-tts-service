@@ -1104,7 +1104,7 @@ def _generate_trajectories_batch(
             if (
                 result.get("answer_step")
                 and result.get("steps")
-                and len(result["steps"]) > 0
+                and len(result["steps"]) > 1
                 and isinstance(result["steps"][-1], str)
             ):
                 log.info("\nGenerated Answer (confidence: N/A):")
@@ -1495,7 +1495,7 @@ def generate_trajectories(
         if (
             result.get("answer_step")
             and result.get("steps")
-            and len(result["steps"]) > 0
+            and len(result["steps"]) > 1
             and isinstance(result["steps"][-1], str)
         ):
             log.info("\nGenerated Answer (confidence: N/A):")
