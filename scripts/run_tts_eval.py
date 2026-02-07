@@ -1184,6 +1184,10 @@ def _generate_trajectories_batch(
                 "generated_trajectory": result["trajectory"],
                 "generated_answer": generated_text,
                 "steps": result["steps"],
+                "thinking_num_steps": result.get(
+                    "thinking_num_steps", len(result["steps"])
+                ),
+                "response_num_steps": result.get("response_num_steps", 0),
                 "validity_scores": result.get("validity_scores", []),
                 "completed": result["completed"],
                 "is_correct": bool(is_correct),  # Primary (exact_match)
@@ -1495,6 +1499,10 @@ def generate_trajectories(
             "generated_trajectory": result["trajectory"],
             "generated_answer": generated_text,
             "steps": result["steps"],
+            "thinking_num_steps": result.get(
+                "thinking_num_steps", len(result["steps"])
+            ),
+            "response_num_steps": result.get("response_num_steps", 0),
             "validity_scores": result.get("validity_scores", []),
             "completed": result["completed"],
             "is_correct": bool(is_correct),

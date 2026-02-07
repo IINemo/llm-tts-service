@@ -120,6 +120,42 @@ class StrategyBaseline(StrategyBase):
         # Take the single generated candidate
         candidate = candidates[0]
 
+        # Thinking mode: step 1 produces <think>...</think>, step 2 generates final answer
+        if (
+            getattr(self.step_generator, "thinking_mode", False)
+            and "</think>" in candidate.text
+            and not candidate.is_trajectory_complete
+        ):
+            log.info("Thinking phase complete, generating final answer (step 2)")
+            thinking_step = candidate
+            answer_candidates = self.step_generator.generate_answer_candidates(
+                request, [thinking_step], candidates_per_step=1,
+            )
+            if answer_candidates:
+                answer_step = answer_candidates[0]
+                answer_step.is_trajectory_complete = True
+                # Return both steps in trajectory
+                trajectory = [thinking_step, answer_step]
+                final_trajectory = convert_trajectory_to_string(trajectory)
+                extracted = extract_answer(final_trajectory)
+
+                self.step_generator.finalize_sample_stats()
+                token_stats = self.step_generator.get_sample_stats()
+                thinking_num_steps, response_num_steps = count_thinking_and_response_steps(trajectory)
+
+                log.info(f"Response:\n{final_trajectory}")
+                return {
+                    "trajectory": final_trajectory,
+                    "extracted_answer": extracted,
+                    "steps": trajectory,
+                    "thinking_num_steps": thinking_num_steps,
+                    "response_num_steps": response_num_steps,
+                    "validity_scores": [candidate.other_data.get("validity_score", 1.0)],
+                    "uncertainty_scores": [candidate.other_data.get("uncertainty_score", 0.0)],
+                    "completed": True,
+                    "token_stats": token_stats,
+                }
+
         # Get uncertainty score from candidate
         uncertainty_score = candidate.other_data.get("uncertainty_score")
         if uncertainty_score is None:
@@ -248,11 +284,14 @@ class StrategyBaseline(StrategyBase):
 
         # Reset per-sample tracking and generate all responses
         self.step_generator.reset_per_sample_stats()
+        stop_tokens = list(self.eos_patterns)
+        if getattr(self.step_generator, "thinking_mode", False) and "</think>" not in stop_tokens:
+            stop_tokens.append("</think>")
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
             trajectories=[[]] * M,
             candidates_per_step=1,
-            stop_tokens_override=self.eos_patterns,
+            stop_tokens_override=stop_tokens,
             max_tokens_override=self.step_generator.max_new_tokens,
             compute_uncertainty=False,
             sample_ids=list(range(M)),
@@ -281,8 +320,24 @@ class StrategyBaseline(StrategyBase):
 
             candidate = candidates[0]  # candidates_per_step=1
 
-            # Build trajectory from the single candidate
-            trajectory = [candidate]
+            # Thinking mode: generation stopped at </think>, now generate final answer
+            if (
+                getattr(self.step_generator, "thinking_mode", False)
+                and "</think>" in candidate.text
+            ):
+                log.info(f"Sample {sample_idx}: thinking complete, generating final answer")
+                thinking_step = candidate
+                answer_candidates = self.step_generator.generate_answer_candidates(
+                    requests[idx], [thinking_step], candidates_per_step=1,
+                )
+                if answer_candidates:
+                    answer_step = answer_candidates[0]
+                    answer_step.is_trajectory_complete = True
+                    trajectory = [thinking_step, answer_step]
+                else:
+                    trajectory = [candidate]
+            else:
+                trajectory = [candidate]
             final_trajectory = convert_trajectory_to_string(trajectory)
 
             # Extract answer from trajectory
@@ -306,7 +361,7 @@ class StrategyBaseline(StrategyBase):
                     "validity_scores": [
                         self._get_validity_score(candidate, sample_idx)
                     ],
-                    "completed": candidate.is_trajectory_complete,
+                    "completed": trajectory[-1].is_trajectory_complete,
                     "token_stats": token_stats,
                 }
             )
