@@ -1087,6 +1087,11 @@ def _generate_trajectories_batch(
                     log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
                     step_text = step.text if hasattr(step, "text") else str(step)
                     log.info(step_text)
+
+            # Log separate answer step for thinking mode (offline BoN, online BoN, etc.)
+            if result.get("answer_step"):
+                log.info("\nGenerated Answer (confidence: N/A):")
+                log.info(result["answer_step"])
             else:
                 log.info(f"\nFull trajectory:\n{result['trajectory']}")
 
@@ -1456,6 +1461,11 @@ def generate_trajectories(
                 # Log full step text, not truncated repr
                 step_text = step.text if hasattr(step, "text") else str(step)
                 log.info(step_text)
+
+        # Log separate answer step for thinking mode (offline BoN, online BoN, etc.)
+        if result.get("answer_step"):
+            log.info("\nGenerated Answer (confidence: N/A):")
+            log.info(result["answer_step"])
         else:
             # Fallback: show full trajectory
             log.info(f"\nFull trajectory:\n{result['trajectory']}")

@@ -29,6 +29,15 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _get_answer_step_from_traces(all_traces: List[Dict]) -> Optional[str]:
+    """Extract answer_step from the selected (best) trace."""
+    if all_traces:
+        for trace in all_traces:
+            if trace.get("selected"):
+                return trace.get("answer_step")
+    return None
+
+
 class StrategySelfConsistency(StrategyBase):
     """
     Self-consistency strategy that generates multiple reasoning paths
@@ -148,6 +157,7 @@ class StrategySelfConsistency(StrategyBase):
                         "reasoning_steps": reasoning_steps,
                         "validity_scores": [],
                         "avg_validity": 0.0,
+                        "answer_step": answer_step.raw_text or answer_step.text,
                     }
                 )
                 continue
@@ -165,6 +175,7 @@ class StrategySelfConsistency(StrategyBase):
                     ),
                     "validity_scores": [],
                     "avg_validity": 0.0,
+                    "answer_step": None,
                 }
             )
 
@@ -423,6 +434,7 @@ class StrategySelfConsistency(StrategyBase):
             "total_tokens": result.get("total_tokens", 0),
             "token_stats": token_stats,
             "reasoning_steps": avg_reasoning_steps,
+            "answer_step": _get_answer_step_from_traces(result.get("all_traces", [])),
         }
 
     def generate_trajectories_batch(
@@ -521,6 +533,7 @@ class StrategySelfConsistency(StrategyBase):
                     "total_tokens": result.get("total_tokens", 0),
                     "token_stats": token_stats,
                     "reasoning_steps": avg_reasoning_steps,
+                    "answer_step": _get_answer_step_from_traces(result.get("all_traces", [])),
                 }
             )
 
@@ -544,6 +557,7 @@ class StrategySelfConsistency(StrategyBase):
             "total_tokens": 0,
             "token_stats": {},
             "reasoning_steps": 0,
+            "answer_step": None,
         }
 
     def cleanup(self):

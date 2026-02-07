@@ -109,6 +109,7 @@ class StrategyBaseline(StrategyBase):
                 "trajectory": "",
                 "extracted_answer": "",
                 "steps": [],
+                "answer_step": None,
                 "reasoning_steps": 0,
                 "validity_scores": [],
                 "uncertainty_scores": [],
@@ -219,6 +220,7 @@ class StrategyBaseline(StrategyBase):
             "trajectory": final_trajectory,
             "extracted_answer": extracted,
             "steps": trajectory,
+            "answer_step": None,
             "reasoning_steps": reasoning_steps,
             "validity_scores": [validity_score],
             "uncertainty_scores": [uncertainty_score],
@@ -348,6 +350,7 @@ class StrategyBaseline(StrategyBase):
                         "trajectory": "",
                         "extracted_answer": "",
                         "steps": [],
+                        "answer_step": None,
                         "reasoning_steps": 0,
                         "validity_scores": [],
                         "completed": False,
@@ -362,8 +365,10 @@ class StrategyBaseline(StrategyBase):
                 answer_step = answer_map[idx]
                 answer_step.is_trajectory_complete = True
                 trajectory = [candidate, answer_step]
+                answer_text = answer_step.raw_text or answer_step.text
             else:
                 trajectory = [candidate]
+                answer_text = None
             final_trajectory = convert_trajectory_to_string(trajectory)
 
             # Extract answer from trajectory
@@ -383,6 +388,7 @@ class StrategyBaseline(StrategyBase):
                     "trajectory": final_trajectory,
                     "extracted_answer": extracted,
                     "steps": trajectory,
+                    "answer_step": answer_text,
                     "reasoning_steps": reasoning_steps,
                     "validity_scores": [
                         self._get_validity_score(candidate, sample_idx)

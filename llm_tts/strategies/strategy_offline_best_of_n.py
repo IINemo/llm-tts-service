@@ -331,6 +331,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                 )
                 traj_data["num_tokens"] += answer_tokens
                 traj_data["is_complete"] = True
+                # Store answer text for logging
+                answer_text = answer_step.raw_text or answer_step.text
+                traj_data["answer_step"] = answer_text
             else:
                 log.warning(f"No answer generated for trajectory {traj_idx}")
                 traj_data["is_complete"] = False
@@ -492,6 +495,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             "trajectory": best_result["full_text"],
             "extracted_answer": extracted,
             "steps": best_result["steps"],  # List of step strings
+            "answer_step": best_result.get("answer_step", None),
             "reasoning_steps": best_result.get("reasoning_steps", 0),
             "validity_scores": best_result["step_scores"],
             "aggregated_score": best_result["aggregated_score"],
@@ -789,6 +793,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "trajectory": best_result.get("full_text", ""),
                     "extracted_answer": extracted,
                     "steps": best_result.get("steps", []),
+                    "answer_step": best_result.get("answer_step", None),
                     "reasoning_steps": best_result.get("reasoning_steps", 0),
                     "validity_scores": best_result.get("step_scores", []),
                     "aggregated_score": best_result.get("aggregated_score", 0.0),
@@ -813,6 +818,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             "trajectory": "",
             "extracted_answer": "",
             "steps": [],
+            "answer_step": None,
             "reasoning_steps": 0,
             "validity_scores": [],
             "aggregated_score": 0.0,

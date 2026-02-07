@@ -142,6 +142,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         validity_scores: List[List[float]] = [[] for _ in range(M)]
         completed: List[bool] = [False] * M
         needs_final_answer: List[bool] = [False] * M
+        answer_steps: List[Optional[str]] = [None] * M
         total_tokens: List[int] = [0] * M
 
         for step_num in range(self.max_steps):
@@ -446,6 +447,8 @@ class StrategyOnlineBestOfN(StrategyBase):
                 trajectories[sample_id].append(a_cands[best_idx])
                 selected_steps[sample_id].append(a_cands[best_idx])
                 validity_scores[sample_id].append(a_scores[best_idx])
+                # Store answer text for logging (thinking mode)
+                answer_steps[sample_id] = a_cands[best_idx].raw_text or a_cands[best_idx].text
 
         # Finalize stats
         self.step_generator.finalize_sample_stats(num_samples=M)
@@ -532,6 +535,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                     "trajectory": final_trajectory,
                     "extracted_answer": extracted,
                     "steps": selected_steps[idx],
+                    "answer_step": answer_steps[idx],
                     "reasoning_steps": reasoning_steps,
                     "validity_scores": validity_scores[idx],
                     "completed": bool(selected_steps[idx])
@@ -820,6 +824,7 @@ class StrategyOnlineBestOfN(StrategyBase):
 
         # Check if we need a final answer
         needs_final = False
+        answer_text = None
         if not selected_steps:
             needs_final = True
         elif not selected_steps[-1].is_trajectory_complete:
@@ -872,6 +877,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                     trajectory.append(answer_cands[best_a])
                     selected_steps.append(answer_cands[best_a])
                     validity_scores.append(a_scores[best_a])
+                    answer_text = answer_cands[best_a].raw_text or answer_cands[best_a].text
 
         # Build result
         final_trajectory = convert_trajectory_to_string(trajectory)
@@ -886,6 +892,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             "trajectory": final_trajectory,
             "extracted_answer": extracted,
             "steps": selected_steps,
+            "answer_step": answer_text,
             "reasoning_steps": reasoning_steps,
             "validity_scores": validity_scores,
             "completed": bool(selected_steps)
