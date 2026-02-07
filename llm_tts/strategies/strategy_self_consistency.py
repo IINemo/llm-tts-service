@@ -331,6 +331,7 @@ class StrategySelfConsistency(StrategyBase):
                     "answer": answer,
                     "score": float(scores[i]),
                     "selected": i == best_idx,
+                    "answer_step": path_data.get("answer_step"),  # Include answer_step in traces
                 }
             )
 
