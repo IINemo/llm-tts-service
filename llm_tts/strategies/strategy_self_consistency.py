@@ -16,11 +16,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 
+from llm_tts.generators.base import convert_trajectory_to_string
 from llm_tts.scorers.majority_voting import ChainMajorityVotingScorer
 from llm_tts.utils import extract_answer
 
 from .metadata_builder import StrategyMetadataBuilder
-from .strategy_base import StrategyBase
+from .strategy_base import StrategyBase, count_thinking_and_response_steps
 
 if TYPE_CHECKING:
     from llm_tts.generators import StepCandidateGeneratorBase
@@ -72,14 +73,84 @@ class StrategySelfConsistency(StrategyBase):
             f"Self-consistency strategy initialized: {num_paths} paths, {mode} mode"
         )
 
+    def _complete_thinking_paths(
+        self,
+        request: List[Dict[str, str]],
+        candidates: List[Any],
+    ) -> List[Dict[str, Any]]:
+        """
+        Complete thinking-mode candidates by generating answer phases.
+
+        For each candidate that stopped at </think>, generates the answer phase
+        via generate_answer_candidates, producing a proper two-step trajectory.
+
+        Args:
+            request: Chat messages for the request
+            candidates: List of StepCandidate objects from generation
+
+        Returns:
+            List of path dictionaries with text, tokens, steps info
+        """
+        paths = []
+        for i, candidate in enumerate(candidates):
+            text = candidate.raw_text or candidate.text
+            num_tokens = candidate.other_data.get(
+                "original_token_count", len(candidate.token_ids)
+            )
+
+            # Thinking mode: stopped at </think>, generate answer as step 2
+            if (
+                getattr(self.step_generator, "thinking_mode", False)
+                and "</think>" in candidate.text
+            ):
+                log.info(f"  Path {i + 1}: thinking complete, generating answer phase")
+                thinking_step = candidate
+                answer_candidates = self.step_generator.generate_answer_candidates(
+                    request, [thinking_step], candidates_per_step=1,
+                )
+                if answer_candidates:
+                    answer_step = answer_candidates[0]
+                    answer_step.is_trajectory_complete = True
+                    trajectory = [thinking_step, answer_step]
+                    full_text = convert_trajectory_to_string(trajectory)
+                    answer_tokens = len(answer_step.token_ids) if answer_step.token_ids else 0
+                    num_tokens += answer_tokens
+                    thinking_num, response_num = count_thinking_and_response_steps(trajectory)
+                    paths.append({
+                        "text": full_text,
+                        "num_tokens": num_tokens,
+                        "steps": [thinking_step.text, answer_step.text],
+                        "is_complete": True,
+                        "thinking_steps": thinking_num,
+                        "response_steps": response_num,
+                        "validity_scores": [],
+                        "avg_validity": 0.0,
+                    })
+                    continue
+
+            # Non-thinking or no </think>: single-step path
+            paths.append({
+                "text": text,
+                "num_tokens": num_tokens,
+                "steps": [text],
+                "is_complete": candidate.is_trajectory_complete,
+                "thinking_steps": 0,
+                "response_steps": 1,
+                "validity_scores": [],
+                "avg_validity": 0.0,
+            })
+
+        return paths
+
     def _generate_paths_batch(
         self, request: List[Dict[str, str]]
     ) -> List[Dict[str, Any]]:
         """
         Generate all N trajectories in a SINGLE vLLM call.
 
-        Uses generate_full_trajectories() which generates N complete trajectories
-        with n=num_paths in one call. This is much faster than step-by-step.
+        Uses generate_step_candidates_batch with proper stop tokens (including
+        </think> for thinking mode). For thinking-mode candidates that stop at
+        </think>, generates the answer phase separately.
 
         Args:
             request: Chat messages for the request
@@ -91,46 +162,38 @@ class StrategySelfConsistency(StrategyBase):
             f"Generating {self.num_paths} trajectories in SINGLE vLLM call (batch mode)..."
         )
 
+        # Build stop tokens list, including </think> for thinking mode
+        stop_tokens = ["<end of response>"]
+        if getattr(self.step_generator, "thinking_mode", False) and "</think>" not in stop_tokens:
+            stop_tokens.append("</think>")
+
         # Single vLLM call generates all N trajectories
-        # Skip step splitting - self-consistency only needs full text for majority voting
-        raw_results = self.step_generator.generate_full_trajectories(
-            request=request,
-            num_trajectories=self.num_paths,
-            split_steps=False,
+        batch_results = self.step_generator.generate_step_candidates_batch(
+            requests=[request],
+            trajectories=[[]],
+            candidates_per_step=self.num_paths,
+            stop_tokens_override=stop_tokens,
+            max_tokens_override=self.step_generator.max_new_tokens,
+            compute_uncertainty=False,
+            sample_ids=[0],
         )
 
-        # Convert to expected format
-        paths = []
-        total_tokens = 0
+        candidates = batch_results[0] if batch_results else []
 
-        for i, raw in enumerate(raw_results):
-            num_tokens = len(raw.get("token_ids", []))
-            total_tokens += num_tokens
+        # Complete thinking paths (generate answer phase for </think> candidates)
+        paths = self._complete_thinking_paths(request, candidates)
 
-            # Extract answer for logging
-            answer = (
-                extract_answer(raw["full_text"], answer_format="auto") or "no_answer"
-            )
-
+        # Log summary
+        total_tokens = sum(p["num_tokens"] for p in paths)
+        for i, path in enumerate(paths):
+            answer = extract_answer(path["text"], answer_format="auto") or "no_answer"
             log.info(
                 f"  Path {i + 1}/{self.num_paths}: "
-                f"tokens={num_tokens}, complete={raw['is_complete']}, answer={answer}"
+                f"tokens={path['num_tokens']}, steps={len(path['steps'])}, "
+                f"complete={path['is_complete']}, answer={answer}"
             )
 
-            paths.append(
-                {
-                    "text": raw["full_text"],
-                    "num_tokens": num_tokens,
-                    "steps": raw["steps"],
-                    "is_complete": raw["is_complete"],
-                    "thinking_steps": 0,
-                    "response_steps": len(raw["steps"]),
-                    "validity_scores": [],
-                    "avg_validity": 0.0,
-                }
-            )
-
-        log.info(f"Generated {self.num_paths} paths, total tokens: {total_tokens}")
+        log.info(f"Generated {len(paths)} paths, total tokens: {total_tokens}")
 
         return paths
 
@@ -365,13 +428,18 @@ class StrategySelfConsistency(StrategyBase):
             f"trajectories via generate_step_candidates_batch"
         )
 
+        # Build stop tokens list, including </think> for thinking mode
+        stop_tokens = ["<end of response>"]
+        if getattr(self.step_generator, "thinking_mode", False) and "</think>" not in stop_tokens:
+            stop_tokens.append("</think>")
+
         # Reset per-sample tracking and generate all M×N trajectories
         self.step_generator.reset_per_sample_stats()
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
             trajectories=[[]] * M,
             candidates_per_step=N,
-            stop_tokens_override=["<end of response>"],
+            stop_tokens_override=stop_tokens,
             max_tokens_override=self.step_generator.max_new_tokens,
             compute_uncertainty=False,
             sample_ids=list(range(M)),
@@ -387,26 +455,8 @@ class StrategySelfConsistency(StrategyBase):
                 results.append(self._empty_result())
                 continue
 
-            # Build paths from the N StepCandidates
-            paths = []
-
-            for candidate in candidates:
-                num_tokens = candidate.other_data.get(
-                    "original_token_count", len(candidate.token_ids)
-                )
-
-                paths.append(
-                    {
-                        "text": candidate.raw_text or candidate.text,
-                        "num_tokens": num_tokens,
-                        "steps": [candidate.raw_text or candidate.text],
-                        "is_complete": candidate.is_trajectory_complete,
-                        "thinking_steps": 0,
-                        "response_steps": 1,
-                        "validity_scores": [],
-                        "avg_validity": 0.0,
-                    }
-                )
+            # Build paths from the N StepCandidates, completing thinking phases
+            paths = self._complete_thinking_paths(requests[idx], candidates)
 
             # Do majority voting for this sample
             result = self.select_best_answer(paths)
