@@ -1073,10 +1073,14 @@ def _generate_trajectories_batch(
             log.info("-" * 60)
 
             if result["steps"] and isinstance(result["steps"], list):
-                # Skip last step only if it duplicates the answer_step (e.g. self-consistency)
+                # Skip last step if it duplicates the answer_step content
+                # (online BoN / self-consistency append answer to steps AND store in answer_step)
                 answer_step_text = result.get("answer_step") or ""
                 last_step_text = result["steps"][-1].text if hasattr(result["steps"][-1], "text") else str(result["steps"][-1])
-                skip_last = bool(answer_step_text) and len(result["steps"]) > 1 and last_step_text.strip() in answer_step_text.strip()
+                skip_last = (
+                    bool(answer_step_text) and len(result["steps"]) > 1
+                    and last_step_text.strip()[:200] == answer_step_text.strip()[:200]
+                )
                 steps_to_log = result["steps"][:-1] if skip_last else result["steps"]
                 for step_idx, step in enumerate(steps_to_log):
                     validity = (
@@ -1450,10 +1454,14 @@ def generate_trajectories(
 
         # For DeepConf, steps contain the individual traces
         if result["steps"] and isinstance(result["steps"], list):
-            # Skip last step only if it duplicates the answer_step (e.g. self-consistency)
+            # Skip last step if it duplicates the answer_step content
+            # (online BoN / self-consistency append answer to steps AND store in answer_step)
             answer_step_text = result.get("answer_step") or ""
             last_step_text = result["steps"][-1].text if hasattr(result["steps"][-1], "text") else str(result["steps"][-1])
-            skip_last = bool(answer_step_text) and len(result["steps"]) > 1 and last_step_text.strip() in answer_step_text.strip()
+            skip_last = (
+                bool(answer_step_text) and len(result["steps"]) > 1
+                and last_step_text.strip()[:200] == answer_step_text.strip()[:200]
+            )
             steps_to_log = result["steps"][:-1] if skip_last else result["steps"]
             for step_idx, step in enumerate(steps_to_log):
                 validity = (
