@@ -232,11 +232,54 @@ class StepCandidateGeneratorBase:
         return stats
 
     @abstractmethod
-    def generate_step_candidates(
-        self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
-    ) -> List[StepCandidate]:
-        """Generate N candidate next steps for a given trajectory."""
+    def generate_step_candidates_batch(
+        self,
+        requests: List[List[Dict[str, str]]],
+        trajectories: List[List[StepCandidate]],
+        candidates_per_step: int = 1,
+        stop_tokens_override=None,
+        max_tokens_override=None,
+        compute_uncertainty: bool = True,
+        sample_ids=None,
+        beam_ids=None,
+    ) -> List[List[StepCandidate]]:
+        """Generate N candidate next steps for each trajectory.
+
+        Primary generation method. Each trajectory can have its own request.
+
+        Args:
+            requests: Per-trajectory chat messages.
+            trajectories: List of trajectories (each a list of StepCandidates).
+            candidates_per_step: Number of candidates per trajectory.
+            stop_tokens_override: Override stop tokens (None = use defaults).
+            max_tokens_override: Override max tokens (None = use defaults).
+            compute_uncertainty: Whether to compute uncertainty scores.
+            sample_ids: Optional per-trajectory sample IDs for token tracking.
+            beam_ids: Optional per-trajectory beam IDs for logging.
+
+        Returns:
+            List of candidate lists, one per trajectory.
+        """
         pass
+
+    def generate_step_candidates(
+        self,
+        request: List[Dict[str, str]],
+        trajectories: List[List[StepCandidate]],
+        candidates_per_step: int = 1,
+        compute_uncertainty: bool = True,
+    ) -> List[List[StepCandidate]]:
+        """Convenience wrapper: same request for all trajectories.
+
+        Delegates to generate_step_candidates_batch with broadcast request.
+        """
+        requests = [request] * len(trajectories)
+        return self.generate_step_candidates_batch(
+            requests,
+            trajectories,
+            candidates_per_step,
+            compute_uncertainty=compute_uncertainty,
+        )
 
     @abstractmethod
     def generate_answer_candidates(

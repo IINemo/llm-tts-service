@@ -27,7 +27,7 @@ Token tracking (_record_generation):
 
 import inspect
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 # Optional vLLM import (not available in CI)
 try:
@@ -1017,97 +1017,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         return steps
 
-    def generate_full_trajectories(
-        self,
-        request: List[Dict[str, str]],
-        num_trajectories: int,
-        max_tokens: Optional[int] = None,
-        split_steps: bool = True,
-    ) -> List[Dict[str, Any]]:
-        """Generate N complete trajectories in a single batch call.
-
-        This is optimized for offline best-of-n: instead of generating step-by-step
-        with stop tokens, we generate complete trajectories (stopping only at EOS)
-        and optionally split them post-hoc using the same stop tokens for consistency.
-
-        Uses _generate_step_candidates_impl with:
-        - Empty stop_tokens (only EOS token IDs stop generation)
-        - Single empty trajectory, N candidates (uses vLLM's n parameter)
-
-        Args:
-            request: Chat messages for the request
-            num_trajectories: Number of trajectories to generate (vLLM n parameter)
-            max_tokens: Maximum tokens per trajectory (default: self.max_new_tokens)
-            split_steps: If True, split trajectories into steps post-hoc (for offline BoN).
-                        If False, skip step splitting (for self-consistency).
-
-        Returns:
-            List of dictionaries, each containing:
-                - "full_text": Complete trajectory text
-                - "steps": List of step texts (split using stop tokens), or [full_text] if split_steps=False
-                - "token_ids": Token IDs for the full trajectory
-                - "is_complete": Whether trajectory ended naturally (EOS/answer pattern)
-        """
-        max_tokens = max_tokens or self.max_new_tokens
-
-        log.info(
-            f"Generating {num_trajectories} full trajectories "
-            f"(max_tokens={max_tokens}, stop_tokens=[] (EOS only))"
-        )
-
-        # Call _generate_step_candidates_impl with:
-        # - Single empty trajectory (start from scratch)
-        # - N candidates (num_trajectories)
-        # - Empty stop tokens (only EOS token IDs stop generation)
-        # - Override max_tokens for full trajectory
-        raw_results = self._generate_step_candidates_impl(
-            requests=[request],
-            trajectories=[[]],  # Single empty trajectory
-            candidates_per_step=num_trajectories,  # N candidates from one prompt
-            stop_tokens_override=[],  # No step boundary tokens, only EOS
-            max_tokens_override=max_tokens,
-        )
-
-        # raw_results is [[cand1, cand2, ..., candN]] - extract the inner list
-        candidates = raw_results[0] if raw_results else []
-
-        results = []
-        total_output_tokens = 0
-
-        for idx, candidate in enumerate(candidates):
-            text = candidate.text
-            token_ids = list(candidate.token_ids) if candidate.token_ids else []
-
-            # Split into steps using the real stop tokens (step boundaries)
-            # Skip for self-consistency which only needs full text
-            if split_steps:
-                steps = self._split_trajectory_into_steps(text)
-            else:
-                steps = [text]  # Single step = full trajectory
-
-            total_output_tokens += len(token_ids)
-
-            log.info(
-                f"  Trajectory {idx + 1}: {len(token_ids)} tokens, "
-                f"complete={candidate.is_trajectory_complete}"
-            )
-
-            results.append(
-                {
-                    "full_text": text,
-                    "steps": steps,
-                    "token_ids": token_ids,
-                    "is_complete": candidate.is_trajectory_complete,
-                }
-            )
-
-        log.info(
-            f"Generated {num_trajectories} trajectories, "
-            f"total_output={total_output_tokens} tokens"
-        )
-
-        return results
-
     # =========================================================================
     # non-thinking mode methods
     # =========================================================================
@@ -1322,40 +1231,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             beam_ids=beam_ids,
         )
 
-    def generate_step_candidates(
-        self,
-        request: List[Dict[str, str]],
-        trajectories: List[List[StepCandidate]],
-        candidates_per_step: int = 1,
-        compute_uncertainty: bool = True,
-    ) -> List[List[StepCandidate]]:
-        """Generate N candidate next steps for each trajectory.
-
-        PUBLIC API - Main entry point for step generation. Supports both:
-        - Single trajectory (best-of-n): pass [trajectory], get [[cand1, cand2, ...]]
-        - Multiple trajectories (self-consistency): pass [traj1, traj2, ...], get [[c1], [c2], ...]
-
-        Args:
-            request: Chat messages (same for all trajectories)
-            trajectories: List of trajectories. Each trajectory is a list of StepCandidates.
-            candidates_per_step: Number of candidates to generate per trajectory.
-            compute_uncertainty: If True and model supports it, compute uncertainty scores.
-                Set to False when using PRM scorer (scores computed separately).
-
-        Returns:
-            List of candidate lists, one per trajectory.
-
-        Note: Strategy should check is_trajectory_complete on returned candidates
-        and call generate_answer_candidates() when reasoning phase is done.
-        """
-        requests = [request] * len(trajectories)
-        return self._generate_step_candidates_impl(
-            requests,
-            trajectories,
-            candidates_per_step,
-            compute_uncertainty=compute_uncertainty,
-        )
-
     def generate_answer_candidates(
         self,
         request: List[Dict[str, str]],
@@ -1538,7 +1413,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self, request, candidates_per_step: int, more_information=False
     ) -> List[StepCandidate]:
         """Generate final answer (non-thinking mode compatibility)."""
-        result = self.generate_step_candidates(request, [[]], candidates_per_step)
+        result = self.generate_step_candidates_batch(
+            [request], [[]], candidates_per_step
+        )
         return result[0] if result else []
 
     def __call__(
@@ -1551,14 +1428,12 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         """Callable interface for step generation.
 
         Convenience wrapper that accepts a single trajectory and returns flat list.
-        Internally calls generate_step_candidates with [trajectory].
-
-        Args:
-            compute_uncertainty: If True and model supports it, compute uncertainty scores.
-                Set to False when using PRM scorer (scores computed separately).
         """
         trajectory = trajectory or []
-        result = self.generate_step_candidates(
-            request, [trajectory], candidates_per_step, compute_uncertainty
+        result = self.generate_step_candidates_batch(
+            [request],
+            [trajectory],
+            candidates_per_step,
+            compute_uncertainty=compute_uncertainty,
         )
         return result[0] if result else []

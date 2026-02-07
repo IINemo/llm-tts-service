@@ -1031,25 +1031,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
     # Public API methods (mirror VLLMStepGenerator)
     # =========================================================================
 
-    def generate_step_candidates(
-        self,
-        request: List[Dict[str, str]],
-        trajectories: List[List[StepCandidate]],
-        candidates_per_step: int = 1,
-        compute_uncertainty: bool = True,
-    ) -> List[List[StepCandidate]]:
-        """Generate N candidate next steps for each trajectory.
-
-        Same request for all trajectories.
-        """
-        requests = [request] * len(trajectories)
-        return self._generate_step_candidates_impl(
-            requests,
-            trajectories,
-            candidates_per_step,
-            compute_uncertainty=compute_uncertainty,
-        )
-
     def generate_step_candidates_batch(
         self,
         requests: List[List[Dict[str, str]]],
@@ -1129,78 +1110,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
         return candidates
 
-    def generate_full_trajectories(
-        self,
-        request: List[Dict[str, str]],
-        num_trajectories: int,
-        max_tokens: Optional[int] = None,
-        split_steps: bool = True,
-    ) -> List[Dict[str, Any]]:
-        """Generate N complete trajectories in batch.
-
-        Optimized for offline best-of-n: generates complete trajectories
-        (no step boundaries) and optionally splits them post-hoc.
-
-        Args:
-            request: Chat messages for the request.
-            num_trajectories: Number of trajectories to generate.
-            max_tokens: Maximum tokens per trajectory.
-            split_steps: If True, split trajectories into steps post-hoc.
-
-        Returns:
-            List of dicts with full_text, steps, token_ids, is_complete.
-        """
-        max_tokens = max_tokens or self.max_new_tokens
-
-        log.info(
-            f"Generating {num_trajectories} full trajectories "
-            f"(max_tokens={max_tokens}, stop_tokens=[] (EOS only))"
-        )
-
-        raw_results = self._generate_step_candidates_impl(
-            requests=[request],
-            trajectories=[[]],
-            candidates_per_step=num_trajectories,
-            stop_tokens_override=[],  # No step boundaries, only EOS
-            max_tokens_override=max_tokens,
-        )
-
-        candidates = raw_results[0] if raw_results else []
-        results = []
-        total_output_tokens = 0
-
-        for idx, candidate in enumerate(candidates):
-            text = candidate.text
-            token_ids = list(candidate.token_ids) if candidate.token_ids else []
-
-            if split_steps:
-                steps = self._split_trajectory_into_steps(text)
-            else:
-                steps = [text]
-
-            total_output_tokens += len(token_ids)
-
-            log.info(
-                f"  Trajectory {idx + 1}: {len(token_ids)} tokens, "
-                f"complete={candidate.is_trajectory_complete}"
-            )
-
-            results.append(
-                {
-                    "full_text": text,
-                    "steps": steps,
-                    "token_ids": token_ids,
-                    "is_complete": candidate.is_trajectory_complete,
-                }
-            )
-
-        log.info(
-            f"Generated {num_trajectories} trajectories, "
-            f"total_output={total_output_tokens} tokens"
-        )
-
-        return results
-
     def count_context_tokens(
         self,
         request: List[Dict[str, str]],
@@ -1221,7 +1130,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self, request, candidates_per_step: int, more_information=False
     ) -> List[StepCandidate]:
         """Generate final answer (compatibility method)."""
-        result = self.generate_step_candidates(request, [[]], candidates_per_step)
+        result = self.generate_step_candidates_batch(
+            [request], [[]], candidates_per_step
+        )
         return result[0] if result else []
 
     def __call__(
@@ -1236,7 +1147,10 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         Convenience wrapper: single trajectory in, flat candidate list out.
         """
         trajectory = trajectory or []
-        result = self.generate_step_candidates(
-            request, [trajectory], candidates_per_step, compute_uncertainty
+        result = self.generate_step_candidates_batch(
+            [request],
+            [trajectory],
+            candidates_per_step,
+            compute_uncertainty=compute_uncertainty,
         )
         return result[0] if result else []
