@@ -1038,7 +1038,9 @@ def _generate_trajectories_batch(
                         s.text if hasattr(s, "text") else str(s)
                         for s in result.get("steps", [])
                     ],
-                    "answer_step": result.get("answer_step"),  # Final answer text (thinking mode)
+                    "answer_step": result.get(
+                        "answer_step"
+                    ),  # Final answer text (thinking mode)
                     "validity_scores": result.get("validity_scores", []),
                     "all_step_scores": result.get("all_step_scores", []),
                     "all_scores": result.get("all_scores", []),
@@ -1076,9 +1078,14 @@ def _generate_trajectories_batch(
                 # Skip last step if it duplicates the answer_step content
                 # (online BoN / self-consistency append answer to steps AND store in answer_step)
                 answer_step_text = result.get("answer_step") or ""
-                last_step_text = result["steps"][-1].text if hasattr(result["steps"][-1], "text") else str(result["steps"][-1])
+                last_step_text = (
+                    result["steps"][-1].text
+                    if hasattr(result["steps"][-1], "text")
+                    else str(result["steps"][-1])
+                )
                 skip_last = (
-                    bool(answer_step_text) and len(result["steps"]) > 1
+                    bool(answer_step_text)
+                    and len(result["steps"]) > 1
                     and last_step_text.strip()[:200] == answer_step_text.strip()[:200]
                 )
                 steps_to_log = result["steps"][:-1] if skip_last else result["steps"]
@@ -1457,9 +1464,14 @@ def generate_trajectories(
             # Skip last step if it duplicates the answer_step content
             # (online BoN / self-consistency append answer to steps AND store in answer_step)
             answer_step_text = result.get("answer_step") or ""
-            last_step_text = result["steps"][-1].text if hasattr(result["steps"][-1], "text") else str(result["steps"][-1])
+            last_step_text = (
+                result["steps"][-1].text
+                if hasattr(result["steps"][-1], "text")
+                else str(result["steps"][-1])
+            )
             skip_last = (
-                bool(answer_step_text) and len(result["steps"]) > 1
+                bool(answer_step_text)
+                and len(result["steps"]) > 1
                 and last_step_text.strip()[:200] == answer_step_text.strip()[:200]
             )
             steps_to_log = result["steps"][:-1] if skip_last else result["steps"]
