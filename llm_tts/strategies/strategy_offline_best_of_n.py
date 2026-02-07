@@ -30,7 +30,7 @@ from llm_tts.generators.base import (
 )
 from llm_tts.utils.answer_extraction import extract_answer
 
-from .strategy_base import StrategyBase, count_reasoning_steps
+from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 
