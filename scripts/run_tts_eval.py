@@ -1100,17 +1100,9 @@ def _generate_trajectories_batch(
                     log.info(step_text)
 
             # Log separate answer step for thinking mode
-            # Conditions:
-            # - answer_step must exist
-            # - steps must be strings (not StepCandidate objects)
-            # - Either: len > 1 (offline/online BoN with multiple thinking steps)
-            #         OR: thinking_mode is True (self-consistency with single step containing full trajectory)
-            if (
-                result.get("answer_step")
-                and result.get("steps")
-                and isinstance(result["steps"][-1], str)
-                and (len(result["steps"]) > 1 or is_thinking_mode)
-            ):
+            # If answer_step exists (thinking mode: baseline, self-consistency, offline/online BoN), log it
+            # Otherwise (non-thinking mode), log full trajectory
+            if result.get("answer_step"):
                 log.info("\nGenerated Answer (confidence: N/A):")
                 log.info(result["answer_step"])
             else:
