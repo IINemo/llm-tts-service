@@ -975,7 +975,9 @@ def _generate_trajectories_batch(
         return results
 
     total_to_process = len(requests_to_process)
-    log.info(f"Batch generating {total_to_process} samples with checkpoint_batch_size={checkpoint_batch_size}...")
+    log.info(
+        f"Batch generating {total_to_process} samples with checkpoint_batch_size={checkpoint_batch_size}..."
+    )
 
     # Split into chunks for intermediate checkpointing
     num_chunks = (total_to_process + checkpoint_batch_size - 1) // checkpoint_batch_size
@@ -1013,9 +1015,9 @@ def _generate_trajectories_batch(
                 f"but expected {len(chunk_indices)}. Truncating to shorter list."
             )
             # Truncate to match
-            chunk_indices = chunk_indices[:len(chunk_results)]
-            chunk_instances = chunk_instances[:len(chunk_results)]
-            chunk_gold_answers = chunk_gold_answers[:len(chunk_results)]
+            chunk_indices = chunk_indices[: len(chunk_results)]
+            chunk_instances = chunk_instances[: len(chunk_results)]
+            chunk_gold_answers = chunk_gold_answers[: len(chunk_results)]
 
         # Save batch results immediately to avoid data loss
         batch_results_path = save_path_file.parent / "batch_results.jsonl"
@@ -1102,7 +1104,10 @@ def _generate_trajectories_batch(
                     elif isinstance(evaluator, EvaluatorLLMAsAJudge):
                         # LLM judges: __call__ takes lists, returns (labels, responses, consensus_scores)
                         # For answer_only mode, use extracted answer
-                        if hasattr(evaluator, "mode") and evaluator.mode == "answer_only":
+                        if (
+                            hasattr(evaluator, "mode")
+                            and evaluator.mode == "answer_only"
+                        ):
                             solution = (
                                 result.get("extracted_answer")
                                 or result.get("generated_answer")
@@ -1116,14 +1121,18 @@ def _generate_trajectories_batch(
                         is_correct_eval = labels[0] == 1 if labels else False
                         eval_results[eval_name] = {
                             "is_correct": is_correct_eval,
-                            "consensus": consensus_scores[0] if consensus_scores else 0.0,
+                            "consensus": (
+                                consensus_scores[0] if consensus_scores else 0.0
+                            ),
                             "response": responses[0] if responses else "",
                         }
                         continue
                     elif isinstance(evaluator, EvaluatorMBPPPlus):
                         # Skip MBPP+ in phase 1 - will run batch evaluation once in phase 2
                         # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
-                        log.debug(f"Skipping MBPP+ evaluation for sample {i} in phase 1")
+                        log.debug(
+                            f"Skipping MBPP+ evaluation for sample {i} in phase 1"
+                        )
                         continue
                     else:
                         # Fallback: try __call__ with lists
@@ -1179,7 +1188,9 @@ def _generate_trajectories_batch(
                 "completed": result["completed"],
                 "is_correct": bool(is_correct),  # Primary (exact_match)
                 "eval": eval_results,  # Per-evaluator results
-                "instance_data": dict(instance),  # Store full instance for MBPP+ evaluation
+                "instance_data": dict(
+                    instance
+                ),  # Store full instance for MBPP+ evaluation
             }
 
             if "token_stats" in result:
@@ -1210,7 +1221,9 @@ def _generate_trajectories_batch(
             running_total_tokens = sum(
                 ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
             )
-            running_total_tflops = sum(_safe_tflops(ts, "tflops") for ts in all_token_stats)
+            running_total_tflops = sum(
+                _safe_tflops(ts, "tflops") for ts in all_token_stats
+            )
 
             # Compute running accuracy per evaluator
             running_stats = {}
@@ -1221,7 +1234,10 @@ def _generate_trajectories_batch(
                     if r.get("eval", {}).get(eval_name, {}).get("is_correct", False)
                 )
                 accuracy = (correct_count / len(results)) if results else 0.0
-                running_stats[eval_name] = {"correct": correct_count, "accuracy": accuracy}
+                running_stats[eval_name] = {
+                    "correct": correct_count,
+                    "accuracy": accuracy,
+                }
                 log.info(
                     f"Running accuracy [{eval_name}]: {correct_count}/{len(results)} = {accuracy:.3f}"
                 )
@@ -1234,7 +1250,9 @@ def _generate_trajectories_batch(
                 ),
                 "response_num_steps": result.get("response_num_steps", 0),
                 "samples_completed": len(results),
-                "total_tokens_this_sample": token_stats.get("total_tokens_this_sample", 0),
+                "total_tokens_this_sample": token_stats.get(
+                    "total_tokens_this_sample", 0
+                ),
                 "input_tokens_this_sample": token_stats.get("input_tokens", 0),
                 "output_tokens_this_sample": token_stats.get("output_tokens", 0),
                 "generations_this_sample": token_stats.get("generation_count", 0),
