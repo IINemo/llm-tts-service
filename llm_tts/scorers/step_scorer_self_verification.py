@@ -22,8 +22,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np
-
 from .step_scorer_base import CandidateScore, StepScorerBase
 
 log = logging.getLogger(__name__)
@@ -219,20 +217,31 @@ class StepScorerSelfVerification(StepScorerBase):
         Prompts LLM to classify each state as sure/likely/unlikely/impossible.
         """
         results = []
+        # Track duplicates within this batch (as in original ToT)
+        local_seen_texts: Dict[str, bool] = {}
 
         for cand_idx, candidate in enumerate(candidates):
             step_text = self._get_step_text(candidate)
 
+            # Handle duplicates within same batch (return 0 as in original ToT)
+            if step_text in local_seen_texts:
+                score = 0.0
+                log.debug(
+                    f"Duplicate candidate {cand_idx}: score=0 (duplicate in batch)"
+                )
             # Check cache
-            cache_key = f"{problem}|||{trajectory_text}|||{step_text}"
-            if cache_key in self.cache:
+            elif f"{problem}|||{trajectory_text}|||{step_text}" in self.cache:
+                cache_key = f"{problem}|||{trajectory_text}|||{step_text}"
                 score = self.cache[cache_key]
                 log.debug(f"Cache hit for candidate {cand_idx}: score={score:.3f}")
             else:
                 # Evaluate step
+                cache_key = f"{problem}|||{trajectory_text}|||{step_text}"
                 score = self._evaluate_single_step(problem, trajectory_text, step_text)
                 self.cache[cache_key] = score
                 self.total_evaluations += 1
+
+            local_seen_texts[step_text] = True
 
             results.append(
                 CandidateScore(
@@ -336,8 +345,8 @@ class StepScorerSelfVerification(StepScorerBase):
                 log.warning(f"Evaluation {i+1} failed: {e}")
                 scores.append(1.0)
 
-        # Aggregate scores (mean as in paper)
-        return float(np.mean(scores)) if scores else 1.0
+        # Aggregate scores using SUM (as in original ToT paper, not mean)
+        return float(sum(scores)) if scores else float(self.n_evaluate_sample)
 
     def _run_voting(
         self,
