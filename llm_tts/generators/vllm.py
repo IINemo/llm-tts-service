@@ -1409,15 +1409,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         )
         return all_candidates
 
-    def generate_answer(
-        self, request, candidates_per_step: int, more_information=False
-    ) -> List[StepCandidate]:
-        """Generate final answer (non-thinking mode compatibility)."""
-        result = self.generate_step_candidates_batch(
-            [request], [[]], candidates_per_step
-        )
-        return result[0] if result else []
-
     def __call__(
         self,
         request: List[Dict[str, str]],

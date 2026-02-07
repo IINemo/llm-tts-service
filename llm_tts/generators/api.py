@@ -1126,15 +1126,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         full_text = prompt_text + traj_text
         return self._count_tokens(full_text)
 
-    def generate_answer(
-        self, request, candidates_per_step: int, more_information=False
-    ) -> List[StepCandidate]:
-        """Generate final answer (compatibility method)."""
-        result = self.generate_step_candidates_batch(
-            [request], [[]], candidates_per_step
-        )
-        return result[0] if result else []
-
     def __call__(
         self,
         request: List[Dict[str, str]],
