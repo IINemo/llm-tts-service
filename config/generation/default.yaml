@@ -8,3 +8,4 @@ sequential_generation: false  # Generate candidates one by one to save memory
 top_p: 0.8
 top_k: 20
 presence_penalty: 0.0  # Penalty for repeated tokens (0.0 = no penalty)
+checkpoint_batch_size: 32  # Save intermediate results every N samples (for long-running jobs)

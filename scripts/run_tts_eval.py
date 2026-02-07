@@ -910,6 +910,7 @@ def _generate_trajectories_batch(
     phase1_evaluators: dict,  # Dict of evaluator_name -> evaluator
     save_path_file: Path,
     sample_metrics_path: Path,
+    checkpoint_batch_size: int = 32,  # Save intermediate results every N samples
 ):
     """
     Batch generation for strategies that support it (baseline, self_consistency).
@@ -917,6 +918,9 @@ def _generate_trajectories_batch(
     Generates all samples in a single vLLM call, which is significantly faster
     than sequential generation because vLLM can process all prompts together
     with continuous batching.
+
+    With checkpointing: Large batches are split into smaller chunks to save
+    intermediate results after each chunk, preventing data loss for long-running jobs.
     """
     strategy_name = getattr(strategy, "__class__", type(strategy)).__name__
     log.info(f"Using batch generation mode for {strategy_name}")
@@ -970,280 +974,314 @@ def _generate_trajectories_batch(
         log.info("No new samples to process")
         return results
 
-    log.info(f"Batch generating {len(requests_to_process)} samples...")
+    total_to_process = len(requests_to_process)
+    log.info(f"Batch generating {total_to_process} samples with checkpoint_batch_size={checkpoint_batch_size}...")
 
-    # Generate all responses in a single batch call
-    try:
-        batch_results = strategy.generate_trajectories_batch(
-            requests_to_process, indices_to_process
+    # Split into chunks for intermediate checkpointing
+    num_chunks = (total_to_process + checkpoint_batch_size - 1) // checkpoint_batch_size
+
+    for chunk_idx in range(num_chunks):
+        batch_start = chunk_idx * checkpoint_batch_size
+        batch_end = min(batch_start + checkpoint_batch_size, total_to_process)
+
+        # Extract this chunk
+        chunk_requests = requests_to_process[batch_start:batch_end]
+        chunk_indices = indices_to_process[batch_start:batch_end]
+        chunk_instances = instances_to_process[batch_start:batch_end]
+        chunk_gold_answers = gold_answers[batch_start:batch_end]
+
+        log.info(
+            f"Processing chunk {chunk_idx + 1}/{num_chunks}: "
+            f"samples {batch_start}-{batch_end - 1} ({len(chunk_requests)} samples)"
         )
-    except Exception as e:
-        log.error(f"Batch generation failed: {e}")
-        log.error("Returning partial results collected so far")
-        return results
 
-    if len(batch_results) != len(indices_to_process):
-        log.error(
-            f"Batch generation returned {len(batch_results)} results "
-            f"but expected {len(indices_to_process)}. Truncating to shorter list."
-        )
-
-    # Save batch results immediately to avoid data loss
-    batch_results_path = save_path_file.parent / "batch_results.jsonl"
-    log.info(f"Saving batch results to {batch_results_path}")
-    with open(batch_results_path, "w") as f:
-        for idx, (i, instance, gold_answer, result) in enumerate(
-            zip(indices_to_process, instances_to_process, gold_answers, batch_results)
-        ):
-            record = {
-                "index": i,
-                "question": instance[question_field],
-                "gold_answer": gold_answer,
-                "trajectory": result.get("trajectory", ""),
-                "extracted_answer": result.get("extracted_answer", ""),
-                "steps": [
-                    s.text if hasattr(s, "text") else str(s)
-                    for s in result.get("steps", [])
-                ],
-                "validity_scores": result.get("validity_scores", []),
-                "all_step_scores": result.get("all_step_scores", []),
-                "all_scores": result.get("all_scores", []),
-                "best_idx": result.get("best_idx"),
-            }
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    log.info(f"Saved {len(batch_results)} batch results")
-
-    # Process results and save
-    for idx, (i, instance, gold_answer_num, result) in enumerate(
-        zip(indices_to_process, instances_to_process, gold_answers, batch_results)
-    ):
-        question = instance[question_field]
-
-        # Extract generated answer
-        if "extracted_answer" in result and result["extracted_answer"]:
-            generated_text = result["extracted_answer"]
-        else:
-            generated_text = result["trajectory"]
-            if question in generated_text:
-                generated_text = generated_text.replace(question, "").strip()
-            if "<Answer>:" in generated_text:
-                generated_text = generated_text.split("<Answer>:")[-1].strip()
-
-        # Log result
-        log.info("\n" + "=" * 60)
-        log.info(f"Sample {i + 1}/{subset_size}")
-        log.info(f"Question: {question[:200]}...")
-        log.info(f"Gold answer: {gold_answer_num}")
-
-        log.info("\n" + "-" * 60)
-        log.info("GENERATED STEPS:")
-        log.info("-" * 60)
-
-        if result["steps"] and isinstance(result["steps"], list):
-            for step_idx, step in enumerate(result["steps"]):
-                validity = (
-                    result.get("validity_scores", [])[step_idx]
-                    if "validity_scores" in result
-                    and step_idx < len(result["validity_scores"])
-                    else "N/A"
-                )
-                confidence_str = (
-                    f"{validity:.3f}"
-                    if isinstance(validity, (int, float))
-                    else validity
-                )
-                log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
-                step_text = step.text if hasattr(step, "text") else str(step)
-                log.info(step_text)
-        else:
-            log.info(f"\nFull trajectory:\n{result['trajectory']}")
-
-        # Check correctness with all evaluators
-        eval_results = {}
-        for eval_name, evaluator in phase1_evaluators.items():
-            try:
-                if isinstance(evaluator, EvaluatorExactMatch):
-                    # EvaluatorExactMatch._score_single takes 3-tuple, returns float
-                    score = evaluator._score_single(
-                        (question, result["trajectory"], str(gold_answer_num))
-                    )
-                    is_correct_eval = bool(score)
-                elif isinstance(evaluator, EvaluatorLLMAsAJudge):
-                    # LLM judges: __call__ takes lists, returns (labels, responses, consensus_scores)
-                    # For answer_only mode, use extracted answer
-                    if hasattr(evaluator, "mode") and evaluator.mode == "answer_only":
-                        solution = (
-                            result.get("extracted_answer")
-                            or result.get("generated_answer")
-                            or result["trajectory"]
-                        )
-                    else:
-                        solution = result["trajectory"]
-                    labels, responses, consensus_scores = evaluator(
-                        [question], [solution], [str(gold_answer_num)]
-                    )
-                    is_correct_eval = labels[0] == 1 if labels else False
-                    eval_results[eval_name] = {
-                        "is_correct": is_correct_eval,
-                        "consensus": consensus_scores[0] if consensus_scores else 0.0,
-                        "response": responses[0] if responses else "",
-                    }
-                    continue
-                elif isinstance(evaluator, EvaluatorMBPPPlus):
-                    # Skip MBPP+ in phase 1 - will run batch evaluation once in phase 2
-                    # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
-                    log.debug(f"Skipping MBPP+ evaluation for sample {i} in phase 1")
-                    continue
-                else:
-                    # Fallback: try __call__ with lists
-                    result_output = evaluator(
-                        [question], [result["trajectory"]], [str(gold_answer_num)]
-                    )
-                    if isinstance(result_output, tuple) and len(result_output) == 2:
-                        labels, responses = result_output
-                        is_correct_eval = labels[0] == 1 if labels else False
-                    elif isinstance(result_output, list):
-                        is_correct_eval = (
-                            bool(result_output[0]) if result_output else False
-                        )
-                    else:
-                        is_correct_eval = False
-                eval_results[eval_name] = {"is_correct": is_correct_eval}
-            except Exception as e:
-                log.error(f"Evaluator {eval_name} failed: {e}")
-                traceback.print_exc()
-                # Don't store failed evaluation - let it retry in batch phase
-                log.warning(
-                    f"Skipping {eval_name} for sample {i} in phase 1, "
-                    "will retry in batch evaluation phase"
-                )
-
-        # Use exact_match as primary for logging (if available)
-        is_correct = eval_results.get("exact_match", {}).get("is_correct", False)
-
-        log.info("\n" + "=" * 60)
-        log.info(f"FINAL ANSWER: {generated_text}")
-        log.info(f"Gold answer:  {gold_answer_num}")
-        for eval_name, eval_result in eval_results.items():
-            status = "✓ YES" if eval_result.get("is_correct") else "✗ NO"
-            log.info(f"[{eval_name}]: {status}")
-        log.info("-" * 60)
-        log.info(f"Num steps: {len(result['steps'])}")
-        if "validity_scores" in result and result["validity_scores"]:
-            scores = result["validity_scores"]
-            log.info(
-                f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
-            )
-        log.info("=" * 60)
-
-        # Store result with per-evaluator results
-        result_dict = {
-            "index": i,
-            "question": question,
-            "gold_answer": gold_answer_num,
-            "generated_trajectory": result["trajectory"],
-            "generated_answer": generated_text,
-            "steps": result["steps"],
-            "validity_scores": result.get("validity_scores", []),
-            "completed": result["completed"],
-            "is_correct": bool(is_correct),  # Primary (exact_match)
-            "eval": eval_results,  # Per-evaluator results
-            "instance_data": dict(instance),  # Store full instance for MBPP+ evaluation
-        }
-
-        if "token_stats" in result:
-            result_dict["token_stats"] = result["token_stats"]
-
-        # Store dataset-specific fields for evaluators (e.g., MBPP+ test_list, task_id)
-        if "task_id" in instance:
-            result_dict["task_id"] = instance["task_id"]
-        if "test_list" in instance:
-            result_dict["test_list"] = instance["test_list"]
-        if "entry_point" in instance:
-            result_dict["entry_point"] = instance["entry_point"]
-
-        results.append(result_dict)
-
-        # Compute running metrics
-        token_stats = result.get("token_stats")
-        if token_stats is None:
-            log.warning(f"Sample {i}: missing 'token_stats' in result")
-            token_stats = {}
-        all_token_stats = []
-        for r in results:
-            ts = r.get("token_stats")
-            if ts is None:
-                ts = {}
-            all_token_stats.append(ts)
-
-        running_total_tokens = sum(
-            ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
-        )
-        running_total_tflops = sum(_safe_tflops(ts, "tflops") for ts in all_token_stats)
-
-        # Compute running accuracy per evaluator
-        running_stats = {}
-        for eval_name in phase1_evaluators.keys():
-            correct_count = sum(
-                1
-                for r in results
-                if r.get("eval", {}).get(eval_name, {}).get("is_correct", False)
-            )
-            accuracy = (correct_count / len(results)) if results else 0.0
-            running_stats[eval_name] = {"correct": correct_count, "accuracy": accuracy}
-            log.info(
-                f"Running accuracy [{eval_name}]: {correct_count}/{len(results)} = {accuracy:.3f}"
-            )
-
-        sample_metrics = {
-            "sample_index": i,
-            "is_correct": bool(is_correct),
-            "thinking_num_steps": result.get(
-                "thinking_num_steps", len(result["steps"])
-            ),
-            "response_num_steps": result.get("response_num_steps", 0),
-            "samples_completed": len(results),
-            "total_tokens_this_sample": token_stats.get("total_tokens_this_sample", 0),
-            "input_tokens_this_sample": token_stats.get("input_tokens", 0),
-            "output_tokens_this_sample": token_stats.get("output_tokens", 0),
-            "generations_this_sample": token_stats.get("generation_count", 0),
-            "tflops_this_sample": _safe_tflops(token_stats, "tflops"),
-            "prm_tokens_this_sample": token_stats.get("prm_input_tokens", 0),
-            "prm_tflops_this_sample": _safe_tflops(token_stats, "prm_tflops"),
-            "running_avg_tokens_per_sample": (
-                (running_total_tokens / len(results)) if results else 0.0
-            ),
-            "running_total_tokens": running_total_tokens,
-            "running_total_tflops": running_total_tflops,
-        }
-        # Add per-evaluator running accuracy to metrics
-        for eval_name, stats in running_stats.items():
-            safe_name = eval_name.replace("-", "_").replace(".", "_")
-            sample_metrics[f"running_correct_{safe_name}"] = stats["correct"]
-            sample_metrics[f"running_accuracy_{safe_name}"] = stats["accuracy"]
-
-        if "validity_scores" in result and result["validity_scores"]:
-            sample_metrics["confidence"] = float(np.mean(result["validity_scores"]))
-
-        # Append metrics line
+        # Generate this chunk
         try:
-            with open(sample_metrics_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(sample_metrics, ensure_ascii=False) + "\n")
+            chunk_results = strategy.generate_trajectories_batch(
+                chunk_requests, chunk_indices
+            )
         except Exception as e:
-            log.warning(f"Failed to append sample metrics: {e}")
+            log.error(f"Chunk {chunk_idx + 1} generation failed: {e}")
+            log.error("Saving partial results collected so far and exiting")
+            save_results_json(results, save_path_file)
+            log.info(f"Checkpoint saved: {len(results)}/{subset_size} samples complete")
+            return results
 
-        # Log to wandb
-        try:
-            import wandb
+        if len(chunk_results) != len(chunk_indices):
+            log.error(
+                f"Chunk generation returned {len(chunk_results)} results "
+                f"but expected {len(chunk_indices)}. Truncating to shorter list."
+            )
+            # Truncate to match
+            chunk_indices = chunk_indices[:len(chunk_results)]
+            chunk_instances = chunk_instances[:len(chunk_results)]
+            chunk_gold_answers = chunk_gold_answers[:len(chunk_results)]
 
-            if wandb.run is not None:
-                wandb.log(sample_metrics)
-        except Exception:
-            pass
+        # Save batch results immediately to avoid data loss
+        batch_results_path = save_path_file.parent / "batch_results.jsonl"
 
-    # Save all results
+        # Append mode for chunks after the first one
+        mode = "a" if (batch_start > 0 or batch_results_path.exists()) else "w"
+        with open(batch_results_path, mode) as f:
+            for idx, (i, instance, gold_answer, result) in enumerate(
+                zip(chunk_indices, chunk_instances, chunk_gold_answers, chunk_results)
+            ):
+                record = {
+                    "index": i,
+                    "question": instance[question_field],
+                    "gold_answer": gold_answer,
+                    "trajectory": result.get("trajectory", ""),
+                    "extracted_answer": result.get("extracted_answer", ""),
+                    "steps": [
+                        s.text if hasattr(s, "text") else str(s)
+                        for s in result.get("steps", [])
+                    ],
+                    "validity_scores": result.get("validity_scores", []),
+                    "all_step_scores": result.get("all_step_scores", []),
+                    "all_scores": result.get("all_scores", []),
+                    "best_idx": result.get("best_idx"),
+                }
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        log.info(f"Saved {len(chunk_results)} batch results to {batch_results_path}")
+
+        # Process results from this chunk
+        for idx, (i, instance, gold_answer_num, result) in enumerate(
+            zip(chunk_indices, chunk_instances, chunk_gold_answers, chunk_results)
+        ):
+            question = instance[question_field]
+
+            # Extract generated answer
+            if "extracted_answer" in result and result["extracted_answer"]:
+                generated_text = result["extracted_answer"]
+            else:
+                generated_text = result["trajectory"]
+                if question in generated_text:
+                    generated_text = generated_text.replace(question, "").strip()
+                if "<Answer>:" in generated_text:
+                    generated_text = generated_text.split("<Answer>:")[-1].strip()
+
+            # Log result
+            log.info("\n" + "=" * 60)
+            log.info(f"Sample {i + 1}/{subset_size}")
+            log.info(f"Question: {question[:200]}...")
+            log.info(f"Gold answer: {gold_answer_num}")
+
+            log.info("\n" + "-" * 60)
+            log.info("GENERATED STEPS:")
+            log.info("-" * 60)
+
+            if result["steps"] and isinstance(result["steps"], list):
+                for step_idx, step in enumerate(result["steps"]):
+                    validity = (
+                        result.get("validity_scores", [])[step_idx]
+                        if "validity_scores" in result
+                        and step_idx < len(result["validity_scores"])
+                        else "N/A"
+                    )
+                    confidence_str = (
+                        f"{validity:.3f}"
+                        if isinstance(validity, (int, float))
+                        else validity
+                    )
+                    log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
+                    step_text = step.text if hasattr(step, "text") else str(step)
+                    log.info(step_text)
+            else:
+                log.info(f"\nFull trajectory:\n{result['trajectory']}")
+
+            # Check correctness with all evaluators
+            eval_results = {}
+            for eval_name, evaluator in phase1_evaluators.items():
+                try:
+                    if isinstance(evaluator, EvaluatorExactMatch):
+                        # EvaluatorExactMatch._score_single takes 3-tuple, returns float
+                        score = evaluator._score_single(
+                            (question, result["trajectory"], str(gold_answer_num))
+                        )
+                        is_correct_eval = bool(score)
+                    elif isinstance(evaluator, EvaluatorLLMAsAJudge):
+                        # LLM judges: __call__ takes lists, returns (labels, responses, consensus_scores)
+                        # For answer_only mode, use extracted answer
+                        if hasattr(evaluator, "mode") and evaluator.mode == "answer_only":
+                            solution = (
+                                result.get("extracted_answer")
+                                or result.get("generated_answer")
+                                or result["trajectory"]
+                            )
+                        else:
+                            solution = result["trajectory"]
+                        labels, responses, consensus_scores = evaluator(
+                            [question], [solution], [str(gold_answer_num)]
+                        )
+                        is_correct_eval = labels[0] == 1 if labels else False
+                        eval_results[eval_name] = {
+                            "is_correct": is_correct_eval,
+                            "consensus": consensus_scores[0] if consensus_scores else 0.0,
+                            "response": responses[0] if responses else "",
+                        }
+                        continue
+                    elif isinstance(evaluator, EvaluatorMBPPPlus):
+                        # Skip MBPP+ in phase 1 - will run batch evaluation once in phase 2
+                        # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
+                        log.debug(f"Skipping MBPP+ evaluation for sample {i} in phase 1")
+                        continue
+                    else:
+                        # Fallback: try __call__ with lists
+                        result_output = evaluator(
+                            [question], [result["trajectory"]], [str(gold_answer_num)]
+                        )
+                        if isinstance(result_output, tuple) and len(result_output) == 2:
+                            labels, responses = result_output
+                            is_correct_eval = labels[0] == 1 if labels else False
+                        elif isinstance(result_output, list):
+                            is_correct_eval = (
+                                bool(result_output[0]) if result_output else False
+                            )
+                        else:
+                            is_correct_eval = False
+                    eval_results[eval_name] = {"is_correct": is_correct_eval}
+                except Exception as e:
+                    log.error(f"Evaluator {eval_name} failed: {e}")
+                    traceback.print_exc()
+                    # Don't store failed evaluation - let it retry in batch phase
+                    log.warning(
+                        f"Skipping {eval_name} for sample {i} in phase 1, "
+                        "will retry in batch evaluation phase"
+                    )
+
+            # Use exact_match as primary for logging (if available)
+            is_correct = eval_results.get("exact_match", {}).get("is_correct", False)
+
+            log.info("\n" + "=" * 60)
+            log.info(f"FINAL ANSWER: {generated_text}")
+            log.info(f"Gold answer:  {gold_answer_num}")
+            for eval_name, eval_result in eval_results.items():
+                status = "✓ YES" if eval_result.get("is_correct") else "✗ NO"
+                log.info(f"[{eval_name}]: {status}")
+            log.info("-" * 60)
+            log.info(f"Num steps: {len(result['steps'])}")
+            if "validity_scores" in result and result["validity_scores"]:
+                scores = result["validity_scores"]
+                log.info(
+                    f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
+                )
+            log.info("=" * 60)
+
+            # Store result with per-evaluator results
+            result_dict = {
+                "index": i,
+                "question": question,
+                "gold_answer": gold_answer_num,
+                "generated_trajectory": result["trajectory"],
+                "generated_answer": generated_text,
+                "steps": result["steps"],
+                "validity_scores": result.get("validity_scores", []),
+                "completed": result["completed"],
+                "is_correct": bool(is_correct),  # Primary (exact_match)
+                "eval": eval_results,  # Per-evaluator results
+                "instance_data": dict(instance),  # Store full instance for MBPP+ evaluation
+            }
+
+            if "token_stats" in result:
+                result_dict["token_stats"] = result["token_stats"]
+
+            # Store dataset-specific fields for evaluators (e.g., MBPP+ test_list, task_id)
+            if "task_id" in instance:
+                result_dict["task_id"] = instance["task_id"]
+            if "test_list" in instance:
+                result_dict["test_list"] = instance["test_list"]
+            if "entry_point" in instance:
+                result_dict["entry_point"] = instance["entry_point"]
+
+            results.append(result_dict)
+
+            # Compute running metrics
+            token_stats = result.get("token_stats")
+            if token_stats is None:
+                log.warning(f"Sample {i}: missing 'token_stats' in result")
+                token_stats = {}
+            all_token_stats = []
+            for r in results:
+                ts = r.get("token_stats")
+                if ts is None:
+                    ts = {}
+                all_token_stats.append(ts)
+
+            running_total_tokens = sum(
+                ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
+            )
+            running_total_tflops = sum(_safe_tflops(ts, "tflops") for ts in all_token_stats)
+
+            # Compute running accuracy per evaluator
+            running_stats = {}
+            for eval_name in phase1_evaluators.keys():
+                correct_count = sum(
+                    1
+                    for r in results
+                    if r.get("eval", {}).get(eval_name, {}).get("is_correct", False)
+                )
+                accuracy = (correct_count / len(results)) if results else 0.0
+                running_stats[eval_name] = {"correct": correct_count, "accuracy": accuracy}
+                log.info(
+                    f"Running accuracy [{eval_name}]: {correct_count}/{len(results)} = {accuracy:.3f}"
+                )
+
+            sample_metrics = {
+                "sample_index": i,
+                "is_correct": bool(is_correct),
+                "thinking_num_steps": result.get(
+                    "thinking_num_steps", len(result["steps"])
+                ),
+                "response_num_steps": result.get("response_num_steps", 0),
+                "samples_completed": len(results),
+                "total_tokens_this_sample": token_stats.get("total_tokens_this_sample", 0),
+                "input_tokens_this_sample": token_stats.get("input_tokens", 0),
+                "output_tokens_this_sample": token_stats.get("output_tokens", 0),
+                "generations_this_sample": token_stats.get("generation_count", 0),
+                "tflops_this_sample": _safe_tflops(token_stats, "tflops"),
+                "prm_tokens_this_sample": token_stats.get("prm_input_tokens", 0),
+                "prm_tflops_this_sample": _safe_tflops(token_stats, "prm_tflops"),
+                "running_avg_tokens_per_sample": (
+                    (running_total_tokens / len(results)) if results else 0.0
+                ),
+                "running_total_tokens": running_total_tokens,
+                "running_total_tflops": running_total_tflops,
+            }
+            # Add per-evaluator running accuracy to metrics
+            for eval_name, stats in running_stats.items():
+                safe_name = eval_name.replace("-", "_").replace(".", "_")
+                sample_metrics[f"running_correct_{safe_name}"] = stats["correct"]
+                sample_metrics[f"running_accuracy_{safe_name}"] = stats["accuracy"]
+
+            if "validity_scores" in result and result["validity_scores"]:
+                sample_metrics["confidence"] = float(np.mean(result["validity_scores"]))
+
+            # Append metrics line
+            try:
+                with open(sample_metrics_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(sample_metrics, ensure_ascii=False) + "\n")
+            except Exception as e:
+                log.warning(f"Failed to append sample metrics: {e}")
+
+            # Log to wandb
+            try:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.log(sample_metrics)
+            except Exception:
+                pass
+
+        # Checkpoint: save results after each chunk completes
+        save_results_json(results, save_path_file)
+        log.info(
+            f"Chunk {chunk_idx + 1}/{num_chunks} complete: "
+            f"{len(results)}/{subset_size} samples processed, checkpoint saved"
+        )
+
+    # Final save after all chunks complete
     save_results_json(results, save_path_file)
-    log.info(f"Saved {len(results)} results to {save_path_file}")
+    log.info(f"Final save: {len(results)} results to {save_path_file}")
 
     return results
 
@@ -1305,6 +1343,11 @@ def generate_trajectories(
         and hasattr(strategy, "generate_trajectories_batch")
         and getattr(strategy, "batch_generation", True)
     ):
+        # Get checkpoint batch size from config (default: 32)
+        checkpoint_batch_size = 32
+        if config is not None and hasattr(config, "generation"):
+            checkpoint_batch_size = config.generation.get("checkpoint_batch_size", 32)
+
         return _generate_trajectories_batch(
             results=results,
             save_path=save_path,
@@ -1318,6 +1361,7 @@ def generate_trajectories(
             phase1_evaluators=phase1_evaluators,
             save_path_file=save_path_file,
             sample_metrics_path=sample_metrics_path,
+            checkpoint_batch_size=checkpoint_batch_size,
         )
 
     for i in tqdm(range(subset_size), desc="Generating trajectories"):
