@@ -25,6 +25,7 @@ wandb_group: "baseline_qwen25_math_15b_instruct_math500"
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-1.5B-Instruct"
+  model_short_name: "qwen25_math_1.5b_instruct"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true  # Match official setting

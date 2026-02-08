@@ -2,6 +2,7 @@
 
 type: "vllm"
 model_path: "Qwen/Qwen3-8B"
+model_short_name: "qwen3_8b"  # Short name for output directory organization
 device: cuda
 
 # vLLM-specific settings

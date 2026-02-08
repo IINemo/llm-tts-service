@@ -17,6 +17,7 @@ run_name: "adaptive_scaling_vllm_qwen25_7.5b_math500_sequence_prob_seed${system.
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true

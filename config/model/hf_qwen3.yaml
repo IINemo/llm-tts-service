@@ -2,5 +2,6 @@
 
 type: "local"
 model_path: "Qwen/Qwen3-8B"  # Base model for generation
+model_short_name: "hf_qwen3_8b"  # Short name for output directory organization
 disable_thinking_mode: true
 device: cuda:0

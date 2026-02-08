@@ -24,6 +24,7 @@ wandb_group: "baseline_qwen3_8b_gsm8k"
 model:
   type: "vllm"
   model_path: "Qwen/Qwen3-8B"
+  model_short_name: "qwen3_8b"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true

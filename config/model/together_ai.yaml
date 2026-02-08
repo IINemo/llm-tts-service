@@ -3,6 +3,7 @@
 # Together AI API model configuration
 type: "together_ai"
 model_name: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"  # Together AI model identifier
+model_short_name: "together_ai"  # Short name for output directory organization
 api_key: null  # Will use TOGETHER_API_KEY environment variable if null
 base_url: "https://api.together.xyz/v1"
 max_retries: 3

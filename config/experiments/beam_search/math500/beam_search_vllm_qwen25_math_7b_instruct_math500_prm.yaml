@@ -26,6 +26,7 @@ wandb_group: "beam_search_qwen25_math_7b_instruct_math500_prm"
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
   gpu_memory_utilization: 0.95
   tensor_parallel_size: 1
   enable_prefix_caching: true

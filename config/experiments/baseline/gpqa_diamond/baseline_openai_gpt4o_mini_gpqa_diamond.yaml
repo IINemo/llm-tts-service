@@ -24,6 +24,7 @@ wandb_group: "baseline_gpt4o_mini_gpqa_diamond"
 model:
   type: "openai_api"
   model_path: "gpt-4o-mini"
+  model_short_name: "gpt4o_mini"
   supports_logprobs: true
   prefill_mode: false
   max_context_budget: 128000  # gpt-4o-mini context window

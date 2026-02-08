@@ -17,6 +17,7 @@ run_name: "adaptive_scaling_vllm_qwen3_8b_aime2024_perplexity_seed${system.seed}
 model:
   type: "vllm"
   model_path: "Qwen/Qwen3-8B"
+  model_short_name: "vllm_thinking_qwen3_8b"
   gpu_memory_utilization: 0.8
   tensor_parallel_size: 1
   enable_prefix_caching: true
