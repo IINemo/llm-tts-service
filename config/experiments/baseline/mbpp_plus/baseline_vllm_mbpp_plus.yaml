@@ -18,6 +18,7 @@ run_name: "baseline_vllm_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
 verbose: true
 report_to: null
 wandb_project: llm-tts-mbpp-plus
+wandb_group: "baseline_vllm_mbpp_plus"
 
 # Model configuration (vLLM backend)
 model:

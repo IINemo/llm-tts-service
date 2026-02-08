@@ -18,7 +18,7 @@ run_name: "online_bon_vllm_thinking_qwen3_8b_gaokao2023en_entropy_seed${system.s
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gaokao2023en
-
+wandb_group: "online_bon_qwen3_8b_thinking_gaokao2023en_entropy"
 # Model configuration (vLLM backend)
 model:
   type: "vllm"

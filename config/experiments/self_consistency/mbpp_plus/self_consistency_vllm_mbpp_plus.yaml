@@ -18,6 +18,7 @@ run_name: "self_consistency_vllm_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-mbpp-plus
+wandb_group: "self_consistency_vllm_mbpp_plus"
 
 # Model configuration (vLLM backend)
 model:

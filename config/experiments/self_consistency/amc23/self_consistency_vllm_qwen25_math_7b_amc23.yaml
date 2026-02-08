@@ -19,6 +19,7 @@ run_name: "self_consistency_vllm_qwen25_math_7b_amc23_seed${system.seed}_${now:%
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-amc23
+wandb_group: "self_consistency_qwen25_math_7b_amc23"
 
 # Model configuration (vLLM backend)
 model:

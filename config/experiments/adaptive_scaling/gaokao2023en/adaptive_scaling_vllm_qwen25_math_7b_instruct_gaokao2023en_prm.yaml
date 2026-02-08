@@ -95,3 +95,4 @@ dataset:
 
 report_to: wandb
 wandb_project: llm-tts-eval-gaokao2023en
+wandb_group: "adaptive_scaling_qwen25_math_7b_instruct_gaokao2023en_prm"

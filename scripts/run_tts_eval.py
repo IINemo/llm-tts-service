@@ -122,8 +122,6 @@ from llm_tts.scorers import (
     StepScorerConfidence,
     StepScorerPRM,
     StepScorerUncertainty,
-    TotValueScorer,
-    TotVoteScorer,
 )
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 
@@ -143,7 +141,6 @@ from llm_tts.strategies import (
     StrategyOfflineBestOfN,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
-    StrategyTreeOfThoughts,
     StrategyUncertaintyCoT,
 )
 from llm_tts.utils import get_torch_dtype
@@ -827,59 +824,6 @@ def create_tts_strategy(
             batch_generation=batch_generation,
             data_name=data_name,
         )
-    elif config.strategy.type == "tree_of_thoughts":
-        # Tree-of-Thoughts requires API-based model for state evaluation
-        if not isinstance(model, BlackboxModelWithStreaming):
-            raise ValueError(
-                f"Tree-of-Thoughts requires BlackboxModelWithStreaming, got {type(model).__name__}"
-            )
-
-        # Create ToT scorer based on method_evaluate config
-        method_evaluate = config.strategy.get("method_evaluate", "value")
-        n_evaluate_sample = config.strategy.get("n_evaluate_sample", 3)
-
-        if method_evaluate == "value":
-            tot_scorer = TotValueScorer(
-                model=model,
-                n_evaluate_sample=n_evaluate_sample,
-                temperature=0.0,
-                max_tokens=50,
-                timeout=config.strategy.get("scorer_timeout", 120),
-                value_prompt_path=config.strategy.get("value_prompt_path"),
-                value_last_step_prompt_path=config.strategy.get(
-                    "value_last_step_prompt_path"
-                ),
-            )
-        elif method_evaluate == "vote":
-            tot_scorer = TotVoteScorer(
-                model=model,
-                n_evaluate_sample=n_evaluate_sample,
-                temperature=0.5,
-                max_tokens=100,
-            )
-        else:
-            raise ValueError(f"Unknown method_evaluate: {method_evaluate}")
-
-        strategy = StrategyTreeOfThoughts(
-            model=model,
-            scorer=tot_scorer,
-            mode=config.strategy.get("mode", "generic"),
-            method_generate=config.strategy.get("method_generate", "propose"),
-            beam_width=config.strategy.get("beam_width", 5),
-            n_generate_sample=config.strategy.get("n_generate_sample", 5),
-            steps=config.strategy.get("steps", 4),
-            temperature=config.strategy.get("temperature", 0.7),
-            max_tokens_per_step=config.strategy.get("max_tokens_per_step", 100),
-            n_threads=config.strategy.get("n_threads", 8),
-            scorer_timeout=config.strategy.get("scorer_timeout", 120),
-            propose_prompt_path=config.strategy.get("propose_prompt_path"),
-            cot_prompt_path=config.strategy.get("cot_prompt_path"),
-            value_prompt_path=config.strategy.get("value_prompt_path"),
-            value_last_step_prompt_path=config.strategy.get(
-                "value_last_step_prompt_path"
-            ),
-        )
-
     elif config.strategy.type == "uncertainty_cot":
         strategy = StrategyUncertaintyCoT(
             step_generator=step_generator,
@@ -1883,6 +1827,7 @@ def main(config):
             "WANDB_PROJECT", "llm-tts-eval"
         )
         run_name = config.get("run_name", None)
+        wandb_group = getattr(config, "wandb_group", None)
 
         # Prepend date to wandb run name to match directory structure
         if run_name:
@@ -1892,7 +1837,11 @@ def main(config):
             wandb_run_name = None
 
         wandb.init(
-            project=project, name=wandb_run_name, dir=output_dir, config=wandb_cfg
+            project=project,
+            name=wandb_run_name,
+            group=wandb_group,
+            dir=output_dir,
+            config=wandb_cfg,
         )
         log.info(f"WandB run URL: {wandb.run.get_url()}")
         wandb_save_directory(Path(output_dir) / ".hydra")

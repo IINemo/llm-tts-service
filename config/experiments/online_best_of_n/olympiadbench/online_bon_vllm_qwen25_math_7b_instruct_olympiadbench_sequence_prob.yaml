@@ -19,7 +19,7 @@ run_name: "online_bon_vllm_nothink_qwen25_7b_olympiadbench_sequence_prob_seed${s
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-olympiadbench
-
+wandb_group: "online_bon_qwen25_math_7b_instruct_olympiadbench_sequence_prob"
 # Model configuration (vLLM backend)
 model:
   type: "vllm"

@@ -3,6 +3,10 @@
 # Default run name (can be overridden in experiment configs)
 run_name: "${strategy.type}_${now:%H-%M-%S}"
 
+# WandB configuration
+wandb_project: null  # Set via --config or environment variable WANDB_PROJECT
+wandb_group: null    # Optional: group runs with same group in WandB UI (set in experiment configs)
+
 # Hydra output directory configuration
 hydra:
   run:

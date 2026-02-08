@@ -19,6 +19,7 @@ run_name: "self_consistency_vllm_qwen25_math_7b_gaokao2023en_t03_seed${system.se
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gaokao2023en
+wandb_group: "self_consistency_qwen25_math_7b_gaokao2023en"
 
 # Model configuration (vLLM backend)
 model:

@@ -20,7 +20,7 @@ run_name: "online_bon_vllm_nothink_qwen25_7b_math500_prm_seed${system.seed}_${no
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-math500
-
+wandb_group: "online_bon_qwen25_math_7b_instruct_math500_prm"
 # Model configuration (vLLM backend)
 model:
   type: "vllm"

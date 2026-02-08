@@ -18,7 +18,7 @@ run_name: "online_bon_vllm_thinking_qwen3_8b_minerva_math_pd_seed${system.seed}_
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-minerva_math
-
+wandb_group: "online_bon_qwen3_8b_thinking_minerva_math_pd"
 # Model configuration (vLLM backend)
 model:
   type: "vllm"

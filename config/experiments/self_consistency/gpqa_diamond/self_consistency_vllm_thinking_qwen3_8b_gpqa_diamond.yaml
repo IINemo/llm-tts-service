@@ -19,6 +19,7 @@ run_name: "self_consistency_vllm_thinking_qwen3_8b_gpqa_diamond_seed${system.see
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gpqa-diamond
+wandb_group: "self_consistency_qwen3_8b_thinking_gpqa_diamond"
 
 # Model configuration (vLLM backend)
 model:

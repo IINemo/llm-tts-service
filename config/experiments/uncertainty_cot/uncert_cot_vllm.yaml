@@ -19,6 +19,7 @@ run_name: "uncert_cot_vllm_qwen25_7b_entropy_aime2025_seed${system.seed}_${now:%
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-aime2025
+wandb_group: "uncertainty_cot_qwen3_8b_aime2025"
 
 # Model configuration (vLLM backend)
 model:
