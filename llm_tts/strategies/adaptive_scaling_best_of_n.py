@@ -133,6 +133,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         last_selected: List[Optional[StepCandidate]] = [
             None for _ in range(num_samples)
         ]
+        answer_steps: List[Optional[str]] = [None for _ in range(num_samples)]
 
         # Reset batch-wide and per-sample token tracking
         self.step_generator.reset_sample_stats()
@@ -494,6 +495,8 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     else 0.0
                 )
                 last_selected[sample_idx] = chosen
+                # Store answer_step text for thinking mode
+                answer_steps[sample_idx] = chosen.raw_text if chosen.raw_text else chosen.text
 
         # ---- Finalize stats & build outputs ----
         self.step_generator.finalize_sample_stats(num_samples=num_samples)
@@ -568,6 +571,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     "validity_scores": validity_scores[idx],
                     "completed": len(selected_steps[idx]) > 0,
                     "token_stats": token_stats,
+                    "answer_step": answer_steps[idx],
                 }
             )
 
