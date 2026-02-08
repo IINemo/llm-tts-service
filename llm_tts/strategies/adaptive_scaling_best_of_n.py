@@ -517,7 +517,9 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 )
                 last_selected[sample_idx] = chosen
                 # Store answer_step text for thinking mode
-                answer_steps[sample_idx] = chosen.raw_text if chosen.raw_text else chosen.text
+                answer_steps[sample_idx] = (
+                    chosen.raw_text if chosen.raw_text else chosen.text
+                )
 
         # ---- Finalize stats & build outputs ----
         self.step_generator.finalize_sample_stats(num_samples=num_samples)
