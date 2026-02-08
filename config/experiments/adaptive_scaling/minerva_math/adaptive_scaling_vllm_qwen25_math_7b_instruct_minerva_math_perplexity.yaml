@@ -11,7 +11,7 @@ defaults:
   - /evaluation/default
   - _self_
 
-run_name: "seed${{system.seed}}_${{now:%H-%M-%S}}"
+run_name: "seed${system.seed}_${now:%H-%M-%S}"
 
 # Model configuration
 model:

@@ -5,7 +5,7 @@
 # This demonstrates adaptive early stopping with streaming + logprobs
 
 # Run naming
-run_name: "seed${{system.seed}}_${{now:%H-%M-%S}}"
+run_name: "seed${system.seed}_${now:%H-%M-%S}"
 
 defaults:
   - /dataset/gsm8k
