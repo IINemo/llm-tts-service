@@ -20,6 +20,7 @@ run_name: "run_gsm8k_tot_seed${system.seed}_${now:%H-%M-%S}"
 verbose: false
 report_to: wandb  # Enable wandb logging (optional)
 wandb_project: llm-tts-eval-tot  # Wandb project name for ToT experiments
+wandb_group: "tree_of_thoughts_gsm8k"
 
 # Model configuration (API-based)
 # Using GPT-4 to match original ToT paper (Yao et al., 2023)

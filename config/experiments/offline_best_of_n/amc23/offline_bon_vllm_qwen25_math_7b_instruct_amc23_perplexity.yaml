@@ -20,6 +20,7 @@ run_name: "offline_bon_vllm_nothink_qwen25_7b_amc23_perplexity_seed${system.seed
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-amc23
+wandb_group: "offline_bon_qwen25_math_7b_instruct_amc23_perplexity"
 
 # Model configuration (vLLM backend)
 # Single GPU since perplexity scorer uses the same model (no separate PRM)

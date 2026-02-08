@@ -20,6 +20,7 @@ run_name: "offline_bon_vllm_nothink_qwen25_7b_olympiadbench_entropy_seed${system
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-olympiadbench
+wandb_group: "offline_bon_qwen25_math_7b_instruct_olympiadbench_entropy"
 
 # Model configuration (vLLM backend)
 # Single GPU since entropy scorer uses the same model (no separate PRM)

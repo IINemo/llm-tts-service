@@ -16,6 +16,7 @@ run_name: "offline_bon_openai_gpt4o_mini_gpqa_diamond_sequence_prob_seed${system
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gpqa-diamond
+wandb_group: "offline_bon_gpt4o_mini_gpqa_diamond_sequence_prob"
 
 model:
   type: "openai_api"

@@ -89,3 +89,4 @@ dataset:
   answer_format: "char"
 report_to: wandb
 wandb_project: llm-tts-eval-gpqa_diamond
+wandb_group: "adaptive_scaling_qwen3_8b_gpqa_diamond_perplexity"

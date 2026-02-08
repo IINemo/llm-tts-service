@@ -20,7 +20,7 @@ run_name: "beam_search_vllm_nothink_qwen25_7b_gaokao2023en_prm_seed${system.seed
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gaokao2023en
-
+wandb_group: "beam_search_qwen25_math_7b_instruct_gaokao2023en_prm"
 # Model configuration (vLLM backend)
 model:
   type: "vllm"

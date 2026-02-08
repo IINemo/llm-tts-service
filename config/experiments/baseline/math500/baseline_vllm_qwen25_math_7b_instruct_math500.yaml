@@ -19,6 +19,7 @@ run_name: "baseline_qwen25_math_official_dataset_seed${system.seed}_${now:%H-%M-
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-math500
+wandb_group: "baseline_qwen25_math_7b_instruct_math500"
 
 # Model configuration (vLLM backend)
 model:

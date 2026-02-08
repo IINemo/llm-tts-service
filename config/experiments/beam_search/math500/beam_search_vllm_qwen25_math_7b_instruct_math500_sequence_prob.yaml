@@ -21,7 +21,7 @@ run_name: "beam_search_vllm_nothink_qwen25_7b_math500_sequence_prob_seed${system
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-math500
-
+wandb_group: "beam_search_qwen25_math_7b_instruct_math500_sequence_prob"
 # Model configuration (vLLM backend)
 # Single GPU since sequence_prob scorer uses the same model (no separate PRM)
 model:

@@ -110,3 +110,4 @@ evaluation:
 # Reporting
 report_to: wandb
 wandb_project: llm-tts-eval-olympiadbench
+wandb_group: "adaptive_scaling_qwen25_math_7b_instruct_olympiadbench_prm"

@@ -19,6 +19,7 @@ run_name: "offline_bon_openai_gpt4o_mini_gpqa_diamond_entropy_seed${system.seed}
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gpqa-diamond
+wandb_group: "offline_bon_gpt4o_mini_gpqa_diamond_entropy"
 
 # Model configuration (OpenAI API)
 model:

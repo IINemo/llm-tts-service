@@ -85,3 +85,4 @@ dataset:
   prompt_file: null
 report_to: wandb
 wandb_project: llm-tts-eval-math500
+wandb_group: "adaptive_scaling_qwen25_math_7b_instruct_math500_sequence_prob"
