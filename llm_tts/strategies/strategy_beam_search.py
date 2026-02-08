@@ -412,10 +412,15 @@ class StrategyBeamSearch(StrategyBase):
 
                     all_candidates_data.append(candidates_for_beam)
 
-                # 5) PRM scoring (optional)
+                # 5) Scoring (optional)
                 if use_prm_scorer:
                     # Use PRM scorer - need to batch score all candidates
                     all_candidates_data = self._batch_score_with_prm(
+                        requests, all_candidates_data, prompt_metadata
+                    )
+                elif hasattr(self.scorer, "score_candidates_batch"):
+                    # Use scorer-provided batch scoring (e.g., self-verification)
+                    all_candidates_data = self._batch_score_with_scorer(
                         requests, all_candidates_data, prompt_metadata
                     )
 
@@ -700,6 +705,48 @@ class StrategyBeamSearch(StrategyBase):
         # Map scores back to candidates
         for (prompt_idx, cand_idx), score in zip(candidate_map, scores):
             all_candidates_data[prompt_idx][cand_idx]["prm_score"] = score
+
+        return all_candidates_data
+
+    def _batch_score_with_scorer(
+        self,
+        requests: List[List[Dict[str, str]]],
+        all_candidates_data: List[List[Dict]],
+        prompt_metadata: List[tuple],
+    ) -> List[List[Dict]]:
+        """
+        Batch score all candidates using a scorer that supports score_candidates_batch.
+
+        Args:
+            requests: Original requests for each sample
+            all_candidates_data: List of candidate lists (one per prompt)
+            prompt_metadata: List of (sample_id, beam_idx, parent_beam) tuples
+
+        Returns:
+            all_candidates_data with 'validity' updated from scorer
+        """
+        chats = []
+        candidates_list = []
+        trajectories = []
+
+        for prompt_idx, candidates in enumerate(all_candidates_data):
+            sample_id, _, parent_beam = prompt_metadata[prompt_idx]
+            chats.append(requests[sample_id])
+            candidates_list.append([c["text"] for c in candidates])
+            trajectories.append(parent_beam["steps"])
+
+        if not candidates_list:
+            return all_candidates_data
+
+        log.info(f"Batch scorer evaluation for {len(candidates_list)} prompt groups")
+
+        all_scores = self.scorer.score_candidates_batch(
+            chats, candidates_list, trajectories=trajectories
+        )
+
+        for prompt_idx, scores in enumerate(all_scores):
+            for cand_idx, score in enumerate(scores):
+                all_candidates_data[prompt_idx][cand_idx]["validity"] = score
 
         return all_candidates_data
 
