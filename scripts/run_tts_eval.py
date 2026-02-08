@@ -31,7 +31,6 @@ from hydra.core.hydra_config import HydraConfig
 from lm_polygraph import WhiteboxModel
 from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
-from tqdm import tqdm
 
 
 def _make_output_name(run_name: str, strategy_type: str, data_name: str) -> str:
@@ -1331,14 +1330,13 @@ def _generate_trajectories_batch(
 def generate_trajectories(
     results,
     save_path,
-    strategy: StrategyOnlineBestOfN,
+    strategy,
     dataset: Dataset,
     processed_indices: set,
     prompt_template: str,
     system_prompt: str = "",
     question_field: str = "question",
     answer_field: str = "answer",
-    flop_calculator: FLOPCalculator = None,
     exact_match_dataset_answer_format: str = "numeric",
     data_name: str = None,  # Required - must be passed explicitly
     config=None,  # Optional - needed for multi-evaluator support
@@ -1366,332 +1364,26 @@ def generate_trajectories(
         phase1_evaluators = {"exact_match": exact_match_evaluator}
         log.info(f"Phase 1 evaluator: data_name={exact_match_evaluator.data_name}")
 
-    subset_size = len(dataset)
+    # Get checkpoint batch size from config (default: 32)
+    checkpoint_batch_size = 32
+    if config is not None and hasattr(config, "generation"):
+        checkpoint_batch_size = config.generation.get("checkpoint_batch_size", 32)
 
-    # Check if strategy supports batch generation (baseline, self_consistency, offline_best_of_n, or beam_search with batch_generation=True)
-    # When batch_generation=False, use per-sample loop for running accuracy during generation
-    if (
-        isinstance(
-            strategy,
-            (
-                StrategyBaseline,
-                StrategySelfConsistency,
-                StrategyOfflineBestOfN,
-                StrategyBeamSearch,
-                AdaptiveScalingBestOfN,
-                StrategyOnlineBestOfN,
-            ),
-        )
-        and hasattr(strategy, "generate_trajectories_batch")
-        and getattr(strategy, "batch_generation", True)
-    ):
-        # Get checkpoint batch size from config (default: 32)
-        checkpoint_batch_size = 32
-        if config is not None and hasattr(config, "generation"):
-            checkpoint_batch_size = config.generation.get("checkpoint_batch_size", 32)
-
-        return _generate_trajectories_batch(
-            results=results,
-            save_path=save_path,
-            strategy=strategy,
-            dataset=dataset,
-            processed_indices=processed_indices,
-            prompt_template=prompt_template,
-            system_prompt=system_prompt,
-            question_field=question_field,
-            answer_field=answer_field,
-            phase1_evaluators=phase1_evaluators,
-            save_path_file=save_path_file,
-            sample_metrics_path=sample_metrics_path,
-            checkpoint_batch_size=checkpoint_batch_size,
-        )
-
-    for i in tqdm(range(subset_size), desc="Generating trajectories"):
-        # Skip if already processed
-        if i in processed_indices:
-            log.info(f"Skipping sample {i} (already processed)")
-            continue
-
-        instance = dataset[i]
-
-        log.info("\n" + "=" * 60)
-        log.info(f"Sample {i + 1}/{subset_size}")
-
-        # Get question using configurable field name
-        question = instance[question_field]
-        log.info(f"Question: {question[:200]}...")
-
-        # Handle answer with fallback for Game of 24
-        if answer_field and answer_field in instance and instance[answer_field]:
-            if "####" in instance[answer_field]:
-                from llm_tts.datasets.gsm8k import extract_answer_from_gsm8k
-
-                gold_answer_num = extract_answer_from_gsm8k(instance[answer_field])
-            else:
-                gold_answer_num = instance[answer_field]
-            log.info(f"Gold answer: {gold_answer_num}")
-        else:
-            gold_answer_num = "24"  # For Game of 24, answer is always 24
-            log.info("Gold answer: 24 (Game of 24)")
-
-        # Generate trajectory
-        request = [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    prompt_template.format(question=question)
-                    if prompt_template and "{question}" in prompt_template
-                    else question
-                ),
-            },
-        ]
-
-        result = strategy.generate_trajectory(request, sample_idx=i)
-
-        # Extract generated answer (but don't check correctness yet)
-        # Use extracted_answer if available (e.g., from DeepConf's \boxed{} extraction)
-        if "extracted_answer" in result and result["extracted_answer"]:
-            generated_text = result["extracted_answer"]
-        else:
-            log.warning(
-                f"Sample {i}: no extracted_answer found, answer extraction may have failed"
-            )
-            generated_text = ""
-
-        # Log detailed traces
-        log.info("\n" + "-" * 60)
-        log.info("GENERATED STEPS:")
-        log.info("-" * 60)
-
-        # For DeepConf, steps contain the individual traces
-        if result["steps"] and isinstance(result["steps"], list):
-            # Skip last step if it duplicates the answer_step content
-            # (online BoN / self-consistency append answer to steps AND store in answer_step)
-            answer_step_text = result.get("answer_step") or ""
-            last_step_text = (
-                result["steps"][-1].text
-                if hasattr(result["steps"][-1], "text")
-                else str(result["steps"][-1])
-            )
-            skip_last = (
-                bool(answer_step_text)
-                and len(result["steps"]) > 1
-                and last_step_text.strip()[:200] == answer_step_text.strip()[:200]
-            )
-            steps_to_log = result["steps"][:-1] if skip_last else result["steps"]
-            for step_idx, step in enumerate(steps_to_log):
-                validity = (
-                    result.get("validity_scores", [])[step_idx]
-                    if "validity_scores" in result
-                    and step_idx < len(result["validity_scores"])
-                    else "N/A"
-                )
-                # Format confidence score (handle both numeric and "N/A")
-                confidence_str = (
-                    f"{validity:.3f}"
-                    if isinstance(validity, (int, float))
-                    else validity
-                )
-                log.info(f"\nStep {step_idx + 1} (confidence: {confidence_str}):")
-                # Log full step text, not truncated repr
-                step_text = step.text if hasattr(step, "text") else str(step)
-                log.info(step_text)
-
-        # Log answer step separately for thinking mode, or full trajectory for non-thinking
-        if result.get("answer_step"):
-            log.info("\nGenerated Answer (confidence: N/A):")
-            log.info(result["answer_step"])
-        else:
-            log.info(f"\nFull trajectory:\n{result['trajectory']}")
-
-        log.info("\n" + "=" * 60)
-        log.info(f"FINAL ANSWER: {generated_text}")
-        log.info(f"Gold answer:  {gold_answer_num}")
-        # Use full trajectory for grading (evaluator will extract answer using official logic)
-        exact_match_eval = phase1_evaluators.get("exact_match")
-        is_correct = (
-            exact_match_eval._score_single(
-                (question, result["trajectory"], str(gold_answer_num))
-            )
-            if exact_match_eval
-            else False
-        )
-        log.info(f"Correct:      {'✓ YES' if is_correct else '✗ NO'}")
-        log.info("-" * 60)
-        log.info(f"Num steps: {len(result['steps'])}")
-        if "validity_scores" in result and result["validity_scores"]:
-            scores = result["validity_scores"]
-            log.info(
-                f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
-            )
-        log.info("=" * 60)
-
-        # Store result (including is_correct to avoid O(n²) re-evaluation)
-        result_dict = {
-            "index": i,
-            "question": question,
-            "gold_answer": gold_answer_num,
-            "generated_trajectory": result["trajectory"],
-            "generated_answer": generated_text,
-            "answer_step": result.get("answer_step"),
-            "steps": result["steps"],
-            "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
-            "validity_scores": result.get("validity_scores", []),
-            "completed": result["completed"],
-            "is_correct": bool(is_correct),
-            "instance_data": dict(instance),  # Store full instance for MBPP+ evaluation
-        }
-
-        # Include all_traces if present (DeepConf generates multiple branches)
-        if "all_traces" in result:
-            result_dict["all_traces"] = result["all_traces"]
-
-        # Include metadata if present (contains trace summaries and details)
-        if "metadata" in result:
-            result_dict["metadata"] = result["metadata"]
-
-        # Include token_stats if present (online BON with step generator tracking)
-        if "token_stats" in result:
-            result_dict["token_stats"] = result["token_stats"]
-
-        # Store answer_step for thinking mode strategies
-        if "answer_step" in result:
-            result_dict["answer_step"] = result["answer_step"]
-
-        results.append(result_dict)
-
-        # Save after each sample (enables resuming with minimal data loss)
-        save_results_json(results, save_path_file)
-        log.info(f"Saved result for sample {i} to {save_path_file}")
-
-        # Compute + persist per-sample metrics locally (and optionally log to wandb)
-        token_stats = result.get("token_stats")
-        if token_stats is None:
-            log.warning(f"Sample {i}: missing 'token_stats' in result")
-            token_stats = {}
-        all_token_stats = []
-        for r in results:
-            ts = r.get("token_stats")
-            if ts is None:
-                ts = {}
-            all_token_stats.append(ts)
-
-        # Count number of traces for this sample
-        num_traces = len(result.get("all_traces", result.get("steps", [])))
-
-        # Calculate running totals from all results
-        running_total_tokens = sum(
-            ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
-        )
-        running_total_input = sum(ts.get("input_tokens", 0) for ts in all_token_stats)
-        running_total_output = sum(ts.get("output_tokens", 0) for ts in all_token_stats)
-        running_total_gens = sum(
-            ts.get("generation_count", 0) for ts in all_token_stats
-        )
-        running_total_tflops = sum(_safe_tflops(ts, "tflops") for ts in all_token_stats)
-
-        # Use cached is_correct values (O(n) instead of O(n²))
-        running_correct = sum(1 for r in results if r.get("is_correct", False))
-        running_accuracy = (running_correct / len(results)) if results else 0.0
-        log.info(
-            f"Running accuracy: {running_correct}/{len(results)} = {running_accuracy:.3f}"
-        )
-
-        sample_metrics = {
-            "sample_index": i,
-            "is_correct": bool(is_correct),
-            "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
-            "num_traces": num_traces,
-            "running_correct": running_correct,
-            "running_accuracy": running_accuracy,
-            "samples_completed": len(results),
-            # Token statistics from generator
-            "total_tokens_this_sample": token_stats.get("total_tokens_this_sample", 0),
-            "input_tokens_this_sample": token_stats.get("input_tokens", 0),
-            "output_tokens_this_sample": token_stats.get("output_tokens", 0),
-            "generations_this_sample": token_stats.get("generation_count", 0),
-            "tflops_this_sample": _safe_tflops(token_stats, "tflops"),
-            "prm_tokens_this_sample": token_stats.get("prm_input_tokens", 0),
-            "prm_tflops_this_sample": _safe_tflops(token_stats, "prm_tflops"),
-            # Running totals
-            "running_avg_tokens_per_sample": (
-                (running_total_tokens / len(results)) if results else 0.0
-            ),
-            "running_total_tokens": running_total_tokens,
-            "running_total_input_tokens": running_total_input,
-            "running_total_output_tokens": running_total_output,
-            "running_total_generations": running_total_gens,
-            "running_avg_tflops_per_sample": (
-                (running_total_tflops / len(results)) if results else 0.0
-            ),
-            "running_total_tflops": running_total_tflops,
-        }
-        if "validity_scores" in result and result["validity_scores"]:
-            sample_metrics["confidence"] = float(np.mean(result["validity_scores"]))
-        if "consensus_score" in result:
-            sample_metrics["consensus_score"] = result["consensus_score"]
-
-        # Append metrics line (JSONL) for easy streaming/plotting
-        try:
-            with open(sample_metrics_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(sample_metrics, ensure_ascii=False) + "\n")
-        except Exception as e:
-            log.warning(
-                f"Failed to append sample metrics to {sample_metrics_path}: {e}"
-            )
-
-        # Log per-sample metrics to wandb if enabled
-        try:
-            import wandb
-
-            if wandb.run is not None:
-                # Log individual confidence charts for each DeepConf trace
-                # Batch all charts into single log call to avoid incrementing step
-                trace_charts = {}
-                if "all_traces" in result:
-                    all_traces = result["all_traces"]
-                    # Check if traces have token_confs (DeepConf)
-                    if (
-                        all_traces
-                        and "token_confs" in all_traces[0]
-                        and all_traces[0]["token_confs"]
-                    ):
-                        for t_idx, trace in enumerate(all_traces):
-                            tc = trace.get("token_confs", [])
-                            if tc:
-                                selected = trace.get("selected", False)
-                                answer = trace.get("answer", "")
-                                min_conf = trace.get("min_conf", 0)
-                                sel_marker = "✓" if selected else ""
-
-                                # Create individual line chart for this trace
-                                data = [[idx, conf] for idx, conf in enumerate(tc)]
-                                table = wandb.Table(
-                                    data=data, columns=["token_idx", "confidence"]
-                                )
-                                chart = wandb.plot.line(
-                                    table,
-                                    "token_idx",
-                                    "confidence",
-                                    title=f"Sample {i} Trace {t_idx}{sel_marker} (ans={answer}, min={min_conf:.3f})",
-                                )
-                                trace_charts[
-                                    f"conf_charts/sample_{i}/trace_{t_idx}"
-                                ] = chart
-
-                # Log all metrics and charts in a single call (1 step per sample)
-                wandb.log({**sample_metrics, **trace_charts})
-        except ImportError:
-            pass
-        except Exception as e:
-            log.warning(f"Failed to log sample metrics to wandb: {e}")
-
-    # Final save after generation
-    save_results_json(results, save_path_file)
-    log.info(f"Final save after generation: {len(results)} results to {save_path_file}")
-
-    return results
+    return _generate_trajectories_batch(
+        results=results,
+        save_path=save_path,
+        strategy=strategy,
+        dataset=dataset,
+        processed_indices=processed_indices,
+        prompt_template=prompt_template,
+        system_prompt=system_prompt,
+        question_field=question_field,
+        answer_field=answer_field,
+        phase1_evaluators=phase1_evaluators,
+        save_path_file=save_path_file,
+        sample_metrics_path=sample_metrics_path,
+        checkpoint_batch_size=checkpoint_batch_size,
+    )
 
 
 def evaluate_results(
@@ -2334,7 +2026,6 @@ def main(config):
         system_prompt=system_prompt,
         question_field=config.dataset.get("question_field", "question"),
         answer_field=config.dataset.get("answer_field", "answer"),
-        flop_calculator=flop_calculator,
         exact_match_dataset_answer_format=config.dataset.answer_format,
         data_name=data_name,
         config=config,  # Pass config for multi-evaluator support
