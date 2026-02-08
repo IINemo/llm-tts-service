@@ -157,7 +157,7 @@ Thumbs.db
 
 # Data files
 *.csv
-# *.json
+*.json
 *.jsonl
 *.parquet
 *.h5
@@ -187,5 +187,5 @@ workdir/
 lm-polygraph/
 
 # External Qwen repositories
-Qwen2.5-Math/
+# Qwen2.5-Math/
 Qwen3/
