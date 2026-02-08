@@ -1837,7 +1837,11 @@ def main(config):
             wandb_run_name = None
 
         wandb.init(
-            project=project, name=wandb_run_name, group=wandb_group, dir=output_dir, config=wandb_cfg
+            project=project,
+            name=wandb_run_name,
+            group=wandb_group,
+            dir=output_dir,
+            config=wandb_cfg,
         )
         log.info(f"WandB run URL: {wandb.run.get_url()}")
         wandb_save_directory(Path(output_dir) / ".hydra")
