@@ -172,6 +172,7 @@ MODEL_CONFIGS[qwen3_8b_thinking]="vllm_thinking_qwen3_8b"
 MODEL_CONFIGS[qwen3_8b]="vllm_qwen3_8b"
 MODEL_CONFIGS[qwen25_math_7b]="vllm_qwen25_math_7b_instruct"
 MODEL_CONFIGS[qwen25_math_15b]="vllm_qwen25_math_15b_instruct"
+MODEL_CONFIGS[openai]="openai_gpt4o_mini"
 
 # Function to get config path
 get_config_name() {
@@ -215,11 +216,17 @@ is_prm() {
     [[ "$1" == "prm" ]]
 }
 
+is_api_model() {
+    [[ "$MODEL" == "openai" ]]
+}
+
 # Function to get GPU count
 get_gpu_count() {
     local scorer=$1
     if [[ -n "$GPUS" ]]; then
         echo "$GPUS"
+    elif is_api_model; then
+        echo "1"  # API models still need 1 GPU for SLURM QoS (won't actually use it)
     elif [[ "$STRATEGY" == "baseline" || "$STRATEGY" == "self_consistency" ]]; then
         echo "1"
     elif is_prm "$scorer"; then
@@ -305,16 +312,22 @@ submit_job() {
     fi
 
     # Build sbatch command
+    local partition="long"
+    local gres_line=""
+    if [[ "$gpus" -gt 0 ]]; then
+        gres_line="#SBATCH --gres=gpu:${gpus}"
+    fi
+
     local sbatch_cmd="#!/bin/bash
 #SBATCH -J ${job_name}
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:${gpus}
-#SBATCH -p long
+#SBATCH -p ${partition}
 #SBATCH -t ${time_limit}
 #SBATCH -o ${output_file}
 #SBATCH -e ${error_file}
 #SBATCH --cpus-per-task=16
+${gres_line}
 "
 
     # Add array directive if needed
