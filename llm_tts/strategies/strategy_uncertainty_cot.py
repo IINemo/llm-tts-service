@@ -104,9 +104,7 @@ class StrategyUncertaintyCoT(StrategyBase):
                 )[0]
                 if not initial_candidate:
                     raise RuntimeError("Initial generation returned no candidates")
-                initial_uncertainty = initial_candidate.other_data[
-                    "uncertainty_score"
-                ]
+                initial_uncertainty = initial_candidate.other_data["uncertainty_score"]
 
             log.info(
                 f"[initial] Uncertainty ({self.uncertainty_sampling_mode}): {initial_uncertainty}"
@@ -143,8 +141,7 @@ class StrategyUncertaintyCoT(StrategyBase):
                         "num_candidates": len(cand_list),
                         "all_candidates": [cand.text for cand in cand_list],
                         "all_uncertainties": [
-                            cand.other_data["uncertainty_score"]
-                            for cand in cand_list
+                            cand.other_data["uncertainty_score"] for cand in cand_list
                         ],
                     }
                 }
@@ -192,9 +189,7 @@ class StrategyUncertaintyCoT(StrategyBase):
             # 4) Check for answer / max steps
             if chosen.is_trajectory_complete and self._has_answer_content(chosen):
                 # Answer is already embedded in the last reasoning step
-                answer_step_text = (
-                    chosen.raw_text if chosen.raw_text else chosen.text
-                )
+                answer_step_text = chosen.raw_text if chosen.raw_text else chosen.text
                 break
             if chosen.is_trajectory_complete or step_num == self.max_steps - 1:
                 answer_step_text = self._generate_answer_step(
