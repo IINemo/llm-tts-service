@@ -1844,6 +1844,10 @@ def main(config):
             config=wandb_cfg,
         )
         log.info(f"WandB run URL: {wandb.run.get_url()}")
+        if wandb_group:
+            entity = wandb.run.entity
+            group_url = f"https://wandb.ai/{entity}/{project}/groups/{wandb_group}/workspace"
+            log.info(f"WandB group URL: {group_url}")
         wandb_save_directory(Path(output_dir) / ".hydra")
 
     # Set random seeds
