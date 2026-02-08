@@ -1,23 +1,23 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/uncertainty_cot/uncert_cot_math
 
-hydra:
-  run:
-    dir: ${save_dir}/eval/${now:%Y-%m-%d}/seed${system.seed}_${now:%H-%M-%S}
-
-save_dir: "./workdir"
+# Run naming
+run_name: "seed${{system.seed}}_${{now:%H-%M-%S}}"
 
 defaults:
-  - dataset: math
-  - generation: default
-  - system: default
-  - scorer: uncertainty_pd
+  - /config
+  - /dataset/minerva_math
+  - /model/hf_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
   - /evaluation/default
   - _self_
 
 model:
   type: "local"
   model_path: "Qwen/Qwen3-8B"
+  model_short_name: "hf_qwen3_8b"  # Short name for output directory organization
   disable_thinking_mode: true
   device: cuda
 

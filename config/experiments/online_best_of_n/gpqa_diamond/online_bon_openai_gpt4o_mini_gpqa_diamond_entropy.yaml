@@ -12,7 +12,7 @@ defaults:
   - /evaluation/default
   - _self_
 
-run_name: "online_bon_openai_gpt4o_mini_gpqa_diamond_entropy_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "seed${{system.seed}}_${{now:%H-%M-%S}}"
 
 verbose: true
 report_to: wandb
@@ -21,6 +21,7 @@ wandb_group: "online_bon_gpt4o_mini_gpqa_diamond_entropy"
 model:
   type: "openai_api"
   model_path: "gpt-4o-mini"
+  model_short_name: "gpt4o_mini"
   supports_logprobs: true
   prefill_mode: false
   max_context_budget: 8192

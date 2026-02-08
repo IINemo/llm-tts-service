@@ -13,7 +13,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_thinking_qwen3_8b_aime2025_sequence_prob_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "seed${{system.seed}}_${{now:%H-%M-%S}}"
 
 # Main configuration
 verbose: true
@@ -24,6 +24,7 @@ wandb_group: "online_bon_qwen3_8b_thinking_aime2025_sequence_prob"
 model:
   type: "vllm"
   model_path: "Qwen/Qwen3-8B"
+  model_short_name: "vllm_thinking_qwen3_8b"
   gpu_memory_utilization: 0.8
   tensor_parallel_size: 1
   enable_prefix_caching: true

@@ -14,7 +14,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_nothink_qwen25_7b_gaokao2023en_perplexity_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "seed${{system.seed}}_${{now:%H-%M-%S}}"
 
 # Main configuration
 verbose: true
@@ -26,6 +26,7 @@ wandb_group: "beam_search_qwen25_math_7b_instruct_gaokao2023en_perplexity"
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true

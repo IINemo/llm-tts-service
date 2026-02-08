@@ -13,7 +13,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "baseline_openai_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "seed${{system.seed}}_${{now:%H-%M-%S}}"
 
 # Main configuration
 verbose: true
@@ -25,6 +25,7 @@ wandb_group: "baseline_openai_mbpp_plus"
 model:
   type: "openai_api"
   model_path: "gpt-4o-mini"  # Fast and cost-effective for code
+  model_short_name: "gpt4o_mini"
   # Alternative models:
   # - "gpt-4o" (best quality)
   # - "gpt-4-turbo"

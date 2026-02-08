@@ -12,7 +12,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "baseline_qwen25_math_7b_olympiadbench_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "seed${{system.seed}}_${{now:%H-%M-%S}}"
 
 # Main configuration
 verbose: true
@@ -24,6 +24,7 @@ wandb_group: "baseline_qwen25_math_7b_instruct_olympiadbench"
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
