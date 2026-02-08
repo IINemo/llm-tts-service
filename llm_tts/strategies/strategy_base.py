@@ -30,11 +30,47 @@ def count_reasoning_steps(steps: list, thinking_mode: bool) -> int:
 
 
 class StrategyBase(ABC):
-    """Abstract base class for TTS strategies with parallel generation support"""
+    """Abstract base class for TTS strategies with batch generation support.
+
+    Strategies must implement generate_trajectories_batch() for efficient
+    batch processing. Single-sample calls via generate_trajectory() are
+    automatically wrapped to use the batch method.
+    """
 
     @abstractmethod
-    def generate_trajectory(self, input_chat: List[Dict[str, str]]) -> Dict[str, Any]:
+    def generate_trajectories_batch(
+        self, requests: List[List[Dict[str, str]]], sample_indices: List[int]
+    ) -> List[Dict[str, Any]]:
+        """Generate trajectories for multiple samples in batch.
+
+        Args:
+            requests: List of input chats (one per sample)
+            sample_indices: List of sample indices (for logging/tracking)
+
+        Returns:
+            List of result dictionaries (one per sample)
+        """
         pass
+
+    def generate_trajectory(
+        self, input_chat: List[Dict[str, str]], sample_idx: int = 0
+    ) -> Dict[str, Any]:
+        """Generate trajectory for a single sample.
+
+        Default implementation wraps generate_trajectories_batch for convenience.
+        Subclasses can override if they need specialized single-sample behavior.
+
+        Args:
+            input_chat: Input chat messages
+            sample_idx: Sample index for logging (default: 0)
+
+        Returns:
+            Result dictionary for the single sample
+        """
+        results = self.generate_trajectories_batch([input_chat], [sample_idx])
+        if not results:
+            raise ValueError("generate_trajectories_batch returned empty results")
+        return results[0]
 
     def _parallel_generate(
         self,

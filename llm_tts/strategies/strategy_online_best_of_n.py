@@ -58,21 +58,6 @@ class StrategyOnlineBestOfN(StrategyBase):
         self.batch_generation = batch_generation
         self.prompt_buffer = prompt_buffer
 
-    def generate_trajectory(
-        self, request: List[Dict[str, str]], sample_idx: int = 0
-    ) -> Dict[str, Any]:
-        """
-        Generate a trajectory for a single sample.
-
-        Delegates to generate_trajectories_batch for consistency and correctness.
-        """
-        log.warning(
-            "Sequential generate_trajectory is deprecated. "
-            "Use generate_trajectories_batch for better performance."
-        )
-        results = self.generate_trajectories_batch([request], [sample_idx])
-        return results[0]
-
     def generate_trajectories_batch(
         self,
         requests: List[List[Dict[str, str]]],
