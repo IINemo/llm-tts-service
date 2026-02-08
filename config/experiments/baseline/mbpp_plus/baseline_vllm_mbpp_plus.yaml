@@ -84,5 +84,5 @@ evaluation:
   evaluators:
     - mbpp_plus
   mbpp_plus:
-    mode: full # "test" and "syntax" modes are depricated, use "full" only
+    mode: full  # "test" and "syntax" modes are deprecated, use "full" only
     timeout: 10

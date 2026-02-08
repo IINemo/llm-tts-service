@@ -74,10 +74,10 @@ dataset:
   dataset_split: "test"
   subset: null
   offset: 0
-  question_field: "prompt"
-  answer_field: "code"
+  question_field: "question"  # EvalPlus loader field (includes docstring + example assertion)
+  answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
-  prompt_file: ./config/prompts/mbpp_plus.txt
+  prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
   system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
 
 # Evaluation configuration
@@ -85,5 +85,5 @@ evaluation:
   evaluators:
     - mbpp_plus
   mbpp_plus:
-    mode: syntax
+    mode: full  # "test" and "syntax" modes are deprecated, use "full" only
     timeout: 10

@@ -1,6 +1,7 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/human_eval_plus/baseline_vllm_human_eval_plus
-# Baseline evaluation for HumanEval+ using local vLLM model
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/human_eval_plus/beam_search_vllm_human_eval_plus
+# Beam Search for HumanEval+ using local vLLM model with newline-based step boundaries
+# Uses Entropy scorer for step evaluation
 
 defaults:
   - /config
@@ -12,11 +13,11 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "baseline_vllm_human_eval_plus_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: null
+report_to: wandb
 wandb_project: llm-tts-human-eval-plus
 
 # Model configuration (vLLM backend)
@@ -37,24 +38,28 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 512  # Functions are typically short
-  temperature: 0.0  # Deterministic for reproducibility
-  top_p: 1.0
-  top_k: 20
+  max_new_tokens: 512
+  temperature: 0.7
+  top_p: 0.95
+  top_k: 50
   batch_size: 1
 
-# Strategy - Baseline single-shot
+# Strategy - Beam Search with newline-based step boundaries for code
 strategy:
-  type: baseline
+  type: beam_search
+  beam_size: 3
+  candidates_per_beam: 5
+  max_steps: 20
+  aggregation: mean
   batch_generation: true
+  prompt_buffer: 500
   # Stop tokens for Qwen models
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
-  # Step token limits
-  min_step_tokens: 0
-  max_step_tokens: 512
-  # Disable semantic markers for baseline
+  min_step_tokens: 5
+  max_step_tokens: 128
+  # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
   use_thinking: false
@@ -62,6 +67,15 @@ strategy:
   use_structure: false
   use_reasoning: false
   use_correction: false
+  # Use newlines as step separators for code
+  custom_words:
+    - "\n"
+    - "\n\n"
+
+# Entropy scorer configuration
+scorer:
+  type: entropy
+  batch_size: 1
 
 # Dataset configuration - HumanEval+
 # Uses EvalPlus API loader which provides correct prompt format with function signature

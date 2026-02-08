@@ -1,20 +1,19 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/mbpp_plus/offline_bon_openrouter_mbpp_plus
-# Offline Best-of-N for MBPP+ using OpenRouter API with newline-based step boundaries
-# Uses Entropy scorer for step evaluation
+# Run: CUDA_VISIBLE_DEVICES=all python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/mbpp_plus/self_consistency_openrouter_mbpp_plus
+# Self-consistency evaluation for MBPP+ using OpenRouter API
 #
 # Environment variable required: OPENROUTER_API_KEY
 
 defaults:
   - /config
+  - /model/openrouter
   - /generation/default
   - /system/default
-  - /scorer/entropy
   - /evaluation/mbpp_plus/default
   - _self_
 
 # Run naming
-run_name: "offline_bon_openrouter_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "self_consistency_openrouter_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -39,24 +38,24 @@ system:
   device: cpu
   seed: 0
 
-# Generation configuration
+# Generation configuration - higher temperature for diversity
 generation:
   max_new_tokens: 512
-  temperature: 0.7
+  temperature: 0.7  # Higher temp for diverse solutions
   top_p: 0.95
   top_k: 50
   batch_size: 1
 
-# Strategy - Offline Best-of-N with newline-based step boundaries for code
+# Strategy - Self-consistency with multiple paths
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8
-  max_steps: 20
-  score_aggregation: mean
+  type: self_consistency
+  num_paths: 5  # Generate 5 candidate solutions
   batch_generation: true
-  min_step_tokens: 5
-  max_step_tokens: 128
-  # Disable linguistic markers (not useful for code)
+  data_name: "mbpp_plus"
+  # Step token limits
+  min_step_tokens: 0
+  max_step_tokens: 512
+  # Disable semantic markers
   use_sequence: false
   use_conclusion: false
   use_thinking: false
@@ -64,21 +63,13 @@ strategy:
   use_structure: false
   use_reasoning: false
   use_correction: false
-  # Use newlines as step separators for code
-  custom_words:
-    - "\n"
-    - "\n\n"
-
-# Entropy scorer configuration
-scorer:
-  type: entropy
-  batch_size: 1
 
 # Dataset configuration - MBPP+
+# Uses EvalPlus API loader which provides correct prompt format with function name
 dataset:
   data_name: "mbpp_plus"
   dataset_path: "evalplus/mbppplus"
-  dataset_split: "test"
+  dataset_split: "test"  # 378 problems
   subset: null
   offset: 0
   question_field: "question"  # EvalPlus loader field (includes docstring + example assertion)
@@ -94,3 +85,6 @@ evaluation:
   mbpp_plus:
     mode: full  # "test" and "syntax" modes are deprecated, use "full" only
     timeout: 10
+
+# Scorer configuration (not used for self_consistency, but included for compatibility)
+scorer: null

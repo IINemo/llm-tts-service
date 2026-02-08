@@ -1,6 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/human_eval_plus/test_vllm_human_eval_plus
-# Quick test evaluation for HumanEval+ using local vLLM model (10 samples)
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/human_eval_plus/baseline_vllm_human_eval_plus
+# Baseline evaluation for HumanEval+ using local vLLM model
 
 defaults:
   - /config
@@ -12,7 +12,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "test_vllm_human_eval_plus_${now:%H-%M-%S}"
+run_name: "baseline_vllm_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -37,8 +37,8 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 512
-  temperature: 0.0
+  max_new_tokens: 512  # Functions are typically short
+  temperature: 0.0  # Deterministic for reproducibility
   top_p: 1.0
   top_k: 20
   batch_size: 1
@@ -47,11 +47,14 @@ generation:
 strategy:
   type: baseline
   batch_generation: true
+  # Stop tokens for Qwen models
   stop_token_ids:
-    - 151645
-    - 151643
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  # Step token limits
   min_step_tokens: 0
   max_step_tokens: 512
+  # Disable semantic markers for baseline
   use_sequence: false
   use_conclusion: false
   use_thinking: false
@@ -60,17 +63,18 @@ strategy:
   use_reasoning: false
   use_correction: false
 
-# Dataset configuration - HumanEval+ (TEST - only 10 samples)
+# Dataset configuration - HumanEval+
+# Uses EvalPlus API loader which provides correct prompt format with function signature
 dataset:
   data_name: "human_eval_plus"
   dataset_path: "evalplus/humanevalplus"
-  dataset_split: "test"
-  subset: 10  # Only process first 10 samples for quick testing
+  dataset_split: "test"  # 164 problems
+  subset: null
   offset: 0
-  question_field: "question"
-  answer_field: "answer"
+  question_field: "question"  # EvalPlus loader field (includes function signature + docstring)
+  answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
-  prompt_file: null
+  prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
   system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
 
 # Evaluation configuration
@@ -78,5 +82,5 @@ evaluation:
   evaluators:
     - human_eval_plus
   human_eval_plus:
-    mode: full
+    mode: full  # "test" and "syntax" modes are deprecated, use "full" only
     timeout: 10

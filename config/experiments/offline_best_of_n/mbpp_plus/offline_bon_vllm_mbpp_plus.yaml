@@ -1,12 +1,11 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/mbpp_plus/offline_bon_openrouter_mbpp_plus
-# Offline Best-of-N for MBPP+ using OpenRouter API with newline-based step boundaries
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/mbpp_plus/offline_bon_vllm_mbpp_plus
+# Offline Best-of-N for MBPP+ using local vLLM model with newline-based step boundaries
 # Uses Entropy scorer for step evaluation
-#
-# Environment variable required: OPENROUTER_API_KEY
 
 defaults:
   - /config
+  - /model/vllm_qwen3
   - /generation/default
   - /system/default
   - /scorer/entropy
@@ -14,29 +13,27 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_openrouter_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-mbpp-plus
 
-# Model configuration (OpenRouter API)
+# Model configuration (vLLM backend)
 model:
-  type: "openai_api"
-  provider: openrouter
-  model_path: "openai/gpt-4o-mini"  # Fast and cost-effective for code
-  # Alternative models:
-  # - "anthropic/claude-3.5-sonnet" (best quality)
-  # - "deepseek/deepseek-coder" (code-specialized)
-  # - "qwen/qwen-2.5-coder-32b-instruct" (open-source coder)
-  api_key: null  # Set via OPENROUTER_API_KEY env var
-  supports_logprobs: true
-  prefill_mode: false
+  type: "vllm"
+  model_path: "Qwen/CodeQwen1.5-7B-Chat"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 8192
+  disable_thinking_mode: true
 
 # System configuration
 system:
-  device: cpu
+  device: cuda
   seed: 0
 
 # Generation configuration
@@ -54,6 +51,10 @@ strategy:
   max_steps: 20
   score_aggregation: mean
   batch_generation: true
+  # Stop tokens for Qwen models
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
   min_step_tokens: 5
   max_step_tokens: 128
   # Disable linguistic markers (not useful for code)
@@ -75,10 +76,11 @@ scorer:
   batch_size: 1
 
 # Dataset configuration - MBPP+
+# Uses EvalPlus API loader which provides correct prompt format with function name
 dataset:
   data_name: "mbpp_plus"
   dataset_path: "evalplus/mbppplus"
-  dataset_split: "test"
+  dataset_split: "test"  # 378 problems
   subset: null
   offset: 0
   question_field: "question"  # EvalPlus loader field (includes docstring + example assertion)

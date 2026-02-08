@@ -1,9 +1,9 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/human_eval_plus/beam_search_openai_human_eval_plus
-# Beam Search for HumanEval+ using OpenAI API with newline-based step boundaries
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/human_eval_plus/beam_search_openrouter_human_eval_plus
+# Beam Search for HumanEval+ using OpenRouter API with newline-based step boundaries
 # Uses Entropy scorer for step evaluation
 #
-# Environment variable required: OPENAI_API_KEY
+# Environment variable required: OPENROUTER_API_KEY
 
 defaults:
   - /config
@@ -14,25 +14,30 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "beam_search_openai_human_eval_plus_${now:%H-%M-%S}"
+run_name: "beam_search_openrouter_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-human-eval-plus
 
-# Model configuration (OpenAI API)
+# Model configuration (OpenRouter API)
 model:
   type: "openai_api"
-  model_path: "gpt-4o-mini"
-  api_key: null  # Set via OPENAI_API_KEY env var
+  provider: openrouter
+  model_path: "openai/gpt-4o-mini"  # Fast and cost-effective for code
+  # Alternative models:
+  # - "anthropic/claude-3.5-sonnet" (best quality)
+  # - "deepseek/deepseek-coder" (code-specialized)
+  # - "qwen/qwen-2.5-coder-32b-instruct" (open-source coder)
+  api_key: null  # Set via OPENROUTER_API_KEY env var
   supports_logprobs: true
   prefill_mode: false
 
 # System configuration
 system:
   device: cpu
-  seed: 42
+  seed: 0
 
 # Generation configuration
 generation:
@@ -78,16 +83,16 @@ dataset:
   dataset_split: "test"
   subset: null
   offset: 0
-  question_field: "question"
-  answer_field: "answer"
+  question_field: "question"  # EvalPlus loader field (includes function signature + docstring)
+  answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
-  prompt_file: null
-  system_prompt: null  # EvalPlus doesn't use system prompt
+  prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
+  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
 
 # Evaluation configuration
 evaluation:
   evaluators:
     - human_eval_plus
   human_eval_plus:
-    mode: full
+    mode: full  # "test" and "syntax" modes are deprecated, use "full" only
     timeout: 10
