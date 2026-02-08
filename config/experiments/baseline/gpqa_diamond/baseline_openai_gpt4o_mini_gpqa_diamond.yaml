@@ -12,7 +12,7 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "seed${system.seed}_${now:%H-%M-%S}"
+run_name: "baseline_gpt4o_mini_gpqa_diamond_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true

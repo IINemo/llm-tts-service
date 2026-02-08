@@ -8,9 +8,9 @@ wandb_project: null  # Set via --config or environment variable WANDB_PROJECT
 wandb_group: null    # Optional: group runs with same group in WandB UI (set in experiment configs)
 
 # Hydra output directory configuration
-# New structure: outputs/DATE/DATASET/STRATEGY/MODEL_SHORT_NAME/SEED_TIME/
+# Structure: outputs/DATE/DATASET/STRATEGY/MODEL_SHORT_NAME/SCORER/SEED_TIME/
 hydra:
   run:
-    dir: outputs/${now:%Y-%m-%d}/${dataset.data_name}/${strategy.type}/${model.model_short_name}/${run_name}
+    dir: outputs/${now:%Y-%m-%d}/${dataset.data_name}/${model.model_short_name}/${strategy.type}/${scorer.type}/seed${system.seed}_${now:%H-%M-%S}
   job:
     chdir: false  # Don't change working directory

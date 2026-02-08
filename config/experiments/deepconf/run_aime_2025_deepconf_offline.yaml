@@ -13,7 +13,7 @@ defaults:
   - _self_
 
 # Run naming for descriptive outputs
-run_name: "seed${system.seed}_${now:%H-%M-%S}"
+run_name: "run_aime_2025_deepconf_offline_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: false
