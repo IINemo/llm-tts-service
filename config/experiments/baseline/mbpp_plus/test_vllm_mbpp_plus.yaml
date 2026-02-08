@@ -27,6 +27,7 @@ verbose: true
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Coder-7B-Instruct"
+  model_short_name: "qwen25_coder_7b_instruct"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true

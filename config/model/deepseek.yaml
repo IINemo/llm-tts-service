@@ -1,5 +1,6 @@
 type: "openai_api"
 model_path: "deepseek-reasoner"  # Base model for generation
+model_short_name: "deepseek"  # Short name for output directory organization
 supports_logprobs: true
 api_key: "" # specify
 prefill_mode: true

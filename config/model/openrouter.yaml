@@ -3,6 +3,7 @@
 type: openai_api  # Model interface type
 provider: openrouter
 model_path: openai/gpt-4o-mini  # OpenAI models support logprobs via OpenRouter
+model_short_name: "openrouter"  # Short name for output directory (experiments may override with specific model)
 api_key: null  # Set via OPENROUTER_API_KEY env var
 supports_logprobs: true  # OpenAI models support logprobs
 prefill_mode: false

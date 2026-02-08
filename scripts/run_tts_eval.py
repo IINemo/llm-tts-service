@@ -1739,6 +1739,7 @@ def evaluate_results(
 
     # Log key metrics to wandb if enabled
     wandb_url = None
+    wandb_group_url = None
     try:
         import wandb
 
@@ -1746,13 +1747,19 @@ def evaluate_results(
             wandb.log(metrics)
             log.info("Logged metrics to wandb")
             wandb_url = wandb.run.get_url()
+            group = wandb.run.group
+            if group:
+                entity = wandb.run.entity
+                project_name = wandb.run.project
+                wandb_group_url = (
+                    f"https://wandb.ai/{entity}/{project_name}/groups/{group}/workspace"
+                )
     except ImportError:
         pass  # wandb not installed
     except Exception as e:
         log.warning(f"Failed to log metrics to wandb: {e}")
 
     # Print tab-separated summary for spreadsheet copy-paste
-    # Format: wandb_url \t exact_match \t llm_judge \t total_tflops
     em_acc = None
     llm_judge_acc = None
     for name in all_evaluator_names:
@@ -1764,12 +1771,15 @@ def evaluate_results(
 
     spreadsheet_parts = [
         wandb_url or "",
+        wandb_group_url or "",
         f"{em_acc:.3f}" if em_acc is not None else "",
         f"{llm_judge_acc:.3f}" if llm_judge_acc is not None else "",
         f"{total_tflops:.0f}",
     ]
     log.info("=" * 60)
-    log.info("SPREADSHEET (wandb_url | exact_match | llm_judge | tflops):")
+    log.info(
+        "SPREADSHEET (wandb_url | wandb_group_url | exact_match | llm_judge | tflops):"
+    )
     log.info("\t".join(spreadsheet_parts))
     log.info("=" * 60)
 
@@ -1844,6 +1854,12 @@ def main(config):
             config=wandb_cfg,
         )
         log.info(f"WandB run URL: {wandb.run.get_url()}")
+        if wandb_group:
+            entity = wandb.run.entity
+            group_url = (
+                f"https://wandb.ai/{entity}/{project}/groups/{wandb_group}/workspace"
+            )
+            log.info(f"WandB group URL: {group_url}")
         wandb_save_directory(Path(output_dir) / ".hydra")
 
     # Set random seeds

@@ -25,6 +25,7 @@ wandb_group: "deepconf_gsm8k"
 model:
   provider: openrouter
   model_name: "openai/gpt-4o-mini"
+  model_short_name: "openrouter_gpt4o_mini"
   api_key: null  # Set via OPENROUTER_API_KEY env var
   top_logprobs: 20  # Required for DeepConf
 

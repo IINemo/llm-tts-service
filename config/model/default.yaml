@@ -4,6 +4,7 @@
 type: "openai_api"
 provider: openrouter
 model_path: "openai/gpt-4o-mini"
+model_short_name: "default"  # Short name for output directory organization
 api_key: null  # Set via OPENROUTER_API_KEY env var
 supports_logprobs: true
 prefill_mode: false
