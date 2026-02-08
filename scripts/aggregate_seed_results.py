@@ -4,12 +4,13 @@ Script for aggregating statistics across multiple experiment runs with different
 """
 
 import argparse
+import glob
 import json
 import os
-import glob
-import numpy as np
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
 
 
 def discover_runs(folder_path: str) -> List[str]:
