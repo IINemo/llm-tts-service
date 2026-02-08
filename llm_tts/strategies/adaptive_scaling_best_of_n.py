@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 from llm_tts.scale_discriminator import ScaleDiscriminator
 
-from .strategy_base import StrategyBase, count_reasoning_steps
+from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 
@@ -509,12 +509,8 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 best_idx = _select_best(a_scores)
                 chosen = a_cands[best_idx]
                 trajectories[sample_idx].append(chosen)
-                selected_steps[sample_idx].append(chosen)
-                validity_scores[sample_idx].append(
-                    chosen.other_data.get("validity_score", 0.0)
-                    if chosen.other_data
-                    else 0.0
-                )
+                # Don't append to selected_steps/validity_scores —
+                # answer is stored separately, same as offline BoN
                 last_selected[sample_idx] = chosen
                 # Store answer_step text for thinking mode
                 answer_steps[sample_idx] = (
@@ -558,10 +554,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
             final_trajectory = convert_trajectory_to_string(trajectories[idx])
             extracted = extract_answer(final_trajectory)
 
-            reasoning_steps = count_reasoning_steps(
-                selected_steps[idx],
-                getattr(self.step_generator, "thinking_mode", False),
-            )
+            reasoning_steps = len(selected_steps[idx])
 
             # Get per-sample token stats from generator's tracking
             token_stats = self.step_generator.get_sample_stats_for(idx)
