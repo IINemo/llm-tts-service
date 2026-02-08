@@ -882,7 +882,6 @@ def create_tts_strategy(
 
     elif config.strategy.type == "uncertainty_cot":
         strategy = StrategyUncertaintyCoT(
-            config=config,
             step_generator=step_generator,
             candidates_per_step=config.strategy.candidates_per_step,
             max_steps=config.strategy.max_steps,

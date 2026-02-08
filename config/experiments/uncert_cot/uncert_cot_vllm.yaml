@@ -5,7 +5,7 @@
 defaults:
   - /config
   - /dataset/aime_2025
-  - /model/vllm_qwen25
+  - /model/vllm_qwen3
   - /generation/default
   - /system/default
   - /scorer/entropy
@@ -23,7 +23,7 @@ wandb_project: llm-tts-eval-aime2025
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-  model_path: "Qwen/Qwen2.5-7B"
+  model_path: "Qwen/Qwen3-8B"
   gpu_memory_utilization: 0.8
   tensor_parallel_size: 1
   enable_prefix_caching: true
