@@ -18,6 +18,7 @@ run_name: "baseline_vllm_qwen25_math_7b_instruct_minerva_math_seed${system.seed}
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-minerva-math
+wandb_group: "baseline_qwen25_math_7b_instruct_minerva_math"
 
 # Model configuration (vLLM backend)
 model:

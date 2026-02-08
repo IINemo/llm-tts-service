@@ -19,7 +19,7 @@ run_name: "online_bon_vllm_thinking_qwen3_8b_aime2024_entropy_seed${system.seed}
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-aime2024
-
+wandb_group: "online_bon_qwen3_8b_thinking_aime2024_entropy"
 # Model configuration (vLLM backend)
 model:
   type: "vllm"

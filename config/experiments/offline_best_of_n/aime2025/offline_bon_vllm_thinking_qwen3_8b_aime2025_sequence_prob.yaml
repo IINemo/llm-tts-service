@@ -19,6 +19,7 @@ run_name: "offline_bon_vllm_thinking_qwen3_8b_aime2025_sequence_prob_seed${syste
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-aime2025
+wandb_group: "offline_bon_qwen3_8b_thinking_aime2025_sequence_prob"
 
 # Model configuration (vLLM backend)
 model:

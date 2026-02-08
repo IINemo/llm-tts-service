@@ -19,6 +19,7 @@ run_name: "run_aime_2025_deepconf_offline_seed${system.seed}_${now:%H-%M-%S}"
 verbose: false
 report_to: wandb  # Enable wandb logging (optional)
 wandb_project: llm-tts-eval-deepconf  # Wandb project name for DeepConf experiments
+wandb_group: "deepconf_aime2025"
 
 # Model configuration (API-based)
 model:

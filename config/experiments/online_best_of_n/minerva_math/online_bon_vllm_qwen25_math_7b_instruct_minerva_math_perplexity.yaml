@@ -19,7 +19,7 @@ run_name: "online_bon_vllm_nothink_qwen25_7b_minerva_math_perplexity_seed${syste
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-minerva_math
-
+wandb_group: "online_bon_qwen25_math_7b_instruct_minerva_math_perplexity"
 # Model configuration (vLLM backend)
 model:
   type: "vllm"

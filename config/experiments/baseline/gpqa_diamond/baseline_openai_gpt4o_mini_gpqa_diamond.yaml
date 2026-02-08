@@ -18,6 +18,7 @@ run_name: "baseline_gpt4o_mini_gpqa_diamond_seed${system.seed}_${now:%H-%M-%S}"
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gpqa-diamond
+wandb_group: "baseline_gpt4o_mini_gpqa_diamond"
 
 # Model configuration (OpenAI API)
 model:

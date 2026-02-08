@@ -87,3 +87,4 @@ dataset:
   prompt_file: null
 report_to: wandb
 wandb_project: llm-tts-eval-aime24
+wandb_group: "adaptive_scaling_qwen3_8b_aime2024_perplexity"

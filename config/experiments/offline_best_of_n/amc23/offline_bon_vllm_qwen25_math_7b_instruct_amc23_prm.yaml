@@ -20,6 +20,7 @@ run_name: "offline_bon_vllm_nothink_qwen25_7b_amc23_prm_seed${system.seed}_${now
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-amc23
+wandb_group: "offline_bon_qwen25_math_7b_instruct_amc23_prm"
 
 # Model configuration (vLLM backend)
 model:

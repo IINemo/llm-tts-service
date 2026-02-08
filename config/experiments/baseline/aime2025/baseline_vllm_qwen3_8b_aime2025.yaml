@@ -18,6 +18,7 @@ run_name: "baseline_qwen3_8b_aime2025_seed${system.seed}_${now:%H-%M-%S}"
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-aime2025
+wandb_group: "baseline_qwen3_8b_aime2025"
 
 # Model configuration (vLLM backend)
 model:

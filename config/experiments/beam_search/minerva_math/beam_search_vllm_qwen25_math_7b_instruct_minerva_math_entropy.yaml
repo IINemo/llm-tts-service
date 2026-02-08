@@ -20,7 +20,7 @@ run_name: "beam_search_vllm_nothink_qwen25_7b_minerva_math_entropy_seed${system.
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-minerva-math
-
+wandb_group: "beam_search_qwen25_math_7b_instruct_minerva_math_entropy"
 # Model configuration (vLLM backend)
 # Single GPU since entropy scorer uses the same model (no separate PRM)
 model:

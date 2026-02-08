@@ -19,6 +19,7 @@ run_name: "offline_bon_vllm_thinking_qwen3_8b_gpqa_diamond_entropy_seed${system.
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gpqa-diamond
+wandb_group: "offline_bon_qwen3_8b_thinking_gpqa_diamond_entropy"
 
 # Model configuration (vLLM backend)
 model:
