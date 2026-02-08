@@ -1751,7 +1751,9 @@ def evaluate_results(
             if group:
                 entity = wandb.run.entity
                 project_name = wandb.run.project
-                wandb_group_url = f"https://wandb.ai/{entity}/{project_name}/groups/{group}/workspace"
+                wandb_group_url = (
+                    f"https://wandb.ai/{entity}/{project_name}/groups/{group}/workspace"
+                )
     except ImportError:
         pass  # wandb not installed
     except Exception as e:
@@ -1775,7 +1777,9 @@ def evaluate_results(
         f"{total_tflops:.0f}",
     ]
     log.info("=" * 60)
-    log.info("SPREADSHEET (wandb_url | wandb_group_url | exact_match | llm_judge | tflops):")
+    log.info(
+        "SPREADSHEET (wandb_url | wandb_group_url | exact_match | llm_judge | tflops):"
+    )
     log.info("\t".join(spreadsheet_parts))
     log.info("=" * 60)
 
@@ -1852,7 +1856,9 @@ def main(config):
         log.info(f"WandB run URL: {wandb.run.get_url()}")
         if wandb_group:
             entity = wandb.run.entity
-            group_url = f"https://wandb.ai/{entity}/{project}/groups/{wandb_group}/workspace"
+            group_url = (
+                f"https://wandb.ai/{entity}/{project}/groups/{wandb_group}/workspace"
+            )
             log.info(f"WandB group URL: {group_url}")
         wandb_save_directory(Path(output_dir) / ".hydra")
 
