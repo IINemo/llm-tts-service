@@ -1,40 +1,38 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=all python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/mbpp_plus/baseline_openai_mbpp_plus
-# Baseline evaluation for MBPP+ using OpenAI API
-#
-# Environment variable required: OPENAI_API_KEY
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/mbpp_plus/baseline_vllm_mbpp_plus
+# Baseline evaluation for MBPP+ using local vLLM model
 
 defaults:
   - /config
-  - /model/openai
+  - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /scorer/entropy
   - /evaluation/mbpp_plus/default
   - _self_
 
 # Run naming
-run_name: "baseline_openai_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "baseline_vllm_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: null
 wandb_project: llm-tts-mbpp-plus
 
-# Model configuration (OpenAI API)
+# Model configuration (vLLM backend)
 model:
-  type: "openai_api"
-  model_path: "gpt-4o-mini"  # Fast and cost-effective for code
-  # Alternative models:
-  # - "gpt-4o" (best quality)
-  # - "gpt-4-turbo"
-  # - "o1-mini" (reasoning model, more expensive)
-  api_key: null  # Set via OPENAI_API_KEY env var
-  supports_logprobs: true
-  prefill_mode: false
+  type: "vllm"
+  model_path: "Qwen/CodeQwen1.5-7B-Chat"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 8192
+  disable_thinking_mode: true
 
 # System configuration
 system:
-  device: cpu
+  device: cuda
   seed: 0
 
 # Generation configuration
@@ -49,6 +47,10 @@ generation:
 strategy:
   type: baseline
   batch_generation: true
+  # Stop tokens for Qwen models
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
   # Step token limits
   min_step_tokens: 0
   max_step_tokens: 512
@@ -62,26 +64,23 @@ strategy:
   use_correction: false
 
 # Dataset configuration - MBPP+
-# Uses EvalPlus API loader which provides correct prompt format matching official methodology
+# Uses EvalPlus API loader which provides correct prompt format with function name
 dataset:
   data_name: "mbpp_plus"
   dataset_path: "evalplus/mbppplus"
   dataset_split: "test"  # 378 problems
   subset: null
   offset: 0
-  question_field: "question"  # EvalPlus formatted prompt (instruction + code block)
+  question_field: "question"  # EvalPlus loader field (includes docstring + example assertion)
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
-  system_prompt: ""  # No system prompt - matches EvalPlus official methodology
+  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
 
 # Evaluation configuration
 evaluation:
   evaluators:
     - mbpp_plus
   mbpp_plus:
-    mode: full  # Use "full" for complete EvalPlus test suite
+    mode: full # "test" and "syntax" modes are depricated, use "full" only
     timeout: 10
-
-# Scorer configuration (not used for baseline, but included for compatibility)
-scorer: null
