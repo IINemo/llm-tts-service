@@ -62,24 +62,6 @@ class StrategyBaseline(StrategyBase):
         )
         log.info(f"Baseline strategy initialized in {mode} mode")
 
-    def generate_trajectory(
-        self, request: List[Dict[str, str]], sample_idx: int = 0
-    ) -> Dict[str, Any]:
-        """
-        Generate a complete response in a single call.
-
-        Args:
-            request: Chat messages (list of dicts with 'role' and 'content')
-            sample_idx: Sample index for logging
-
-        Returns:
-            Dictionary with trajectory, extracted answer, and metadata
-        """
-        if self.batch_generation:
-            return self._generate_trajectory_batch_mode(request, sample_idx)
-        else:
-            return self._generate_trajectory_with_uncertainty(request, sample_idx)
-
     def _generate_trajectory_with_uncertainty(
         self, request: List[Dict[str, str]], sample_idx: int = 0
     ) -> Dict[str, Any]:
@@ -230,17 +212,6 @@ class StrategyBaseline(StrategyBase):
             "completed": candidate.is_trajectory_complete,
             "token_stats": token_stats,
         }
-
-    def _generate_trajectory_batch_mode(
-        self, request: List[Dict[str, str]], sample_idx: int = 0
-    ) -> Dict[str, Any]:
-        """
-        Generate response using batch generation mode.
-
-        Delegates to _generate_trajectories_batch_mode for a single request.
-        """
-        result = self._generate_trajectories_batch_mode([request], [sample_idx])
-        return result[0]
 
     def generate_trajectories_batch(
         self, requests: List[List[Dict[str, str]]], sample_indices: List[int] = None

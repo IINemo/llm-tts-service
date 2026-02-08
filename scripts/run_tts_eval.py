@@ -1218,6 +1218,10 @@ def _generate_trajectories_batch(
             if "token_stats" in result:
                 result_dict["token_stats"] = result["token_stats"]
 
+            # Store answer_step for thinking mode strategies
+            if "answer_step" in result:
+                result_dict["answer_step"] = result["answer_step"]
+
             # Store dataset-specific fields for evaluators (e.g., MBPP+ test_list, task_id)
             if "task_id" in instance:
                 result_dict["task_id"] = instance["task_id"]
@@ -1548,6 +1552,10 @@ def generate_trajectories(
         # Include token_stats if present (online BON with step generator tracking)
         if "token_stats" in result:
             result_dict["token_stats"] = result["token_stats"]
+
+        # Store answer_step for thinking mode strategies
+        if "answer_step" in result:
+            result_dict["answer_step"] = result["answer_step"]
 
         results.append(result_dict)
 
