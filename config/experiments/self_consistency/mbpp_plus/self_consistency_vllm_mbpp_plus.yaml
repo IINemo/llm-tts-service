@@ -1,12 +1,6 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/mbpp_plus/test_vllm_mbpp_plus
-# Quick test configuration for MBPP+ (10 samples only)
-#
-# REQUIREMENTS:
-# - NVIDIA GPU with CUDA support
-# - vLLM installed: uv pip install "vllm>=0.12.0,<0.13.0"
-#
-# For testing without GPU, run: python tests/test_mbpp_plus_integration.py
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/mbpp_plus/self_consistency_vllm_mbpp_plus
+# Self-consistency evaluation for MBPP+ using local vLLM model
 
 defaults:
   - /config
@@ -18,10 +12,12 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "test_vllm_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "self_consistency_vllm_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
+report_to: wandb
+wandb_project: llm-tts-mbpp-plus
 
 # Model configuration (vLLM backend)
 model:
@@ -31,31 +27,36 @@ model:
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 4096  # Smaller for testing
+  max_model_len: 8192
   disable_thinking_mode: true
 
 # System configuration
 system:
   device: cuda
-  seed: 42
+  seed: 0
 
-# Generation configuration
+# Generation configuration - higher temperature for diversity
 generation:
-  max_new_tokens: 256  # Shorter for testing
-  temperature: 0.0
-  top_p: 1.0
-  top_k: 20
+  max_new_tokens: 512
+  temperature: 0.7  # Higher temp for diverse solutions
+  top_p: 0.95
+  top_k: 50
   batch_size: 1
 
-# Strategy - Baseline single-shot
+# Strategy - Self-consistency with multiple paths
 strategy:
-  type: baseline
+  type: self_consistency
+  num_paths: 5  # Generate 5 candidate solutions
   batch_generation: true
+  data_name: "mbpp_plus"
+  # Stop tokens for Qwen models
   stop_token_ids:
     - 151645
     - 151643
+  # Step token limits
   min_step_tokens: 0
-  max_step_tokens: 256
+  max_step_tokens: 512
+  # Disable semantic markers
   use_sequence: false
   use_conclusion: false
   use_thinking: false
@@ -64,12 +65,12 @@ strategy:
   use_reasoning: false
   use_correction: false
 
-# Dataset configuration - MBPP+ (small subset for testing)
+# Dataset configuration - MBPP+
 dataset:
   data_name: "mbpp_plus"
   dataset_path: "evalplus/mbppplus"
   dataset_split: "test"
-  subset: 10  # Only 10 samples for quick test
+  subset: null
   offset: 0
   question_field: "prompt"
   answer_field: "code"
