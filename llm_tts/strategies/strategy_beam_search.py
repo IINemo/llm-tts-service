@@ -427,7 +427,7 @@ class StrategyBeamSearch(StrategyBase):
 
                     all_candidates_data.append(candidates_for_beam)
 
-                # 5) PRM scoring (optional)
+                # 5) Scoring (optional)
                 if use_prm_scorer:
                     # Use PRM scorer - need to batch score all candidates
                     all_candidates_data = self._batch_score_with_prm(
