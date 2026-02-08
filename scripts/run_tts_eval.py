@@ -1883,17 +1883,7 @@ def main(config):
             "WANDB_PROJECT", "llm-tts-eval"
         )
         run_name = config.get("run_name", None)
-
-        # Group name for grouping related runs (e.g., different seeds of same experiment)
-        # Can be explicitly set in config, or auto-generated from run_name without seed/timestamp
         wandb_group = getattr(config, "wandb_group", None)
-        if not wandb_group and run_name:
-            # Auto-generate group from run_name by removing seed and timestamp
-            import re
-            # Remove patterns like _seed42_ or _seed42, and timestamps like _17-19-39
-            wandb_group = re.sub(r'_seed\d+(_\d{2}-\d{2}-\d{2})?', '', run_name)
-            # Also clean up trailing timestamps if present
-            wandb_group = re.sub(r'_\d{2}-\d{2}-\d{2}$', '', wandb_group)
 
         # Prepend date to wandb run name to match directory structure
         if run_name:
