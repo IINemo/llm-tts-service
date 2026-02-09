@@ -9,7 +9,7 @@ defaults:
   - /config
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/sequence_prob
   - /evaluation/mbpp_plus/default
   - _self_
 
@@ -18,7 +18,7 @@ run_name: "offline_bon_openrouter_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: wandb
+report_to: null
 wandb_project: llm-tts-mbpp-plus
 
 # Model configuration (OpenRouter API)
@@ -33,6 +33,7 @@ model:
   api_key: null  # Set via OPENROUTER_API_KEY env var
   supports_logprobs: true
   prefill_mode: false
+  max_context_budget: 228000
 
 # System configuration
 system:
@@ -41,21 +42,21 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 512
-  temperature: 0.7
+  max_new_tokens: 16384
+  temperature: 0.6
   top_p: 0.95
-  top_k: 50
+  top_k: 20
   batch_size: 1
 
 # Strategy - Offline Best-of-N with newline-based step boundaries for code
 strategy:
   type: offline_best_of_n
   num_trajectories: 8
-  max_steps: 20
+  max_steps: 100
   score_aggregation: mean
   batch_generation: true
-  min_step_tokens: 5
-  max_step_tokens: 128
+  min_step_tokens: 10
+  max_step_tokens: 2048
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
@@ -71,7 +72,7 @@ strategy:
 
 # Entropy scorer configuration
 scorer:
-  type: entropy
+  type: sequence_prob
   batch_size: 1
 
 # Dataset configuration - MBPP+
@@ -85,7 +86,6 @@ dataset:
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
-  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
 
 # Evaluation configuration
 evaluation:

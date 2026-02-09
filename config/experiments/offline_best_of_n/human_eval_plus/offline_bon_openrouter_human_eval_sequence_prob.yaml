@@ -1,19 +1,20 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=all python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/human_eval_plus/baseline_openrouter_human_eval_plus
-# Baseline evaluation for HumanEval+ using OpenRouter API
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_openrouter_human_eval_plus
+# Offline Best-of-N for HumanEval+ using OpenRouter API with newline-based step boundaries
+# Uses Entropy scorer for step evaluation
 #
 # Environment variable required: OPENROUTER_API_KEY
 
 defaults:
   - /config
-  - /model/openrouter
   - /generation/default
   - /system/default
+  - /scorer/sequence_prob
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "baseline_openrouter_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "offline_bon_openrouter_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -47,14 +48,16 @@ generation:
   top_k: 20
   batch_size: 1
 
-# Strategy - Baseline single-shot
+# Strategy - Offline Best-of-N with newline-based step boundaries for code
 strategy:
-  type: baseline
+  type: offline_best_of_n
+  num_trajectories: 8
+  max_steps: 100
+  score_aggregation: mean
   batch_generation: true
-  # Step token limits
-  min_step_tokens: 0
-  max_step_tokens: 16384
-  # Disable semantic markers for baseline
+  min_step_tokens: 10
+  max_step_tokens: 2048
+  # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
   use_thinking: false
@@ -62,13 +65,21 @@ strategy:
   use_structure: false
   use_reasoning: false
   use_correction: false
+  # Use newlines as step separators for code
+  custom_words:
+    - "\n"
+    - "\n\n"
+
+# Entropy scorer configuration
+scorer:
+  type: entropy
+  batch_size: 1
 
 # Dataset configuration - HumanEval+
-# Uses EvalPlus API loader which provides correct prompt format with function signature
 dataset:
   data_name: "human_eval_plus"
   dataset_path: "evalplus/humanevalplus"
-  dataset_split: "test"  # 164 problems
+  dataset_split: "test"
   subset: null
   offset: 0
   question_field: "question"  # EvalPlus loader field (includes function signature + docstring)
@@ -83,6 +94,3 @@ evaluation:
   human_eval_plus:
     mode: full  # "test" and "syntax" modes are deprecated, use "full" only
     timeout: 10
-
-# Scorer configuration (not used for baseline, but included for compatibility)
-scorer: null
