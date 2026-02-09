@@ -18,100 +18,7 @@ import subprocess
 import sys
 
 
-def _pip(*args: str) -> None:
-    cmd = [sys.executable, "-m", "pip", *args]
-    print("[bootstrap]", " ".join(cmd), flush=True)
-    subprocess.check_call(cmd)
-
-
-def ensure_lm_polygraph_installed() -> None:
-    import importlib
-
-    def _force(spec: str, no_deps: bool = False) -> None:
-        args = ["install", "--force-reinstall"]
-        if no_deps:
-            args.append("--no-deps")
-        args.append(spec)
-        _pip(*args)
-
-    # Upgrade tooling (ok), but we will re-pin everything afterwards anyway
-    try:
-        _pip("install", "-U", "pip", "setuptools", "wheel")
-    except Exception as e:
-        print(f"[bootstrap] tooling upgrade failed (continuing): {e}", flush=True)
-
-    # Hard pins that must hold for this job (last-word wins)
-    # - transformers import checks require huggingface-hub<1.0
-    # - datasets requires fsspec<=2024.6.1
-    # - torch 2.9.0 on linux x86_64 wants triton==3.5.0
-    _force("huggingface-hub>=0.34.0,<1.0")
-    _force("fsspec>=2023.1.0,<=2024.6.1")
-    _force("triton==3.5.0")
-
-    # Ensure vLLM-compatible transformers stack
-    _force("tokenizers==0.22.2")
-    _force("transformers>=4.57.0,<5.0.0", no_deps=True)
-
-    # Install lm-polygraph WITHOUT deps so it doesn't downgrade transformers/tokenizers
-    _pip(
-        "install",
-        "--no-deps",
-        "lm-polygraph @ git+https://github.com/IINemo/lm-polygraph.git@dev",
-    )
-
-    # ANTLR pin for OmegaConf
-    _force("antlr4-python3-runtime==4.9.3", no_deps=True)
-
-    # OPTIONAL: install lm-polygraph's runtime deps you actually need
-    # (You can add/remove based on what your evaluation uses.)
-    _pip(
-        "install",
-        "bert-score>=0.3.13",
-        "bitsandbytes",
-        "bs4",
-        "fastchat",
-        "flask>=2.3.2",
-        "fschat>=0.2.3",
-        "hf-lfs>=0.0.3",
-        "matplotlib>=3.6",
-        "nlpaug>=1.1.10",
-        "nltk>=3.7,<4",
-        "pytest>=4.4.1",
-        "pytreebank>=0.2.7",
-        "rouge-score>=0.0.4",
-        "unbabel-comet==2.2.1",
-        "wget",
-        "spacy>=3.4.0,<3.8.0",
-    )
-
-    # Final re-pin (because those deps might pull updates)
-    _force("huggingface-hub>=0.34.0,<1.0")
-    _force("fsspec>=2023.1.0,<=2024.6.1")
-    _force("tokenizers==0.22.2")
-    _force("transformers>=4.57.0,<5.0.0", no_deps=True)
-    _force("triton==3.5.0")
-
-    # Sanity checks
-    import fsspec
-    import huggingface_hub
-    import tokenizers
-    import transformers  # noqa: F401
-
-    importlib.import_module("lm_polygraph")
-    print(
-        f"[bootstrap] OK: transformers={transformers.__version__}, "
-        f"tokenizers={tokenizers.__version__}, "
-        f"huggingface_hub={huggingface_hub.__version__}, "
-        f"fsspec={fsspec.__version__}",
-        flush=True,
-    )
-
-
-ensure_lm_polygraph_installed()
-# --- end bootstrap ---
-
-
-def main():
+def main() -> None:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     target_script = os.path.join(script_dir, "run_tts_eval.py")
 
@@ -134,7 +41,8 @@ def main():
 
             try:
                 overrides = json.loads(overrides_json)
-                hydra_args.extend(overrides)
+                if isinstance(overrides, list):
+                    hydra_args.extend([str(x) for x in overrides])
             except json.JSONDecodeError:
                 pass
 
@@ -157,11 +65,15 @@ def main():
         if key.startswith("CLEARML"):
             del env[key]
 
-    # GPU diagnostics
+    # GPU diagnostics (non-fatal if nvidia-smi missing)
     print("[ClearML wrapper] === GPU Diagnostics ===", flush=True)
-    subprocess.run(["nvidia-smi"], env=env)
-    print("[ClearML wrapper] === nvidia-smi -L ===", flush=True)
-    subprocess.run(["nvidia-smi", "-L"], env=env)
+    try:
+        subprocess.run(["nvidia-smi"], env=env, check=False)
+        print("[ClearML wrapper] === nvidia-smi -L ===", flush=True)
+        subprocess.run(["nvidia-smi", "-L"], env=env, check=False)
+    except FileNotFoundError:
+        print("[ClearML wrapper] nvidia-smi not found in container", flush=True)
+
     print("[ClearML wrapper] === Environment ===", flush=True)
     print(
         f"  CUDA_VISIBLE_DEVICES={env.get('CUDA_VISIBLE_DEVICES', '(not set)')}",
@@ -177,7 +89,7 @@ def main():
         flush=True,
     )
 
-    # Auto-detect MIG UUID and set CUDA_VISIBLE_DEVICES
+    # Auto-detect MIG UUID and set CUDA_VISIBLE_DEVICES if present
     import re as _re
 
     try:
@@ -186,29 +98,26 @@ def main():
             capture_output=True,
             text=True,
             env=env,
+            check=False,
         )
-        mig_uuids = _re.findall(r"(MIG-[0-9a-f-]+)", result_smi.stdout)
+        mig_uuids = _re.findall(r"(MIG-[0-9a-f-]+)", result_smi.stdout or "")
         if mig_uuids:
             mig_uuid = mig_uuids[0]
             print(f"[ClearML wrapper] Detected MIG UUID: {mig_uuid}", flush=True)
             env["CUDA_VISIBLE_DEVICES"] = mig_uuid
-            print(
-                f"[ClearML wrapper] Set CUDA_VISIBLE_DEVICES={mig_uuid}",
-                flush=True,
-            )
+            print(f"[ClearML wrapper] Set CUDA_VISIBLE_DEVICES={mig_uuid}", flush=True)
         else:
             print("[ClearML wrapper] No MIG UUID found in nvidia-smi -L", flush=True)
     except Exception as e:
         print(f"[ClearML wrapper] MIG UUID detection failed: {e}", flush=True)
 
-    # Granular import diagnostic to isolate std::bad_alloc
-    diag_code = """
+    # Granular import diagnostic to isolate CUDA / vLLM import issues
+    diag_code = r"""
 import sys, traceback, os
 print(f'[diag] Python: {sys.executable}', flush=True)
 print(f'[diag] CUDA_VISIBLE_DEVICES={os.environ.get("CUDA_VISIBLE_DEVICES", "(not set)")}', flush=True)
 print(f'[diag] VLLM_ATTENTION_BACKEND={os.environ.get("VLLM_ATTENTION_BACKEND", "(not set)")}', flush=True)
 
-# Step 1: basic torch + CUDA init
 print('[diag] Step 1: importing torch and initializing CUDA...', flush=True)
 try:
     import torch
@@ -225,7 +134,6 @@ except Exception:
     traceback.print_exc()
     sys.stdout.flush()
 
-# Step 2: vllm import (lazy)
 print('[diag] Step 2: importing vllm...', flush=True)
 try:
     import vllm
@@ -234,7 +142,6 @@ except Exception:
     traceback.print_exc()
     sys.stdout.flush()
 
-# Step 3: vllm.config (triggers CUDA ops loading)
 print('[diag] Step 3: importing vllm.config...', flush=True)
 try:
     import vllm.config
@@ -243,7 +150,6 @@ except Exception:
     traceback.print_exc()
     sys.stdout.flush()
 
-# Step 4: LLM class
 print('[diag] Step 4: importing LLM, SamplingParams...', flush=True)
 try:
     from vllm import LLM, SamplingParams
@@ -253,7 +159,7 @@ except Exception:
     sys.stdout.flush()
 
 print('[diag] All imports OK, exiting cleanly', flush=True)
-os._exit(0)  # force exit to avoid cleanup crashes
+os._exit(0)
 """
     print("[ClearML wrapper] Running import diagnostic...", flush=True)
     subprocess.run(
@@ -261,12 +167,13 @@ os._exit(0)  # force exit to avoid cleanup crashes
         env=env,
         cwd=os.path.dirname(script_dir),
         stderr=subprocess.STDOUT,
+        check=False,
     )
 
     print(f"[ClearML wrapper] Running: {' '.join(cmd)}", flush=True)
     # Merge stderr into stdout so ClearML captures errors
-    # (run_tts_eval.py redirects sys.stderr to a file, hiding tracebacks)
     result = subprocess.run(cmd, env=env, stderr=subprocess.STDOUT)
+
     if result.returncode != 0:
         print(
             f"[ClearML wrapper] Process exited with code {result.returncode}",
@@ -280,8 +187,12 @@ os._exit(0)  # force exit to avoid cleanup crashes
             recursive=True,
         ):
             print(f"[ClearML wrapper] Contents of {stderr_log}:", flush=True)
-            with open(stderr_log) as f:
-                print(f.read(), flush=True)
+            try:
+                with open(stderr_log) as f:
+                    print(f.read(), flush=True)
+            except Exception as e:
+                print(f"[ClearML wrapper] Could not read {stderr_log}: {e}", flush=True)
+
     sys.exit(result.returncode)
 
 
