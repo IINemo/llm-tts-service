@@ -26,7 +26,6 @@ def _pip(*args: str) -> None:
 
 
 def ensure_lm_polygraph_installed() -> None:
-    # Only check module importability here (no WhiteboxModel import => no F811/F401 issues)
     try:
         importlib.import_module("lm_polygraph")
         print("[bootstrap] lm_polygraph already installed", flush=True)
@@ -34,22 +33,28 @@ def ensure_lm_polygraph_installed() -> None:
     except Exception as e:
         print(f"[bootstrap] lm_polygraph not importable: {e}", flush=True)
 
-    # Upgrade tooling (pip on workers was old; VCS installs/builds behave better after upgrade)
+    # Upgrade tooling (helps VCS installs/builds)
     try:
         _pip("install", "-U", "pip", "setuptools", "wheel")
     except Exception as e:
         print(f"[bootstrap] tooling upgrade failed (continuing): {e}", flush=True)
 
-    # Install lm-polygraph into this venv (non-editable => avoids PEP660 build_editable issue)
-    _pip("install", "lm-polygraph @ git+https://github.com/IINemo/lm-polygraph.git@dev")
+    # IMPORTANT:
+    # Install lm-polygraph WITHOUT deps so it doesn't downgrade transformers to 4.51.3
+    _pip(
+        "install",
+        "--no-deps",
+        "lm-polygraph @ git+https://github.com/IINemo/lm-polygraph.git@dev",
+    )
 
-    # Fix the specific observed breakage:
-    # transformers 4.57.x requires tokenizers>=0.22.0,<=0.23.0 but env had 0.21.4
-    _pip("install", "--force-reinstall", "tokenizers==0.23.0")
-
-    # Re-pin known conflict points (belt-and-suspenders)
-    _pip("install", "--force-reinstall", "--no-deps", "antlr4-python3-runtime==4.9.3")
+    # Ensure vLLM-compatible transformers stack
     _pip("install", "--force-reinstall", "--no-deps", "transformers>=4.57.0,<5.0.0")
+
+    # tokenizers==0.23.0 does not exist; use latest available (0.22.2)
+    _pip("install", "--force-reinstall", "tokenizers==0.22.2")
+
+    # Keep ANTLR pinned for OmegaConf
+    _pip("install", "--force-reinstall", "--no-deps", "antlr4-python3-runtime==4.9.3")
 
     # Sanity check: module import only
     importlib.import_module("lm_polygraph")
