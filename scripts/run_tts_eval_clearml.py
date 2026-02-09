@@ -37,11 +37,7 @@ def ensure_lm_polygraph_installed() -> None:
     _pip("install", "--force-reinstall", "--no-deps", "antlr4-python3-runtime==4.9.3")
 
     # 3) Install lm-polygraph WITHOUT deps so it won't downgrade transformers/tokenizers
-    _pip(
-        "install",
-        "--no-deps",
-        "lm-polygraph @ git+https://github.com/IINemo/lm-polygraph.git@dev",
-    )
+    _pip("install", "--no-deps", "git+https://github.com/IINemo/lm-polygraph.git@dev")
 
     # 4) Install lm-polygraph runtime deps explicitly (safe versions)
     _pip(
