@@ -379,7 +379,7 @@ class StepScorerSelfVerification(StepScorerBase):
                 score_map[key] = score
                 self.cache[item["cache_key"]] = score
             self.total_evaluations += len(pending)
-        elif pending:
+        elif pending and not self.use_local:
             eval_scores: Dict[tuple, List[float]] = {
                 (p["group_idx"], p["cand_idx"]): [] for p in pending
             }
@@ -410,7 +410,18 @@ class StepScorerSelfVerification(StepScorerBase):
                 score_map[key] = score
                 self.cache[item["cache_key"]] = score
             self.total_evaluations += len(pending)
-        # No pending candidates to evaluate.
+        elif pending:
+            for item in pending:
+                score = self._evaluate_single_step(
+                    self._extract_problem(chats[item["group_idx"]]),
+                    self._trajectory_to_text(trajectories[item["group_idx"]]),
+                    self._get_step_text(
+                        candidates_list[item["group_idx"]][item["cand_idx"]]
+                    ),
+                )
+                score_map[(item["group_idx"], item["cand_idx"])] = score
+                self.cache[item["cache_key"]] = score
+                self.total_evaluations += 1
 
         for group_idx, candidates in enumerate(candidates_list):
             group_scores: List[float] = []
@@ -473,24 +484,41 @@ class StepScorerSelfVerification(StepScorerBase):
                     if vote_idx is not None:
                         votes_by_group[group_idx][vote_idx] += 1.0
         else:
-            for i in range(self.n_evaluate_sample):
-                batch_prompts = [p for p in prompts if p]
-                outputs: List[str] = []
-                try:
-                    outputs = self._call_api_batch(batch_prompts)
-                except Exception as e:
-                    log.warning(f"Vote batch {i+1} failed: {e}")
-                    outputs = []
-
-                out_idx = 0
+            if self.use_local:
                 for group_idx, prompt in enumerate(prompts):
                     if not prompt:
                         continue
-                    output = outputs[out_idx] if out_idx < len(outputs) else ""
-                    out_idx += 1
-                    vote_idx = self._parse_vote_output(output, group_sizes[group_idx])
-                    if vote_idx is not None:
-                        votes_by_group[group_idx][vote_idx] += 1.0
+                    for i in range(self.n_evaluate_sample):
+                        try:
+                            output = self._call_model(prompt)
+                            vote_idx = self._parse_vote_output(
+                                output, group_sizes[group_idx]
+                            )
+                            if vote_idx is not None:
+                                votes_by_group[group_idx][vote_idx] += 1.0
+                        except Exception as e:
+                            log.warning(f"Vote {i+1} failed: {e}")
+            else:
+                for i in range(self.n_evaluate_sample):
+                    batch_prompts = [p for p in prompts if p]
+                    outputs: List[str] = []
+                    try:
+                        outputs = self._call_api_batch(batch_prompts)
+                    except Exception as e:
+                        log.warning(f"Vote batch {i+1} failed: {e}")
+                        outputs = []
+
+                    out_idx = 0
+                    for group_idx, prompt in enumerate(prompts):
+                        if not prompt:
+                            continue
+                        output = outputs[out_idx] if out_idx < len(outputs) else ""
+                        out_idx += 1
+                        vote_idx = self._parse_vote_output(
+                            output, group_sizes[group_idx]
+                        )
+                        if vote_idx is not None:
+                            votes_by_group[group_idx][vote_idx] += 1.0
 
         for group_idx, votes in enumerate(votes_by_group):
             results[group_idx] = votes

@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """Create a ClearML task for running the TTS evaluation.
 
-This script creates a ClearML task with proper dependency handling to resolve
-conflicts between lm-polygraph (requires transformers==4.51.3) and vllm 0.12.0
-(requires transformers>=4.56.0).
+This script creates a ClearML task with dependency handling to avoid:
+- OmegaConf/ANTLR runtime mismatch (pin antlr4-python3-runtime==4.9.3)
+- vLLM needing newer transformers (pin transformers>=4.57.0,<5.0.0)
+- lm-polygraph VCS install flakiness under ClearML 'packages='
 
-Strategy:
-1. Install all base packages including vllm with correct torch/transformers
-2. In docker_bash_setup_script, install lm-polygraph (which downgrades transformers)
-3. Then force-reinstall transformers>=4.57.0 to fix the downgrade
+IMPORTANT:
+- Do NOT install lm-polygraph via BASE_PACKAGES. Install it at runtime inside
+  scripts/run_tts_eval_clearml.py (post-venv) before running run_tts_eval.py.
 """
 
 from clearml import Task
 
-# Base packages (everything except lm-polygraph)
+# Base packages - vllm docker image may already have some of these,
+# but we pin explicitly for reproducibility.
 BASE_PACKAGES = [
+    # Pin conflicting versions FIRST to prevent upgrades
+    "huggingface-hub>=0.34.0,<1.0",
+    "tokenizers>=0.22.0,<0.24.0",
+    "fsspec>=2023.1.0,<=2025.3.0",
     # Core ML packages with pinned versions for vllm 0.12.0
     "torch==2.9.0",
     "torchvision==0.24.0",
@@ -35,11 +40,14 @@ BASE_PACKAGES = [
     "httpx>=0.27",
     "pyyaml>=6.0",
     "parse",
-    # Evaluation
-    "antlr4-python3-runtime==4.11.1",
+    # HF eval/datasets stack
+    "datasets>=2.18.0,<3.0.0",
+    "evaluate>=0.4.0,<1.0.0",
+    # Evaluation (ANTLR runtime pin avoids OmegaConf ATN mismatch)
+    "antlr4-python3-runtime==4.9.3",
     "word2number>=1.1",
     "latex2sympy2>=1.9",
-    # For lm-polygraph deps (install before lm-polygraph to avoid conflicts)
+    # Common deps used by lm-polygraph / eval stack (lm-polygraph installed at runtime)
     "scikit-learn>=1.0",
     "sentence-transformers>=2.0",
     "spacy>=3.0",
@@ -48,28 +56,40 @@ BASE_PACKAGES = [
     "accelerate>=0.20",
 ]
 
-# Docker bash setup script to install lm-polygraph and fix transformers
-DOCKER_BASH_SETUP = """
+# Docker bash setup script - runs BEFORE venv creation
+# Only used for system-level setup (apt packages, disk cleanup)
+DOCKER_BASH_SETUP = r"""
 set -e
 
-echo "=== Cleaning up disk space ==="
+
+echo "=== Aggressive disk cleanup ==="
 rm -rf /root/.clearml/venvs-cache/* 2>/dev/null || true
-rm -rf /root/.clearml/venvs-builds/3.12 2>/dev/null || true
+rm -rf /root/.clearml/venvs-builds/* 2>/dev/null || true
 rm -rf /tmp/* 2>/dev/null || true
+rm -rf /var/cache/apt/archives/* 2>/dev/null || true
+rm -rf /root/.cache/pip/* 2>/dev/null || true
 pip cache purge 2>/dev/null || true
 
-echo "=== Installing lm-polygraph (will downgrade transformers) ==="
-pip install 'lm-polygraph @ git+https://github.com/IINemo/lm-polygraph.git@dev'
 
-echo "=== Force reinstalling transformers to fix vllm compatibility ==="
-pip install 'transformers>=4.57.0,<5.0.0' --force-reinstall --no-deps
+# Show available disk space
+df -h / || true
 
-echo "=== Verifying installed versions ==="
-python -c "import transformers; print(f'transformers: {transformers.__version__}')"
-python -c "import torch; print(f'torch: {torch.__version__}')"
-python -c "import vllm; print(f'vllm: {vllm.__version__}')"
 
-echo "=== Setup complete ==="
+echo "=== Installing system packages ==="
+rm -rf /var/lib/apt/lists/*
+apt-get clean
+apt-get update --allow-insecure-repositories || true
+apt-get install -y --allow-unauthenticated ca-certificates gnupg
+apt-get update
+apt-get install -y git python3 python3-venv python3-pip
+
+
+# Final cleanup
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+
+echo "=== System setup complete ==="
+df -h / || true
 """
 
 
@@ -87,7 +107,9 @@ def create_task(
         repo="https://github.com/IINemo/llm-tts-service.git",
         branch="fix/clearml-hydra-wrapper",
         script="scripts/run_tts_eval_clearml.py",
-        docker="pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel",
+        # Use minimal CUDA runtime image (much smaller than devel)
+        docker="nvidia/cuda:12.4.0-runtime-ubuntu22.04",
+        docker_args="--entrypoint=",  # IMPORTANT: clear entrypoint
         docker_bash_setup_script=DOCKER_BASH_SETUP,
         packages=BASE_PACKAGES,
     )
@@ -122,9 +144,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--name", default="ToT Self-Verification MATH500 v38", help="Task name"
     )
-    parser.add_argument("--queue", default="gpu-80gb", help="Queue name")
+    parser.add_argument("--queue", default="high_q_80", help="Queue name")
     parser.add_argument(
-        "--config", default="online_bon_openrouter_entropy_math500", help="Config name"
+        "--config",
+        default="online_bon_openrouter_entropy_math500",
+        help="Config name",
     )
 
     args = parser.parse_args()

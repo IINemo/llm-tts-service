@@ -380,10 +380,15 @@ def create_model(config):
                     # Use entropy wrapper for generation (scores not used for selection)
                     stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                     estimator = MeanTokenEntropy()
+                elif scorer_type == "self_verification":
+                    # Self-verification scorer uses its own model for scoring
+                    # Use entropy wrapper for generation (scores not used for selection)
+                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                    estimator = MeanTokenEntropy()
                 else:
                     raise ValueError(
                         f"Unsupported scorer type for vLLM: {scorer_type}. "
-                        f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm"
+                        f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm, self_verification"
                     )
 
                 vllm_model = VLLMWithUncertainty(
@@ -586,27 +591,61 @@ def create_model(config):
     return model, step_generator
 
 
+def _create_api_model_for_scorer(model_cfg):
+    """Create an API-backed model instance for scoring only."""
+    # Use model_name if available, otherwise fall back to model_path
+    model_path = model_cfg.get("model_name") or model_cfg.get("model_path")
+    log.info(f"Self-verification scorer API model: {model_path}")
+
+    provider = model_cfg.get("provider")
+    base_url = model_cfg.get("base_url")
+
+    if provider == "openrouter":
+        api_key = model_cfg.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+        if base_url is None:
+            base_url = "https://openrouter.ai/api/v1"
+    else:
+        api_key = model_cfg.get("api_key") or os.getenv("OPENAI_API_KEY")
+
+    return BlackboxModelWithStreaming(
+        openai_api_key=api_key,
+        model_path=model_path,
+        supports_logprobs=model_cfg.get("supports_logprobs", False),
+        base_url=base_url,
+    )
+
+
 def create_tts_strategy(
     config, model, step_generator, scorer, output_dir=None, flop_calculator=None
 ):
     if scorer is not None and isinstance(scorer, StepScorerSelfVerification):
-        # For API models, use the model directly
-        if isinstance(model, BlackboxModelWithStreaming):
-            scorer.set_model(model, use_vllm=False)
-            log.info("Self-verification scorer: using API backend")
-        # For vLLM models, use the underlying vLLM engine
-        elif hasattr(model, "vllm_engine"):
-            scorer.set_model(model.vllm_engine, use_vllm=True)
-            log.info("Self-verification scorer: using vLLM backend")
-        # For local WhiteboxModel (lm_polygraph)
-        elif isinstance(model, WhiteboxModel):
-            scorer.set_model(model, use_local=True)
-            log.info("Self-verification scorer: using local WhiteboxModel backend")
+        scorer_model_cfg = getattr(config.scorer, "model", None)
+        if scorer_model_cfg is not None:
+            if scorer_model_cfg.get("type") != "openai_api":
+                raise ValueError(
+                    "Self-verification scorer model override only supports type=openai_api"
+                )
+            scorer_model = _create_api_model_for_scorer(scorer_model_cfg)
+            scorer.set_model(scorer_model, use_vllm=False)
+            log.info("Self-verification scorer: using API override model")
         else:
-            log.warning(
-                "Self-verification scorer: unknown model type, may not work correctly"
-            )
-            scorer.set_model(model, use_vllm=False)
+            # For API models, use the model directly
+            if isinstance(model, BlackboxModelWithStreaming):
+                scorer.set_model(model, use_vllm=False)
+                log.info("Self-verification scorer: using API backend")
+            # For vLLM models, use the underlying vLLM engine
+            elif hasattr(model, "vllm_engine"):
+                scorer.set_model(model.vllm_engine, use_vllm=True)
+                log.info("Self-verification scorer: using vLLM backend")
+            # For local WhiteboxModel (lm_polygraph)
+            elif isinstance(model, WhiteboxModel):
+                scorer.set_model(model, use_local=True)
+                log.info("Self-verification scorer: using local WhiteboxModel backend")
+            else:
+                log.warning(
+                    "Self-verification scorer: unknown model type, may not work correctly"
+                )
+                scorer.set_model(model, use_vllm=False)
 
     if config.strategy.type == "baseline":
         # Get eos_patterns from config, default to ["<end of response>"]
