@@ -12,7 +12,6 @@ Hydra arguments are read from the ClearML task's 'HydraArgs/' parameter section:
   - HydraArgs/overrides: JSON list of Hydra overrides (e.g. ["++key=val", ...])
 """
 
-import importlib
 import json
 import os
 import subprocess
@@ -26,39 +25,86 @@ def _pip(*args: str) -> None:
 
 
 def ensure_lm_polygraph_installed() -> None:
-    try:
-        importlib.import_module("lm_polygraph")
-        print("[bootstrap] lm_polygraph already installed", flush=True)
-        return
-    except Exception as e:
-        print(f"[bootstrap] lm_polygraph not importable: {e}", flush=True)
+    import importlib
 
-    # Upgrade tooling (helps VCS installs/builds)
+    def _force(spec: str, no_deps: bool = False) -> None:
+        args = ["install", "--force-reinstall"]
+        if no_deps:
+            args.append("--no-deps")
+        args.append(spec)
+        _pip(*args)
+
+    # Upgrade tooling (ok), but we will re-pin everything afterwards anyway
     try:
         _pip("install", "-U", "pip", "setuptools", "wheel")
     except Exception as e:
         print(f"[bootstrap] tooling upgrade failed (continuing): {e}", flush=True)
 
-    # IMPORTANT:
-    # Install lm-polygraph WITHOUT deps so it doesn't downgrade transformers to 4.51.3
+    # Hard pins that must hold for this job (last-word wins)
+    # - transformers import checks require huggingface-hub<1.0
+    # - datasets requires fsspec<=2024.6.1
+    # - torch 2.9.0 on linux x86_64 wants triton==3.5.0
+    _force("huggingface-hub>=0.34.0,<1.0")
+    _force("fsspec>=2023.1.0,<=2024.6.1")
+    _force("triton==3.5.0")
+
+    # Ensure vLLM-compatible transformers stack
+    _force("tokenizers==0.22.2")
+    _force("transformers>=4.57.0,<5.0.0", no_deps=True)
+
+    # Install lm-polygraph WITHOUT deps so it doesn't downgrade transformers/tokenizers
     _pip(
         "install",
         "--no-deps",
         "lm-polygraph @ git+https://github.com/IINemo/lm-polygraph.git@dev",
     )
 
-    # Ensure vLLM-compatible transformers stack
-    _pip("install", "--force-reinstall", "--no-deps", "transformers>=4.57.0,<5.0.0")
+    # ANTLR pin for OmegaConf
+    _force("antlr4-python3-runtime==4.9.3", no_deps=True)
 
-    # tokenizers==0.23.0 does not exist; use latest available (0.22.2)
-    _pip("install", "--force-reinstall", "tokenizers==0.22.2")
+    # OPTIONAL: install lm-polygraph's runtime deps you actually need
+    # (You can add/remove based on what your evaluation uses.)
+    _pip(
+        "install",
+        "bert-score>=0.3.13",
+        "bitsandbytes",
+        "bs4",
+        "fastchat",
+        "flask>=2.3.2",
+        "fschat>=0.2.3",
+        "hf-lfs>=0.0.3",
+        "matplotlib>=3.6",
+        "nlpaug>=1.1.10",
+        "nltk>=3.7,<4",
+        "pytest>=4.4.1",
+        "pytreebank>=0.2.7",
+        "rouge-score>=0.0.4",
+        "unbabel-comet==2.2.1",
+        "wget",
+        "spacy>=3.4.0,<3.8.0",
+    )
 
-    # Keep ANTLR pinned for OmegaConf
-    _pip("install", "--force-reinstall", "--no-deps", "antlr4-python3-runtime==4.9.3")
+    # Final re-pin (because those deps might pull updates)
+    _force("huggingface-hub>=0.34.0,<1.0")
+    _force("fsspec>=2023.1.0,<=2024.6.1")
+    _force("tokenizers==0.22.2")
+    _force("transformers>=4.57.0,<5.0.0", no_deps=True)
+    _force("triton==3.5.0")
 
-    # Sanity check: module import only
+    # Sanity checks
+    import fsspec
+    import huggingface_hub
+    import tokenizers
+    import transformers  # noqa: F401
+
     importlib.import_module("lm_polygraph")
-    print("[bootstrap] lm_polygraph OK", flush=True)
+    print(
+        f"[bootstrap] OK: transformers={transformers.__version__}, "
+        f"tokenizers={tokenizers.__version__}, "
+        f"huggingface_hub={huggingface_hub.__version__}, "
+        f"fsspec={fsspec.__version__}",
+        flush=True,
+    )
 
 
 ensure_lm_polygraph_installed()
