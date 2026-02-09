@@ -528,6 +528,11 @@ def extract_answer(pred_str, data_name, use_last_number=True):
         pred = a
     elif re.search(r"\bthe answer is\b", pred_str, re.IGNORECASE):
         pred = pred_str.split("the answer is")[-1].strip().split("\n")[0].strip()
+    elif "<Answer>:" in pred_str:
+        # Handle Qwen3 thinking mode format: <Answer>: X
+        pred = pred_str.split("<Answer>:")[-1].strip().split("\n")[0].strip()
+        # Remove <end of response> tag if present
+        pred = pred.split("<end of response>")[0].strip()
     elif "final answer is" in pred_str:
         pred = pred_str.split("final answer is")[-1].strip()
     elif "答案是" in pred_str:
