@@ -16,7 +16,6 @@ Analyze this step carefully:
 Rate this step as one of:
 - sure: This step is definitely correct and makes good progress
 - likely: This step appears correct and reasonable
-- unlikely: This step may have issues or doesn't help much
 - impossible: This step is wrong or leads to a dead end
 
-Your rating (sure/likely/unlikely/impossible):
+Your rating (sure/likely/impossible):
