@@ -26,6 +26,7 @@ def _pip(*args: str) -> None:
 
 
 def ensure_lm_polygraph_installed() -> None:
+    # Only check module importability here (no WhiteboxModel import => no F811/F401 issues)
     try:
         importlib.import_module("lm_polygraph")
         print("[bootstrap] lm_polygraph already installed", flush=True)
@@ -33,20 +34,24 @@ def ensure_lm_polygraph_installed() -> None:
     except Exception as e:
         print(f"[bootstrap] lm_polygraph not importable: {e}", flush=True)
 
-    # Strongly recommended: upgrade pip so VCS installs / modern builds behave
+    # Upgrade tooling (pip on workers was old; VCS installs/builds behave better after upgrade)
     try:
-        _pip("install", "-U", "pip")
+        _pip("install", "-U", "pip", "setuptools", "wheel")
     except Exception as e:
-        print(f"[bootstrap] pip upgrade failed (continuing): {e}", flush=True)
+        print(f"[bootstrap] tooling upgrade failed (continuing): {e}", flush=True)
 
-    # Install lm-polygraph into this venv
+    # Install lm-polygraph into this venv (non-editable => avoids PEP660 build_editable issue)
     _pip("install", "lm-polygraph @ git+https://github.com/IINemo/lm-polygraph.git@dev")
 
-    # Re-pin known conflict points
+    # Fix the specific observed breakage:
+    # transformers 4.57.x requires tokenizers>=0.22.0,<=0.23.0 but env had 0.21.4
+    _pip("install", "--force-reinstall", "tokenizers==0.23.0")
+
+    # Re-pin known conflict points (belt-and-suspenders)
     _pip("install", "--force-reinstall", "--no-deps", "antlr4-python3-runtime==4.9.3")
     _pip("install", "--force-reinstall", "--no-deps", "transformers>=4.57.0,<5.0.0")
 
-    # Sanity check
+    # Sanity check: module import only
     importlib.import_module("lm_polygraph")
     print("[bootstrap] lm_polygraph OK", flush=True)
 
