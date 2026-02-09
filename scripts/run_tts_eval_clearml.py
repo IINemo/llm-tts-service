@@ -15,8 +15,6 @@ Hydra arguments are read from the ClearML task's 'HydraArgs/' parameter section:
 import importlib
 import json
 import os
-
-# --- ClearML bootstrap: ensure lm_polygraph is installed in the task venv ---
 import subprocess
 import sys
 
@@ -28,7 +26,6 @@ def _pip(*args: str) -> None:
 
 
 def ensure_lm_polygraph_installed() -> None:
-    # Fast path: just check module importability (no symbol import)
     try:
         importlib.import_module("lm_polygraph")
         print("[bootstrap] lm_polygraph already installed", flush=True)
@@ -36,26 +33,20 @@ def ensure_lm_polygraph_installed() -> None:
     except Exception as e:
         print(f"[bootstrap] lm_polygraph not importable: {e}", flush=True)
 
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    setup_sh = os.path.join(repo_root, "setup.sh")
+    # Strongly recommended: upgrade pip so VCS installs / modern builds behave
+    try:
+        _pip("install", "-U", "pip")
+    except Exception as e:
+        print(f"[bootstrap] pip upgrade failed (continuing): {e}", flush=True)
 
-    if os.path.exists(setup_sh):
-        print("[bootstrap] running setup.sh", flush=True)
-        subprocess.check_call(["bash", setup_sh])
-
-        # latex2sympy2 must be installed separately due to antlr conflict
-        _pip("install", "--no-deps", "latex2sympy2")
-    else:
-        _pip(
-            "install",
-            "lm-polygraph @ git+https://github.com/IINemo/lm-polygraph.git@dev",
-        )
+    # Install lm-polygraph into this venv
+    _pip("install", "lm-polygraph @ git+https://github.com/IINemo/lm-polygraph.git@dev")
 
     # Re-pin known conflict points
     _pip("install", "--force-reinstall", "--no-deps", "antlr4-python3-runtime==4.9.3")
     _pip("install", "--force-reinstall", "--no-deps", "transformers>=4.57.0,<5.0.0")
 
-    # Sanity check: module import only (no duplicate symbol import)
+    # Sanity check
     importlib.import_module("lm_polygraph")
     print("[bootstrap] lm_polygraph OK", flush=True)
 
