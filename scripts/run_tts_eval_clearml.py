@@ -1,28 +1,98 @@
 #!/usr/bin/env python3
 """ClearML wrapper for run_tts_eval.py that bypasses ClearML's Hydra binding.
 
-ClearML's PatchHydra intercepts @hydra.main and modifies config_sources,
-which breaks code that reads HydraConfig.get().runtime.config_sources.
-This wrapper runs the actual script in a clean subprocess without ClearML's
-Hydra patches.
-
-Hydra arguments are read from the ClearML task's 'HydraArgs/' parameter section:
-  - HydraArgs/config_path: Hydra --config-path value
-  - HydraArgs/config_name: Hydra --config-name value
-  - HydraArgs/overrides: JSON list of Hydra overrides (e.g. ["++key=val", ...])
+This wrapper runs run_tts_eval.py in a clean subprocess (without ClearML Hydra patches).
+It also bootstraps lm-polygraph into ClearML's auto-created venv without breaking vLLM.
 """
 
+import importlib
 import json
 import os
 import subprocess
 import sys
 
 
-def main() -> None:
+def _pip(*args: str) -> None:
+    cmd = [sys.executable, "-m", "pip", *args]
+    print("[bootstrap]", " ".join(cmd), flush=True)
+    subprocess.check_call(cmd)
+
+
+def ensure_lm_polygraph_installed() -> None:
+    # Fast path
+    try:
+        importlib.import_module("lm_polygraph")
+        print("[bootstrap] lm_polygraph already installed", flush=True)
+        return
+    except Exception as e:
+        print(f"[bootstrap] lm_polygraph not importable: {e}", flush=True)
+
+    # 1) Keep critical pins compatible with vLLM 0.12.0 + transformers>=4.56
+    #    (These should already be installed since vllm imports worked, but we enforce anyway.)
+    _pip("install", "--force-reinstall", "huggingface-hub>=0.34.0,<1.0")
+    _pip("install", "--force-reinstall", "tokenizers==0.22.2")
+    _pip("install", "--force-reinstall", "--no-deps", "transformers>=4.57.0,<5.0.0")
+
+    # 2) ANTLR pin (OmegaConf grammar compatibility)
+    _pip("install", "--force-reinstall", "--no-deps", "antlr4-python3-runtime==4.9.3")
+
+    # 3) Install lm-polygraph WITHOUT deps so it won't downgrade transformers/tokenizers
+    _pip(
+        "install",
+        "--no-deps",
+        "lm-polygraph @ git+https://github.com/IINemo/lm-polygraph.git@dev",
+    )
+
+    # 4) Install lm-polygraph runtime deps explicitly (safe versions)
+    _pip(
+        "install",
+        "bert-score>=0.3.13",
+        "bitsandbytes",
+        "bs4",
+        "fastchat",
+        "flask>=2.3.2",
+        "fschat>=0.2.3",
+        "hf-lfs>=0.0.3",
+        "matplotlib>=3.6",
+        "nlpaug>=1.1.10",
+        "nltk>=3.7,<4",
+        "pytest>=4.4.1",
+        "pytreebank>=0.2.7",
+        "rouge-score>=0.0.4",
+        "unbabel-comet==2.2.1",
+        "wget",
+        "spacy>=3.4.0,<3.8.0",
+        "sentence-transformers",
+        "sacrebleu>=1.5.0",
+        "sentencepiece>=0.1.97",
+        "evaluate>=0.4.2",
+        "datasets>=2.19.0,<4.0.0",
+        "fsspec>=2023.1.0,<=2024.6.1",
+    )
+
+    # 5) latex2sympy2 must be installed without deps (antlr conflict)
+    _pip("install", "--no-deps", "latex2sympy2")
+
+    # 6) Final re-pin in case any dependency tried to move the stack
+    _pip("install", "--force-reinstall", "huggingface-hub>=0.34.0,<1.0")
+    _pip("install", "--force-reinstall", "tokenizers==0.22.2")
+    _pip("install", "--force-reinstall", "--no-deps", "transformers>=4.57.0,<5.0.0")
+    _pip("install", "--force-reinstall", "--no-deps", "antlr4-python3-runtime==4.9.3")
+
+    # Sanity check
+    importlib.import_module("lm_polygraph")
+    print("[bootstrap] lm_polygraph OK", flush=True)
+
+
+# Bootstrap once in the ClearML venv
+ensure_lm_polygraph_installed()
+
+
+def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     target_script = os.path.join(script_dir, "run_tts_eval.py")
 
-    # Try to read arguments from ClearML task parameters
+    # Read Hydra args from ClearML task parameters
     hydra_args = []
     try:
         from clearml import Task
@@ -41,8 +111,7 @@ def main() -> None:
 
             try:
                 overrides = json.loads(overrides_json)
-                if isinstance(overrides, list):
-                    hydra_args.extend([str(x) for x in overrides])
+                hydra_args.extend(overrides)
             except json.JSONDecodeError:
                 pass
 
@@ -53,146 +122,16 @@ def main() -> None:
         print(f"[ClearML wrapper] Could not read ClearML params: {e}", flush=True)
 
     # Build command
-    cmd = [sys.executable, target_script]
-    cmd.extend(hydra_args)
-    # Also pass any CLI arguments (fallback if not using ClearML params)
-    cmd.extend(sys.argv[1:])
+    cmd = [sys.executable, target_script] + hydra_args + sys.argv[1:]
 
-    # Clean environment: remove ClearML env vars to prevent auto-initialization
-    # in the subprocess. This ensures @hydra.main runs without ClearML patches.
+    # Clean environment (avoid ClearML auto init inside subprocess)
     env = os.environ.copy()
     for key in list(env.keys()):
         if key.startswith("CLEARML"):
             del env[key]
 
-    # GPU diagnostics (non-fatal if nvidia-smi missing)
-    print("[ClearML wrapper] === GPU Diagnostics ===", flush=True)
-    try:
-        subprocess.run(["nvidia-smi"], env=env, check=False)
-        print("[ClearML wrapper] === nvidia-smi -L ===", flush=True)
-        subprocess.run(["nvidia-smi", "-L"], env=env, check=False)
-    except FileNotFoundError:
-        print("[ClearML wrapper] nvidia-smi not found in container", flush=True)
-
-    print("[ClearML wrapper] === Environment ===", flush=True)
-    print(
-        f"  CUDA_VISIBLE_DEVICES={env.get('CUDA_VISIBLE_DEVICES', '(not set)')}",
-        flush=True,
-    )
-    print(
-        f"  CUDA_MODULE_LOADING={env.get('CUDA_MODULE_LOADING', '(not set)')}",
-        flush=True,
-    )
-    print(f"  VLLM_USE_V1={env.get('VLLM_USE_V1', '(not set)')}", flush=True)
-    print(
-        f"  VLLM_ATTENTION_BACKEND={env.get('VLLM_ATTENTION_BACKEND', '(not set)')}",
-        flush=True,
-    )
-
-    # Auto-detect MIG UUID and set CUDA_VISIBLE_DEVICES if present
-    import re as _re
-
-    try:
-        result_smi = subprocess.run(
-            ["nvidia-smi", "-L"],
-            capture_output=True,
-            text=True,
-            env=env,
-            check=False,
-        )
-        mig_uuids = _re.findall(r"(MIG-[0-9a-f-]+)", result_smi.stdout or "")
-        if mig_uuids:
-            mig_uuid = mig_uuids[0]
-            print(f"[ClearML wrapper] Detected MIG UUID: {mig_uuid}", flush=True)
-            env["CUDA_VISIBLE_DEVICES"] = mig_uuid
-            print(f"[ClearML wrapper] Set CUDA_VISIBLE_DEVICES={mig_uuid}", flush=True)
-        else:
-            print("[ClearML wrapper] No MIG UUID found in nvidia-smi -L", flush=True)
-    except Exception as e:
-        print(f"[ClearML wrapper] MIG UUID detection failed: {e}", flush=True)
-
-    # Granular import diagnostic to isolate CUDA / vLLM import issues
-    diag_code = r"""
-import sys, traceback, os
-print(f'[diag] Python: {sys.executable}', flush=True)
-print(f'[diag] CUDA_VISIBLE_DEVICES={os.environ.get("CUDA_VISIBLE_DEVICES", "(not set)")}', flush=True)
-print(f'[diag] VLLM_ATTENTION_BACKEND={os.environ.get("VLLM_ATTENTION_BACKEND", "(not set)")}', flush=True)
-
-print('[diag] Step 1: importing torch and initializing CUDA...', flush=True)
-try:
-    import torch
-    print(f'[diag] torch {torch.__version__} imported OK', flush=True)
-    torch.cuda.init()
-    print(f'[diag] torch.cuda.init() OK', flush=True)
-    print(f'[diag] CUDA available: {torch.cuda.is_available()}', flush=True)
-    if torch.cuda.is_available():
-        print(f'[diag] device name: {torch.cuda.get_device_name(0)}', flush=True)
-        print(f'[diag] device count: {torch.cuda.device_count()}', flush=True)
-        free, total = torch.cuda.mem_get_info()
-        print(f'[diag] free GiB: {free/1024**3:.1f}, total GiB: {total/1024**3:.1f}', flush=True)
-except Exception:
-    traceback.print_exc()
-    sys.stdout.flush()
-
-print('[diag] Step 2: importing vllm...', flush=True)
-try:
-    import vllm
-    print(f'[diag] vllm {vllm.__version__} imported OK', flush=True)
-except Exception:
-    traceback.print_exc()
-    sys.stdout.flush()
-
-print('[diag] Step 3: importing vllm.config...', flush=True)
-try:
-    import vllm.config
-    print('[diag] vllm.config imported OK', flush=True)
-except Exception:
-    traceback.print_exc()
-    sys.stdout.flush()
-
-print('[diag] Step 4: importing LLM, SamplingParams...', flush=True)
-try:
-    from vllm import LLM, SamplingParams
-    print('[diag] LLM, SamplingParams imported OK', flush=True)
-except Exception:
-    traceback.print_exc()
-    sys.stdout.flush()
-
-print('[diag] All imports OK, exiting cleanly', flush=True)
-os._exit(0)
-"""
-    print("[ClearML wrapper] Running import diagnostic...", flush=True)
-    subprocess.run(
-        [sys.executable, "-c", diag_code],
-        env=env,
-        cwd=os.path.dirname(script_dir),
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
     print(f"[ClearML wrapper] Running: {' '.join(cmd)}", flush=True)
-    # Merge stderr into stdout so ClearML captures errors
     result = subprocess.run(cmd, env=env, stderr=subprocess.STDOUT)
-
-    if result.returncode != 0:
-        print(
-            f"[ClearML wrapper] Process exited with code {result.returncode}",
-            flush=True,
-        )
-        # Try to print the stderr.log from the output directory
-        import glob
-
-        for stderr_log in glob.glob(
-            os.path.join(os.path.dirname(script_dir), "outputs", "**", "stderr.log"),
-            recursive=True,
-        ):
-            print(f"[ClearML wrapper] Contents of {stderr_log}:", flush=True)
-            try:
-                with open(stderr_log) as f:
-                    print(f.read(), flush=True)
-            except Exception as e:
-                print(f"[ClearML wrapper] Could not read {stderr_log}: {e}", flush=True)
-
     sys.exit(result.returncode)
 
 
