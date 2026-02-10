@@ -40,8 +40,10 @@ def ensure_lm_polygraph_installed() -> None:
     _pip("install", "--no-deps", "git+https://github.com/IINemo/lm-polygraph.git@dev")
 
     # 4) Install lm-polygraph runtime deps explicitly (safe versions)
+    # CRITICAL: Pin huggingface-hub<1.0 in the same command to prevent upgrades
     _pip(
         "install",
+        "huggingface-hub>=0.34.0,<1.0",  # Pin first to prevent sentence-transformers from upgrading
         "bert-score>=0.3.13",
         "bitsandbytes",
         "bs4",
@@ -80,8 +82,22 @@ def ensure_lm_polygraph_installed() -> None:
     print("[bootstrap] lm_polygraph OK", flush=True)
 
 
-# Bootstrap once in the ClearML venv
-ensure_lm_polygraph_installed()
+# Bootstrap lm_polygraph only if not already available
+# Set SKIP_LM_POLYGRAPH=1 to skip installation entirely
+if os.environ.get("SKIP_LM_POLYGRAPH", "0") != "1":
+    try:
+        import lm_polygraph  # noqa: F401
+
+        print(
+            "[bootstrap] lm_polygraph already available, skipping bootstrap", flush=True
+        )
+    except ImportError:
+        ensure_lm_polygraph_installed()
+else:
+    print(
+        "[bootstrap] Skipping lm_polygraph installation (SKIP_LM_POLYGRAPH=1)",
+        flush=True,
+    )
 
 
 def main():
