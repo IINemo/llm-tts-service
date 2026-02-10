@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 from clearml import Task
 
-# vLLM image has torch+vllm pre-installed with correct CUDA
-DEFAULT_DOCKER_IMAGE = "vllm/vllm-openai:latest"
-# Override entrypoint (vllm image defaults to `vllm serve`)
-# Skip lm_polygraph bootstrap - not needed for vLLM experiments
+# vLLM v0.12.0 with CUDA 12.1 (compatible with older drivers)
+DEFAULT_DOCKER_IMAGE = "vllm/vllm-openai:v0.12.0"
+# Override entrypoint, skip lm_polygraph bootstrap
 DEFAULT_DOCKER_ARGS = "--entrypoint= --shm-size=8g -e SKIP_LM_POLYGRAPH=1"
+
+# Check GPU info
+DOCKER_BASH_SETUP = r"""
+echo "=== GPU Info ==="
+nvidia-smi
+echo "=== CUDA Version ==="
+nvcc --version 2>/dev/null || echo "nvcc not found"
+echo "================"
+"""
 
 
 def create_task(
@@ -28,6 +36,7 @@ def create_task(
             branch="fix/clearml-hydra-wrapper",
             script="scripts/run_tts_eval_clearml.py",
             docker=f"{DEFAULT_DOCKER_IMAGE} {DEFAULT_DOCKER_ARGS}",
+            docker_bash_setup_script=DOCKER_BASH_SETUP,
             packages=[],
         )
     else:
