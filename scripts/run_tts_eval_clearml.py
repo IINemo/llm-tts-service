@@ -93,12 +93,14 @@ def ensure_lm_polygraph_installed() -> None:
 
 
 def ensure_essential_deps_installed() -> None:
-    """Install essential deps for run_tts_eval.py (without lm_polygraph).
+    """Install essential deps for run_tts_eval.py including lm_polygraph.
 
     Note: Do NOT install vllm/torch here - use system's pre-installed versions
     to avoid CUDA library conflicts.
     """
     print("[bootstrap] Installing essential dependencies...", flush=True)
+
+    # Core deps
     _pip(
         "install",
         "hydra-core>=1.3.2",
@@ -107,9 +109,19 @@ def ensure_essential_deps_installed() -> None:
         "datasets",
         "python-dotenv",
         "sympy",
-        "latex2sympy2",
-        "antlr4-python3-runtime==4.9.3",  # Required for latex2sympy2
+        "openai",
+        "accelerate",
+        "einops",
+        "diskcache",
     )
+
+    # lm_polygraph without deps (to avoid version conflicts)
+    _pip("install", "--no-deps", "git+https://github.com/IINemo/lm-polygraph.git@dev")
+
+    # latex2sympy2 with specific antlr version
+    _pip("install", "--no-deps", "latex2sympy2")
+    _pip("install", "antlr4-python3-runtime==4.9.3")
+
     print("[bootstrap] Essential deps installed", flush=True)
 
 
