@@ -162,6 +162,64 @@ class StrategyManager:
 
     def __init__(self):
         self._client_cache: Dict[str, OpenAI] = {}
+        self._vllm_model = None
+        self._step_generator = None
+        self._scorer = None
+
+    def _init_vllm_backend(self):
+        """Load vLLM model, wrap with uncertainty, create step generator.
+        Called lazily on first vLLM request, then cached."""
+        from vllm import LLM
+        from lm_polygraph.utils import VLLMWithUncertainty
+        from lm_polygraph.stat_calculators import (
+            VLLMLogprobsCalculator,
+            EntropyCalculator,
+        )
+        from lm_polygraph.estimators import MeanTokenEntropy
+        from llm_tts.generators.vllm import VLLMStepGenerator
+        from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
+        from llm_tts.scorers.step_scorer_confidence import StepScorerConfidence
+
+        log.info(f"Loading vLLM model: {settings.vllm_model_path}")
+
+        llm = LLM(
+            model=settings.vllm_model_path,
+            gpu_memory_utilization=settings.vllm_gpu_memory_utilization,
+            tensor_parallel_size=settings.vllm_tensor_parallel_size,
+            max_model_len=settings.vllm_max_model_len,
+            trust_remote_code=True,
+            seed=settings.vllm_seed,
+        )
+
+        stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+        estimator = MeanTokenEntropy()
+        self._vllm_model = VLLMWithUncertainty(
+            llm=llm, stat_calculators=stat_calculators, estimator=estimator
+        )
+
+        detector = ThinkingMarkerDetector(
+            min_step_tokens=10,
+            max_step_tokens=2048,
+            use_sequence=True,
+            use_conclusion=True,
+            use_thinking=True,
+            use_verification=True,
+            use_reasoning=True,
+        )
+
+        self._step_generator = VLLMStepGenerator(
+            model=self._vllm_model,
+            thinking_mode=settings.default_thinking_mode,
+            detector=detector,
+            max_new_tokens=settings.default_max_tokens,
+            temperature=settings.default_temperature,
+            max_context_budget=settings.vllm_max_model_len,
+            disable_thinking_mode=None if settings.default_thinking_mode else True,
+        )
+
+        self._scorer = StepScorerConfidence()
+
+        log.info("vLLM backend initialized successfully")
 
     def _get_or_create_client(self, provider: str = "openrouter") -> OpenAI:
         """Get cached OpenAI client or create new one."""
@@ -196,8 +254,8 @@ class StrategyManager:
         Create a TTS strategy instance.
 
         Args:
-            strategy_type: Type of strategy (currently only "self_consistency")
-            model_name: Model name (e.g., "openai/gpt-4o-mini")
+            strategy_type: Type of strategy
+            model_name: Model name
             strategy_config: Optional strategy-specific configuration
 
         Returns:
@@ -207,11 +265,59 @@ class StrategyManager:
 
         if strategy_type == "self_consistency":
             return self._create_self_consistency_strategy(model_name, strategy_config)
+        elif strategy_type in ("offline_bon", "online_bon", "beam_search"):
+            return self._create_vllm_strategy(strategy_type, strategy_config)
         else:
             raise ValueError(
                 f"Unknown strategy type: {strategy_type}. "
-                f"Available strategies: self_consistency"
+                f"Available strategies: self_consistency, offline_bon, online_bon, beam_search"
             )
+
+    def _create_vllm_strategy(
+        self, strategy_type: str, config: Dict[str, Any]
+    ):
+        """Create a vLLM-backed TTS strategy instance."""
+        if self._step_generator is None:
+            self._init_vllm_backend()
+
+        if strategy_type == "offline_bon":
+            from llm_tts.strategies.strategy_offline_best_of_n import (
+                StrategyOfflineBestOfN,
+            )
+
+            strategy = StrategyOfflineBestOfN(
+                scorer=self._scorer,
+                num_trajectories=config.get("num_trajectories", 8),
+                max_steps=config.get("max_steps", 100),
+                step_generator=self._step_generator,
+                score_aggregation=config.get("score_aggregation", "min"),
+                batch_generation=True,
+            )
+        elif strategy_type == "online_bon":
+            from llm_tts.strategies.strategy_online_best_of_n import (
+                StrategyOnlineBestOfN,
+            )
+
+            strategy = StrategyOnlineBestOfN(
+                scorer=self._scorer,
+                candidates_per_step=config.get("candidates_per_step", 4),
+                max_steps=config.get("max_steps", 100),
+                step_generator=self._step_generator,
+                batch_generation=True,
+            )
+        elif strategy_type == "beam_search":
+            from llm_tts.strategies.strategy_beam_search import StrategyBeamSearch
+
+            strategy = StrategyBeamSearch(
+                step_generator=self._step_generator,
+                scorer=self._scorer,
+                beam_size=config.get("beam_size", 4),
+                candidates_per_beam=config.get("candidates_per_beam", 4),
+                max_steps=config.get("max_steps", 100),
+            )
+
+        log.info(f"Created vLLM strategy: {strategy_type}")
+        return strategy
 
     def _create_self_consistency_strategy(
         self, model_name: str, config: Dict[str, Any]
@@ -236,8 +342,11 @@ class StrategyManager:
         return strategy
 
     def clear_cache(self):
-        """Clear client cache."""
+        """Clear client cache and vLLM resources."""
         self._client_cache.clear()
+        self._vllm_model = None
+        self._step_generator = None
+        self._scorer = None
         log.info("Client cache cleared")
 
 

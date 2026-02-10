@@ -68,7 +68,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     """
     try:
         log.info(f"Received chat completion request for model: {request.model}")
-        log.info(f"TTS strategy: {request.tts_strategy}, num_paths: {request.num_paths}")
+        log.info(f"TTS strategy: {request.tts_strategy}")
 
         # Validate streaming not yet supported
         if request.stream:
@@ -86,18 +86,28 @@ async def create_chat_completion(request: ChatCompletionRequest):
         # Convert messages to dict format
         messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
 
+        # Determine strategy type and provider
+        strategy_type = request.tts_strategy or "self_consistency"
+        is_vllm_strategy = strategy_type in ("offline_bon", "online_bon", "beam_search")
+
         # Build strategy config
         strategy_config = {
-            "provider": request.provider or "openrouter",
+            "provider": request.provider or ("vllm" if is_vllm_strategy else "openrouter"),
             "temperature": request.temperature,
             "max_tokens": request.max_tokens or 4096,
             "num_paths": request.num_paths or 5,
+            # vLLM TTS params
+            "num_trajectories": request.tts_num_trajectories,
+            "candidates_per_step": request.tts_candidates_per_step,
+            "beam_size": request.tts_beam_size,
+            "max_steps": request.tts_max_steps,
+            "score_aggregation": request.tts_score_aggregation,
         }
 
         # Create strategy
-        log.info(f"Creating strategy: {request.tts_strategy}")
+        log.info(f"Creating strategy: {strategy_type}")
         strategy = strategy_manager.create_strategy(
-            strategy_type=request.tts_strategy or "self_consistency",
+            strategy_type=strategy_type,
             model_name=request.model,
             strategy_config=strategy_config,
         )
@@ -106,7 +116,12 @@ async def create_chat_completion(request: ChatCompletionRequest):
         log.info("Generating trajectory...")
         start_time = time.time()
 
-        result = strategy.generate_trajectory(messages)
+        if is_vllm_strategy:
+            results = strategy.generate_trajectories_batch([messages])
+            result = results[0]
+        else:
+            result = strategy.generate_trajectory(messages)
+
         elapsed_time = time.time() - start_time
 
         log.info(f"Trajectory generated in {elapsed_time:.2f}s")
@@ -120,6 +135,14 @@ async def create_chat_completion(request: ChatCompletionRequest):
         metadata = result.get("metadata", {})
         metadata["elapsed_time"] = round(elapsed_time, 2)
         metadata["selected_answer"] = result.get("extracted_answer", "")
+        if is_vllm_strategy:
+            metadata["strategy"] = strategy_type
+            metadata["reasoning_steps"] = result.get("reasoning_steps", 0)
+            metadata["completed"] = result.get("completed", False)
+            if "aggregated_score" in result:
+                metadata["aggregated_score"] = result["aggregated_score"]
+            if "validity_scores" in result:
+                metadata["validity_scores"] = result["validity_scores"]
 
         # Estimate token usage
         prompt_text = " ".join(msg["content"] for msg in messages)

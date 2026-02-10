@@ -41,7 +41,7 @@ class ChatCompletionRequest(BaseModel):
     # Strategy selection
     tts_strategy: Optional[str] = Field(
         default="self_consistency",
-        description="TTS strategy: self_consistency",
+        description="TTS strategy: self_consistency, offline_bon, online_bon, beam_search",
     )
 
     # Self-consistency specific parameters
@@ -52,7 +52,29 @@ class ChatCompletionRequest(BaseModel):
     # Provider selection
     provider: Optional[str] = Field(
         default="openrouter",
-        description="API provider: openrouter or openai",
+        description="API provider: openrouter, openai, or vllm",
+    )
+
+    # vLLM TTS strategy parameters (passed via extra_body)
+    tts_scorer: Optional[str] = Field(
+        default="entropy",
+        description="Scorer type: entropy, perplexity, sequence_prob",
+    )
+    tts_num_trajectories: Optional[int] = Field(
+        default=8, description="Number of trajectories for offline BoN", ge=1, le=256
+    )
+    tts_candidates_per_step: Optional[int] = Field(
+        default=4, description="Candidates per step for online BoN / beam search", ge=1, le=64
+    )
+    tts_beam_size: Optional[int] = Field(
+        default=4, description="Beam size for beam search", ge=1, le=64
+    )
+    tts_max_steps: Optional[int] = Field(
+        default=100, description="Max reasoning steps", ge=1, le=500
+    )
+    tts_score_aggregation: Optional[str] = Field(
+        default="min",
+        description="Score aggregation: min, mean, max, product, last",
     )
 
     class Config:
