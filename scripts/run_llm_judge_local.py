@@ -158,9 +158,13 @@ def main():
             print("Error: Set OPENROUTER_API_KEY environment variable for openrouter")
             return 1
     else:
-        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get(
+            "OPENROUTER_API_KEY"
+        )
         if not api_key:
-            print("Error: Set OPENAI_API_KEY or OPENROUTER_API_KEY environment variable")
+            print(
+                "Error: Set OPENAI_API_KEY or OPENROUTER_API_KEY environment variable"
+            )
             return 1
 
     # Load results
