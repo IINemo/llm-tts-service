@@ -380,6 +380,23 @@ module load rocm 2>/dev/null || true
 source ~/.bashrc
 conda activate lm-polygraph-env
 
+# Set CUDA_VISIBLE_DEVICES if not already set by SLURM
+# SLURM sets CUDA_VISIBLE_DEVICES on some clusters but not all
+# Try SLURM_STEP_GPUS first, then detect from available GPUs
+if [[ -z \"\$CUDA_VISIBLE_DEVICES\" ]]; then
+    if [[ -n \"\$SLURM_STEP_GPUS\" ]]; then
+        export CUDA_VISIBLE_DEVICES=\"\$SLURM_STEP_GPUS\"
+    else
+        # Fallback: find first free GPU by checking memory usage
+        # A GPU with <1000 MiB used is considered free
+        FREE_GPU=\$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | \\
+            awk -F', ' '\$2 < 1000 {print \$1; exit}')
+        if [[ -n \"\$FREE_GPU\" ]]; then
+            export CUDA_VISIBLE_DEVICES=\"\$FREE_GPU\"
+        fi
+    fi
+fi
+
 echo \"============================================\"
 echo \"SLURM Job ID: \$SLURM_JOB_ID\"
 echo \"Seed: \${SEED}\"
@@ -496,6 +513,23 @@ module load rocm 2>/dev/null || true
 
 source ~/.bashrc
 conda activate lm-polygraph-env
+
+# Set CUDA_VISIBLE_DEVICES if not already set by SLURM
+# SLURM sets CUDA_VISIBLE_DEVICES on some clusters but not all
+# Try SLURM_STEP_GPUS first, then detect from available GPUs
+if [[ -z \"\$CUDA_VISIBLE_DEVICES\" ]]; then
+    if [[ -n \"\$SLURM_STEP_GPUS\" ]]; then
+        export CUDA_VISIBLE_DEVICES=\"\$SLURM_STEP_GPUS\"
+    else
+        # Fallback: find first free GPU by checking memory usage
+        # A GPU with <1000 MiB used is considered free
+        FREE_GPU=\$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | \\
+            awk -F', ' '\$2 < 1000 {print \$1; exit}')
+        if [[ -n \"\$FREE_GPU\" ]]; then
+            export CUDA_VISIBLE_DEVICES=\"\$FREE_GPU\"
+        fi
+    fi
+fi
 
 echo \"============================================\"
 echo \"SLURM Job ID: \$SLURM_JOB_ID\"
