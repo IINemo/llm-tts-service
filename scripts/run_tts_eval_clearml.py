@@ -47,6 +47,7 @@ def ensure_lm_polygraph_installed() -> None:
     _pip(
         "install",
         "huggingface-hub>=0.34.0,<1.0",  # Pin first to prevent sentence-transformers from upgrading
+        "openai",  # Required by lm_polygraph
         "bert-score>=0.3.13",
         "bitsandbytes",
         "bs4",
