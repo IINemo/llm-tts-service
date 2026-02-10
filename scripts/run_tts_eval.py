@@ -110,6 +110,7 @@ from utils.results import load_results_json, parse_resume_arguments, save_result
 from llm_tts.evaluation import (
     EvaluatorAlignScore,
     EvaluatorExactMatch,
+    EvaluatorHumanEvalPlus,
     EvaluatorLLMAsAJudge,
     EvaluatorMBPPPlus,
 )
@@ -282,6 +283,18 @@ def build_evaluators(config):
             evaluators["mbpp_plus"] = EvaluatorMBPPPlus(
                 mode=mbpp_cfg.get("mode", "full"),
                 timeout=mbpp_cfg.get("timeout", 10),
+            )
+
+        elif evaluator_name == "human_eval_plus":
+            # HumanEval+ evaluator for code generation (uses EvalPlus)
+            he_cfg = config.evaluation.get("human_eval_plus", {})
+            if he_cfg:
+                he_cfg = OmegaConf.to_container(he_cfg, resolve=True)
+            else:
+                he_cfg = {}
+            evaluators["human_eval_plus"] = EvaluatorHumanEvalPlus(
+                mode=he_cfg.get("mode", "full"),
+                timeout=he_cfg.get("timeout", 10),
             )
 
         else:
@@ -1099,11 +1112,13 @@ def _generate_trajectories_batch(
                             "response": responses[0] if responses else "",
                         }
                         continue
-                    elif isinstance(evaluator, EvaluatorMBPPPlus):
-                        # Skip MBPP+ in phase 1 - will run batch evaluation once in phase 2
-                        # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
+                    elif isinstance(
+                        evaluator, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)
+                    ):
+                        # Skip EvalPlus in phase 1 - will run batch evaluation once in phase 2
+                        # (Running EvalPlus per-sample is inefficient)
                         log.debug(
-                            f"Skipping MBPP+ evaluation for sample {i} in phase 1"
+                            f"Skipping EvalPlus evaluation for sample {i} in phase 1"
                         )
                         continue
                     else:
@@ -1352,8 +1367,9 @@ def evaluate_results(
     evaluators = build_evaluators(config)
     log.info(f"Using evaluators: {list(evaluators.keys())}")
 
-    # Move MBPP+ to batch evaluation (running EvalPlus per-sample is inefficient)
+    # Move EvalPlus evaluators to batch evaluation (running per-sample is inefficient)
     mbpp_evaluator = evaluators.pop("mbpp_plus", None)
+    human_eval_plus_evaluator = evaluators.pop("human_eval_plus", None)
 
     # Build batch evaluators (from config.evaluation.batch_evaluators)
     batch_evaluator_names = config.evaluation.get("batch_evaluators", [])
@@ -1393,10 +1409,13 @@ def evaluate_results(
             eval_key = f"llm_judge_{sanitized_model}"
             batch_evaluators[eval_key] = EvaluatorLLMAsAJudge(**llm_cfg)
 
-    # Add MBPP+ to batch evaluators (single EvalPlus run is much more efficient)
+    # Add EvalPlus evaluators to batch (single EvalPlus run is much more efficient)
     if mbpp_evaluator is not None:
         batch_evaluators["mbpp_plus"] = mbpp_evaluator
         log.info("MBPP+ moved to batch evaluation (single EvalPlus run)")
+    if human_eval_plus_evaluator is not None:
+        batch_evaluators["human_eval_plus"] = human_eval_plus_evaluator
+        log.info("HumanEval+ moved to batch evaluation (single EvalPlus run)")
 
     if batch_evaluators:
         log.info(f"Batch evaluators: {list(batch_evaluators.keys())}")
@@ -1452,9 +1471,11 @@ def evaluate_results(
                         log.warning(
                             f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}"
                         )
-                elif isinstance(evaluator_fn, EvaluatorMBPPPlus):
-                    # Skip MBPP+ in per-sample loop - will run batch evaluation once
-                    # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
+                elif isinstance(
+                    evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)
+                ):
+                    # Skip EvalPlus in per-sample loop - will run batch evaluation once
+                    # (Running EvalPlus per-sample is inefficient)
                     continue
                 else:
                     # Other evaluators use __call__ with extracted answer
@@ -1557,10 +1578,10 @@ def evaluate_results(
                 for r in samples_to_eval
             ]
 
-        # Prepare optional parameters for evaluators that need them (e.g., MBPP+)
+        # Prepare optional parameters for evaluators that need them (e.g., EvalPlus)
         task_ids = None
         instance_data_list = None
-        if isinstance(evaluator_fn, EvaluatorMBPPPlus):
+        if isinstance(evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
             # Get task_ids from instance_data or direct field
             task_ids = []
             for r in samples_to_eval:
@@ -1572,7 +1593,7 @@ def evaluate_results(
 
         try:
             # Batch evaluate - pass additional params if evaluator needs them
-            if isinstance(evaluator_fn, EvaluatorMBPPPlus):
+            if isinstance(evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
                 eval_result = evaluator_fn(
                     problems, solutions, gold_answers, task_ids, instance_data_list
                 )
@@ -1878,7 +1899,7 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
-    # Special handling for MBPP+ to use EvalPlus API (provides correct prompt format)
+    # Special handling for EvalPlus datasets to use EvalPlus API (provides correct prompt format)
     data_name = config.dataset.get("data_name", "")
     if data_name == "mbpp_plus" or "mbppplus" in config.dataset.dataset_path.lower():
         from llm_tts.datasets.mbpp_plus import load_mbpp_plus
@@ -1898,6 +1919,26 @@ def main(config):
                 "entry_point": item["entry_point"],
                 "test_list": item["test_list"],
                 "assertion": item.get("assertion", ""),
+            }
+            serializable_data.append(serializable_item)
+        dataset = Dataset.from_list(serializable_data)
+    elif (
+        data_name == "human_eval_plus"
+        or "humanevalplus" in config.dataset.dataset_path.lower()
+    ):
+        from llm_tts.datasets.human_eval_plus import load_human_eval_plus
+
+        log.info(
+            "Using EvalPlus API for HumanEval+ (provides correct prompt format with function signature)"
+        )
+        he_data = load_human_eval_plus(subset_size=None)  # Load all, subset later
+        serializable_data = []
+        for item in he_data:
+            serializable_item = {
+                "question": item["question"],
+                "answer": item["answer"],
+                "task_id": item["task_id"],
+                "entry_point": item["entry_point"],
             }
             serializable_data.append(serializable_item)
         dataset = Dataset.from_list(serializable_data)

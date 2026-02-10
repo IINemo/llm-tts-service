@@ -1,10 +1,10 @@
 """
-MBPP+ dataset loader and utilities.
+HumanEval+ dataset loader and utilities.
 
-MBPP+ (Mostly Basic Python Problems Plus) is an enhanced version of MBPP
-with 35x more test cases for rigorous evaluation of code generation.
+HumanEval+ is an enhanced version of HumanEval with 80x more test cases
+for rigorous evaluation of code generation.
 
-Dataset: https://huggingface.co/datasets/evalplus/mbppplus
+Dataset: https://huggingface.co/datasets/evalplus/humanevalplus
 EvalPlus: https://github.com/evalplus/evalplus
 """
 
@@ -13,16 +13,16 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from evalplus.data import get_mbpp_plus, write_jsonl
+from evalplus.data import get_human_eval_plus, write_jsonl
 
 log = logging.getLogger(__name__)
 
 
-def load_mbpp_plus(
+def load_human_eval_plus(
     subset_size: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Load MBPP+ dataset using evalplus API.
+    Load HumanEval+ dataset using evalplus API.
 
     Args:
         subset_size: If provided, only load first N examples
@@ -34,12 +34,12 @@ def load_mbpp_plus(
 
 
 def _load_from_evalplus(subset_size: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Load MBPP+ using evalplus API.
+    """Load HumanEval+ using evalplus API.
 
     Formats prompts to match EvalPlus official methodology:
     - instruction_prefix + code block with docstring
     """
-    log.info("Loading MBPP+ using evalplus API...")
+    log.info("Loading HumanEval+ using evalplus API...")
 
     # EvalPlus instruction prefix for chat/instruction models
     INSTRUCTION_PREFIX = (
@@ -47,18 +47,10 @@ def _load_from_evalplus(subset_size: Optional[int] = None) -> List[Dict[str, Any
         "following problem in a markdown code block:"
     )
 
-    problems = get_mbpp_plus()
+    problems = get_human_eval_plus()
     formatted_data = []
 
     for task_id, problem in problems.items():
-        # Extract test_list from assertion field (newline-separated assert statements)
-        assertion_text = problem.get("assertion", "")
-        test_list = [
-            line.strip()
-            for line in assertion_text.split("\n")
-            if line.strip() and line.strip().startswith("assert ")
-        ]
-
         # Format prompt exactly like EvalPlus does for chat models:
         # instruction_prefix + "\n```python\n" + prompt + "\n```"
         raw_prompt = problem["prompt"].strip()
@@ -68,13 +60,12 @@ def _load_from_evalplus(subset_size: Optional[int] = None) -> List[Dict[str, Any
             # Standard fields for the evaluation pipeline
             "question": formatted_prompt,
             "answer": problem["canonical_solution"],
-            # MBPP+ specific fields
+            # HumanEval+ specific fields
             "task_id": task_id,
             "entry_point": problem.get(
-                "entry_point", _extract_function_name(problem["prompt"])
+                "entry_point", _extract_function_name(raw_prompt)
             ),
-            "test_list": test_list,  # Extracted from assertion field
-            "assertion": assertion_text,  # Keep original assertion text
+            "prompt": raw_prompt,  # Original prompt (function signature + docstring)
             "base_input": problem.get("base_input", []),
             "plus_input": problem.get("plus_input", []),
             "atol": problem.get("atol", 0),
@@ -85,27 +76,15 @@ def _load_from_evalplus(subset_size: Optional[int] = None) -> List[Dict[str, Any
         if subset_size and len(formatted_data) >= subset_size:
             break
 
-    log.info(f"Loaded {len(formatted_data)} MBPP+ problems via evalplus API")
+    log.info(f"Loaded {len(formatted_data)} HumanEval+ problems via evalplus API")
     return formatted_data
 
 
 def _extract_function_name(prompt: str) -> str:
-    """Extract function name from MBPP prompt."""
-    # MBPP prompts often mention "Write a function" or similar
-    # Try to find function name in various patterns
-
-    # Pattern: "Write a function X to..."
-    match = re.search(r"[Ww]rite a (?:python )?function (\w+)", prompt)
-    if match:
-        return match.group(1)
-
-    # Pattern: "def function_name"
+    """Extract function name from HumanEval prompt."""
+    # HumanEval prompts typically start with function signature
+    # Pattern: "def function_name("
     match = re.search(r"def (\w+)\s*\(", prompt)
-    if match:
-        return match.group(1)
-
-    # Pattern: function name mentioned with backticks
-    match = re.search(r"`(\w+)`", prompt)
     if match:
         return match.group(1)
 
@@ -158,15 +137,15 @@ def extract_code_from_response(response: str) -> str:
     return response.strip()
 
 
-def format_mbpp_prompt(
+def format_human_eval_prompt(
     problem: Dict[str, Any],
     prompt_template: Optional[str] = None,
 ) -> str:
     """
-    Format an MBPP+ problem into a prompt for the model.
+    Format a HumanEval+ problem into a prompt for the model.
 
     Args:
-        problem: A formatted MBPP+ problem dict
+        problem: A formatted HumanEval+ problem dict
         prompt_template: Optional template with {prompt}, {entry_point} placeholders
 
     Returns:
@@ -250,10 +229,10 @@ if __name__ == "__main__":
     # Test loading
     logging.basicConfig(level=logging.INFO)
 
-    print("\n=== Testing MBPP+ loader ===\n")
+    print("\n=== Testing HumanEval+ loader ===\n")
 
     # Load small subset
-    data = load_mbpp_plus(subset_size=5)
+    data = load_human_eval_plus(subset_size=5)
 
     print(f"Loaded {len(data)} problems\n")
 
@@ -272,11 +251,15 @@ if __name__ == "__main__":
 Here's the solution:
 
 ```python
-def similar_elements(test_tup1, test_tup2):
-    return tuple(set(test_tup1) & set(test_tup2))
+def has_close_elements(numbers: List[float], threshold: float) -> bool:
+    for i in range(len(numbers)):
+        for j in range(i + 1, len(numbers)):
+            if abs(numbers[i] - numbers[j]) < threshold:
+                return True
+    return False
 ```
 
-This function finds common elements between two tuples.
+This function checks if any two elements are closer than the threshold.
 """
 
     extracted = extract_code_from_response(test_response)

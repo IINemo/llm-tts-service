@@ -1,7 +1,7 @@
 """
-MBPP+ evaluator for code generation using EvalPlus methodology.
+HumanEval+ evaluator for code generation using EvalPlus methodology.
 
-Uses EvalPlus evaluation with full test suite (base + plus inputs, ~100+ tests per problem).
+Uses EvalPlus evaluation with full test suite (base + plus inputs, ~1000+ tests per problem).
 
 Reference: https://github.com/evalplus/evalplus
 """
@@ -18,9 +18,9 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger(__name__)
 
 
-class EvaluatorMBPPPlus:
+class EvaluatorHumanEvalPlus:
     """
-    Evaluator for MBPP+ code generation following EvalPlus methodology.
+    Evaluator for HumanEval+ code generation following EvalPlus methodology.
 
     Uses EvalPlus evaluation with complete test suite for thorough evaluation.
     """
@@ -31,7 +31,7 @@ class EvaluatorMBPPPlus:
         timeout: int = 10,
     ):
         """
-        Initialize the MBPP+ evaluator.
+        Initialize the HumanEval+ evaluator.
 
         Args:
             mode: Evaluation mode. Only "full" is supported. Other modes are deprecated.
@@ -45,7 +45,7 @@ class EvaluatorMBPPPlus:
 
         self.mode = mode
         self.timeout = timeout
-        log.info(f"MBPP+ Evaluator initialized with mode='{mode}'")
+        log.info(f"HumanEval+ Evaluator initialized with mode='{mode}'")
 
     def __call__(
         self,
@@ -80,17 +80,17 @@ class EvaluatorMBPPPlus:
         """
         Full evaluation using EvalPlus.
 
-        Creates a samples file with dummy entries for all MBPP+ problems.
-        EvalPlus requires all 378 problems to be present, so we include empty
+        Creates a samples file with dummy entries for all HumanEval+ problems.
+        EvalPlus requires all 164 problems to be present, so we include empty
         solutions for problems we're not evaluating.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             samples_path = Path(tmpdir) / "samples.jsonl"
 
-            # Load the full MBPP+ dataset
-            from evalplus.data import get_mbpp_plus
+            # Load the full HumanEval+ dataset
+            from evalplus.data import get_human_eval_plus
 
-            all_problems = get_mbpp_plus()
+            all_problems = get_human_eval_plus()
 
             # Create samples file with actual solutions + dummy entries
             samples = []
@@ -124,7 +124,7 @@ class EvaluatorMBPPPlus:
             cmd = [
                 "evalplus.evaluate",
                 "--dataset",
-                "mbpp",
+                "humaneval",
                 "--samples",
                 str(samples_path),
                 "--i-just-wanna-run",
@@ -222,12 +222,12 @@ class EvaluatorMBPPPlus:
         )
 
     def _normalize_task_id(self, task_id: Any) -> str:
-        """Ensure task_id is in 'Mbpp/X' format."""
+        """Ensure task_id is in 'HumanEval/X' format."""
         if isinstance(task_id, int):
-            return f"Mbpp/{task_id}"
+            return f"HumanEval/{task_id}"
         task_id_str = str(task_id)
-        if not task_id_str.startswith("Mbpp/"):
-            return f"Mbpp/{task_id_str}"
+        if not task_id_str.startswith("HumanEval/"):
+            return f"HumanEval/{task_id_str}"
         return task_id_str
 
     def _extract_code(self, solution: str) -> str:

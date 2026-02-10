@@ -1,0 +1,84 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/human_eval_plus/self_consistency_vllm_codeqwen15_7b_chat_human_eval_plus
+# Self-consistency evaluation for HumanEval+ using local vLLM model
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /evaluation/human_eval_plus/default
+  - _self_
+
+# Run naming
+run_name: "self_consistency_vllm_codeqwen15_7b_chat_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-human-eval-plus
+wandb_group: "self_consistency_vllm_codeqwen15_7b_chat_human_eval_plus"
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/CodeQwen1.5-7B-Chat"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 8192
+  disable_thinking_mode: true
+
+# System configuration
+system:
+  device: cuda
+  seed: 0
+
+# Generation configuration
+generation:
+  max_new_tokens: 512
+  temperature: 0.7  # Higher temperature for diverse candidates
+  top_p: 0.95
+  top_k: 50
+  batch_size: 1
+
+# Strategy - Self-consistency with multiple candidates
+strategy:
+  type: self_consistency
+  batch_generation: true
+  num_paths: 5  # Generate 5 candidate solutions
+  data_name: "human_eval_plus"  # For answer extraction
+  stop_token_ids:
+    - 151645
+    - 151643
+  min_step_tokens: 0
+  max_step_tokens: 512
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+
+# Dataset configuration - HumanEval+
+dataset:
+  data_name: "human_eval_plus"
+  dataset_path: "evalplus/humanevalplus"
+  dataset_split: "test"
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "code"
+  prompt_file: null
+  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - human_eval_plus
+  human_eval_plus:
+    mode: full
+    timeout: 10
