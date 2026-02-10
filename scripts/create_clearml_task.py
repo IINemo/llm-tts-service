@@ -3,7 +3,8 @@ from clearml import Task
 
 # PyTorch base image (has Python 3.11 with pre-built wheels for sentencepiece)
 DEFAULT_DOCKER_IMAGE = "pytorch/pytorch:2.8.0-cuda12.9-cudnn9-runtime"
-DEFAULT_DOCKER_ARGS = "--shm-size=8g"
+# Skip lm_polygraph bootstrap - not needed for vLLM experiments
+DEFAULT_DOCKER_ARGS = "--shm-size=8g -e SKIP_LM_POLYGRAPH=1"
 
 
 def create_task(
