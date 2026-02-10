@@ -1,5 +1,5 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/mbpp_plus/baseline_vllm_mbpp_plus
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/mbpp_plus/baseline_vllm_codeqwen15_7b_chat_mbpp_plus
 # Baseline evaluation for MBPP+ using local vLLM model
 
 defaults:
@@ -7,18 +7,17 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/entropy
   - /evaluation/mbpp_plus/default
   - _self_
 
 # Run naming
-run_name: "baseline_vllm_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "baseline_vllm_codeqwen15_7b_chat_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-mbpp-plus
-wandb_group: "baseline_vllm_mbpp_plus"
+wandb_group: "baseline_vllm_codeqwen15_7b_chat_mbpp_plus"
 
 # Model configuration (vLLM backend)
 model:

@@ -7,7 +7,6 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/entropy
   - /evaluation/human_eval_plus/default
   - _self_
 

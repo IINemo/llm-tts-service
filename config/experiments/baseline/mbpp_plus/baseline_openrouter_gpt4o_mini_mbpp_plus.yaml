@@ -29,6 +29,7 @@ model:
   api_key: null  # Set via OPENROUTER_API_KEY env var
   supports_logprobs: true
   prefill_mode: false
+  max_context_budget: 128000
 
 # System configuration
 system:
