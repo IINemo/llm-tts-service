@@ -76,7 +76,7 @@ class StrategyBeamSearch(StrategyBase):
         beam_size: Number of top beams to keep at each step.
         candidates_per_beam: Number of candidates to generate for each beam per step.
         max_steps: Maximum reasoning steps.
-        aggregation: How to aggregate scores across steps ("mean", "sum", "min", "max", "product").
+        aggregation: How to aggregate scores across steps ("last", "mean", "sum", "min", "max", "product").
         batch_generation: If True, use batched mode in generate_trajectories_batch.
     """
 
@@ -789,7 +789,9 @@ class StrategyBeamSearch(StrategyBase):
         """Aggregate scores across steps according to selected strategy."""
         if len(scores) == 0:
             return 0
-        if self.aggregation == "sum":
+        if self.aggregation == "last":
+            return scores[-1]
+        elif self.aggregation == "sum":
             return sum(scores)
         elif self.aggregation == "mean":
             return np.mean(scores).item()

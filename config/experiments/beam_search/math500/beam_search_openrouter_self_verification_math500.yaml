@@ -54,7 +54,7 @@ strategy:
   beam_size: 3
   candidates_per_beam: 3
   max_steps: 10
-  aggregation: mean
+  aggregation: mean  # Original ToT: select by current step score only
   batch_generation: false  # API doesn't support true batching
   prompt_buffer: 500
   min_step_tokens: 10
@@ -75,6 +75,7 @@ scorer:
   temperature: 0.7
   max_tokens: 100
   timeout: 60
+  value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
 
 # Dataset configuration
 dataset:
