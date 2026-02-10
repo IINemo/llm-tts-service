@@ -19,6 +19,28 @@ DRY_RUN="no"
 GPUS=""
 TIME_LIMIT=""
 
+# Track used nodes for parallel job submission
+USED_NODES=""
+
+# Function to get currently used GPU nodes
+get_used_nodes() {
+    local user=$(whoami)
+    local nodes=$(squeue -u "$user" -t RUNNING -h -o "%N" | sort -u | tr '\n' ',' | sed 's/,$//')
+    echo "$nodes"
+}
+
+# Function to update used nodes list
+update_used_nodes() {
+    local current_nodes=$(get_used_nodes)
+    if [[ -n "$current_nodes" ]]; then
+        if [[ -n "$USED_NODES" ]]; then
+            USED_NODES="${USED_NODES},${current_nodes}"
+        else
+            USED_NODES="$current_nodes"
+        fi
+    fi
+}
+
 # Help message
 show_help() {
     cat << EOF
@@ -318,6 +340,12 @@ submit_job() {
         gres_line="#SBATCH --gres=gpu:${gpus}"
     fi
 
+    # Build exclude line for used nodes (to avoid OOM from multiple jobs on same GPU)
+    local exclude_line=""
+    if [[ -n "$USED_NODES" ]]; then
+        exclude_line="#SBATCH --exclude=${USED_NODES}"
+    fi
+
     local sbatch_cmd="#!/bin/bash
 #SBATCH -J ${job_name}
 #SBATCH -N 1
@@ -328,6 +356,7 @@ submit_job() {
 #SBATCH -e ${error_file}
 #SBATCH --cpus-per-task=16
 ${gres_line}
+${exclude_line}
 "
 
     # Add array directive if needed
@@ -394,6 +423,7 @@ python scripts/run_tts_eval.py \\
         echo "  Seed: $seed"
         echo "  GPUs: $gpus"
         echo "  Time: $time_limit"
+        echo "  Exclude nodes: ${USED_NODES:-none}"
         echo "  Script: $temp_script"
         echo ""
         cat "$temp_script"
@@ -401,6 +431,21 @@ python scripts/run_tts_eval.py \\
     else
         local job_id=$(sbatch "$temp_script" | grep -oP '\d+')
         echo "Submitted job $job_id: $job_name (seed=$seed)"
+
+        # Wait briefly for job to start and get allocated node
+        sleep 2
+
+        # Get the node allocated to this job and add to used nodes
+        local allocated_node=$(squeue -j "$job_id" -h -o "%N" 2>/dev/null || echo "")
+        if [[ -n "$allocated_node" ]]; then
+            if [[ -n "$USED_NODES" ]]; then
+                USED_NODES="${USED_NODES},${allocated_node}"
+            else
+                USED_NODES="$allocated_node"
+            fi
+            echo "  Allocated node: $allocated_node (added to exclude list)"
+        fi
+
         rm -f "$temp_script"
     fi
 }
@@ -588,6 +633,13 @@ for scorer in "${scorer_list[@]}"; do
         max_gpus=$scorer_gpus
     fi
 done
+
+# Initialize USED_NODES with currently running jobs
+USED_NODES=$(get_used_nodes)
+if [[ -n "$USED_NODES" ]]; then
+    echo "Currently used nodes (will exclude): $USED_NODES"
+    echo ""
+fi
 
 # Submit based on mode
 if [[ "$MODE" == "sequential" && "${#scorer_list[@]}" -gt 1 && "$SCORERS" == "all" ]]; then
