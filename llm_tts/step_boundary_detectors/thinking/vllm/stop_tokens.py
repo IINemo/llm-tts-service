@@ -5,7 +5,37 @@ Converts regex word boundary patterns (\b) to literal stop strings
 for use with vLLM's SamplingParams.stop parameter.
 """
 
-from typing import List, Set
+from typing import List, Set, Tuple
+
+
+def _split_custom_markers(custom_markers: List[str]) -> Tuple[List[str], List[str]]:
+    """
+    Split custom markers into words (to expand) and raw tokens (to use as-is).
+
+    Words contain alphanumeric characters and go through expand_word_boundary().
+    Raw tokens (e.g., "\\n", "\\n\\n") are added directly to stop tokens.
+    Empty or whitespace-only entries are silently skipped.
+
+    Returns:
+        (expandable_words, raw_markers)
+    """
+    expandable_words = []
+    raw_markers = []
+    for marker in custom_markers:
+        if not marker:
+            continue
+        # Markers starting with \n are always raw tokens (e.g., "\n", "\n\n")
+        if marker.startswith("\n"):
+            raw_markers.append(marker)
+        # Skip whitespace-only entries (spaces, tabs)
+        elif not marker.strip():
+            continue
+        # Non-alphanumeric markers (e.g., "...") are raw tokens
+        elif not any(c.isalnum() for c in marker):
+            raw_markers.append(marker)
+        else:
+            expandable_words.append(marker)
+    return expandable_words, raw_markers
 
 
 def expand_word_boundary(word: str, include_lowercase: bool = True) -> List[str]:
@@ -235,20 +265,11 @@ def get_stop_tokens(
     if use_correction:
         words.extend(CORRECTION_WORDS)
 
-    # Process custom_words: literal tokens (starting with \n or non-alphanumeric) added directly
-    literal_tokens = []
+    # Split custom markers into words to expand and raw tokens to use as-is
+    raw_markers = []
     if custom_words:
-        for cw in custom_words:
-            # Detect literal tokens vs words to expand
-            if (
-                not cw
-                or not cw.strip()
-                or cw.startswith("\n")
-                or not any(c.isalnum() for c in cw)
-            ):
-                literal_tokens.append(cw)
-            else:
-                words.append(cw)
+        extra_words, raw_markers = _split_custom_markers(custom_words)
+        words.extend(extra_words)
 
     # Expand each word to stop tokens
     for word in words:
@@ -259,9 +280,8 @@ def get_stop_tokens(
     if use_structure:
         all_tokens.update(STRUCTURE_TOKENS)
 
-    # Add literal tokens from custom_words (e.g., "\n", "\n\n")
-    if literal_tokens:
-        all_tokens.update(literal_tokens)
+    # Add raw markers directly (e.g., "\n", "\n\n")
+    all_tokens.update(raw_markers)
 
     # Add answer tokens
     if include_answer_tokens:
@@ -316,20 +336,11 @@ def get_stop_tokens_compact(
     if use_correction:
         words.extend(CORRECTION_WORDS)
 
-    # Process custom_words: literal tokens (starting with \n or non-alphanumeric) added directly
-    literal_tokens = []
+    # Split custom markers into words to expand and raw tokens to use as-is
+    raw_markers = []
     if custom_words:
-        for cw in custom_words:
-            # Detect literal tokens vs words to expand
-            if (
-                not cw
-                or not cw.strip()
-                or cw.startswith("\n")
-                or not any(c.isalnum() for c in cw)
-            ):
-                literal_tokens.append(cw)
-            else:
-                words.append(cw)
+        extra_words, raw_markers = _split_custom_markers(custom_words)
+        words.extend(extra_words)
 
     # Only generate newline-prefixed variants
     for word in words:
@@ -349,9 +360,8 @@ def get_stop_tokens_compact(
     if use_structure:
         all_tokens.update(STRUCTURE_TOKENS)
 
-    # Add literal tokens from custom_words (e.g., "\n", "\n\n")
-    if literal_tokens:
-        all_tokens.update(literal_tokens)
+    # Add raw markers directly (e.g., "\n", "\n\n")
+    all_tokens.update(raw_markers)
 
     # Always add answer tokens
     all_tokens.update(ANSWER_TOKENS)
@@ -400,20 +410,11 @@ def get_stop_tokens_sentence_start(
         words.extend(REASONING_WORDS)
     if use_correction:
         words.extend(CORRECTION_WORDS)
-    # Process custom_words: literal tokens (starting with \n or non-alphanumeric) added directly
-    literal_tokens = []
+    # Split custom markers into words to expand and raw tokens to use as-is
+    raw_markers = []
     if custom_words:
-        for cw in custom_words:
-            # Detect literal tokens vs words to expand
-            if (
-                not cw
-                or not cw.strip()
-                or cw.startswith("\n")
-                or not any(c.isalnum() for c in cw)
-            ):
-                literal_tokens.append(cw)
-            else:
-                words.append(cw)
+        extra_words, raw_markers = _split_custom_markers(custom_words)
+        words.extend(extra_words)
 
     # Only use newline prefixes to preserve sentence-ending punctuation
     # DO NOT use ". ", "? ", "! " - these eat the punctuation from previous sentence
@@ -437,9 +438,8 @@ def get_stop_tokens_sentence_start(
     if use_structure:
         all_tokens.update(STRUCTURE_TOKENS)
 
-    # Add literal tokens from custom_words (e.g., "\n", "\n\n")
-    if literal_tokens:
-        all_tokens.update(literal_tokens)
+    # Add raw markers directly (e.g., "\n", "\n\n")
+    all_tokens.update(raw_markers)
 
     # Always add answer tokens
     all_tokens.update(ANSWER_TOKENS)
