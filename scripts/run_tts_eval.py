@@ -1103,11 +1103,11 @@ def _generate_trajectories_batch(
                             "response": responses[0] if responses else "",
                         }
                         continue
-                    elif isinstance(evaluator, EvaluatorMBPPPlus):
-                        # Skip MBPP+ in phase 1 - will run batch evaluation once in phase 2
-                        # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
+                    elif isinstance(evaluator, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
+                        # Skip EvalPlus in phase 1 - will run batch evaluation once in phase 2
+                        # (Running EvalPlus per-sample is inefficient)
                         log.debug(
-                            f"Skipping MBPP+ evaluation for sample {i} in phase 1"
+                            f"Skipping EvalPlus evaluation for sample {i} in phase 1"
                         )
                         continue
                     else:
@@ -1460,9 +1460,9 @@ def evaluate_results(
                         log.warning(
                             f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}"
                         )
-                elif isinstance(evaluator_fn, EvaluatorMBPPPlus):
-                    # Skip MBPP+ in per-sample loop - will run batch evaluation once
-                    # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
+                elif isinstance(evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
+                    # Skip EvalPlus in per-sample loop - will run batch evaluation once
+                    # (Running EvalPlus per-sample is inefficient)
                     continue
                 else:
                     # Other evaluators use __call__ with extracted answer
@@ -1565,10 +1565,10 @@ def evaluate_results(
                 for r in samples_to_eval
             ]
 
-        # Prepare optional parameters for evaluators that need them (e.g., MBPP+)
+        # Prepare optional parameters for evaluators that need them (e.g., EvalPlus)
         task_ids = None
         instance_data_list = None
-        if isinstance(evaluator_fn, EvaluatorMBPPPlus):
+        if isinstance(evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
             # Get task_ids from instance_data or direct field
             task_ids = []
             for r in samples_to_eval:
@@ -1580,7 +1580,7 @@ def evaluate_results(
 
         try:
             # Batch evaluate - pass additional params if evaluator needs them
-            if isinstance(evaluator_fn, EvaluatorMBPPPlus):
+            if isinstance(evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
                 eval_result = evaluator_fn(
                     problems, solutions, gold_answers, task_ids, instance_data_list
                 )
