@@ -1,25 +1,25 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_vllm_qwen3_8b_human_eval_plus_entropy
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_vllm_qwen3_8b_human_eval_plus_perplexity
 # Offline Best-of-N for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
-# Uses Entropy scorer for step evaluation
+# Uses perplexity scorer for step evaluation
 
 defaults:
   - /config
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/perplexity
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_qwen3_8b_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_qwen3_8b_human_eval_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: null
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "offline_bon_vllm_qwen3_8b_human_eval_plus_entropy"
+wandb_group: "offline_bon_vllm_qwen3_8b_human_eval_plus_perplexity"
 
 # Model configuration (vLLM backend)
 model:
@@ -71,9 +71,9 @@ strategy:
     - "\n"
     - "\n\n"
 
-# Entropy scorer configuration
+# perplexity scorer configuration
 scorer:
-  type: entropy
+  type: perplexity
   batch_size: 1
 
 # Dataset configuration - HumanEval+
