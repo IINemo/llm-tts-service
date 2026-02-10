@@ -5,8 +5,8 @@ evaluation:
   batch_evaluators:
     - llm_judge
   llm_judge:
-    provider: openai
-    model: gpt-5-mini
-    base_url: https://api.openai.com/v1
+    provider: openrouter
+    model: openai/gpt-4.1-mini
+    base_url: https://openrouter.ai/api/v1
     cache_path: ./cache/llm_judge
     n_threads: 50
