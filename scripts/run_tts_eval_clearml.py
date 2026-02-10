@@ -140,6 +140,15 @@ def ensure_essential_deps_installed() -> None:
         "wget",
         "unbabel-comet",
         "fastchat",
+        "word2number",  # llm_tts dependency
+        "parse",
+        "pylatexenc",
+        "regex",
+        "requests",
+        "wandb",
+        "Pillow",
+        "pyyaml",
+        "absl-py",
     )
 
     # lm_polygraph without deps (to avoid version conflicts)
