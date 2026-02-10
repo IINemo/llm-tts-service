@@ -1060,8 +1060,17 @@ def _generate_trajectories_batch(
                 try:
                     if isinstance(evaluator, EvaluatorExactMatch):
                         # EvaluatorExactMatch._score_single takes 3-tuple, returns float
+                        # For self-consistency, use extracted_answer if available (trajectory is aggregated)
+                        solution = (
+                            result.get("extracted_answer")
+                            or result.get("generated_answer")
+                            or result["trajectory"]
+                        )
+                        # Convert to string for comparison
+                        if isinstance(solution, (int, float)):
+                            solution = str(solution)
                         score = evaluator._score_single(
-                            (question, result["trajectory"], str(gold_answer_num))
+                            (question, solution, str(gold_answer_num))
                         )
                         is_correct_eval = bool(score)
                     elif isinstance(evaluator, EvaluatorLLMAsAJudge):
