@@ -29,9 +29,18 @@ import torch
 from datasets import Dataset, load_dataset
 from dotenv import load_dotenv
 from hydra.core.hydra_config import HydraConfig
-from lm_polygraph import WhiteboxModel
-from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
+
+# lm_polygraph imports (optional - only needed for HuggingFace models)
+try:
+    from lm_polygraph import WhiteboxModel
+    from lm_polygraph.utils.generation_parameters import GenerationParameters
+
+    LM_POLYGRAPH_AVAILABLE = True
+except ImportError:
+    WhiteboxModel = None
+    GenerationParameters = None
+    LM_POLYGRAPH_AVAILABLE = False
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
