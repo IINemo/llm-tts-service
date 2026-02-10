@@ -1,5 +1,6 @@
 # @package _global_
 # Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gpqa_diamond/offline_bon_openai_gpt4o_mini_gpqa_diamond_entropy
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Offline Best-of-N with GPT-4o-mini (OpenAI API) + Entropy scorer on GPQA-Diamond
 # Generates N complete trajectories, splits post-hoc, selects best based on min step entropy
 

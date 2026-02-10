@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/deepconf/run_aime_2025_deepconf_offline
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 
 # DeepConf Offline Mode Configuration for AIME 2025
 # Competition-level mathematics problems from American Invitational Mathematics Examination

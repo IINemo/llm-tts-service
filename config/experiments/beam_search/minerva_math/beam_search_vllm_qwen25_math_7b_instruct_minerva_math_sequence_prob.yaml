@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/beam_search_vllm_nothink_qwen25_7b_minerva_math_sequence_prob
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Beam Search with vLLM + Non-Thinking Mode (Qwen2.5-7B) on Minerva Math
 # Uses Sequence Probability scorer for step evaluation (sum of log-probs, not normalized)
 # Maintains B beams, expands each with N candidates, prunes to top-B at each step

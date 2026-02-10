@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/amc23/baseline_vllm_qwen25_math_7b_instruct_amc23
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Baseline evaluation for Qwen2.5-Math-7B-Instruct on AMC 2023
 
 defaults:
