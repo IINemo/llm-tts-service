@@ -113,6 +113,10 @@ def ensure_essential_deps_installed() -> None:
         "accelerate",
         "einops",
         "diskcache",
+        "scipy",
+        "scikit-learn",
+        "nltk",
+        "sentencepiece",
     )
 
     # lm_polygraph without deps (to avoid version conflicts)
