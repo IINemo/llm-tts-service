@@ -31,9 +31,10 @@ from llm_tts.evaluation.llm_as_a_judge import (  # noqa: E402
 
 def parse_reply(reply: str) -> int:
     """Parse a single reply and return label (1=correct, 0=incorrect, -1=unclear)."""
-    if "<Grade>: Correct" in reply:
+    # Check for both <Grade>: and Grade: formats
+    if "<Grade>: Correct" in reply or "Grade: Correct" in reply:
         return 1
-    elif "<Grade>: Incorrect" in reply:
+    elif "<Grade>: Incorrect" in reply or "Grade: Incorrect" in reply:
         return 0
     else:
         return -1
@@ -150,11 +151,21 @@ def main():
     )
     args = parser.parse_args()
 
-    # Get API key
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
-        print("Error: Set OPENAI_API_KEY or OPENROUTER_API_KEY environment variable")
-        return 1
+    # Get API key based on base_url
+    if "openrouter" in args.base_url:
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            print("Error: Set OPENROUTER_API_KEY environment variable for openrouter")
+            return 1
+    else:
+        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get(
+            "OPENROUTER_API_KEY"
+        )
+        if not api_key:
+            print(
+                "Error: Set OPENAI_API_KEY or OPENROUTER_API_KEY environment variable"
+            )
+            return 1
 
     # Load results
     print(f"Loading {args.results_json}...")
