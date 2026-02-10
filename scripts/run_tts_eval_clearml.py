@@ -39,7 +39,10 @@ def ensure_lm_polygraph_installed() -> None:
     # 3) Install lm-polygraph WITHOUT deps so it won't downgrade transformers/tokenizers
     _pip("install", "--no-deps", "git+https://github.com/IINemo/lm-polygraph.git@dev")
 
-    # 4) Install lm-polygraph runtime deps explicitly (safe versions)
+    # 4) Install sentencepiece binary first (avoids cmake build issues)
+    _pip("install", "--only-binary=:all:", "sentencepiece>=0.1.97")
+
+    # 5) Install lm-polygraph runtime deps explicitly (safe versions)
     # CRITICAL: Pin huggingface-hub<1.0 in the same command to prevent upgrades
     _pip(
         "install",
@@ -62,16 +65,15 @@ def ensure_lm_polygraph_installed() -> None:
         "spacy>=3.4.0,<3.8.0",
         "sentence-transformers",
         "sacrebleu>=1.5.0",
-        "sentencepiece>=0.1.97",
         "evaluate>=0.4.2",
         "datasets>=2.19.0,<4.0.0",
         "fsspec>=2023.1.0,<=2024.6.1",
     )
 
-    # 5) latex2sympy2 must be installed without deps (antlr conflict)
+    # 6) latex2sympy2 must be installed without deps (antlr conflict)
     _pip("install", "--no-deps", "latex2sympy2")
 
-    # 6) Final re-pin in case any dependency tried to move the stack
+    # 7) Final re-pin in case any dependency tried to move the stack
     _pip("install", "--force-reinstall", "huggingface-hub>=0.34.0,<1.0")
     _pip("install", "--force-reinstall", "tokenizers==0.22.2")
     _pip("install", "--force-reinstall", "--no-deps", "transformers>=4.57.0,<5.0.0")
