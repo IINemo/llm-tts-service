@@ -117,6 +117,10 @@ def ensure_essential_deps_installed() -> None:
         "scikit-learn",
         "nltk",
         "sentencepiece",
+        "rouge-score",
+        "bert-score",
+        "sacrebleu",
+        "evaluate",
     )
 
     # lm_polygraph without deps (to avoid version conflicts)
