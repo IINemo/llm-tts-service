@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 from clearml import Task
 
-# PyTorch base image (has Python 3.11 with pre-built wheels for sentencepiece)
-DEFAULT_DOCKER_IMAGE = "pytorch/pytorch:2.8.0-cuda12.9-cudnn9-runtime"
+# vLLM image has torch+vllm pre-installed with correct CUDA
+DEFAULT_DOCKER_IMAGE = "vllm/vllm-openai:latest"
+# Override entrypoint (vllm image defaults to `vllm serve`)
 # Skip lm_polygraph bootstrap - not needed for vLLM experiments
-DEFAULT_DOCKER_ARGS = "--shm-size=8g -e SKIP_LM_POLYGRAPH=1"
+DEFAULT_DOCKER_ARGS = "--entrypoint= --shm-size=8g -e SKIP_LM_POLYGRAPH=1"
 
 
 def create_task(
