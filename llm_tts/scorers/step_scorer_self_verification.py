@@ -116,6 +116,17 @@ class StepScorerSelfVerification(StepScorerBase):
             "impossible": 0.001,
         }
 
+        # Extended synonyms that map to the base labels above
+        # Note: paper says "sure/maybe/impossible", code uses "sure/likely/impossible"
+        self.value_synonyms = {
+            "maybe": 1.0,  # paper uses "maybe" as equivalent to "likely"
+            "correct": 20.0,
+            "definitely": 20.0,
+            "unlikely": 0.001,
+            "incorrect": 0.001,
+            "wrong": 0.001,
+        }
+
         # Statistics
         self.total_evaluations = 0
         self.cache: Dict[str, float] = {}
@@ -370,7 +381,7 @@ class StepScorerSelfVerification(StepScorerBase):
                             f"Evaluation {i+1} failed for candidate "
                             f"{item['group_idx']}/{item['cand_idx']}: {e}"
                         )
-                        score = 1.0
+                        score = 0.0
                     eval_scores[(item["group_idx"], item["cand_idx"])].append(score)
 
             for item in pending:
@@ -401,7 +412,7 @@ class StepScorerSelfVerification(StepScorerBase):
                             f"Evaluation {i+1} failed for candidate "
                             f"{item['group_idx']}/{item['cand_idx']}: {e}"
                         )
-                        score = 1.0
+                        score = 0.0
                     eval_scores[(item["group_idx"], item["cand_idx"])].append(score)
 
             for item in pending:
@@ -603,7 +614,7 @@ class StepScorerSelfVerification(StepScorerBase):
                         log.warning(
                             f"Evaluation {i+1} failed for candidate {item['idx']}: {e}"
                         )
-                        score = 1.0
+                        score = 0.0
                     eval_scores[item["idx"]].append(score)
 
             for item in pending:
@@ -732,10 +743,10 @@ class StepScorerSelfVerification(StepScorerBase):
                 )
             except Exception as e:
                 log.warning(f"Evaluation {i+1} failed: {e}")
-                scores.append(1.0)  # Default to "likely" on failure
+                scores.append(0.0)
 
         # Aggregate scores using SUM (as in original ToT paper, not mean)
-        return float(sum(scores)) if scores else float(self.n_evaluate_sample)
+        return float(sum(scores)) if scores else 0.0
 
     def _run_voting(
         self,
@@ -1014,37 +1025,59 @@ class StepScorerSelfVerification(StepScorerBase):
         """
         Parse value evaluation output into numerical score.
 
-        Looks for keywords: sure, likely, unlikely, impossible
+        Matching priority (following original ToT paper):
+        1. Exact match on last line (primary ToT labels)
+        2. Token search on last line (primary + synonym labels)
+        3. Token search on full output (fallback)
+        4. Default to 0.0 (unmatched = no contribution, as in original ToT)
         """
         output_lower = output.lower().strip()
+        all_keywords = {**self.value_map, **self.value_synonyms}
 
-        # Prefer exact label matching on the last non-empty line (ToT behavior).
+        # 1. Prefer exact label matching on the last non-empty line (ToT behavior).
         lines = [line.strip() for line in output_lower.splitlines() if line.strip()]
         if lines:
             last_line = lines[-1]
             normalized = re.sub(r"[^a-z]+", " ", last_line).strip()
             if normalized in self.value_map:
                 return self.value_map[normalized]
+            # 2. Token search on last line (primary + synonyms)
             for token in normalized.split():
-                if token in self.value_map:
-                    return self.value_map[token]
+                if token in all_keywords:
+                    return all_keywords[token]
 
-        # Default to "likely" if no match
-        log.debug(f"No rating found in output: '{output[:100]}', defaulting to 1.0")
-        return 1.0
+        # 3. Search full output for any keyword (fallback)
+        full_normalized = re.sub(r"[^a-z\s]+", " ", output_lower)
+        for token in full_normalized.split():
+            if token in all_keywords:
+                return all_keywords[token]
+
+        # 4. Default to 0.0 — unmatched outputs contribute nothing
+        #    (matches original ToT where unrecognized labels are not counted)
+        log.debug(f"No rating found in output: '{output[:100]}', defaulting to 0.0")
+        return 0.0
 
     def _parse_vote_output(self, output: str, n_candidates: int) -> Optional[int]:
         """
         Parse vote output to get selected candidate index (0-based).
-        """
-        # Find numbers in output
-        numbers = re.findall(r"\d+", output)
 
+        Priority:
+        1. "The best choice is X" pattern (original ToT paper format)
+        2. First valid number in output
+        """
+        # 1. Try "best choice is X" pattern (as in original ToT paper)
+        match = re.search(r"best choice is\s*(\d+)", output, re.IGNORECASE)
+        if match:
+            num = int(match.group(1))
+            if 1 <= num <= n_candidates:
+                return num - 1
+
+        # 2. Fallback: find any valid candidate number in output
+        numbers = re.findall(r"\d+", output)
         for num_str in numbers:
             num = int(num_str)
-            # Check if valid candidate number (1-indexed in prompt)
             if 1 <= num <= n_candidates:
-                return num - 1  # Convert to 0-indexed
+                return num - 1
 
         log.debug(f"No valid vote found in output: '{output[:100]}'")
         return None
