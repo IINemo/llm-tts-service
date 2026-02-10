@@ -43,11 +43,12 @@ def ensure_lm_polygraph_installed() -> None:
     _pip("install", "--only-binary=:all:", "sentencepiece>=0.1.97")
 
     # 5) Install lm-polygraph runtime deps explicitly (safe versions)
-    # CRITICAL: Pin huggingface-hub<1.0 in the same command to prevent upgrades
     _pip(
         "install",
-        "huggingface-hub>=0.34.0,<1.0",  # Pin first to prevent sentence-transformers from upgrading
-        "openai",  # Required by lm_polygraph
+        "accelerate>=0.32.1",  # Required by lm_polygraph
+        "diskcache>=5.6.3",  # Required by lm_polygraph
+        "einops",  # Required by lm_polygraph
+        "hydra-core>=1.3.2",  # Required by lm_polygraph
         "bert-score>=0.3.13",
         "bitsandbytes",
         "bs4",
@@ -71,11 +72,17 @@ def ensure_lm_polygraph_installed() -> None:
         "fsspec>=2023.1.0,<=2024.6.1",
     )
 
-    # 6) latex2sympy2 must be installed without deps (antlr conflict)
+    # 6) Install openai without deps to avoid huggingface-hub upgrade
+    _pip("install", "--no-deps", "openai")
+    _pip(
+        "install", "httpx", "pydantic", "sniffio", "tqdm", "jiter"
+    )  # openai deps without hf-hub
+
+    # 7) latex2sympy2 must be installed without deps (antlr conflict)
     _pip("install", "--no-deps", "latex2sympy2")
 
-    # 7) Final re-pin in case any dependency tried to move the stack
-    _pip("install", "--force-reinstall", "huggingface-hub>=0.34.0,<1.0")
+    # 8) Final re-pin - CRITICAL: force exact versions
+    _pip("install", "--force-reinstall", "huggingface-hub==0.30.2")
     _pip("install", "--force-reinstall", "tokenizers==0.22.2")
     _pip("install", "--force-reinstall", "--no-deps", "transformers>=4.57.0,<5.0.0")
     _pip("install", "--force-reinstall", "--no-deps", "antlr4-python3-runtime==4.9.3")
