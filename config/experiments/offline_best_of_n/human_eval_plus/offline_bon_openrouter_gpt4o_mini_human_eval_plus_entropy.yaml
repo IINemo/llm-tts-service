@@ -1,5 +1,5 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_openrouter_human_eval_plus
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_openrouter_gpt4o_mini_human_eval_plus_entropy
 # Offline Best-of-N for HumanEval+ using OpenRouter API with newline-based step boundaries
 # Uses Entropy scorer for step evaluation
 #
@@ -7,6 +7,7 @@
 
 defaults:
   - /config
+  - /model/openrouter
   - /generation/default
   - /system/default
   - /scorer/entropy
@@ -14,12 +15,13 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_openrouter_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "offline_bon_openrouter_gpt4o_mini_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: null
+report_to: wandb
 wandb_project: llm-tts-human-eval-plus
+wandb_group: "offline_bon_openrouter_gpt4o_mini_human_eval_plus_entropy"
 
 # Model configuration (OpenRouter API)
 model:

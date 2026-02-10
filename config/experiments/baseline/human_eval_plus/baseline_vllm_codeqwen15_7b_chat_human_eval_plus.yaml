@@ -1,5 +1,5 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/human_eval_plus/baseline_vllm_human_eval_plus
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/human_eval_plus/baseline_vllm_codeqwen15_7b_chat_human_eval_plus
 # Baseline evaluation for HumanEval+ using local vLLM model
 
 defaults:
@@ -12,12 +12,13 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "baseline_vllm_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "baseline_vllm_codeqwen15_7b_chat_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: null
+report_to: wandb
 wandb_project: llm-tts-human-eval-plus
+wandb_group: "baseline_vllm_codeqwen15_7b_chat_human_eval_plus"
 
 # Model configuration (vLLM backend)
 model:

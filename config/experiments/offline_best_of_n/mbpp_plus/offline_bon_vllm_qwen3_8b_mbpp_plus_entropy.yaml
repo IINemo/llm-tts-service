@@ -1,5 +1,5 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/mbpp_plus/offline_bon_vllm_qwen3_8b_mbpp_plus
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/mbpp_plus/offline_bon_vllm_qwen3_8b_mbpp_plus_entropy
 # Offline Best-of-N for MBPP+ using vLLM with Qwen3-8B and newline-based step boundaries
 # Uses Entropy scorer for step evaluation
 
@@ -13,12 +13,13 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_qwen3_8b_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_qwen3_8b_mbpp_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-mbpp-plus
+wandb_group: "offline_bon_vllm_qwen3_8b_mbpp_plus_entropy"
 
 # Model configuration (vLLM backend)
 model:

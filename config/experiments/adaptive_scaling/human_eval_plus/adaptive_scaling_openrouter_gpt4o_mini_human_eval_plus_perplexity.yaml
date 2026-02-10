@@ -1,5 +1,5 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_openrouter_human_eval_plus_perplexity
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_openrouter_gpt4o_mini_human_eval_plus_perplexity
 # MUR (Adaptive Scaling) for HumanEval+ using OpenRouter API with newline-based step boundaries
 # Uses Perplexity scorer (MUR fixes perplexity as signal for scaled step selection)
 #
@@ -7,6 +7,7 @@
 
 defaults:
   - /config
+  - /model/openrouter
   - /generation/default
   - /system/default
   - /scorer/perplexity
@@ -14,12 +15,13 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "adaptive_scaling_openrouter_human_eval_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_openrouter_gpt4o_mini_human_eval_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-human-eval-plus
+wandb_group: "adaptive_scaling_openrouter_gpt4o_mini_human_eval_plus_perplexity"
 
 # Model configuration (OpenRouter API)
 model:
