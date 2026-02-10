@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=all python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/mbpp_plus/baseline_openai_mbpp_plus
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Baseline evaluation for MBPP+ using OpenAI API
 #
 # Environment variable required: OPENAI_API_KEY

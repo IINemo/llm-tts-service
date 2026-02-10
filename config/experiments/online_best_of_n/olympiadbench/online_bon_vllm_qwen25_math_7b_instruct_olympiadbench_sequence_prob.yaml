@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/olympiadbench/online_bon_vllm_nothink_qwen25_7b_olympiadbench_sequence_prob
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on OlympiadBench
 # Uses Sequence Probability scorer for step evaluation
 

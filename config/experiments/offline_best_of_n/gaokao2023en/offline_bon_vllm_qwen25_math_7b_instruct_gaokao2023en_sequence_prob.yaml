@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gaokao2023en/offline_bon_vllm_nothink_qwen25_7b_gaokao2023en_sequence_prob
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on GaoKao 2023 En
 # Uses Sequence Probability scorer for step evaluation (sum of log-probs, not normalized)
 # Generates N trajectories in single call, splits post-hoc, selects best based on min step score

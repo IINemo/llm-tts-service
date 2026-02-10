@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/minerva_math/self_consistency_vllm_qwen25_math_7b_minerva_math
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Self-consistency evaluation on Minerva Math (272 STEM problems)
 # Uses majority voting over N diverse reasoning paths
 
