@@ -31,9 +31,10 @@ from llm_tts.evaluation.llm_as_a_judge import (  # noqa: E402
 
 def parse_reply(reply: str) -> int:
     """Parse a single reply and return label (1=correct, 0=incorrect, -1=unclear)."""
-    if "<Grade>: Correct" in reply:
+    # Check for both <Grade>: and Grade: formats
+    if "<Grade>: Correct" in reply or "Grade: Correct" in reply:
         return 1
-    elif "<Grade>: Incorrect" in reply:
+    elif "<Grade>: Incorrect" in reply or "Grade: Incorrect" in reply:
         return 0
     else:
         return -1
