@@ -92,8 +92,26 @@ def ensure_lm_polygraph_installed() -> None:
     print("[bootstrap] lm_polygraph OK", flush=True)
 
 
-# Bootstrap lm_polygraph only if not already available
-# Set SKIP_LM_POLYGRAPH=1 to skip installation entirely
+def ensure_essential_deps_installed() -> None:
+    """Install essential deps for run_tts_eval.py (without lm_polygraph)."""
+    print("[bootstrap] Installing essential dependencies...", flush=True)
+    _pip(
+        "install",
+        "hydra-core>=1.3.2",
+        "omegaconf",
+        "vllm",
+        "transformers",
+        "datasets",
+        "python-dotenv",
+        "tqdm",
+        "sympy",
+        "latex2sympy2",
+    )
+    print("[bootstrap] Essential deps installed", flush=True)
+
+
+# Bootstrap dependencies
+# Set SKIP_LM_POLYGRAPH=1 to skip lm_polygraph and only install essentials
 if os.environ.get("SKIP_LM_POLYGRAPH", "0") != "1":
     try:
         import lm_polygraph  # noqa: F401
@@ -108,6 +126,7 @@ else:
         "[bootstrap] Skipping lm_polygraph installation (SKIP_LM_POLYGRAPH=1)",
         flush=True,
     )
+    ensure_essential_deps_installed()
 
 
 def main():
