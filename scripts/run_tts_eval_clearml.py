@@ -100,7 +100,8 @@ def ensure_essential_deps_installed() -> None:
     """
     print("[bootstrap] Installing essential dependencies...", flush=True)
 
-    # Core deps
+    # All lm_polygraph dependencies (from requirements.txt)
+    # Note: torch/vllm excluded - use system's pre-installed versions
     _pip(
         "install",
         "hydra-core>=1.3.2",
@@ -121,6 +122,24 @@ def ensure_essential_deps_installed() -> None:
         "bert-score",
         "sacrebleu",
         "evaluate",
+        "sentence-transformers",
+        "spacy",
+        "nlpaug",
+        "matplotlib",
+        "pandas",
+        "bs4",
+        "hf-lfs",
+        "pytest",
+        "pytreebank",
+        "numpy",
+        "dill",
+        "flask",
+        "protobuf",
+        "fschat",
+        "bitsandbytes",
+        "wget",
+        "unbabel-comet",
+        "fastchat",
     )
 
     # lm_polygraph without deps (to avoid version conflicts)
