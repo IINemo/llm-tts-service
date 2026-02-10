@@ -93,19 +93,22 @@ def ensure_lm_polygraph_installed() -> None:
 
 
 def ensure_essential_deps_installed() -> None:
-    """Install essential deps for run_tts_eval.py (without lm_polygraph)."""
+    """Install essential deps for run_tts_eval.py (without lm_polygraph).
+
+    Note: Do NOT install vllm/torch here - use system's pre-installed versions
+    to avoid CUDA library conflicts.
+    """
     print("[bootstrap] Installing essential dependencies...", flush=True)
     _pip(
         "install",
         "hydra-core>=1.3.2",
         "omegaconf",
-        "vllm",
         "transformers",
         "datasets",
         "python-dotenv",
-        "tqdm",
         "sympy",
         "latex2sympy2",
+        "antlr4-python3-runtime==4.9.3",  # Required for latex2sympy2
     )
     print("[bootstrap] Essential deps installed", flush=True)
 
