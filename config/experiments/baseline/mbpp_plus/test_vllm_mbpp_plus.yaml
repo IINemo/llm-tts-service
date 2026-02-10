@@ -1,5 +1,4 @@
 # @package _global_
-<<<<<<<< HEAD:config/experiments/baseline/mbpp_plus/test_vllm_mbpp_plus.yaml
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/mbpp_plus/test_vllm_mbpp_plus
 # Quick test configuration for MBPP+ (10 samples only)
 #
@@ -8,10 +7,6 @@
 # - vLLM installed: uv pip install "vllm>=0.12.0,<0.13.0"
 #
 # For testing without GPU, run: python tests/test_mbpp_plus_integration.py
-========
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/human_eval_plus/self_consistency_vllm_human_eval_plus
-# Self-consistency evaluation for HumanEval+ using local vLLM model
->>>>>>>> c295552 (Reorganize MBPP+ and HumanEval+ configs into hierarchical structure):config/experiments/self_consistency/human_eval_plus/self_consistency_vllm_human_eval_plus.yaml
 
 defaults:
   - /config
@@ -19,57 +14,49 @@ defaults:
   - /generation/default
   - /system/default
   - /scorer/entropy
-  - /evaluation/human_eval_plus/default
+  - /evaluation/mbpp_plus/default
   - _self_
 
 # Run naming
-run_name: "self_consistency_vllm_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "test_vllm_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: null
-wandb_project: llm-tts-human-eval-plus
 
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
-<<<<<<<< HEAD:config/experiments/baseline/mbpp_plus/test_vllm_mbpp_plus.yaml
   model_path: "Qwen/Qwen2.5-Coder-7B-Instruct"
   model_short_name: "qwen25_coder_7b_instruct"
-========
-  model_path: "Qwen/CodeQwen1.5-7B-Chat"
->>>>>>>> c295552 (Reorganize MBPP+ and HumanEval+ configs into hierarchical structure):config/experiments/self_consistency/human_eval_plus/self_consistency_vllm_human_eval_plus.yaml
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 8192
+  max_model_len: 4096  # Smaller for testing
   disable_thinking_mode: true
 
 # System configuration
 system:
   device: cuda
-  seed: 0
+  seed: 42
 
 # Generation configuration
 generation:
-  max_new_tokens: 512
-  temperature: 0.7  # Higher temperature for diverse candidates
-  top_p: 0.95
-  top_k: 50
+  max_new_tokens: 256  # Shorter for testing
+  temperature: 0.0
+  top_p: 1.0
+  top_k: 20
   batch_size: 1
 
-# Strategy - Self-consistency with multiple candidates
+# Strategy - Baseline single-shot
 strategy:
-  type: self_consistency
+  type: baseline
   batch_generation: true
-  num_paths: 5  # Generate 5 candidate solutions
-  data_name: "human_eval_plus"  # For answer extraction
   stop_token_ids:
     - 151645
     - 151643
   min_step_tokens: 0
-  max_step_tokens: 512
+  max_step_tokens: 256
   use_sequence: false
   use_conclusion: false
   use_thinking: false
@@ -78,23 +65,23 @@ strategy:
   use_reasoning: false
   use_correction: false
 
-# Dataset configuration - HumanEval+
+# Dataset configuration - MBPP+ (small subset for testing)
 dataset:
-  data_name: "human_eval_plus"
-  dataset_path: "evalplus/humanevalplus"
+  data_name: "mbpp_plus"
+  dataset_path: "evalplus/mbppplus"
   dataset_split: "test"
-  subset: null
+  subset: 10  # Only 10 samples for quick test
   offset: 0
-  question_field: "question"
-  answer_field: "answer"
+  question_field: "prompt"
+  answer_field: "code"
   answer_format: "code"
-  prompt_file: null
+  prompt_file: ./config/prompts/mbpp_plus.txt
   system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
 
 # Evaluation configuration
 evaluation:
   evaluators:
-    - human_eval_plus
-  human_eval_plus:
-    mode: full
+    - mbpp_plus
+  mbpp_plus:
+    mode: syntax
     timeout: 10
