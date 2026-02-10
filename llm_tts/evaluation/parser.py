@@ -533,7 +533,12 @@ def extract_answer(pred_str, data_name, use_last_number=True):
         # Remove <end of response> tag if present
         pred = pred.split("<end of response>")[0].strip()
     elif re.search(r"\bthe answer is\b", pred_str, re.IGNORECASE):
-        pred = re.split(r"\bthe answer is\b", pred_str, flags=re.IGNORECASE)[-1].strip().split("\n")[0].strip()
+        pred = (
+            re.split(r"\bthe answer is\b", pred_str, flags=re.IGNORECASE)[-1]
+            .strip()
+            .split("\n")[0]
+            .strip()
+        )
     elif "final answer is" in pred_str:
         pred = pred_str.split("final answer is")[-1].strip()
     elif "答案是" in pred_str:

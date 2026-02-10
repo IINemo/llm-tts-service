@@ -1103,7 +1103,9 @@ def _generate_trajectories_batch(
                             "response": responses[0] if responses else "",
                         }
                         continue
-                    elif isinstance(evaluator, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
+                    elif isinstance(
+                        evaluator, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)
+                    ):
                         # Skip EvalPlus in phase 1 - will run batch evaluation once in phase 2
                         # (Running EvalPlus per-sample is inefficient)
                         log.debug(
@@ -1460,7 +1462,9 @@ def evaluate_results(
                         log.warning(
                             f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}"
                         )
-                elif isinstance(evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
+                elif isinstance(
+                    evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)
+                ):
                     # Skip EvalPlus in per-sample loop - will run batch evaluation once
                     # (Running EvalPlus per-sample is inefficient)
                     continue
@@ -1909,7 +1913,10 @@ def main(config):
             }
             serializable_data.append(serializable_item)
         dataset = Dataset.from_list(serializable_data)
-    elif data_name == "human_eval_plus" or "humanevalplus" in config.dataset.dataset_path.lower():
+    elif (
+        data_name == "human_eval_plus"
+        or "humanevalplus" in config.dataset.dataset_path.lower()
+    ):
         from llm_tts.datasets.human_eval_plus import load_human_eval_plus
 
         log.info(
