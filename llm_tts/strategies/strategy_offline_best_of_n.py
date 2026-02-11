@@ -547,7 +547,12 @@ class StrategyOfflineBestOfN(StrategyBase):
             )
 
             # Extract answer from best trajectory
-            extracted = extract_answer(best_result.get("full_text", ""))
+            # For thinking mode, the answer is in answer_step (after </think)
+            # For non-thinking mode, the answer is in full_text
+            answer_text = best_result.get("answer_step") or best_result.get(
+                "full_text", ""
+            )
+            extracted = extract_answer(answer_text)
 
             # Token stats from generator's per-sample tracking
             token_stats = self.step_generator.get_sample_stats_for(sample_data_idx)

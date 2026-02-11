@@ -682,10 +682,16 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     # Handle max tokens - only truncate if we actually hit the limit
                     # stop_reason=None can mean EOS token ID stop (complete) or max tokens
                     # Check token count to distinguish
+                    # Use effective_max_tokens (respects max_tokens_override for answer phase)
                     actual_hit_max_tokens = stop_reason == "length" or (
-                        stop_reason is None and len(token_ids) >= self.max_step_tokens
+                        stop_reason is None and len(token_ids) >= effective_max_tokens
                     )
                     if actual_hit_max_tokens and not thinking_complete:
+                        log.warning(
+                            f"Path {traj_idx} cand {cand_idx}: hit max tokens "
+                            f"({len(token_ids)} >= {effective_max_tokens}), "
+                            f"truncating at sentence boundary"
+                        )
                         text = self._truncate_at_sentence_boundary(text)
 
                     # Check for repetitions
@@ -721,6 +727,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                             raw_text, token_count
                         )
                         if was_truncated:
+                            log.warning(
+                                f"Path {traj_idx} cand {cand_idx}: truncated "
+                                f"repetitions (hit max tokens: {token_count})"
+                            )
                             raw_text = truncated_text
                             step_text = raw_text
 

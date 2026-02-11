@@ -622,6 +622,11 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
             # Truncate at sentence boundary if hit max tokens
             if not thinking_complete and token_count >= self.max_step_tokens:
+                log.warning(
+                    f"API generation hit max tokens "
+                    f"({token_count} >= {self.max_step_tokens}), "
+                    f"truncating at sentence boundary"
+                )
                 text = self._truncate_at_sentence_boundary(text)
                 # Match vLLM behavior: mark trajectory complete when max tokens
                 # exhausted without </think> (model ran out of budget)
@@ -634,6 +639,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 text, token_count
             )
             if was_truncated:
+                log.warning(
+                    f"API generation truncated repetitions (hit max tokens: {token_count})"
+                )
                 text = truncated_text
 
             # Check for answer patterns

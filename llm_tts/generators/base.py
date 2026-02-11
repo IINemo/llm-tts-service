@@ -51,8 +51,9 @@ def convert_trajectory_to_string(trajectory: List[StepCandidate]) -> str:
     """Convert trajectory to string.
 
     Each step.text should already end with newline, so we just concatenate.
+    Uses raw_text if available to preserve original model output.
     """
-    return "".join([step.text for step in trajectory])
+    return "".join([step.raw_text or step.text for step in trajectory])
 
 
 class StepCandidateGeneratorBase:
