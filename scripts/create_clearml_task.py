@@ -4,7 +4,10 @@ from clearml import Task
 # vLLM v0.12.0 with CUDA 12.1 (compatible with older drivers)
 DEFAULT_DOCKER_IMAGE = "vllm/vllm-openai:v0.12.0"
 # Override entrypoint, skip lm_polygraph bootstrap
-DEFAULT_DOCKER_ARGS = "--entrypoint= --shm-size=8g -e SKIP_LM_POLYGRAPH=1"
+# Add OPENROUTER_API_KEY for llm_judge evaluation
+DEFAULT_DOCKER_ARGS = (
+    "--entrypoint= --shm-size=8g -e SKIP_LM_POLYGRAPH=1 -e OPENROUTER_API_KEY"
+)
 
 # Check GPU info
 DOCKER_BASH_SETUP = r"""

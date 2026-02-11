@@ -308,7 +308,7 @@ def create_model(config):
             raise ImportError("vLLM not installed. Run: pip install vllm")
 
         # Initialize vLLM engine with seed for reproducibility
-        llm = LLM(
+        llm_kwargs = dict(
             model=config.model.model_path,
             gpu_memory_utilization=config.model.get("gpu_memory_utilization", 0.9),
             tensor_parallel_size=config.model.get("tensor_parallel_size", 1),
@@ -318,6 +318,11 @@ def create_model(config):
             enforce_eager=config.model.get("enforce_eager", False),
             seed=config.system.seed,  # Reproducibility
         )
+        quantization = config.model.get("quantization", None)
+        if quantization:
+            llm_kwargs["quantization"] = quantization
+            log.info(f"Using quantization: {quantization}")
+        llm = LLM(**llm_kwargs)
 
         # Create sampling params (will be updated by strategy)
         sampling_params = SamplingParams(
