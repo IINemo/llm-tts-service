@@ -3,7 +3,7 @@
 #
 # Beam Search with Self-Verification Scorer (Tree of Thoughts paper)
 # Uses vLLM for local GPU inference on Minerva Math dataset
-# Model: LLM360/K2-Think-V2 (70B)
+# Model: LLM360/K2-Think (33B)
 #
 # Based on: "Tree of Thoughts: Deliberate Problem Solving with Large Language Models"
 # Paper: https://arxiv.org/abs/2305.10601
@@ -28,8 +28,8 @@ wandb_project: llm-tts-eval-minerva-math
 # Model configuration (vLLM backend) - K2-Think-V2 (70B)
 model:
   type: vllm
-  model_path: "kaitchup/K2-V2-Instruct-fp8-dynamic"
-  gpu_memory_utilization: 0.95
+  model_path: "LLM360/K2-Think"
+  gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -60,8 +60,8 @@ strategy:
   batch_generation: true
   prompt_buffer: 500
   stop_token_ids:
-    - 250019  # <|im_end|>
-    - 1       # <|end_of_text|>
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
   min_step_tokens: 10
   max_step_tokens: 256
   use_sequence: true
