@@ -12,15 +12,18 @@ DEFAULT_DOCKER_ARGS = (
 )
 
 # Check GPU info, fix apt GPG signature issues
+# NOTE: ClearML flattens this to one line with ";", so no curly-brace groups allowed
 DOCKER_BASH_SETUP = r"""
-echo "=== Installing git ==="
-rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
-apt-get clean
-apt-get update -qq && apt-get install -y -qq git || {
-    echo "apt-get failed, trying with --allow-unauthenticated..."
-    apt-get update --allow-insecure-repositories -qq
-    apt-get install -y -qq --allow-unauthenticated git || true
-}
+echo "=== Disk before cleanup ==="
+df -h /
+rm -rf /root/.clearml/venvs-cache/* /root/.clearml/pip-download-cache/* /var/cache/apt/archives/*.deb
+echo "=== Disk after cleanup ==="
+df -h /
+mkdir -p /tmp/apt-archives/partial
+rm -rf /var/lib/apt/lists/*
+apt-get -o dir::cache::archives=/tmp/apt-archives update --allow-insecure-repositories -qq
+apt-get -o dir::cache::archives=/tmp/apt-archives install -y -qq --allow-unauthenticated --no-install-recommends git
+git --version || echo "ERROR: git installation failed"
 echo "=== GPU Info ==="
 nvidia-smi
 echo "=== CUDA Version ==="
