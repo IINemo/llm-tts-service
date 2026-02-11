@@ -7,6 +7,7 @@ Uses the same functions and flow as:
 """
 
 import logging
+import multiprocessing
 import re
 
 from tqdm import tqdm
@@ -15,6 +16,43 @@ from .grader import math_equal
 from .parser import STRIP_EXCEPTIONS, extract_answer, strip_string
 
 log = logging.getLogger()
+
+_MATH_EQUAL_TIMEOUT = 30  # seconds
+
+
+def _math_equal_worker(pred, gold, result_queue):
+    """Worker function for subprocess-safe math_equal."""
+    try:
+        result = math_equal(pred, gold)
+        result_queue.put(result)
+    except BaseException:
+        result_queue.put(False)
+
+
+def math_equal_safe(pred: str, gold: str, timeout: int = _MATH_EQUAL_TIMEOUT) -> bool:
+    """Run math_equal in a separate process to survive hard crashes (ANTLR segfaults, etc.)."""
+    result_queue = multiprocessing.Queue()
+    proc = multiprocessing.Process(
+        target=_math_equal_worker, args=(pred, gold, result_queue)
+    )
+    proc.start()
+    proc.join(timeout=timeout)
+    if proc.is_alive():
+        proc.kill()
+        proc.join()
+        log.warning(
+            f"math_equal timed out after {timeout}s: pred={repr(pred)}, gold={repr(gold)}"
+        )
+        return False
+    if proc.exitcode != 0:
+        log.warning(
+            f"math_equal crashed (exit code {proc.exitcode}): pred={repr(pred)}, gold={repr(gold)}"
+        )
+        return False
+    try:
+        return result_queue.get_nowait()
+    except Exception:
+        return False
 
 
 def _normalize_gold_answer(gold_answer: str, data_name: str) -> str:
@@ -141,7 +179,7 @@ class EvaluatorExactMatch:
             log.info(
                 f"_score_single BEFORE math_equal: pred={repr(pred)}, gold={repr(gold)}"
             )
-            result = math_equal(pred, gold)
+            result = math_equal_safe(pred, gold)
             log.info(f"_score_single AFTER math_equal: result={result}")
             return 1.0 if result else 0.0
         except Exception as e:
@@ -178,7 +216,7 @@ class EvaluatorExactMatch:
                 log.info(
                     f"__call__ idx={idx} BEFORE math_equal: pred={repr(pred)}, gold={repr(gold_normalized)}"
                 )
-                result = math_equal(pred, gold_normalized)
+                result = math_equal_safe(pred, gold_normalized)
                 log.info(f"__call__ idx={idx} AFTER math_equal: result={result}")
                 scores.append(1.0 if result else 0.0)
             except Exception as e:
