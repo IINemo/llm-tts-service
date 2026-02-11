@@ -28,14 +28,13 @@ wandb_project: llm-tts-eval-minerva-math
 # Model configuration (vLLM backend) - K2-Think-V2 (70B)
 model:
   type: vllm
-  model_path: "LLM360/K2-Think-V2"
+  model_path: "kaitchup/K2-V2-Instruct-fp8-dynamic"
   gpu_memory_utilization: 0.95
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 4096
   disable_thinking_mode: true
-  quantization: fp8
 
 # System configuration
 system:
