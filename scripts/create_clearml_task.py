@@ -11,8 +11,16 @@ DEFAULT_DOCKER_ARGS = (
     "--entrypoint= --shm-size=8g -e SKIP_LM_POLYGRAPH=1 -e OPENROUTER_API_KEY"
 )
 
-# Check GPU info
+# Check GPU info, fix apt GPG signature issues
 DOCKER_BASH_SETUP = r"""
+echo "=== Installing git ==="
+rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+apt-get clean
+apt-get update -qq && apt-get install -y -qq git || {
+    echo "apt-get failed, trying with --allow-unauthenticated..."
+    apt-get update --allow-insecure-repositories -qq
+    apt-get install -y -qq --allow-unauthenticated git || true
+}
 echo "=== GPU Info ==="
 nvidia-smi
 echo "=== CUDA Version ==="
