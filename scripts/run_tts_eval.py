@@ -617,8 +617,11 @@ def _create_api_model_for_scorer(model_cfg):
 
     provider = model_cfg.get("provider")
     base_url = model_cfg.get("base_url")
+    api_key_env = model_cfg.get("api_key_env")
 
-    if provider == "openrouter":
+    if api_key_env:
+        api_key = model_cfg.get("api_key") or os.getenv(api_key_env)
+    elif provider == "openrouter":
         api_key = model_cfg.get("api_key") or os.getenv("OPENROUTER_API_KEY")
         if base_url is None:
             base_url = "https://openrouter.ai/api/v1"
