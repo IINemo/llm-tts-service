@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import json
+
 from clearml import Task
 
 # vLLM v0.12.0 with CUDA 12.1 (compatible with older drivers)
@@ -55,7 +57,7 @@ def create_task(
     # Hydra args (same format as working task)
     task.set_parameter("HydraArgs/config_path", config_path)
     task.set_parameter("HydraArgs/config_name", config_name)
-    task.set_parameter("HydraArgs/overrides", str(overrides))
+    task.set_parameter("HydraArgs/overrides", json.dumps(overrides))
 
     print(f"Created task: {task.id}")
     Task.enqueue(task, queue_name=queue_name)
