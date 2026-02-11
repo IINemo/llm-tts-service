@@ -96,11 +96,11 @@ class StrategyUncertaintyCoT(StrategyBase):
                     request_chat, trajectory_steps
                 )
             elif self.uncertainty_sampling_mode == "sequence":
-                self.step_generator.max_new_tokens = self.max_new_tokens
                 initial_candidate = self.step_generator(
                     request_chat,
                     trajectory_steps,
                     candidates_per_step=1,
+                    max_tokens_override=self.max_new_tokens,
                 )[0]
                 if not initial_candidate:
                     raise RuntimeError("Initial generation returned no candidates")
@@ -112,13 +112,13 @@ class StrategyUncertaintyCoT(StrategyBase):
 
             # 2) Branch based on uncertainty
             use_cot = bool(initial_uncertainty > self.uncertainty_threshold)
-            self.step_generator.max_new_tokens = self.max_new_tokens
             if use_cot:
                 log.info("Using multi-path completion")
                 cand_list = self.step_generator(
                     request_chat,
                     trajectory_steps,
                     candidates_per_step=self.candidates_per_step,
+                    max_tokens_override=self.max_new_tokens,
                 )
                 if not cand_list:
                     raise RuntimeError("No candidates returned for CoT branch")
@@ -153,6 +153,7 @@ class StrategyUncertaintyCoT(StrategyBase):
                         request_chat,
                         trajectory_steps,
                         candidates_per_step=1,
+                        max_tokens_override=self.max_new_tokens,
                     )[0]
                     if not initial_candidate:
                         raise RuntimeError(
@@ -268,9 +269,11 @@ class StrategyUncertaintyCoT(StrategyBase):
     def _probe_token_uncertainty(
         self, request_chat: List[Dict[str, str]], trajectory_steps: List[Any]
     ) -> Optional[float]:
-        self.step_generator.max_new_tokens = 1
         probe = self.step_generator(
-            request_chat, trajectory_steps, candidates_per_step=1
+            request_chat,
+            trajectory_steps,
+            candidates_per_step=1,
+            max_tokens_override=1,
         )
         if not probe:
             raise RuntimeError("Token-level probe generation returned no candidates")
