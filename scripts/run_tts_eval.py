@@ -394,7 +394,6 @@ def create_model(config):
             max_model_len=config.model.get(
                 "max_context_budget", config.model.get("max_model_len", 32768)
             ),
-            enforce_eager=config.model.get("enforce_eager", False),
             seed=config.system.seed,  # Reproducibility
         )
         quantization = config.model.get("quantization", None)
