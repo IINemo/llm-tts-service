@@ -34,11 +34,13 @@ class StepCandidate:
         generation_scores: Optional[torch.Tensor] = None,
         raw_text: str = None,
         other_data: Dict[str, Any] = None,
+        is_thinking_complete: bool = False,
     ):
         self.text = text
         self.token_ids = token_ids
         self.is_complete = is_complete
         self.is_trajectory_complete = is_trajectory_complete
+        self.is_thinking_complete = is_thinking_complete
         self.generation_scores = generation_scores
         self.raw_text = raw_text or text
         self.other_data = other_data

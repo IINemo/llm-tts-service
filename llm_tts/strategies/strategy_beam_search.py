@@ -225,8 +225,8 @@ class StrategyBeamSearch(StrategyBase):
             for sample_id in active_samples:
                 for beam_idx, beam in enumerate(sample_beams[sample_id]):
 
-                    # Never expand a completed beam
-                    if beam["steps"] and beam["steps"][-1].is_trajectory_complete:
+                    # Never expand a completed beam (trajectory done or thinking done)
+                    if beam["steps"] and (beam["steps"][-1].is_trajectory_complete or beam["steps"][-1].is_thinking_complete):
                         continue
 
                     beam_tokens = beam.get("total_tokens", 0)
@@ -288,19 +288,22 @@ class StrategyBeamSearch(StrategyBase):
                         text = candidate.text
                         token_ids = list(candidate.token_ids)
                         is_trajectory_complete = candidate.is_trajectory_complete
+                        is_thinking_complete = candidate.is_thinking_complete
 
                         # Additional beam search checks not in generator:
                         # Check if we can extract a valid boxed answer from FULL trajectory
-                        full_traj_text = (
-                            convert_trajectory_to_string(parent_beam["steps"]) + text
-                        )
-                        has_boxed = bool(extract_answer(full_traj_text, "boxed"))
-                        if has_boxed:
-                            is_trajectory_complete = True
+                        # (skip for thinking-mode steps — boxed inside <think> is not final)
+                        if not is_thinking_complete:
+                            full_traj_text = (
+                                convert_trajectory_to_string(parent_beam["steps"]) + text
+                            )
+                            has_boxed = bool(extract_answer(full_traj_text, "boxed"))
+                            if has_boxed:
+                                is_trajectory_complete = True
 
-                        # Detect garbage/degenerate output (emojis, CJK, unusual unicode)
-                        if _detect_garbage(text):
-                            is_trajectory_complete = True
+                            # Detect garbage/degenerate output (emojis, CJK, unusual unicode)
+                            if _detect_garbage(text):
+                                is_trajectory_complete = True
 
                         data = candidate.other_data if candidate.other_data else {}
                         uncertainty = data.get("uncertainty_score")
@@ -323,6 +326,7 @@ class StrategyBeamSearch(StrategyBase):
                                 "uncertainty": uncertainty,
                                 "validity": validity,
                                 "is_complete": is_trajectory_complete,
+                                "is_thinking_complete": is_thinking_complete,
                                 "sample_id": sample_id,
                                 "beam_idx": beam_idx,
                                 "parent_beam": parent_beam,
@@ -350,6 +354,7 @@ class StrategyBeamSearch(StrategyBase):
                         token_ids=cand_data["token_ids"],
                         is_complete=True,
                         is_trajectory_complete=cand_data["is_complete"],
+                        is_thinking_complete=cand_data.get("is_thinking_complete", False),
                         other_data={
                             "validity_score": cand_data["validity"],
                             "uncertainty_score": cand_data["uncertainty"],
@@ -699,7 +704,7 @@ class StrategyBeamSearch(StrategyBase):
         completed = []
         active = []
         for b in beams:
-            if b["steps"] and b["steps"][-1].is_trajectory_complete:
+            if b["steps"] and (b["steps"][-1].is_trajectory_complete or b["steps"][-1].is_thinking_complete):
                 completed.append(b)
             else:
                 active.append(b)

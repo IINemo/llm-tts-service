@@ -363,14 +363,12 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 )
                 last_selected[sample_idx] = chosen
 
-                # Check for thinking mode completion (`<end of response>` token)
+                # Check for thinking mode completion
                 if (
                     getattr(self.step_generator, "thinking_mode", False)
-                    and "</think>" in chosen.text
+                    and chosen.is_thinking_complete
                 ):
                     # Thinking phase complete: mark for final answer generation
-                    # Reset is_trajectory_complete — the answer phase will complete it
-                    chosen.is_trajectory_complete = False
                     completed[sample_idx] = True
                     needs_final_answer[sample_idx] = True
                     scores_str = ", ".join(

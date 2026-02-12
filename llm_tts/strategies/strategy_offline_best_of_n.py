@@ -229,7 +229,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         # Thinking mode: stopped at </think>, needs answer generation
         if (
             getattr(self.step_generator, "thinking_mode", False)
-            and "</think>" in candidate.text
+            and candidate.is_thinking_complete
         ):
             # Use candidate.text for splitting — it has </think> appended back
             # (candidate.raw_text is vLLM output which strips stop strings)

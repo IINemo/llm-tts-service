@@ -661,6 +661,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 stop_reason = getattr(output, "stop_reason", None)
 
                 # Mode-specific text processing and completion detection
+                is_thinking_complete = False
                 if self.thinking_mode:
                     text = raw_text
 
@@ -671,6 +672,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     # Append </think> back to text so downstream can detect it
                     if stop_reason == "</think>" and "</think>" not in text:
                         text = text + "</think>"
+
+                    if thinking_complete:
+                        is_thinking_complete = True
 
                     # Handle max tokens - only truncate if we actually hit the limit
                     # stop_reason=None can mean EOS token ID stop (complete) or max tokens
@@ -757,10 +761,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
                 # Determine completion reason
                 completion_reason = None
-                if is_trajectory_complete:
-                    if self.thinking_mode and "</think>" in step_text:
-                        completion_reason = CompletionReason.THINKING_COMPLETE
-                    elif not self.thinking_mode:
+                if is_thinking_complete:
+                    completion_reason = CompletionReason.THINKING_COMPLETE
+                elif is_trajectory_complete:
+                    if not self.thinking_mode:
                         if stopped_at_eos:
                             completion_reason = CompletionReason.EOS_PATTERN
                         elif stopped_at_answer:
@@ -781,6 +785,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 if completion_reason:
                     candidate.other_data["completion_reason"] = completion_reason
 
+                candidate.is_thinking_complete = is_thinking_complete
                 candidates.append(candidate)
 
             # Post-generation context limit check for this trajectory
@@ -791,7 +796,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
                 # After thinking is complete, we only need room for the answer
                 thinking_done = self.thinking_mode and any(
-                    "</think>" in c.text
+                    c.is_thinking_complete
                     or c.other_data.get("completion_reason")
                     == CompletionReason.THINKING_COMPLETE
                     for c in candidates
@@ -885,9 +890,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             candidate = self._process_generation_output(
                 output=output,
                 final_text=text.strip(),
-                is_trajectory_complete=True,
+                is_trajectory_complete=False,
                 idx=idx,
             )
+            candidate.is_thinking_complete = True
             candidates.append(candidate)
 
         # Record token usage for FLOP calculation
@@ -1185,7 +1191,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                         text="\n</think>\n\n<start of response>\nReasoning Steps:\n",
                         token_ids=[],
                         is_complete=True,
-                        is_trajectory_complete=True,
+                        is_trajectory_complete=False,
+                        is_thinking_complete=True,
                     )
                     trajectory = trajectory + [close_thinking_step]
             processed_trajectories.append(trajectory)
@@ -1203,6 +1210,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         for candidates in results:
             for c in candidates:
                 c.is_trajectory_complete = True
+                c.is_thinking_complete = True
                 if self.thinking_mode:
                     for pattern in self.answer_patterns:
                         if pattern not in c.text:

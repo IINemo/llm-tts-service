@@ -105,7 +105,7 @@ class StrategySelfConsistency(StrategyBase):
         for i, candidate in enumerate(candidates):
             if (
                 getattr(self.step_generator, "thinking_mode", False)
-                and "</think>" in candidate.text
+                and candidate.is_thinking_complete
                 and not candidate.is_trajectory_complete
             ):
                 thinking_indices.append(i)

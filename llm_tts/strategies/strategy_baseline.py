@@ -105,7 +105,7 @@ class StrategyBaseline(StrategyBase):
         # Thinking mode: step 1 produces <think>...</think>, step 2 generates final answer
         if (
             getattr(self.step_generator, "thinking_mode", False)
-            and "</think>" in candidate.text
+            and candidate.is_thinking_complete
             and not candidate.is_trajectory_complete
         ):
             log.info("Thinking phase complete, generating final answer (step 2)")
@@ -290,7 +290,7 @@ class StrategyBaseline(StrategyBase):
                 candidate = candidates[0]
                 if (
                     getattr(self.step_generator, "thinking_mode", False)
-                    and "</think>" in candidate.text
+                    and candidate.is_thinking_complete
                     and not candidate.is_trajectory_complete
                 ):
                     thinking_indices.append(idx)

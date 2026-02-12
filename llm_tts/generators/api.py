@@ -596,10 +596,11 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             is_streaming: Whether this came from streaming (n=1) path.
 
         Returns:
-            Tuple of (processed_text, is_trajectory_complete, completion_reason).
+            Tuple of (processed_text, is_trajectory_complete, completion_reason, is_thinking_complete).
         """
         text = raw_text
         is_trajectory_complete = False
+        is_thinking_complete = False
         completion_reason = None
 
         if self.thinking_mode:
@@ -608,7 +609,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             if thinking_complete:
                 think_pos = text.find("</think>")
                 text = text[: think_pos + len("</think>")]
-                is_trajectory_complete = True
+                is_thinking_complete = True
                 completion_reason = CompletionReason.THINKING_COMPLETE
 
             # Handle repetitions
@@ -658,7 +659,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 else:
                     completion_reason = CompletionReason.EOS_PATTERN
 
-        return text, is_trajectory_complete, completion_reason
+        return text, is_trajectory_complete, completion_reason, is_thinking_complete
 
     def _generate_step_candidates_impl(
         self,
@@ -888,18 +889,28 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     text = step_text or raw_text
 
                     # Additional completion checks
+                    is_thinking_complete = False
                     if not traj_complete:
-                        _, traj_complete, completion_reason = (
+                        _, traj_complete, completion_reason, is_thinking_complete = (
                             self._process_candidate_text(
                                 text, token_count, is_streaming=True
                             )
                         )
                     else:
-                        completion_reason = CompletionReason.EOS_PATTERN
+                        # BoundaryEarlyStopping set trajectory_complete=True.
+                        # In thinking mode, </think> means thinking is done but
+                        # the trajectory still needs an answer phase.
+                        if self.thinking_mode and "</think>" in (raw_collected or text):
+                            is_thinking_complete = True
+                            traj_complete = False
+                            completion_reason = CompletionReason.THINKING_COMPLETE
+                        else:
+                            completion_reason = CompletionReason.EOS_PATTERN
                 else:
                     step_text = ""
+                    is_thinking_complete = False
                     # Batch path — process text for completion
-                    text, traj_complete, completion_reason = (
+                    text, traj_complete, completion_reason, is_thinking_complete = (
                         self._process_candidate_text(
                             raw_text, token_count, is_streaming=False
                         )
@@ -973,6 +984,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 if completion_reason:
                     candidate.other_data["completion_reason"] = completion_reason
 
+                candidate.is_thinking_complete = is_thinking_complete
                 candidates.append(candidate)
 
             # Emit all scoring lines for this sample as one log message
@@ -992,7 +1004,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
                 # After thinking is complete, we only need room for the answer
                 thinking_done = self.thinking_mode and any(
-                    "</think>" in c.text
+                    c.is_thinking_complete
                     or (
                         c.other_data
                         and c.other_data.get("completion_reason")
@@ -1114,7 +1126,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                         text="\n</think>\n\n<start of response>\nReasoning Steps:\n",
                         token_ids=[],
                         is_complete=True,
-                        is_trajectory_complete=True,
+                        is_trajectory_complete=False,
+                        is_thinking_complete=True,
                     )
                     trajectory = trajectory + [close_thinking_step]
             processed_trajectories.append(trajectory)
@@ -1132,6 +1145,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         for candidates in results:
             for c in candidates:
                 c.is_trajectory_complete = True
+                c.is_thinking_complete = True
 
         return results
 
