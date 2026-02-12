@@ -38,6 +38,7 @@ generation:
   top_p: 0.8
   top_k: 20
   batch_size: 512
+  checkpoint_batch_size: 4
   max_length: 8192
 
 # Strategy - Adaptive Scaling
