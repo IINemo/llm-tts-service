@@ -273,7 +273,10 @@ class StrategyOnlineBestOfN(StrategyBase):
 
                 # Check if full trajectory contains a boxed answer
                 # (skip for thinking-mode steps — boxed inside <think> is not final)
-                if not selected.is_trajectory_complete and not selected.is_thinking_complete:
+                if (
+                    not selected.is_trajectory_complete
+                    and not selected.is_thinking_complete
+                ):
                     full_traj_text = (
                         convert_trajectory_to_string(trajectories[sample_id])
                         + selected.text
@@ -288,8 +291,10 @@ class StrategyOnlineBestOfN(StrategyBase):
 
                 # Detect garbage/degenerate output
                 # (skip for thinking-mode steps — answer phase still needed)
-                if not selected.is_trajectory_complete and not selected.is_thinking_complete and _detect_garbage(
-                    selected.text
+                if (
+                    not selected.is_trajectory_complete
+                    and not selected.is_thinking_complete
+                    and _detect_garbage(selected.text)
                 ):
                     selected.is_trajectory_complete = True
                     forced_complete = True
@@ -748,7 +753,10 @@ class StrategyOnlineBestOfN(StrategyBase):
             forced_complete = False
 
             # Skip boxed/garbage checks for thinking-mode steps (answer phase still needed)
-            if not selected.is_trajectory_complete and not selected.is_thinking_complete:
+            if (
+                not selected.is_trajectory_complete
+                and not selected.is_thinking_complete
+            ):
                 full_traj_text = (
                     convert_trajectory_to_string(trajectory) + selected.text
                 )
@@ -758,7 +766,11 @@ class StrategyOnlineBestOfN(StrategyBase):
                     forced_complete = True
                     log.info(f"Sample {sample_idx}: Boxed answer detected")
 
-            if not selected.is_trajectory_complete and not selected.is_thinking_complete and _detect_garbage(selected.text):
+            if (
+                not selected.is_trajectory_complete
+                and not selected.is_thinking_complete
+                and _detect_garbage(selected.text)
+            ):
                 selected.is_trajectory_complete = True
                 forced_complete = True
                 log.info(

@@ -188,7 +188,11 @@ class StrategyUncertaintyCoT(StrategyBase):
                 # Answer is already embedded in the last reasoning step
                 answer_step_text = chosen.raw_text if chosen.raw_text else chosen.text
                 break
-            if chosen.is_trajectory_complete or chosen.is_thinking_complete or step_num == self.max_steps - 1:
+            if (
+                chosen.is_trajectory_complete
+                or chosen.is_thinking_complete
+                or step_num == self.max_steps - 1
+            ):
                 # Generate answer only in thinking mode — non-thinking mode
                 # produces the answer naturally in the last reasoning step.
                 if getattr(self.step_generator, "thinking_mode", False):

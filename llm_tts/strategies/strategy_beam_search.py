@@ -226,7 +226,10 @@ class StrategyBeamSearch(StrategyBase):
                 for beam_idx, beam in enumerate(sample_beams[sample_id]):
 
                     # Never expand a completed beam (trajectory done or thinking done)
-                    if beam["steps"] and (beam["steps"][-1].is_trajectory_complete or beam["steps"][-1].is_thinking_complete):
+                    if beam["steps"] and (
+                        beam["steps"][-1].is_trajectory_complete
+                        or beam["steps"][-1].is_thinking_complete
+                    ):
                         continue
 
                     beam_tokens = beam.get("total_tokens", 0)
@@ -295,7 +298,8 @@ class StrategyBeamSearch(StrategyBase):
                         # (skip for thinking-mode steps — boxed inside <think> is not final)
                         if not is_thinking_complete:
                             full_traj_text = (
-                                convert_trajectory_to_string(parent_beam["steps"]) + text
+                                convert_trajectory_to_string(parent_beam["steps"])
+                                + text
                             )
                             has_boxed = bool(extract_answer(full_traj_text, "boxed"))
                             if has_boxed:
@@ -354,7 +358,9 @@ class StrategyBeamSearch(StrategyBase):
                         token_ids=cand_data["token_ids"],
                         is_complete=True,
                         is_trajectory_complete=cand_data["is_complete"],
-                        is_thinking_complete=cand_data.get("is_thinking_complete", False),
+                        is_thinking_complete=cand_data.get(
+                            "is_thinking_complete", False
+                        ),
                         other_data={
                             "validity_score": cand_data["validity"],
                             "uncertainty_score": cand_data["uncertainty"],
@@ -704,7 +710,10 @@ class StrategyBeamSearch(StrategyBase):
         completed = []
         active = []
         for b in beams:
-            if b["steps"] and (b["steps"][-1].is_trajectory_complete or b["steps"][-1].is_thinking_complete):
+            if b["steps"] and (
+                b["steps"][-1].is_trajectory_complete
+                or b["steps"][-1].is_thinking_complete
+            ):
                 completed.append(b)
             else:
                 active.append(b)
