@@ -472,6 +472,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         is_trajectory_complete: bool,
         idx: int,
         target_text: Optional[str] = None,
+        raw_text: Optional[str] = None,
         raw_text_for_log: Optional[str] = None,
         step_text_for_log: Optional[str] = None,
         path_idx: Optional[int] = None,
@@ -487,6 +488,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             is_trajectory_complete: Whether this completes the trajectory
             idx: Candidate index for logging
             target_text: Text to match for token prefix finding (default: output.text)
+            raw_text: Raw text to store in candidate (default: output.text)
             raw_text_for_log: Raw text for non-thinking mode logging
             step_text_for_log: Step text for non-thinking mode logging
             path_idx: Path index for batch generation logging
@@ -497,6 +499,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         token_ids = output.token_ids
         logprobs = output.logprobs
         stop_reason = getattr(output, "stop_reason", None)
+
+        if raw_text is None:
+            raw_text = output.text
 
         # Find best token prefix (exclude stop tokens from scoring)
         scoring_target = target_text if target_text is not None else output.text
@@ -520,7 +525,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             logprobs=logprobs,
             best_prefix_len=best_prefix_len,
             is_trajectory_complete=is_trajectory_complete,
-            raw_text=output.text,
+            raw_text=raw_text,
         )
 
     def _generate_step_candidates_impl(
@@ -777,6 +782,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     is_trajectory_complete=is_trajectory_complete,
                     idx=cand_idx,
                     target_text=target_text,
+                    raw_text=text if self.thinking_mode else None,
                     raw_text_for_log=raw_text if not self.thinking_mode else None,
                     step_text_for_log=step_text if not self.thinking_mode else None,
                     path_idx=traj_idx if len(trajectories) > 1 else None,
@@ -1188,7 +1194,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                         "</think>. Adding closing step."
                     )
                     close_thinking_step = StepCandidate(
-                        text="\n</think>\n\n<start of response>\nReasoning Steps:\n",
+                        text="</think>",
                         token_ids=[],
                         is_complete=True,
                         is_trajectory_complete=False,

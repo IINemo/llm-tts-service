@@ -1123,7 +1123,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                         "</think>. Adding closing step."
                     )
                     close_thinking_step = StepCandidate(
-                        text="\n</think>\n\n<start of response>\nReasoning Steps:\n",
+                        text="</think>",
                         token_ids=[],
                         is_complete=True,
                         is_trajectory_complete=False,
