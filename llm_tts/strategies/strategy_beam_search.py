@@ -180,8 +180,8 @@ class StrategyBeamSearch(StrategyBase):
         # Calculated as min of:
         #   1. max_context_budget - prompt_buffer (leave room for prompt)
         #   2. max_steps * max_step_tokens (theoretical max from step limits)
-        max_context_budget = getattr(self.step_generator, "max_context_budget", 4096)
-        max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
+        max_context_budget = getattr(self.step_generator, "context_budget", 4096)
+        max_step_tokens = getattr(self.step_generator, "step_token_limit", 256)
         max_trajectory_tokens = max(
             0,
             min(

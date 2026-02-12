@@ -42,7 +42,6 @@ class StrategyUncertaintyCoT(StrategyBase):
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
         self.max_empty_steps = max_empty_steps
-        self.max_new_tokens = step_generator.max_new_tokens
         self.uncertainty_threshold = uncertainty_threshold
         self.uncertainty_sampling_mode = uncertainty_sampling.lower()
 
@@ -96,7 +95,6 @@ class StrategyUncertaintyCoT(StrategyBase):
                     request_chat, trajectory_steps
                 )
             elif self.uncertainty_sampling_mode == "sequence":
-                self.step_generator.max_new_tokens = self.max_new_tokens
                 initial_candidate = self.step_generator(
                     request_chat,
                     trajectory_steps,
@@ -112,7 +110,6 @@ class StrategyUncertaintyCoT(StrategyBase):
 
             # 2) Branch based on uncertainty
             use_cot = bool(initial_uncertainty > self.uncertainty_threshold)
-            self.step_generator.max_new_tokens = self.max_new_tokens
             if use_cot:
                 log.info("Using multi-path completion")
                 cand_list = self.step_generator(
@@ -192,9 +189,12 @@ class StrategyUncertaintyCoT(StrategyBase):
                 answer_step_text = chosen.raw_text if chosen.raw_text else chosen.text
                 break
             if chosen.is_trajectory_complete or step_num == self.max_steps - 1:
-                answer_step_text = self._generate_answer_step(
-                    request_chat, trajectory_steps, trajectory_all
-                )
+                # Generate answer only in thinking mode — non-thinking mode
+                # produces the answer naturally in the last reasoning step.
+                if getattr(self.step_generator, "thinking_mode", False):
+                    answer_step_text = self._generate_answer_step(
+                        request_chat, trajectory_steps, trajectory_all
+                    )
                 break
 
         # Finalize and capture token stats
@@ -268,7 +268,7 @@ class StrategyUncertaintyCoT(StrategyBase):
     def _probe_token_uncertainty(
         self, request_chat: List[Dict[str, str]], trajectory_steps: List[Any]
     ) -> Optional[float]:
-        self.step_generator.max_new_tokens = 1
+        self.step_generator.generation_limit = 1
         probe = self.step_generator(
             request_chat, trajectory_steps, candidates_per_step=1
         )

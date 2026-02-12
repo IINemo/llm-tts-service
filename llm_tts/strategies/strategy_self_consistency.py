@@ -215,7 +215,7 @@ class StrategySelfConsistency(StrategyBase):
             trajectories=[[]],
             candidates_per_step=self.num_paths,
             stop_tokens_override=stop_tokens,
-            max_tokens_override=self.step_generator.max_new_tokens,
+            max_tokens=self.step_generator.generation_limit,
             compute_uncertainty=False,
             sample_ids=[0],
         )
@@ -399,7 +399,7 @@ class StrategySelfConsistency(StrategyBase):
             trajectories=[[]] * M,
             candidates_per_step=N,
             stop_tokens_override=stop_tokens,
-            max_tokens_override=self.step_generator.max_new_tokens,
+            max_tokens=self.step_generator.generation_limit,
             compute_uncertainty=False,
             sample_ids=list(range(M)),
         )

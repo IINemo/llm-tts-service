@@ -72,33 +72,6 @@ class AdaptiveScalingBestOfN(StrategyBase):
         best_idx = max(range(len(scores)), key=lambda i: scores[i])
         return best_idx, candidates[best_idx]
 
-    def _generate_final_answer(
-        self, chat: List[Dict[str, str]], trajectory: List[StepCandidate]
-    ) -> tuple:
-        """Generate and select best final answer based on criterion"""
-
-        # Generate answer candidates in batches if needed
-        answer_candidates = self.step_generator.generate_answer_candidates(
-            chat, trajectory=trajectory, candidates_per_step=self.candidates_per_step
-        )
-
-        # Score answer candidates
-        answer_validity_scores = self.scorer.score_candidates(
-            chat, answer_candidates, trajectory=trajectory
-        )
-
-        # Select best answer based on criterion
-        best_idx, _ = self._select_best_candidate(
-            answer_candidates, answer_validity_scores
-        )
-
-        log.info(f"Generated {len(answer_candidates)} answer candidates")
-        log.info(f"Selected answer {best_idx}")
-        log.info(f"Validity: {answer_validity_scores[best_idx]:.3f}")
-        log.info(f"Text: {answer_candidates[best_idx].text}")
-
-        return answer_candidates[best_idx], answer_validity_scores[best_idx]
-
     def generate_trajectory_mini_batch(
         self,
         requests: List[List[Dict[str, str]]],
@@ -470,7 +443,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
             if needs_final_answer[idx]:
                 to_finalize.append(idx)
 
-        if to_finalize:
+        # Generate final answers only in thinking mode — non-thinking mode
+        # produces the answer naturally in the last reasoning step.
+        thinking_mode = getattr(self.step_generator, "thinking_mode", False)
+        if to_finalize and thinking_mode:
             log.info(
                 f"Generating final answers for {len(to_finalize)} samples "
                 f"(samples: {[sample_idxs[i] for i in to_finalize]})"

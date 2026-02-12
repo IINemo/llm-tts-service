@@ -399,7 +399,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             trajectories=[[] for _ in range(M)],
             candidates_per_step=N,
             stop_tokens_override=stop_tokens,
-            max_tokens_override=self.step_generator.max_new_tokens,
+            max_tokens=self.step_generator.generation_limit,
             compute_uncertainty=use_uncertainty_wrapper,
             sample_ids=list(range(M)),
         )

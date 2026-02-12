@@ -109,8 +109,8 @@ class StrategyOnlineBestOfN(StrategyBase):
             self.scorer.reset_prm_stats()
 
         # Context limit for trajectories
-        max_context_budget = getattr(self.step_generator, "max_context_budget", 4096)
-        max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
+        max_context_budget = getattr(self.step_generator, "context_budget", 4096)
+        max_step_tokens = getattr(self.step_generator, "step_token_limit", 256)
         max_trajectory_tokens = min(
             max_context_budget - self.prompt_buffer,
             self.max_steps * max_step_tokens,
@@ -378,8 +378,10 @@ class StrategyOnlineBestOfN(StrategyBase):
             if needs_final_answer[i]:
                 to_finalize.append(i)
 
-        # 10. Batch generate final answers
-        if to_finalize:
+        # 10. Batch generate final answers (thinking mode only —
+        #     non-thinking mode produces the answer naturally in reasoning steps)
+        thinking_mode = getattr(self.step_generator, "thinking_mode", False)
+        if to_finalize and thinking_mode:
             log.info(
                 f"Generating final answers for {len(to_finalize)} samples "
                 f"(samples: {[sample_indices[i] for i in to_finalize]})"
@@ -571,8 +573,8 @@ class StrategyOnlineBestOfN(StrategyBase):
         )
 
         # Context limit
-        max_context_budget = getattr(self.step_generator, "max_context_budget", 4096)
-        max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
+        max_context_budget = getattr(self.step_generator, "context_budget", 4096)
+        max_step_tokens = getattr(self.step_generator, "step_token_limit", 256)
         max_trajectory_tokens = min(
             max_context_budget - self.prompt_buffer,
             self.max_steps * max_step_tokens,
@@ -838,7 +840,10 @@ class StrategyOnlineBestOfN(StrategyBase):
             # Thinking complete but still need answer phase
             needs_final = True
 
-        if needs_final:
+        # Generate final answer only in thinking mode — non-thinking mode
+        # produces the answer naturally in the last reasoning step.
+        thinking_mode = getattr(self.step_generator, "thinking_mode", False)
+        if needs_final and thinking_mode:
             log.info(f"Sample {sample_idx}: Generating final answer")
             semaphore.acquire()
             try:

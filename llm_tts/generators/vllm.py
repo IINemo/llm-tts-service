@@ -93,7 +93,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         answer_patterns: Optional[List[str]] = None,
         stop_token_ids: Optional[List[int]] = None,
         max_new_tokens: int = 4096,
-        max_answer_tokens: int = 512,
         temperature: float = 0.6,
         top_p: float = 0.95,
         top_k: int = 20,
@@ -114,14 +113,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.disable_thinking_mode = disable_thinking_mode
         self.tokenizer = model.get_tokenizer()
 
-        # Store common parameters
-        self.max_new_tokens = max_new_tokens
-        self.max_answer_tokens = max_answer_tokens
+        # Store common parameters (internal names differ from config keys)
+        self.generation_limit = max_new_tokens
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
         self.presence_penalty = presence_penalty
-        self.max_context_budget = max_context_budget
+        self.context_budget = max_context_budget
 
         # Stop token IDs (e.g., [151645, 151643] for Qwen EOS)
         self.stop_token_ids = list(stop_token_ids) if stop_token_ids else None
@@ -141,9 +139,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             f"Generation parameters: temperature={self.temperature}, "
             f"top_p={self.top_p}, top_k={self.top_k}, "
             f"presence_penalty={self.presence_penalty}, "
-            f"max_new_tokens={self.max_new_tokens}, "
-            f"max_answer_tokens={self.max_answer_tokens}, "
-            f"max_context_budget={self.max_context_budget}"
+            f"generation_limit={self.generation_limit}, "
+            f"context_budget={self.context_budget}"
         )
 
     def _init_detector(self, detector: Optional[ThinkingMarkerDetector]):
@@ -160,9 +157,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.detector = detector
         self.detector.answer_patterns = self.answer_patterns
 
-        # Get min/max step tokens from detector
+        # Get min/step token limit from detector
         self.min_step_tokens = getattr(detector, "min_step_tokens", 0)
-        self.max_step_tokens = getattr(detector, "max_step_tokens", 300)
+        self.step_token_limit = getattr(detector, "max_step_tokens", 300)
 
         # Derive stop tokens from detector's use_* flags
         self.stop_tokens = detector.get_vllm_stop_tokens()
@@ -274,7 +271,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         """Create SamplingParams with specified stop tokens."""
         return SamplingParams(
             n=n,
-            max_tokens=max_tokens or self.max_new_tokens,
+            max_tokens=max_tokens or self.generation_limit,
             min_tokens=min_tokens,
             temperature=self.temperature,
             top_p=self.top_p,
@@ -532,7 +529,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
         stop_tokens_override: Optional[List[str]] = None,
-        max_tokens_override: Optional[int] = None,
+        max_tokens: Optional[int] = None,
         compute_uncertainty: bool = True,
         sample_ids: Optional[List] = None,
         beam_ids: Optional[List] = None,
@@ -548,7 +545,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             candidates_per_step: Number of candidates to generate per trajectory.
             stop_tokens_override: Override stop tokens (for full trajectory generation).
                                   If None, uses self.stop_tokens.
-            max_tokens_override: Override max tokens. If None, uses self.max_step_tokens.
+            max_tokens: Override max tokens. If None, uses self.step_token_limit.
             compute_uncertainty: If True and model supports it, compute uncertainty scores.
                 Set to False when using PRM scorer (scores computed separately).
             beam_ids: Optional list mapping each trajectory index to a beam_id.
@@ -616,17 +613,17 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             if stop_tokens_override is not None
             else self.stop_tokens
         )
-        effective_max_tokens = (
-            max_tokens_override
-            if max_tokens_override is not None
-            else self.max_step_tokens
+        max_tokens = (
+            max_tokens
+            if max_tokens is not None
+            else self.step_token_limit
         )
 
         # Create sampling params with stop tokens
         sampling_params = self._create_sampling_params(
             stop_tokens=effective_stop_tokens,
             n=candidates_per_step,
-            max_tokens=effective_max_tokens,
+            max_tokens=max_tokens,
             min_tokens=self.min_step_tokens,
         )
 
@@ -682,14 +679,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     # Handle max tokens - only truncate if we actually hit the limit
                     # stop_reason=None can mean EOS token ID stop (complete) or max tokens
                     # Check token count to distinguish
-                    # Use effective_max_tokens (respects max_tokens_override for answer phase)
                     actual_hit_max_tokens = stop_reason == "length" or (
-                        stop_reason is None and len(token_ids) >= effective_max_tokens
+                        stop_reason is None and len(token_ids) >= max_tokens
                     )
                     if actual_hit_max_tokens and not thinking_complete:
                         log.warning(
                             f"Path {traj_idx} cand {cand_idx}: hit max tokens "
-                            f"({len(token_ids)} >= {effective_max_tokens}), "
+                            f"({len(token_ids)} >= {max_tokens}), "
                             f"truncating at sentence boundary"
                         )
                         text = self._truncate_at_sentence_boundary(text)
@@ -703,7 +699,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
                     # Stopped at EOS token ID (stop_reason=None but didn't hit max)
                     stopped_at_eos = (
-                        stop_reason is None and len(token_ids) < self.max_step_tokens
+                        stop_reason is None and len(token_ids) < self.step_token_limit
                     )
 
                     is_trajectory_complete = repetition_detected or stopped_at_eos
@@ -736,7 +732,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
                     # Check for natural EOS (stop_reason is None AND didn't hit max tokens)
                     stopped_at_eos = (
-                        stop_reason is None and len(token_ids) < self.max_step_tokens
+                        stop_reason is None and len(token_ids) < self.step_token_limit
                     )
 
                     # Check if stopped at answer pattern
@@ -797,7 +793,6 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 max_gen = max(len(c.token_ids) for c in candidates)
                 total_tokens = context_tokens + max_gen
 
-                max_step = getattr(self, "max_step_tokens", 300)
                 # After thinking is complete, we only need room for the answer
                 thinking_done = self.thinking_mode and any(
                     "</think>" in c.text
@@ -805,12 +800,17 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     == CompletionReason.THINKING_COMPLETE
                     for c in candidates
                 )
-                tokens_needed = (
-                    self.max_answer_tokens
-                    if thinking_done
-                    else max_step + self.max_answer_tokens
-                )
-                remaining = self.max_context_budget - total_tokens
+                if self.thinking_mode:
+                    # Thinking mode: answer phase uses generation_limit
+                    tokens_needed = (
+                        self.generation_limit
+                        if thinking_done
+                        else self.step_token_limit + self.generation_limit
+                    )
+                else:
+                    # Non-thinking: no separate answer phase
+                    tokens_needed = self.step_token_limit
+                remaining = self.context_budget - total_tokens
 
                 if remaining < tokens_needed:
                     log.warning(
@@ -861,7 +861,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         prompt = self._build_prompt(request, [])
         context_tokens = len(self.tokenizer.encode(prompt))
-        max_tokens = max_tokens or self.max_new_tokens
+        max_tokens = max_tokens or self.generation_limit
 
         sampling_params = self._create_sampling_params(
             stop_tokens=["</think>"],
@@ -1109,7 +1109,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
         stop_tokens_override: Optional[List[str]] = None,
-        max_tokens_override: Optional[int] = None,
+        max_tokens: Optional[int] = None,
         compute_uncertainty: bool = True,
         sample_ids: Optional[List] = None,
         beam_ids: Optional[List] = None,
@@ -1125,7 +1125,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             trajectories: List of trajectories. Each trajectory is a list of StepCandidates.
             candidates_per_step: Number of candidates to generate per trajectory.
             stop_tokens_override: Override stop tokens. If None, uses self.stop_tokens.
-            max_tokens_override: Override max tokens. If None, uses self.max_step_tokens.
+            max_tokens: Override max tokens. If None, uses self.step_token_limit.
             compute_uncertainty: If True and model supports it, compute uncertainty scores.
             sample_ids: Optional list mapping each trajectory index to a sample_id.
                 If provided, per-sample token stats are recorded via record_sample_tokens().
@@ -1146,7 +1146,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             trajectories,
             candidates_per_step,
             stop_tokens_override=stop_tokens_override,
-            max_tokens_override=max_tokens_override,
+            max_tokens=max_tokens,
             compute_uncertainty=compute_uncertainty,
             sample_ids=sample_ids,
             beam_ids=beam_ids,
@@ -1189,15 +1189,13 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     trajectory = trajectory + [close_thinking_step]
             processed_trajectories.append(trajectory)
 
-        answer_max_tokens = (
-            self.max_new_tokens if self.thinking_mode else self.max_answer_tokens
-        )
+        answer_max_tokens = self.generation_limit  # Only called in thinking mode
         results = self._generate_step_candidates_impl(
             requests=requests,
             trajectories=processed_trajectories,
             candidates_per_step=candidates_per_step,
             stop_tokens_override=self.response_stop_tokens,
-            max_tokens_override=answer_max_tokens,
+            max_tokens=answer_max_tokens,
         )
 
         # Post-process: mark complete and append answer patterns for thinking mode

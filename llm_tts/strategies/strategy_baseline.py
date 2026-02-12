@@ -278,7 +278,7 @@ class StrategyBaseline(StrategyBase):
             trajectories=[[]] * M,
             candidates_per_step=1,
             stop_tokens_override=stop_tokens,
-            max_tokens_override=self.step_generator.max_new_tokens,
+            max_tokens=self.step_generator.generation_limit,
             compute_uncertainty=False,
             sample_ids=list(range(M)),
         )
