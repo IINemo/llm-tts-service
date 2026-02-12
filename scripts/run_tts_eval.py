@@ -699,7 +699,6 @@ def create_model(config):
                     [],
                 ),
                 max_new_tokens=config.generation.max_new_tokens,
-                max_answer_tokens=config.generation.get("max_answer_tokens", 512),
                 temperature=config.generation.temperature,
                 top_p=config.generation.top_p,
                 top_k=config.generation.get("top_k", 20),
