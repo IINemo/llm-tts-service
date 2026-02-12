@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/deepconf/deepconf_vllm_qwen3_aime2025_nothink
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # DeepConf Offline Mode: Qwen3-8B via vLLM on AIME 2025 (No Thinking)
 # Fast inference with PagedAttention - no OOM on long sequences
 

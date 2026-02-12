@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/uncertainty_cot/uncert_cot_vllm
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Uncertainty-aware Chain-of-Thought with vLLM (Qwen2.5-7B)
 
 defaults:

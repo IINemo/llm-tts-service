@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/gpqa_diamond/baseline_vllm_thinking_qwen3_8b_gpqa_diamond
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Baseline evaluation for Qwen3-8B (Thinking Mode) on GPQA-Diamond (graduate-level science multiple choice)
 
 defaults:
@@ -44,6 +45,7 @@ generation:
   top_p: 0.95
   top_k: 20
   batch_size: 1
+  checkpoint_batch_size: 4
 
 # Strategy - Baseline single-shot
 strategy:
