@@ -698,11 +698,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             if stop_tokens_override is not None
             else self.stop_tokens
         )
-        max_tokens = (
-            max_tokens
-            if max_tokens is not None
-            else self.step_token_limit
-        )
+        max_tokens = max_tokens if max_tokens is not None else self.step_token_limit
 
         already_complete = {}
         active_indices = []
@@ -1005,11 +1001,16 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     for c in candidates
                 )
                 if self.thinking_mode:
-                    # Thinking mode: answer phase uses generation_limit
+                    # Thinking mode: reserve room for the answer phase.
+                    # Cap at context_budget // 2 to avoid false positives
+                    # when generation_limit ≈ context_budget (e.g., both 32768).
+                    answer_reserve = min(
+                        self.generation_limit, self.context_budget // 2
+                    )
                     tokens_needed = (
-                        self.generation_limit
+                        answer_reserve
                         if thinking_done
-                        else self.step_token_limit + self.generation_limit
+                        else self.step_token_limit + answer_reserve
                     )
                 else:
                     # Non-thinking: no separate answer phase

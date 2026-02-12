@@ -268,10 +268,14 @@ class StrategyUncertaintyCoT(StrategyBase):
     def _probe_token_uncertainty(
         self, request_chat: List[Dict[str, str]], trajectory_steps: List[Any]
     ) -> Optional[float]:
+        saved_limit = self.step_generator.generation_limit
         self.step_generator.generation_limit = 1
-        probe = self.step_generator(
-            request_chat, trajectory_steps, candidates_per_step=1
-        )
+        try:
+            probe = self.step_generator(
+                request_chat, trajectory_steps, candidates_per_step=1
+            )
+        finally:
+            self.step_generator.generation_limit = saved_limit
         if not probe:
             raise RuntimeError("Token-level probe generation returned no candidates")
         return probe[0].other_data.get("uncertainty_score")
