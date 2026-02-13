@@ -24,6 +24,7 @@ from pathlib import Path
 
 import hydra
 import numpy as np
+import openai
 import torch
 from datasets import Dataset, load_dataset
 from dotenv import load_dotenv
@@ -153,6 +154,57 @@ load_dotenv()
 log = logging.getLogger(__name__)
 
 _tflops_warned = set()
+
+
+def _validate_api_keys(config):
+    """Validate that required API keys are set and working before starting experiments.
+
+    Checks all evaluators (both per-sample and batch) that need API access.
+    Fails fast with a clear error message instead of failing hours later.
+    """
+    evaluator_names = list(config.evaluation.get("evaluators", []))
+    evaluator_names += list(config.evaluation.get("batch_evaluators", []))
+
+    if "llm_judge" not in evaluator_names:
+        return
+
+    llm_cfg = config.evaluation.get("llm_judge", {})
+    provider = llm_cfg.get("provider", "openai")
+    base_url = llm_cfg.get("base_url", None)
+    model = llm_cfg.get("model", "unknown")
+
+    # Determine which key is needed
+    if provider == "openrouter":
+        key_name = "OPENROUTER_API_KEY"
+    elif provider == "deepseek":
+        key_name = "DEEPSEEK_API_KEY"
+    else:
+        key_name = "OPENAI_API_KEY"
+
+    api_key = os.environ.get(key_name)
+    if not api_key:
+        raise ValueError(
+            f"LLM judge requires {key_name} but it is not set. "
+            f"Set it in your .env file or environment. "
+            f"(provider={provider}, model={model})"
+        )
+
+    # Ping the API with a minimal request to verify the key works
+    log.info(f"Validating {key_name} for LLM judge ({provider}/{model})...")
+    try:
+        client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_completion_tokens=16,
+        )
+        log.info(f"API key validated successfully: {key_name}")
+    except Exception as e:
+        raise ValueError(
+            f"LLM judge API key validation failed for {key_name}: {e}. "
+            f"Check that your API key is valid and the provider is accessible. "
+            f"(provider={provider}, model={model}, base_url={base_url})"
+        ) from e
 
 
 def _safe_tflops(stats: dict, key: str = "tflops") -> float:
@@ -1893,6 +1945,9 @@ def main(config):
             )
             log.info(f"WandB group URL: {group_url}")
         wandb_save_directory(Path(output_dir) / ".hydra")
+
+    # Validate API keys early (before spending hours on model loading / generation)
+    _validate_api_keys(config)
 
     # Set random seeds
     set_random_seeds(config.system.seed)
