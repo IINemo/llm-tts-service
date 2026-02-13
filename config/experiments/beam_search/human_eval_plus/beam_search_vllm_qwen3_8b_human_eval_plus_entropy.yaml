@@ -25,7 +25,7 @@ wandb_group: "beam_search_vllm_qwen3_8b_human_eval_plus_entropy"
 model:
   type: "vllm"
   model_path: "Qwen/Qwen3-8B"
-  gpu_memory_utilization: 0.8
+  gpu_memory_utilization: 0.85
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true

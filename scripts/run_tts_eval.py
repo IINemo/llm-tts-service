@@ -697,7 +697,6 @@ def create_model(config):
                     [],
                 ),
                 max_new_tokens=config.generation.max_new_tokens,
-                max_answer_tokens=config.generation.get("max_answer_tokens", 512),
                 temperature=config.generation.temperature,
                 top_p=config.generation.top_p,
                 top_k=config.generation.get("top_k", 20),
@@ -956,7 +955,10 @@ def _generate_trajectories_batch(
                 chunk_requests, chunk_indices
             )
         except Exception as e:
+            import traceback
+
             log.error(f"Chunk {chunk_idx + 1} generation failed: {e}")
+            log.error(f"Traceback:\n{traceback.format_exc()}")
             log.error("Saving partial results collected so far and exiting")
             save_results_json(results, save_path_file)
             log.info(f"Checkpoint saved: {len(results)}/{subset_size} samples complete")

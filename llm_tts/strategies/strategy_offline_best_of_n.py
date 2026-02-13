@@ -229,7 +229,8 @@ class StrategyOfflineBestOfN(StrategyBase):
         # Thinking mode: stopped at </think>, needs answer generation
         if (
             getattr(self.step_generator, "thinking_mode", False)
-            and "</think>" in candidate.text
+            and candidate.is_thinking_complete
+            and not candidate.is_trajectory_complete
         ):
             # Use candidate.text for splitting — it has </think> appended back
             # (candidate.raw_text is vLLM output which strips stop strings)
@@ -399,7 +400,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             trajectories=[[] for _ in range(M)],
             candidates_per_step=N,
             stop_tokens_override=stop_tokens,
-            max_tokens_override=self.step_generator.max_new_tokens,
+            max_tokens=self.step_generator.generation_limit,
             compute_uncertainty=use_uncertainty_wrapper,
             sample_ids=list(range(M)),
         )
@@ -547,7 +548,12 @@ class StrategyOfflineBestOfN(StrategyBase):
             )
 
             # Extract answer from best trajectory
-            extracted = extract_answer(best_result.get("full_text", ""))
+            # For thinking mode, the answer is in answer_step (after </think)
+            # For non-thinking mode, the answer is in full_text
+            answer_text = best_result.get("answer_step") or best_result.get(
+                "full_text", ""
+            )
+            extracted = extract_answer(answer_text)
 
             # Token stats from generator's per-sample tracking
             token_stats = self.step_generator.get_sample_stats_for(sample_data_idx)

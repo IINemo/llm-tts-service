@@ -42,7 +42,6 @@ class StrategyUncertaintyCoT(StrategyBase):
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
         self.max_empty_steps = max_empty_steps
-        self.max_new_tokens = step_generator.max_new_tokens
         self.uncertainty_threshold = uncertainty_threshold
         self.uncertainty_sampling_mode = uncertainty_sampling.lower()
 
@@ -192,15 +191,14 @@ class StrategyUncertaintyCoT(StrategyBase):
                 # Answer is already embedded in the last reasoning step
                 answer_step_text = chosen.raw_text if chosen.raw_text else chosen.text
                 break
-            if chosen.is_trajectory_complete or step_num == self.max_steps - 1:
-                # If trajectory is already complete with content (e.g. model
-                # reached natural EOS without an explicit answer pattern),
-                # use the step text directly instead of generating again.
-                if chosen.is_trajectory_complete and chosen.text.strip():
-                    answer_step_text = (
-                        chosen.raw_text if chosen.raw_text else chosen.text
-                    )
-                else:
+            if (
+                chosen.is_trajectory_complete
+                or chosen.is_thinking_complete
+                or step_num == self.max_steps - 1
+            ):
+                # Generate answer only in thinking mode — non-thinking mode
+                # produces the answer naturally in the last reasoning step.
+                if getattr(self.step_generator, "thinking_mode", False):
                     answer_step_text = self._generate_answer_step(
                         request_chat, trajectory_steps, trajectory_all
                     )
@@ -290,12 +288,14 @@ class StrategyUncertaintyCoT(StrategyBase):
     def _probe_token_uncertainty(
         self, request_chat: List[Dict[str, str]], trajectory_steps: List[Any]
     ) -> Optional[float]:
-        probe = self.step_generator(
-            request_chat,
-            trajectory_steps,
-            candidates_per_step=1,
-            max_tokens_override=1,
-        )
+        saved_limit = self.step_generator.generation_limit
+        self.step_generator.generation_limit = 1
+        try:
+            probe = self.step_generator(
+                request_chat, trajectory_steps, candidates_per_step=1
+            )
+        finally:
+            self.step_generator.generation_limit = saved_limit
         if not probe:
             raise RuntimeError("Token-level probe generation returned no candidates")
         return probe[0].other_data.get("uncertainty_score")

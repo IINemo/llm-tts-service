@@ -109,8 +109,8 @@ class StrategyOnlineBestOfN(StrategyBase):
             self.scorer.reset_prm_stats()
 
         # Context limit for trajectories
-        max_context_budget = getattr(self.step_generator, "max_context_budget", 4096)
-        max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
+        max_context_budget = getattr(self.step_generator, "context_budget", 4096)
+        max_step_tokens = getattr(self.step_generator, "step_token_limit", 256)
         max_trajectory_tokens = min(
             max_context_budget - self.prompt_buffer,
             self.max_steps * max_step_tokens,
@@ -272,7 +272,11 @@ class StrategyOnlineBestOfN(StrategyBase):
                 forced_complete = False
 
                 # Check if full trajectory contains a boxed answer
-                if not selected.is_trajectory_complete:
+                # (skip for thinking-mode steps — boxed inside <think> is not final)
+                if (
+                    not selected.is_trajectory_complete
+                    and not selected.is_thinking_complete
+                ):
                     full_traj_text = (
                         convert_trajectory_to_string(trajectories[sample_id])
                         + selected.text
@@ -286,8 +290,11 @@ class StrategyOnlineBestOfN(StrategyBase):
                         )
 
                 # Detect garbage/degenerate output
-                if not selected.is_trajectory_complete and _detect_garbage(
-                    selected.text
+                # (skip for thinking-mode steps — answer phase still needed)
+                if (
+                    not selected.is_trajectory_complete
+                    and not selected.is_thinking_complete
+                    and _detect_garbage(selected.text)
                 ):
                     selected.is_trajectory_complete = True
                     forced_complete = True
@@ -316,20 +323,29 @@ class StrategyOnlineBestOfN(StrategyBase):
                 # 8. Completion checks
                 if (
                     getattr(self.step_generator, "thinking_mode", False)
-                    and "</think>" in selected.text
+                    and selected.is_thinking_complete
                 ):
                     # Thinking phase complete: generate answer via
                     # generate_answer_candidates (proper stop tokens, not
                     # step-level splitting).
-                    # Reset is_trajectory_complete — boxed answer inside <think>
-                    # is not the final response, answer phase still needed.
-                    selected.is_trajectory_complete = False
-                    log.info(
-                        f"Sample {sample_indices[sample_id]}: "
-                        f"thinking complete, marking for answer generation"
-                    )
                     completed[sample_id] = True
-                    needs_final_answer[sample_id] = True
+                    if selected.is_trajectory_complete:
+                        reason = (
+                            selected.other_data.get("completion_reason")
+                            if selected.other_data
+                            else None
+                        )
+                        log.warning(
+                            f"Sample {sample_indices[sample_id]}: "
+                            f"thinking complete but is_trajectory_complete was set "
+                            f"(reason={reason}), skipping answer generation"
+                        )
+                    else:
+                        needs_final_answer[sample_id] = True
+                        log.info(
+                            f"Sample {sample_indices[sample_id]}: "
+                            f"thinking complete, marking for answer generation"
+                        )
                 elif forced_complete:
                     # Boxed answer or garbage: keep the step, just mark done
                     completed[sample_id] = True
@@ -374,12 +390,15 @@ class StrategyOnlineBestOfN(StrategyBase):
         for i in range(M):
             if not completed[i]:
                 # Reached max_steps without completing
+                log.warning(f"Sample {i}: Reached max_steps without completing")
                 needs_final_answer[i] = True
             if needs_final_answer[i]:
                 to_finalize.append(i)
 
-        # 10. Batch generate final answers
-        if to_finalize:
+        # 10. Batch generate final answers (thinking mode only —
+        #     non-thinking mode produces the answer naturally in reasoning steps)
+        thinking_mode = getattr(self.step_generator, "thinking_mode", False)
+        if to_finalize and thinking_mode:
             log.info(
                 f"Generating final answers for {len(to_finalize)} samples "
                 f"(samples: {[sample_indices[i] for i in to_finalize]})"
@@ -571,8 +590,8 @@ class StrategyOnlineBestOfN(StrategyBase):
         )
 
         # Context limit
-        max_context_budget = getattr(self.step_generator, "max_context_budget", 4096)
-        max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
+        max_context_budget = getattr(self.step_generator, "context_budget", 4096)
+        max_step_tokens = getattr(self.step_generator, "step_token_limit", 256)
         max_trajectory_tokens = min(
             max_context_budget - self.prompt_buffer,
             self.max_steps * max_step_tokens,
@@ -746,7 +765,11 @@ class StrategyOnlineBestOfN(StrategyBase):
             # Additional completion checks
             forced_complete = False
 
-            if not selected.is_trajectory_complete:
+            # Skip boxed/garbage checks for thinking-mode steps (answer phase still needed)
+            if (
+                not selected.is_trajectory_complete
+                and not selected.is_thinking_complete
+            ):
                 full_traj_text = (
                     convert_trajectory_to_string(trajectory) + selected.text
                 )
@@ -756,7 +779,11 @@ class StrategyOnlineBestOfN(StrategyBase):
                     forced_complete = True
                     log.info(f"Sample {sample_idx}: Boxed answer detected")
 
-            if not selected.is_trajectory_complete and _detect_garbage(selected.text):
+            if (
+                not selected.is_trajectory_complete
+                and not selected.is_thinking_complete
+                and _detect_garbage(selected.text)
+            ):
                 selected.is_trajectory_complete = True
                 forced_complete = True
                 log.info(
@@ -779,16 +806,24 @@ class StrategyOnlineBestOfN(StrategyBase):
             # Completion checks
             if (
                 getattr(self.step_generator, "thinking_mode", False)
-                and "</think>" in selected.text
+                and selected.is_thinking_complete
             ):
-                # Thinking phase complete: need answer generation.
-                # Reset is_trajectory_complete — boxed answer inside <think>
-                # is not the final response, answer phase still needed.
-                selected.is_trajectory_complete = False
-                log.info(
-                    f"Sample {sample_idx}: "
-                    f"thinking complete, marking for answer generation"
-                )
+                if selected.is_trajectory_complete:
+                    reason = (
+                        selected.other_data.get("completion_reason")
+                        if selected.other_data
+                        else None
+                    )
+                    log.warning(
+                        f"Sample {sample_idx}: "
+                        f"thinking complete but is_trajectory_complete was set "
+                        f"(reason={reason}), skipping answer generation"
+                    )
+                else:
+                    log.info(
+                        f"Sample {sample_idx}: "
+                        f"thinking complete, marking for answer generation"
+                    )
                 break
 
             if forced_complete:
@@ -830,15 +865,11 @@ class StrategyOnlineBestOfN(StrategyBase):
             needs_final = True
         elif not selected_steps[-1].is_trajectory_complete:
             needs_final = True
-        elif (
-            getattr(self.step_generator, "thinking_mode", False)
-            and selected_steps
-            and "</think>" in selected_steps[-1].text
-        ):
-            # Thinking complete but still need answer phase
-            needs_final = True
 
-        if needs_final:
+        # Generate final answer only in thinking mode — non-thinking mode
+        # produces the answer naturally in the last reasoning step.
+        thinking_mode = getattr(self.step_generator, "thinking_mode", False)
+        if needs_final and thinking_mode:
             log.info(f"Sample {sample_idx}: Generating final answer")
             semaphore.acquire()
             try:
