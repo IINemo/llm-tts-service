@@ -54,8 +54,8 @@ generation:
 strategy:
   type: beam_search
   beam_size: 5
-  candidates_per_beam: 5
-  max_steps: 20
+  candidates_per_beam: 8
+  max_steps: 30
   aggregation: mean  # Original ToT: select by current step score only
   batch_generation: true
   prompt_buffer: 500
