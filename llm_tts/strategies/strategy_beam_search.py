@@ -483,7 +483,7 @@ class StrategyBeamSearch(StrategyBase):
             )
             # Log chosen trajectory details - show each step separately
             scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
-            log.info(
+            log.warning(
                 f"Sample {sample_indices[sample_id]}: Reached max_steps with "
                 f"{len(best_beam['steps'])} steps, "
                 f"score={self._aggregate_scores(best_beam['scores']):.3f}, "

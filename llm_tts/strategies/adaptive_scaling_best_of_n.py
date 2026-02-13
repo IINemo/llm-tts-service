@@ -437,7 +437,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         for idx in range(num_samples):
             if not completed[idx]:
                 scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
-                log.info(
+                log.warning(
                     f"Sample {sample_idxs[idx]}: Reached max_steps ({self.max_steps}) "
                     f"with {len(selected_steps[idx])} steps, "
                     f"scores=[{scores_str}]"

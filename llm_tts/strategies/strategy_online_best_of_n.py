@@ -390,6 +390,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         for i in range(M):
             if not completed[i]:
                 # Reached max_steps without completing
+                log.warning(f"Sample {i}: Reached max_steps without completing")
                 needs_final_answer[i] = True
             if needs_final_answer[i]:
                 to_finalize.append(i)
