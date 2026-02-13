@@ -75,7 +75,9 @@ strategy:
 
 # Entropy scorer configuration
 scorer:
-  type: entropy
+  type: prm
+  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+  device: cuda:0
   batch_size: 1
 
 # Dataset configuration - HumanEval+

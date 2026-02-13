@@ -1,25 +1,25 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_vllm_qwen3_8b_human_eval_plus_perplexity
 # MUR (Adaptive Scaling) for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
-# Uses Perplexity scorer (MUR fixes perplexity as signal for scaled step selection)
+# Uses entropy scorer (MUR fixes entropy as signal for scaled step selection)
 
 defaults:
   - /config
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/perplexity
+  - /scorer/entropy
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "adaptive_scaling_vllm_qwen3_8b_human_eval_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen3_8b_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: null
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "adaptive_scaling_vllm_qwen3_8b_human_eval_plus_perplexity"
+wandb_group: "adaptive_scaling_vllm_qwen3_8b_human_eval_plus_entropy"
 
 # Model configuration (vLLM backend)
 model:
@@ -56,7 +56,6 @@ strategy:
   momentum_rate: 0.9
   adaptive_scaling_method: momentum
   detector_type: structured
-  # Stop tokens for Qwen models
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>

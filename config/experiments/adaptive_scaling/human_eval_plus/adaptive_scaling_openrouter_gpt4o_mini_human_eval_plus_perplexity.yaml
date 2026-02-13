@@ -50,13 +50,13 @@ generation:
 strategy:
   type: adaptive
   candidates_per_step: 8
-  max_steps: 50
+  max_steps: 250
   scaling_rate: 0.9
   momentum_rate: 0.9
   adaptive_scaling_method: momentum
   detector_type: structured
   min_step_tokens: 10
-  max_step_tokens: 2048
+  max_step_tokens: 1024
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
