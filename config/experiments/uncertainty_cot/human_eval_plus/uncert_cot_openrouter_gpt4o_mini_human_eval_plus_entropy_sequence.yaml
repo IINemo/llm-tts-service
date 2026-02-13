@@ -50,8 +50,8 @@ strategy:
   max_steps: 20
   max_empty_steps: 5
   uncertainty_threshold: 0.25
-  min_step_tokens: 50
-  max_step_tokens: 300
+  min_step_tokens: 10
+  max_step_tokens: 1024
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
