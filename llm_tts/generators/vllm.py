@@ -809,11 +809,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 )
                 if self.thinking_mode:
                     # Thinking mode: reserve room for the answer phase.
-                    # Cap at context_budget // 2 to avoid false positives
-                    # when generation_limit ≈ context_budget (e.g., both 32768).
-                    answer_reserve = min(
-                        self.generation_limit, self.context_budget // 2
-                    )
+                    # Answer after </think> is typically short (boxed result),
+                    # so 512 tokens is sufficient.
+                    answer_reserve = 512
                     tokens_needed = (
                         answer_reserve
                         if thinking_done
