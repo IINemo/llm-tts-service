@@ -5,3 +5,5 @@ model: deepseek/deepseek-r1-0528
 n_threads: 50
 prompt_file: ""
 cache_path: ${oc.env:HOME}/.cache
+provider: openrouter
+api_key: null  # Set via env var or override directly for remote execution

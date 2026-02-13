@@ -95,13 +95,16 @@ class EvaluatorLLMAsAJudge:
         n_threads: int,
         budget: int = 3,
         mode: str = "answer_only",
+        api_key: str | None = None,
     ):
         """
         Args:
             mode: "full_solution" - pass entire reasoning to judge
                   "answer_only" - compare just extracted answer vs gold (default)
+            api_key: OpenAI-compatible API key. Falls back to OPENAI_API_KEY env var.
         """
-        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            api_key = os.environ.get("OPENAI_API_KEY")
         self.client = openai.OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.prompt = prompt

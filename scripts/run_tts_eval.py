@@ -178,22 +178,23 @@ def build_evaluators(config):
             if "{question}" in prompt_template:
                 prompt_template = prompt_template.replace("{question}", "{q}")
 
-            # Set API key in environment based on provider
+            # Resolve API key: config value > env var (provider-specific) > env var (generic)
             provider = llm_cfg.get("provider")
-            if provider == "openrouter":
-                api_key = os.getenv("OPENROUTER_API_KEY")
-            elif provider == "deepseek":
-                api_key = os.getenv("DEEPSEEK_API_KEY")
-            else:
-                api_key = os.getenv("OPENAI_API_KEY")
-
-            if api_key:
-                os.environ["OPENAI_API_KEY"] = api_key
+            api_key = llm_cfg.get("api_key")
+            if not api_key:
+                if provider == "openrouter":
+                    api_key = os.getenv("OPENROUTER_API_KEY")
+                elif provider == "deepseek":
+                    api_key = os.getenv("DEEPSEEK_API_KEY")
+                else:
+                    api_key = os.getenv("OPENAI_API_KEY")
 
             # Remove config-only params not needed by evaluator
             llm_cfg.pop("prompt_file", None)
             llm_cfg.pop("provider", None)
+            llm_cfg.pop("api_key", None)
             llm_cfg["prompt"] = prompt_template
+            llm_cfg["api_key"] = api_key
 
             # Include model name in evaluator key to support multiple LLM judge models
             model_name = llm_cfg.get("model", "unknown")
@@ -1516,22 +1517,23 @@ def evaluate_results(
             if "{question}" in prompt_template:
                 prompt_template = prompt_template.replace("{question}", "{q}")
 
-            # Set API key in environment based on provider
+            # Resolve API key: config value > env var (provider-specific) > env var (generic)
             provider = llm_cfg.get("provider")
-            if provider == "openrouter":
-                api_key = os.getenv("OPENROUTER_API_KEY")
-            elif provider == "deepseek":
-                api_key = os.getenv("DEEPSEEK_API_KEY")
-            else:
-                api_key = os.getenv("OPENAI_API_KEY")
-
-            if api_key:
-                os.environ["OPENAI_API_KEY"] = api_key
+            api_key = llm_cfg.get("api_key")
+            if not api_key:
+                if provider == "openrouter":
+                    api_key = os.getenv("OPENROUTER_API_KEY")
+                elif provider == "deepseek":
+                    api_key = os.getenv("DEEPSEEK_API_KEY")
+                else:
+                    api_key = os.getenv("OPENAI_API_KEY")
 
             # Remove config-only params not needed by evaluator
             llm_cfg.pop("prompt_file", None)
             llm_cfg.pop("provider", None)
+            llm_cfg.pop("api_key", None)
             llm_cfg["prompt"] = prompt_template
+            llm_cfg["api_key"] = api_key
 
             # Include model name in evaluator key
             model_name = llm_cfg.get("model", "unknown")
