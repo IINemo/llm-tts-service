@@ -1216,6 +1216,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             [trajectory],
             candidates_per_step,
             compute_uncertainty=compute_uncertainty,
-            max_tokens_override=max_tokens_override,
+            max_tokens=max_tokens_override,
         )
         return result[0] if result else []

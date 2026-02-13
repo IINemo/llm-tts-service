@@ -99,7 +99,6 @@ class StrategyUncertaintyCoT(StrategyBase):
                     request_chat,
                     trajectory_steps,
                     candidates_per_step=1,
-                    max_tokens_override=self.max_new_tokens,
                 )[0]
                 if not initial_candidate:
                     raise RuntimeError("Initial generation returned no candidates")
@@ -117,7 +116,6 @@ class StrategyUncertaintyCoT(StrategyBase):
                     request_chat,
                     trajectory_steps,
                     candidates_per_step=self.candidates_per_step,
-                    max_tokens_override=self.max_new_tokens,
                 )
                 if not cand_list:
                     raise RuntimeError("No candidates returned for CoT branch")
@@ -152,7 +150,6 @@ class StrategyUncertaintyCoT(StrategyBase):
                         request_chat,
                         trajectory_steps,
                         candidates_per_step=1,
-                        max_tokens_override=self.max_new_tokens,
                     )[0]
                     if not initial_candidate:
                         raise RuntimeError(
