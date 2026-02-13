@@ -438,11 +438,18 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         # Check for VLLMWithUncertainty wrapper by looking for 'estimator' attribute
         # (raw vLLM has a different score() method for pooling models)
         if hasattr(self.model, "estimator"):
-            uncertainty_score = self.model.score(
-                token_ids[:best_prefix_len],
-                logprobs[:best_prefix_len],
-            )
-            validity_score = 1.0 / (1.0 + uncertainty_score)
+            try:
+                uncertainty_score = self.model.score(
+                    token_ids[:best_prefix_len],
+                    logprobs[:best_prefix_len],
+                )
+                validity_score = 1.0 / (1.0 + uncertainty_score)
+            except Exception as e:
+                log.warning(
+                    f"Uncertainty scoring failed ({best_prefix_len} tokens): {e}"
+                )
+                uncertainty_score = None
+                validity_score = None
         else:
             uncertainty_score = None
             validity_score = None
@@ -642,14 +649,21 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         # Generate for all prompts
         # Check if model supports uncertainty computation (VLLMWithUncertainty wrapper)
         use_uncertainty_wrapper = hasattr(self.model, "estimator")
-        if use_uncertainty_wrapper and compute_uncertainty:
-            outputs = self.model.generate(
-                prompts, sampling_params, compute_uncertainty=True
+        try:
+            if use_uncertainty_wrapper and compute_uncertainty:
+                outputs = self.model.generate(
+                    prompts, sampling_params, compute_uncertainty=True
+                )
+            else:
+                # Use raw vLLM for PRM scorer or when uncertainty not needed
+                raw_llm = getattr(self.model, "llm", self.model)
+                outputs = raw_llm.generate(prompts, sampling_params)
+        except Exception as e:
+            log.error(
+                f"vLLM generate failed for {len(prompts)} prompts, "
+                f"n={candidates_per_step}, max_tokens={max_tokens}: {e}"
             )
-        else:
-            # Use raw vLLM for PRM scorer or when uncertainty not needed
-            raw_llm = getattr(self.model, "llm", self.model)
-            outputs = raw_llm.generate(prompts, sampling_params)
+            raise
 
         # Process outputs and organize by trajectory
         candidates_by_traj = {}
@@ -704,7 +718,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
                     # Stopped at EOS token ID (stop_reason=None but didn't hit max)
                     stopped_at_eos = (
-                        stop_reason is None and len(token_ids) < self.step_token_limit
+                        stop_reason is None and len(token_ids) < max_tokens
                     )
 
                     is_trajectory_complete = repetition_detected or stopped_at_eos
@@ -737,7 +751,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
                     # Check for natural EOS (stop_reason is None AND didn't hit max tokens)
                     stopped_at_eos = (
-                        stop_reason is None and len(token_ids) < self.step_token_limit
+                        stop_reason is None and len(token_ids) < max_tokens
                     )
 
                     # Check if stopped at answer pattern
@@ -797,7 +811,10 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             # Post-generation context limit check for this trajectory
             if candidates and not candidates[0].is_trajectory_complete:
                 context_tokens = len(self.tokenizer.encode(prompts[prompt_idx]))
-                max_gen = max(len(c.token_ids) for c in candidates)
+                max_gen = max(
+                    c.other_data.get("original_token_count", len(c.token_ids))
+                    for c in candidates
+                )
                 total_tokens = context_tokens + max_gen
 
                 # After thinking is complete, we only need room for the answer
