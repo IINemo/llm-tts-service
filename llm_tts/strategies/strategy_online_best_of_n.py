@@ -856,14 +856,6 @@ class StrategyOnlineBestOfN(StrategyBase):
             needs_final = True
         elif not selected_steps[-1].is_trajectory_complete:
             needs_final = True
-        elif (
-            getattr(self.step_generator, "thinking_mode", False)
-            and selected_steps
-            and selected_steps[-1].is_thinking_complete
-            and not selected_steps[-1].is_trajectory_complete
-        ):
-            # Thinking complete but still need answer phase
-            needs_final = True
 
         # Generate final answer only in thinking mode — non-thinking mode
         # produces the answer naturally in the last reasoning step.

@@ -382,10 +382,11 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     scores_str = ", ".join(
                         f"{s:.3f}" for s in validity_scores[sample_idx]
                     )
+                    action = "marking for answer generation" if needs_final_answer[sample_idx] else "no answer generation (context limit)"
                     log.info(
                         f"Sample {sample_idxs[sample_idx]}: "
-                        f"thinking complete (`` detected) at step {step_num}, "
-                        f"marking for answer generation, "
+                        f"thinking complete at step {step_num}, "
+                        f"{action}, "
                         f"scores=[{scores_str}]"
                     )
                     continue
