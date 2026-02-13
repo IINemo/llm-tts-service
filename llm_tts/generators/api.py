@@ -434,10 +434,15 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
                     time.sleep(wait)
                 else:
+                    log.error(
+                        f"[{call_id}] Streaming call failed after {max_retries} attempts: {e}"
+                    )
                     raise
 
         if not results or len(results) == 0:
-            raise ValueError("No result returned from streaming generation")
+            raise ValueError(
+                f"[{call_id}] No result returned from streaming generation"
+            )
 
         result = results[0]
 
@@ -508,10 +513,15 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
                     time.sleep(wait)
                 else:
+                    log.error(
+                        f"[{call_id}] Batch call failed after {max_retries} attempts (n={n}): {e}"
+                    )
                     raise
 
         if not results or len(results) == 0:
-            raise ValueError("No result returned from batch generation")
+            raise ValueError(
+                f"[{call_id}] No result returned from batch generation (n={n})"
+            )
 
         # For n>1, results is List[List[dict]] — one list per chat
         chat_results = results[0]
@@ -536,35 +546,44 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             Dict with uncertainty_score, validity_score, token_ids, logprobs.
         """
         has_scorer = hasattr(self.model, "estimator")
-        if api_logprobs and has_scorer:
-            token_ids, logprobs = convert_api_logprobs(api_logprobs)
-            uncertainty_score = self.model.score(token_ids, logprobs)
+        if api_logprobs:
+            try:
+                token_ids, logprobs = convert_api_logprobs(api_logprobs)
+            except Exception as e:
+                log.warning(
+                    f"convert_api_logprobs failed ({len(api_logprobs)} entries): {e}"
+                )
+                pseudo_ids = list(range(self._count_tokens(text)))
+                return {
+                    "uncertainty_score": None,
+                    "validity_score": None,
+                    "token_ids": pseudo_ids,
+                    "logprobs": [],
+                    "raw_logprobs": [],
+                    "original_token_count": len(pseudo_ids),
+                }
             flat_logprobs = []
             for tid, lp_dict in zip(token_ids, logprobs):
                 if tid in lp_dict:
                     flat_logprobs.append(lp_dict[tid].logprob)
                 else:
                     flat_logprobs.append(-100.0)
+            if has_scorer:
+                try:
+                    uncertainty_score = self.model.score(token_ids, logprobs)
+                    validity_score = 1.0 / (1.0 + uncertainty_score)
+                except Exception as e:
+                    log.warning(
+                        f"Uncertainty scoring failed ({len(token_ids)} tokens): {e}"
+                    )
+                    uncertainty_score = None
+                    validity_score = None
+            else:
+                uncertainty_score = None
+                validity_score = None
             return {
                 "uncertainty_score": uncertainty_score,
-                "validity_score": 1.0 / (1.0 + uncertainty_score),
-                "token_ids": token_ids,
-                "logprobs": flat_logprobs,
-                "raw_logprobs": logprobs,
-                "original_token_count": len(token_ids),
-            }
-        elif api_logprobs:
-            # Have logprobs but no scorer — still convert for storage
-            token_ids, logprobs = convert_api_logprobs(api_logprobs)
-            flat_logprobs = []
-            for tid, lp_dict in zip(token_ids, logprobs):
-                if tid in lp_dict:
-                    flat_logprobs.append(lp_dict[tid].logprob)
-                else:
-                    flat_logprobs.append(-100.0)
-            return {
-                "uncertainty_score": None,
-                "validity_score": None,
+                "validity_score": validity_score,
                 "token_ids": token_ids,
                 "logprobs": flat_logprobs,
                 "raw_logprobs": logprobs,
@@ -1014,11 +1033,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 )
                 if self.thinking_mode:
                     # Thinking mode: reserve room for the answer phase.
-                    # Cap at context_budget // 2 to avoid false positives
-                    # when generation_limit ≈ context_budget (e.g., both 32768).
-                    answer_reserve = min(
-                        self.generation_limit, self.context_budget // 2
-                    )
+                    # Answer after </think> is typically short (boxed result),
+                    # so 512 tokens is sufficient.
+                    answer_reserve = 512
                     tokens_needed = (
                         answer_reserve
                         if thinking_done
@@ -1031,8 +1048,11 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
                 if remaining < tokens_needed:
                     log.warning(
-                        f"Path {traj_idx}: context limit, "
-                        f"only {remaining} remaining (need {tokens_needed})"
+                        f"Path {traj_idx}: context limit reached — "
+                        f"used {total_tokens}/{self.context_budget} tokens "
+                        f"(prompt={ctx_tokens}, generated={max_gen}), "
+                        f"remaining={remaining}, needed={tokens_needed} "
+                        f"({'answer_reserve' if thinking_done else 'step+answer_reserve'})"
                     )
                     for c in candidates:
                         c.is_trajectory_complete = True
