@@ -22,6 +22,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+import clearml
 import hydra
 import numpy as np
 import openai
@@ -123,6 +124,7 @@ from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreami
 from llm_tts.scorers import (
     StepScorerConfidence,
     StepScorerPRM,
+    StepScorerSelfVerification,
     StepScorerUncertainty,
 )
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
@@ -395,6 +397,22 @@ def create_scorer(config):
             scorer.init_flop_calculator(config.scorer.model_path)
         except Exception as e:
             log.warning(f"Could not init PRM FLOP calculator: {e}")
+    elif config.scorer.type == "self_verification":
+        # Self-Verification Scorer (Tree of Thoughts paper)
+        # Model will be set later in create_model() after model is initialized
+        scorer = StepScorerSelfVerification(
+            model=None,  # Set later
+            method=getattr(config.scorer, "method", "value"),
+            n_evaluate_sample=getattr(config.scorer, "n_evaluate_sample", 3),
+            temperature=getattr(config.scorer, "temperature", 0.7),
+            max_tokens=getattr(config.scorer, "max_tokens", 100),
+            timeout=getattr(config.scorer, "timeout", 60),
+            value_prompt=getattr(config.scorer, "value_prompt", None),
+            value_prompt_file=getattr(config.scorer, "value_prompt_file", None),
+            vote_prompt=getattr(config.scorer, "vote_prompt", None),
+            vote_prompt_file=getattr(config.scorer, "vote_prompt_file", None),
+            use_vllm=False,  # Will be set based on model type
+        )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
     elif config.scorer.type in (
@@ -419,7 +437,7 @@ def create_model(config):
             raise ImportError("vLLM not installed. Run: pip install vllm")
 
         # Initialize vLLM engine with seed for reproducibility
-        llm = LLM(
+        llm_kwargs = dict(
             model=config.model.model_path,
             gpu_memory_utilization=config.model.get("gpu_memory_utilization", 0.9),
             tensor_parallel_size=config.model.get("tensor_parallel_size", 1),
@@ -430,6 +448,11 @@ def create_model(config):
             ),
             seed=config.system.seed,  # Reproducibility
         )
+        quantization = config.model.get("quantization", None)
+        if quantization:
+            llm_kwargs["quantization"] = quantization
+            log.info(f"Using quantization: {quantization}")
+        llm = LLM(**llm_kwargs)
 
         # Create sampling params (will be updated by strategy)
         sampling_params = SamplingParams(
@@ -463,12 +486,17 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            # Self-consistency and baseline don't need uncertainty wrapper
-            # (self-consistency uses majority voting, baseline uses raw vLLM batch generation)
-            if config.strategy.type in ("self_consistency", "baseline"):
+            # Self-consistency, baseline, and self_verification don't need uncertainty wrapper
+            # (self-consistency uses majority voting, baseline uses raw vLLM batch generation,
+            # self_verification uses the LLM directly for evaluation)
+            scorer_type = config.scorer.type if config.scorer else "entropy"
+            if (
+                config.strategy.type in ("self_consistency", "baseline")
+                or scorer_type == "self_verification"
+            ):
                 vllm_model = llm
                 log.info(
-                    f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
+                    f"Strategy={config.strategy.type}, scorer={scorer_type}: using raw vLLM (no uncertainty wrapper)"
                 )
             else:
                 if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
@@ -478,7 +506,6 @@ def create_model(config):
                     )
 
                 # Select estimator based on scorer config
-                scorer_type = config.scorer.type if config.scorer else "entropy"
                 if scorer_type == "perplexity":
                     stat_calculators = [VLLMLogprobsCalculator()]
                     estimator = Perplexity()
@@ -501,10 +528,15 @@ def create_model(config):
                     # Use entropy wrapper for generation (scores not used for selection)
                     stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                     estimator = MeanTokenEntropy()
+                elif scorer_type == "self_verification":
+                    # Self-verification scorer uses its own model for scoring
+                    # Use entropy wrapper for generation (scores not used for selection)
+                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                    estimator = MeanTokenEntropy()
                 else:
                     raise ValueError(
                         f"Unsupported scorer type for vLLM: {scorer_type}. "
-                        f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm"
+                        f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm, self_verification"
                     )
 
                 vllm_model = VLLMWithUncertainty(
@@ -776,9 +808,69 @@ def create_model(config):
     return model, step_generator
 
 
+def _create_api_model_for_scorer(model_cfg):
+    """Create an API-backed model instance for scoring only."""
+    # Use model_name if available, otherwise fall back to model_path
+    model_path = model_cfg.get("model_name") or model_cfg.get("model_path")
+    log.info(f"Self-verification scorer API model: {model_path}")
+
+    provider = model_cfg.get("provider")
+    base_url = model_cfg.get("base_url")
+    api_key_env = model_cfg.get("api_key_env")
+
+    if api_key_env:
+        api_key = model_cfg.get("api_key") or os.getenv(api_key_env)
+    elif provider == "openrouter":
+        api_key = model_cfg.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+        if base_url is None:
+            base_url = "https://openrouter.ai/api/v1"
+    else:
+        api_key = model_cfg.get("api_key") or os.getenv("OPENAI_API_KEY")
+
+    return BlackboxModelWithStreaming(
+        openai_api_key=api_key,
+        model_path=model_path,
+        supports_logprobs=model_cfg.get("supports_logprobs", False),
+        base_url=base_url,
+    )
+
+
 def create_tts_strategy(
     config, model, step_generator, scorer, output_dir=None, flop_calculator=None
 ):
+    if scorer is not None and isinstance(scorer, StepScorerSelfVerification):
+        scorer_model_cfg = getattr(config.scorer, "model", None)
+        if scorer_model_cfg is not None:
+            if scorer_model_cfg.get("type") != "openai_api":
+                raise ValueError(
+                    "Self-verification scorer model override only supports type=openai_api"
+                )
+            scorer_model = _create_api_model_for_scorer(scorer_model_cfg)
+            scorer.set_model(scorer_model, use_vllm=False)
+            log.info("Self-verification scorer: using API override model")
+        else:
+            # For API models, use the model directly
+            if isinstance(model, BlackboxModelWithStreaming):
+                scorer.set_model(model, use_vllm=False)
+                log.info("Self-verification scorer: using API backend")
+            # For vLLM models wrapped with VLLMWithUncertainty
+            elif hasattr(model, "vllm_engine"):
+                scorer.set_model(model.vllm_engine, use_vllm=True)
+                log.info("Self-verification scorer: using vLLM backend (wrapped)")
+        # For raw vLLM LLM instance (when uncertainty wrapper is skipped)
+        elif VLLM_AVAILABLE and isinstance(model, LLM):
+            scorer.set_model(model, use_vllm=True)
+            log.info("Self-verification scorer: using vLLM backend (raw)")
+            # For local WhiteboxModel (lm_polygraph)
+            elif isinstance(model, WhiteboxModel):
+                scorer.set_model(model, use_local=True)
+                log.info("Self-verification scorer: using local WhiteboxModel backend")
+            else:
+                log.warning(
+                    "Self-verification scorer: unknown model type, may not work correctly"
+                )
+                scorer.set_model(model, use_vllm=False)
+
     if config.strategy.type == "baseline":
         # Get eos_patterns from config, default to ["<end of response>"]
         eos_patterns = getattr(config.strategy, "detector_eos_patterns", None)
@@ -2161,6 +2253,7 @@ def main(config):
 
 
 if __name__ == "__main__":
+    task = clearml.Task.init(project_name="llm-tts", task_name="tts-eval-experiment")
     # Parse custom resume arguments before Hydra processes sys.argv
     parse_resume_arguments()
     main()
