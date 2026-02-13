@@ -230,6 +230,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         if (
             getattr(self.step_generator, "thinking_mode", False)
             and candidate.is_thinking_complete
+            and not candidate.is_trajectory_complete
         ):
             # Use candidate.text for splitting — it has </think> appended back
             # (candidate.raw_text is vLLM output which strips stop strings)

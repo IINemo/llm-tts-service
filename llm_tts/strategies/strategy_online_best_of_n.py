@@ -328,20 +328,20 @@ class StrategyOnlineBestOfN(StrategyBase):
                     # Thinking phase complete: generate answer via
                     # generate_answer_candidates (proper stop tokens, not
                     # step-level splitting).
+                    completed[sample_id] = True
                     if selected.is_trajectory_complete:
                         reason = selected.other_data.get("completion_reason") if selected.other_data else None
                         log.warning(
                             f"Sample {sample_indices[sample_id]}: "
                             f"thinking complete but is_trajectory_complete was set "
-                            f"(reason={reason}), resetting for answer generation"
+                            f"(reason={reason}), skipping answer generation"
                         )
-                        selected.is_trajectory_complete = False
-                    log.info(
-                        f"Sample {sample_indices[sample_id]}: "
-                        f"thinking complete, marking for answer generation"
-                    )
-                    completed[sample_id] = True
-                    needs_final_answer[sample_id] = True
+                    else:
+                        needs_final_answer[sample_id] = True
+                        log.info(
+                            f"Sample {sample_indices[sample_id]}: "
+                            f"thinking complete, marking for answer generation"
+                        )
                 elif forced_complete:
                     # Boxed answer or garbage: keep the step, just mark done
                     completed[sample_id] = True
@@ -803,19 +803,18 @@ class StrategyOnlineBestOfN(StrategyBase):
                 getattr(self.step_generator, "thinking_mode", False)
                 and selected.is_thinking_complete
             ):
-                # Thinking phase complete: need answer generation.
                 if selected.is_trajectory_complete:
                     reason = selected.other_data.get("completion_reason") if selected.other_data else None
                     log.warning(
                         f"Sample {sample_idx}: "
                         f"thinking complete but is_trajectory_complete was set "
-                        f"(reason={reason}), resetting for answer generation"
+                        f"(reason={reason}), skipping answer generation"
                     )
-                    selected.is_trajectory_complete = False
-                log.info(
-                    f"Sample {sample_idx}: "
-                    f"thinking complete, marking for answer generation"
-                )
+                else:
+                    log.info(
+                        f"Sample {sample_idx}: "
+                        f"thinking complete, marking for answer generation"
+                    )
                 break
 
             if forced_complete:
@@ -861,6 +860,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             getattr(self.step_generator, "thinking_mode", False)
             and selected_steps
             and selected_steps[-1].is_thinking_complete
+            and not selected_steps[-1].is_trajectory_complete
         ):
             # Thinking complete but still need answer phase
             needs_final = True
