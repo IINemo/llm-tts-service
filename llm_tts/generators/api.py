@@ -440,7 +440,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     raise
 
         if not results or len(results) == 0:
-            raise ValueError(f"[{call_id}] No result returned from streaming generation")
+            raise ValueError(
+                f"[{call_id}] No result returned from streaming generation"
+            )
 
         result = results[0]
 
@@ -517,7 +519,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     raise
 
         if not results or len(results) == 0:
-            raise ValueError(f"[{call_id}] No result returned from batch generation (n={n})")
+            raise ValueError(
+                f"[{call_id}] No result returned from batch generation (n={n})"
+            )
 
         # For n>1, results is List[List[dict]] — one list per chat
         chat_results = results[0]

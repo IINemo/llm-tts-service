@@ -330,7 +330,11 @@ class StrategyOnlineBestOfN(StrategyBase):
                     # step-level splitting).
                     completed[sample_id] = True
                     if selected.is_trajectory_complete:
-                        reason = selected.other_data.get("completion_reason") if selected.other_data else None
+                        reason = (
+                            selected.other_data.get("completion_reason")
+                            if selected.other_data
+                            else None
+                        )
                         log.warning(
                             f"Sample {sample_indices[sample_id]}: "
                             f"thinking complete but is_trajectory_complete was set "
@@ -804,7 +808,11 @@ class StrategyOnlineBestOfN(StrategyBase):
                 and selected.is_thinking_complete
             ):
                 if selected.is_trajectory_complete:
-                    reason = selected.other_data.get("completion_reason") if selected.other_data else None
+                    reason = (
+                        selected.other_data.get("completion_reason")
+                        if selected.other_data
+                        else None
+                    )
                     log.warning(
                         f"Sample {sample_idx}: "
                         f"thinking complete but is_trajectory_complete was set "

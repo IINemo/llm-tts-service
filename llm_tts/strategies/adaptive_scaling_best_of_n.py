@@ -371,7 +371,11 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     # Thinking phase complete.
                     completed[sample_idx] = True
                     if chosen.is_trajectory_complete:
-                        reason = chosen.other_data.get("completion_reason") if chosen.other_data else None
+                        reason = (
+                            chosen.other_data.get("completion_reason")
+                            if chosen.other_data
+                            else None
+                        )
                         log.warning(
                             f"Sample {sample_idxs[sample_idx]}: "
                             f"thinking complete but is_trajectory_complete was set "
@@ -382,7 +386,11 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     scores_str = ", ".join(
                         f"{s:.3f}" for s in validity_scores[sample_idx]
                     )
-                    action = "marking for answer generation" if needs_final_answer[sample_idx] else "no answer generation (context limit)"
+                    action = (
+                        "marking for answer generation"
+                        if needs_final_answer[sample_idx]
+                        else "no answer generation (context limit)"
+                    )
                     log.info(
                         f"Sample {sample_idxs[sample_idx]}: "
                         f"thinking complete at step {step_num}, "

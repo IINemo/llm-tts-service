@@ -717,9 +717,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                         )
 
                     # Stopped at EOS token ID (stop_reason=None but didn't hit max)
-                    stopped_at_eos = (
-                        stop_reason is None and len(token_ids) < max_tokens
-                    )
+                    stopped_at_eos = stop_reason is None and len(token_ids) < max_tokens
 
                     is_trajectory_complete = repetition_detected or stopped_at_eos
                     step_text = text.strip()
@@ -750,9 +748,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                             step_text = raw_text
 
                     # Check for natural EOS (stop_reason is None AND didn't hit max tokens)
-                    stopped_at_eos = (
-                        stop_reason is None and len(token_ids) < max_tokens
-                    )
+                    stopped_at_eos = stop_reason is None and len(token_ids) < max_tokens
 
                     # Check if stopped at answer pattern
                     stopped_at_answer = False

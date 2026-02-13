@@ -958,6 +958,7 @@ def _generate_trajectories_batch(
             )
         except Exception as e:
             import traceback
+
             log.error(f"Chunk {chunk_idx + 1} generation failed: {e}")
             log.error(f"Traceback:\n{traceback.format_exc()}")
             log.error("Saving partial results collected so far and exiting")
