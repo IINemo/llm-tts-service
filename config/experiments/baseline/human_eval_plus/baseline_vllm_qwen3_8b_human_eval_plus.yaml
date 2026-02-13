@@ -43,7 +43,7 @@ generation:
   temperature: 0.6
   top_p: 0.95
   top_k: 20
-  batch_size: 1
+  batch_size: 32
 
 # Strategy - Baseline single-shot
 strategy:
@@ -77,7 +77,6 @@ dataset:
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
-  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
 
 # Evaluation configuration
 evaluation:

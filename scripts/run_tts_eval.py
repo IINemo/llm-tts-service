@@ -119,11 +119,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import (
-    StepScorerConfidence,
-    StepScorerPRM,
-    StepScorerUncertainty,
-)
+from llm_tts.scorers import StepScorerConfidence, StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 
 # vLLM step generator (optional)
@@ -570,7 +566,8 @@ def create_model(config):
             use_reasoning=config.strategy.get("use_reasoning", False),
             use_sentence_start=config.strategy.get("use_sentence_start", False),
             use_correction=config.strategy.get("use_correction", False),
-            custom_markers=config.strategy.get("custom_markers"),
+            custom_markers=config.strategy.get("custom_words")
+            or config.strategy.get("custom_markers"),
         )
         # Set answer patterns if provided
         if config.strategy.get("detector_answer_patterns"):
@@ -631,7 +628,8 @@ def create_model(config):
                 use_structure=config.strategy.get("use_structure", False),
                 use_reasoning=config.strategy.get("use_reasoning", False),
                 use_correction=config.strategy.get("use_correction", False),
-                custom_markers=config.strategy.get("custom_markers"),
+                custom_markers=config.strategy.get("custom_words")
+                or config.strategy.get("custom_markers"),
             )
 
             generation_parameters = GenerationParameters()

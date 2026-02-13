@@ -1,7 +1,6 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/mbpp_plus/offline_bon_openrouter_gpt4o_mini_mbpp_plus_perplexity
-# Offline Best-of-N for MBPP+ using OpenRouter API with newline-based step boundaries
-# Uses Perplexity scorer for step evaluation
+# Run: CUDA_VISIBLE_DEVICES=all python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/human_eval_plus/baseline_openrouter_gpt4o_mini_human_eval_plus
+# Baseline evaluation for HumanEval+ using OpenRouter API
 #
 # Environment variable required: OPENROUTER_API_KEY
 
@@ -10,24 +9,24 @@ defaults:
   - /model/openrouter
   - /generation/default
   - /system/default
-  - /scorer/perplexity
-  - /evaluation/mbpp_plus/default
+  - /scorer/entropy
+  - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "offline_bon_openrouter_gpt4o_mini_mbpp_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "baseline_openrouter_gptoss120bhuman_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: wandb
-wandb_project: llm-tts-mbpp-plus
-wandb_group: "offline_bon_openrouter_gpt4o_mini_mbpp_plus_perplexity"
+report_to: null
+wandb_project: llm-tts-human-eval-plus
+wandb_group: "baseline_openrouter_gptoss120b_human_eval_plus"
 
 # Model configuration (OpenRouter API)
 model:
   type: "openai_api"
   provider: openrouter
-  model_path: "openai/gpt-4o-mini"  # Fast and cost-effective for code
+  model_path: "openai/gpt-oss-120b"  # Fast and cost-effective for code
   # Alternative models:
   # - "anthropic/claude-3.5-sonnet" (best quality)
   # - "deepseek/deepseek-coder" (code-specialized)
@@ -36,6 +35,7 @@ model:
   supports_logprobs: true
   prefill_mode: false
   max_context_budget: 128000
+  disable_thinking_mode: false
 
 # System configuration
 system:
@@ -44,22 +44,20 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 16384
+  max_new_tokens: 32768
   temperature: 0.6
   top_p: 0.95
   top_k: 20
   batch_size: 1
 
-# Strategy - Offline Best-of-N with newline-based step boundaries for code
+# Strategy - Baseline single-shot
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8
-  max_steps: 100
-  score_aggregation: mean
+  type: baseline
   batch_generation: true
-  min_step_tokens: 10
-  max_step_tokens: 2048
-  # Disable linguistic markers (not useful for code)
+  # Step token limits
+  min_step_tokens: 0
+  max_step_tokens: 32768
+  # Disable semantic markers for baseline
   use_sequence: false
   use_conclusion: false
   use_thinking: false
@@ -67,24 +65,16 @@ strategy:
   use_structure: false
   use_reasoning: false
   use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
-# Perplexity scorer configuration
-scorer:
-  type: perplexity
-  batch_size: 1
-
-# Dataset configuration - MBPP+
+# Dataset configuration - HumanEval+
+# Uses EvalPlus API loader which provides correct prompt format with function signature
 dataset:
-  data_name: "mbpp_plus"
-  dataset_path: "evalplus/mbppplus"
-  dataset_split: "test"
+  data_name: "human_eval_plus"
+  dataset_path: "evalplus/humanevalplus"
+  dataset_split: "test"  # 164 problems
   subset: null
   offset: 0
-  question_field: "question"  # EvalPlus loader field (includes docstring + example assertion)
+  question_field: "question"  # EvalPlus loader field (includes function signature + docstring)
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
@@ -92,7 +82,7 @@ dataset:
 # Evaluation configuration
 evaluation:
   evaluators:
-    - mbpp_plus
-  mbpp_plus:
+    - human_eval_plus
+  human_eval_plus:
     mode: full  # "test" and "syntax" modes are deprecated, use "full" only
     timeout: 10
