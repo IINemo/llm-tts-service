@@ -328,6 +328,14 @@ class StrategyOnlineBestOfN(StrategyBase):
                     # Thinking phase complete: generate answer via
                     # generate_answer_candidates (proper stop tokens, not
                     # step-level splitting).
+                    if selected.is_trajectory_complete:
+                        reason = selected.other_data.get("completion_reason") if selected.other_data else None
+                        log.warning(
+                            f"Sample {sample_indices[sample_id]}: "
+                            f"thinking complete but is_trajectory_complete was set "
+                            f"(reason={reason}), resetting for answer generation"
+                        )
+                        selected.is_trajectory_complete = False
                     log.info(
                         f"Sample {sample_indices[sample_id]}: "
                         f"thinking complete, marking for answer generation"
@@ -796,6 +804,14 @@ class StrategyOnlineBestOfN(StrategyBase):
                 and selected.is_thinking_complete
             ):
                 # Thinking phase complete: need answer generation.
+                if selected.is_trajectory_complete:
+                    reason = selected.other_data.get("completion_reason") if selected.other_data else None
+                    log.warning(
+                        f"Sample {sample_idx}: "
+                        f"thinking complete but is_trajectory_complete was set "
+                        f"(reason={reason}), resetting for answer generation"
+                    )
+                    selected.is_trajectory_complete = False
                 log.info(
                     f"Sample {sample_idx}: "
                     f"thinking complete, marking for answer generation"
