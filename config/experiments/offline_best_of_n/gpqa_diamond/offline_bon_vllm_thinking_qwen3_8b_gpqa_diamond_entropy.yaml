@@ -53,7 +53,7 @@ generation:
 strategy:
   type: offline_best_of_n
   num_trajectories: 8        # Number of complete trajectories to generate
-  max_steps: 100
+  max_steps: 250
   score_aggregation: min     # Conservative: trajectory is only as good as its weakest step
   batch_generation: true     # Fully batched: M×N trajectories in single vLLM call
   # Stop tokens for Qwen3
