@@ -826,8 +826,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
                 if remaining < tokens_needed:
                     log.warning(
-                        f"Path {traj_idx}: context limit, "
-                        f"only {remaining} remaining (need {tokens_needed})"
+                        f"Path {traj_idx}: context limit reached — "
+                        f"used {total_tokens}/{self.context_budget} tokens "
+                        f"(prompt={context_tokens}, generated={max_gen}), "
+                        f"remaining={remaining}, needed={tokens_needed} "
+                        f"({'answer_reserve' if thinking_done else 'step+answer_reserve'})"
                     )
                     for c in candidates:
                         c.is_trajectory_complete = True
