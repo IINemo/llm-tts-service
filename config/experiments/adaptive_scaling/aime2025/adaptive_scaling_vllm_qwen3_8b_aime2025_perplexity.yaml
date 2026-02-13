@@ -45,7 +45,7 @@ generation:
 strategy:
   type: adaptive
   candidates_per_step: 8
-  max_steps: 50
+  max_steps: 250
   scaling_rate: 0.9
   momentum_rate: 0.9
   adaptive_scaling_method: momentum  # momentum, random, average, always, threshold
