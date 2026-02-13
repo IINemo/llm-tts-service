@@ -45,7 +45,6 @@ generation:
   top_p: 0.95
   top_k: 20
   batch_size: 1
-  checkpoint_batch_size: 4
 
 # Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
 strategy:
