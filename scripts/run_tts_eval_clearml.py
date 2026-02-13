@@ -224,6 +224,35 @@ def main():
 
     print(f"[ClearML wrapper] Running: {' '.join(cmd)}", flush=True)
     result = subprocess.run(cmd, env=env, stderr=subprocess.STDOUT)
+
+    # Upload outputs as ClearML artifacts
+    try:
+        from clearml import Task
+
+        task = Task.current_task()
+        if task:
+            repo_dir = os.path.dirname(script_dir)
+            outputs_dir = os.path.join(repo_dir, "outputs")
+            if os.path.isdir(outputs_dir):
+                # Find the most recent run directory
+                for date_dir in sorted(os.listdir(outputs_dir), reverse=True):
+                    date_path = os.path.join(outputs_dir, date_dir)
+                    if not os.path.isdir(date_path):
+                        continue
+                    for run_dir in sorted(os.listdir(date_path), reverse=True):
+                        run_path = os.path.join(date_path, run_dir)
+                        if not os.path.isdir(run_path):
+                            continue
+                        print(
+                            f"[ClearML wrapper] Uploading outputs from: {run_path}",
+                            flush=True,
+                        )
+                        task.upload_artifact("outputs", artifact_object=run_path)
+                        break
+                    break
+    except Exception as e:
+        print(f"[ClearML wrapper] Failed to upload artifacts: {e}", flush=True)
+
     sys.exit(result.returncode)
 
 

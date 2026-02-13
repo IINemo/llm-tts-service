@@ -36,7 +36,7 @@ def create_task(
     project_name: str = "llm-tts-service",
     task_name: str = "BeamSearch SelfVerification MinervaMath",
     queue_name: str = "gpu-80gb",
-    config_name: str = "experiments/beam_search/minerva_math/beam_search_vllm_self_verification_minerva_math",
+    config_name: str = "experiments/beam_search/minerva_math/beam_search_vllm_self_verification_math500",
     config_path: str = "../config",
     use_docker: bool = True,
     overrides: list = None,
