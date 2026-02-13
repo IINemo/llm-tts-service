@@ -45,7 +45,6 @@ generation:
   top_p: 0.95
   top_k: 20
   batch_size: 1
-  checkpoint_batch_size: 4
   max_length: 8192
 
 # Strategy - Online Best-of-N with thinking marker detector
