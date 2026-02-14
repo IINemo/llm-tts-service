@@ -177,150 +177,96 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     # =========================================================================
 
     def _log_stop_tokens_with_strings(self) -> None:
-        """Log stop tokens with their decoded string representations for debugging."""
-        if not self.stop_tokens:
+        """Log all stop tokens used for generation, grouped by category."""
+        if not self.stop_tokens and not self.stop_token_ids:
+            log.info("No stop tokens configured")
             return
 
-        # Get detector's use_* flags to group tokens by category
+        num_ids = len(self.stop_token_ids) if self.stop_token_ids else 0
+        log.info(
+            f"Stop tokens: {len(self.stop_tokens)} strings, {num_ids} token IDs"
+        )
+
+        # Try to categorize string stop tokens by detector category
         detector = getattr(self, "detector", None)
         if detector and hasattr(detector, "use_sequence"):
-            # Build tokens by category directly from detector's word lists
+            from llm_tts.step_boundary_detectors.thinking.vllm import (
+                get_stop_tokens_sentence_start,
+            )
             from llm_tts.step_boundary_detectors.thinking.vllm.stop_tokens import (
-                SEQUENCE_WORDS, CONCLUSION_WORDS,
+                ANSWER_TOKENS,
+                CONCLUSION_WORDS,
+                CORRECTION_WORDS,
+                REASONING_WORDS,
+                SEQUENCE_WORDS,
+                STRUCTURE_TOKENS,
                 THINKING_WORDS,
                 VERIFICATION_WORDS,
-                REASONING_WORDS,
-                CORRECTION_WORDS,
-                STRUCTURE_TOKENS,
             )
 
-            categories = []
-            if getattr(detector, "use_sequence", False):
-                categories.append(("Sequence", SEQUENCE_WORDS))
-            if getattr(detector, "use_conclusion", False):
-                categories.append(("Conclusion", CONCLUSION_WORDS))
-            if getattr(detector, "use_thinking", False):
-                categories.append(("Thinking", THINKING_WORDS))
-            if getattr(detector, "use_verification", False):
-                categories.append(("Verification", VERIFICATION_WORDS))
-            if getattr(detector, "use_reasoning", False):
-                categories.append(("Reasoning", REASONING_WORDS))
-            if getattr(detector, "use_structure", False):
-                categories.append(("Structure", STRUCTURE_TOKENS))
+            # Map flag names to word lists
+            flag_categories = [
+                ("Sequence", "use_sequence", SEQUENCE_WORDS),
+                ("Conclusion", "use_conclusion", CONCLUSION_WORDS),
+                ("Thinking", "use_thinking", THINKING_WORDS),
+                ("Verification", "use_verification", VERIFICATION_WORDS),
+                ("Reasoning", "use_reasoning", REASONING_WORDS),
+                ("Correction", "use_correction", CORRECTION_WORDS),
+                ("Structure", "use_structure", STRUCTURE_TOKENS),
+            ]
 
-            # Get tokenizer from model
-            tokenizer = getattr(self.model, "tokenizer", None) if hasattr(self.model, "tokenizer") else None
-            if tokenizer is None:
-                try:
-                    tokenizer = self.model.get_tokenizer()
-                except Exception:
-                    log.warning("Cannot get tokenizer for stop token decoding")
+            # For each enabled category, get its tokens using the same expansion
+            # as detector.get_vllm_stop_tokens() (get_stop_tokens_sentence_start)
+            all_flags = [
+                "use_sequence", "use_conclusion", "use_thinking",
+                "use_verification", "use_reasoning", "use_correction",
+                "use_structure",
+            ]
+            # ANSWER_TOKENS are always added by get_stop_tokens_sentence_start,
+            # exclude them from category matching to avoid misattribution
+            answer_tokens = set(ANSWER_TOKENS)
+            stop_tokens_set = set(self.stop_tokens)
+            accounted = set()
 
-            # Answer tokens (separate handling)
-            answer_tokens = getattr(detector, "answer_patterns", [])
-            if answer_tokens:
-                categories.append(("Answer", answer_tokens))
+            for cat_name, flag_name, word_list in flag_categories:
+                if not getattr(detector, flag_name, False):
+                    continue
 
-            # Log each category
-            total_count = 0
-            for category_name, word_list in categories:
-                from llm_tts.step_boundary_detectors.thinking.vllm.stop_tokens import (
-                    expand_word_boundary,
-                    _split_custom_markers,
+                # Generate tokens for just this category using the same
+                # expansion as detector.get_vllm_stop_tokens()
+                kwargs = {f: False for f in all_flags}
+                kwargs[flag_name] = True
+                cat_tokens = set(get_stop_tokens_sentence_start(**kwargs)) - answer_tokens
+
+                matched = sorted(stop_tokens_set & cat_tokens)
+                accounted.update(matched)
+
+                words_str = ", ".join(word_list)
+                log.info(
+                    f"  {cat_name}: {len(matched)} tokens "
+                    f"from {len(word_list)} words [{words_str}]"
                 )
 
-                category_tokens = set()
-                # Get raw markers
-                raw_markers = []
-                if category_name == "Structure":
-                    # Structure tokens are already literals
-                    category_tokens.update(word_list)
-                else:
-                    # Split into expandable words and raw markers
-                    for marker in word_list:
-                        extra_words, raws = _split_custom_markers([marker] if category_name == "Answer" else [marker])
-                        word_list.extend(extra_words)
-                        raw_markers.extend(raws)
-
-                    # Expand each word to stop tokens
-                    for word in word_list:
-                        tokens = expand_word_boundary(word)
-                        category_tokens.update(tokens)
-
-                    # Add raw markers directly
-                    category_tokens.update(raw_markers)
-
-                category_tokens = sorted(category_tokens)
-
-                # Get count before removing from total
-                count = len(category_tokens)
-                total_count += count
-
-                # Show first few tokens in this category
-                sample_show = min(count, 10)
-                log.info(f"Category '{category_name}' ({count} tokens, showing first {sample_show}):")
-                for token in category_tokens[:sample_show]:
-                    if isinstance(token, str):
-                        log.info(f"  {repr(token)}")
-                    else:
-                        # For non-str tokens, we'd use tokenizer
-                        try:
-                            token_id = token if isinstance(token, int) else tokenizer.convert_tokens_to_ids(token)
-                            decoded = tokenizer.decode([token_id])
-                            log.info(f"  (id={token_id}) {repr(decoded)}")
-                        except Exception:
-                            log.info(f"  {repr(token)}")
-
-                # Remove this category's tokens from total for summary
-                # (do this after logging all categories)
-
-            # Summary of remaining tokens (answer tokens, any custom additions, etc.)
-            remaining = len(self.stop_tokens) - total_count
-            if remaining > 0:
-                log.info(f"Other/Remaining tokens ({remaining}):")
-                # Show a sample of remaining tokens
-                for token in sorted(self.stop_tokens)[-10:]:
-                    if token in set(str(t) for cat_tokens in categories for t in cat_tokens[1]):
-                        continue
-                    if isinstance(token, str):
-                        log.info(f"  {repr(token)}")
-                    else:
-                        try:
-                            token_id = token if isinstance(token, int) else tokenizer.convert_tokens_to_ids(token)
-                            decoded = tokenizer.decode([token_id])
-                            log.info(f"  (id={token_id}) {repr(decoded)}")
-                        except Exception:
-                            log.info(f"  {repr(token)}")
-                    if sum(1 for _ in range(remaining - 9)) <= 0:
-                        break
-            else:
-                log.info("No other/remaining tokens (all tokens accounted for in categories)")
+            # Tokens not in any category (e.g., </think>, answer patterns)
+            uncategorized = sorted(stop_tokens_set - accounted)
+            if uncategorized:
+                tokens_str = ", ".join(repr(t) for t in uncategorized)
+                log.info(f"  Other: {len(uncategorized)} tokens [{tokens_str}]")
         else:
-            # Fallback: just list all tokens without categories
-            log.info("Stop tokens (all, decoded, no category info available):")
-            # Get tokenizer from model
-            tokenizer = getattr(self.model, "tokenizer", None) if hasattr(self.model, "tokenizer") else None
-            if tokenizer is None:
-                try:
-                    tokenizer = self.model.get_tokenizer()
-                except Exception:
-                    log.warning("Cannot get tokenizer for stop token decoding")
-                    return
-
-            # Log each stop token with its decoded form
+            # No category info, list all tokens
             for i, token in enumerate(self.stop_tokens):
+                log.info(f"  [{i+1}] {repr(token)}")
+
+        # Log token ID stop tokens with decoded strings
+        if self.stop_token_ids:
+            parts = []
+            for token_id in self.stop_token_ids:
                 try:
-                    # Try to decode single token
-                    if isinstance(token, str):
-                        decoded_repr = f"(str) {repr(token)}"
-                    else:
-                        # Convert to token ID if needed
-                        token_id = token if isinstance(token, int) else tokenizer.convert_tokens_to_ids(token)
-                        decoded = tokenizer.decode([token_id])
-                        decoded_repr = f"(id={token_id}) {repr(decoded)}"
-                    log.info(f"  [{i+1}] {decoded_repr}")
-                except Exception as e:
-                    log.info(f"  [{i+1}] {repr(token)} -> <decode error: {e}>")
+                    decoded = self.tokenizer.decode([token_id])
+                    parts.append(f"{token_id}={repr(decoded)}")
+                except Exception:
+                    parts.append(str(token_id))
+            log.info(f"  Token IDs: {', '.join(parts)}")
 
     def _extract_logprobs(
         self, token_ids: List[int], logprobs: List[Dict]
