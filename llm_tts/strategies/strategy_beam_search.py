@@ -449,9 +449,7 @@ class StrategyBeamSearch(StrategyBase):
 
             # Generate answer phases for thinking-complete beams (batched)
             if thinking_mode and samples_pending_finalization:
-                self._generate_beam_answers(
-                    samples_pending_finalization, requests
-                )
+                self._generate_beam_answers(samples_pending_finalization, requests)
 
             # Finalize completed samples
             for sample_id, best_beam in samples_pending_finalization:
@@ -472,9 +470,7 @@ class StrategyBeamSearch(StrategyBase):
                 for step_idx, (step, score) in enumerate(
                     zip(best_beam["steps"], best_beam["scores"])
                 ):
-                    log.info(
-                        f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}"
-                    )
+                    log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
 
             # Remove completed samples from active set
             for sample_id in samples_to_remove:
@@ -684,7 +680,9 @@ class StrategyBeamSearch(StrategyBase):
         if not to_generate:
             return
 
-        log.info(f"Generating {len(to_generate)} answer phases for thinking-complete beams")
+        log.info(
+            f"Generating {len(to_generate)} answer phases for thinking-complete beams"
+        )
 
         batch_requests = [requests[sample_id] for sample_id, _ in to_generate]
         batch_trajectories = [beam["steps"] for _, beam in to_generate]

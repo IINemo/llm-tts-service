@@ -183,9 +183,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             return
 
         num_ids = len(self.stop_token_ids) if self.stop_token_ids else 0
-        log.info(
-            f"Stop tokens: {len(self.stop_tokens)} strings, {num_ids} token IDs"
-        )
+        log.info(f"Stop tokens: {len(self.stop_tokens)} strings, {num_ids} token IDs")
 
         # Try to categorize string stop tokens by detector category
         detector = getattr(self, "detector", None)
@@ -218,8 +216,12 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             # For each enabled category, get its tokens using the same expansion
             # as detector.get_vllm_stop_tokens() (get_stop_tokens_sentence_start)
             all_flags = [
-                "use_sequence", "use_conclusion", "use_thinking",
-                "use_verification", "use_reasoning", "use_correction",
+                "use_sequence",
+                "use_conclusion",
+                "use_thinking",
+                "use_verification",
+                "use_reasoning",
+                "use_correction",
                 "use_structure",
             ]
             # ANSWER_TOKENS are always added by get_stop_tokens_sentence_start,
@@ -236,7 +238,9 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 # expansion as detector.get_vllm_stop_tokens()
                 kwargs = {f: False for f in all_flags}
                 kwargs[flag_name] = True
-                cat_tokens = set(get_stop_tokens_sentence_start(**kwargs)) - answer_tokens
+                cat_tokens = (
+                    set(get_stop_tokens_sentence_start(**kwargs)) - answer_tokens
+                )
 
                 matched = sorted(stop_tokens_set & cat_tokens)
                 accounted.update(matched)
