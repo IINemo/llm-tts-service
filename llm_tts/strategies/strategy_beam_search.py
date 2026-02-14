@@ -202,6 +202,11 @@ class StrategyBeamSearch(StrategyBase):
         completed_results: Dict[int, Dict[str, Any]] = {}
         active_samples = set(range(M))
 
+        # Check if thinking mode is enabled (for answer generation after thinking)
+        thinking_mode = getattr(
+            self.step_generator, "thinking_mode", False
+        ) and not getattr(self.step_generator, "disable_thinking_mode", True)
+
         for step_num in range(self.max_steps):
             if not active_samples:
                 log.info(f"All samples completed at step {step_num}")
@@ -398,6 +403,7 @@ class StrategyBeamSearch(StrategyBase):
 
             # 8) Prune to top-k ACTIVE beams per sample and record completions
             samples_to_remove = []
+            samples_pending_finalization = []  # (sample_id, best_beam)
 
             for sample_id in active_samples:
                 beams = new_sample_beams[sample_id]
@@ -434,31 +440,41 @@ class StrategyBeamSearch(StrategyBase):
                 sample_beams[sample_id] = active
 
                 if not active:
-                    # No active beams remain; finalize using best completed beam (accumulated)
+                    # No active beams remain; select best beam for finalization
                     best_beam = self._select_best_beam(
                         completed_beams_by_sample[sample_id]
                     )
-                    completed_results[sample_id] = self._finalize_sample(
-                        best_beam["steps"],
-                        best_beam["scores"],
-                        token_stats=self.step_generator.get_sample_stats_for(sample_id),
-                        sample_id=sample_id,
-                    )
+                    samples_pending_finalization.append((sample_id, best_beam))
                     samples_to_remove.append(sample_id)
-                    # Log chosen trajectory details - show each step separately
-                    scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
+
+            # Generate answer phases for thinking-complete beams (batched)
+            if thinking_mode and samples_pending_finalization:
+                self._generate_beam_answers(
+                    samples_pending_finalization, requests
+                )
+
+            # Finalize completed samples
+            for sample_id, best_beam in samples_pending_finalization:
+                completed_results[sample_id] = self._finalize_sample(
+                    best_beam["steps"],
+                    best_beam["scores"],
+                    token_stats=self.step_generator.get_sample_stats_for(sample_id),
+                    sample_id=sample_id,
+                )
+                # Log chosen trajectory details - show each step separately
+                scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
+                log.info(
+                    f"Sample {sample_indices[sample_id]}: Completed with "
+                    f"{len(best_beam['steps'])} steps, "
+                    f"score={self._aggregate_scores(best_beam['scores']):.3f}, "
+                    f"scores=[{scores_str}]"
+                )
+                for step_idx, (step, score) in enumerate(
+                    zip(best_beam["steps"], best_beam["scores"])
+                ):
                     log.info(
-                        f"Sample {sample_indices[sample_id]}: Completed with "
-                        f"{len(best_beam['steps'])} steps, "
-                        f"score={self._aggregate_scores(best_beam['scores']):.3f}, "
-                        f"scores=[{scores_str}]"
+                        f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}"
                     )
-                    for step_idx, (step, score) in enumerate(
-                        zip(best_beam["steps"], best_beam["scores"])
-                    ):
-                        log.info(
-                            f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}"
-                        )
 
             # Remove completed samples from active set
             for sample_id in samples_to_remove:
@@ -470,11 +486,18 @@ class StrategyBeamSearch(StrategyBase):
             )
 
         # Finalize any remaining active samples (prefer completed if any exist)
+        remaining_pending = []
         for sample_id in active_samples:
             active = sample_beams[sample_id]
             candidates = completed_beams_by_sample[sample_id] or active
             best_beam = self._select_best_beam(candidates)
+            remaining_pending.append((sample_id, best_beam))
 
+        # Generate answer phases for remaining thinking-complete beams
+        if thinking_mode and remaining_pending:
+            self._generate_beam_answers(remaining_pending, requests)
+
+        for sample_id, best_beam in remaining_pending:
             completed_results[sample_id] = self._finalize_sample(
                 best_beam["steps"],
                 best_beam["scores"],
@@ -633,6 +656,63 @@ class StrategyBeamSearch(StrategyBase):
 
         return all_candidates_data
 
+    def _generate_beam_answers(
+        self,
+        beams_needing_answers: List[tuple],  # [(sample_id, beam_dict)]
+        requests: List[List[Dict[str, str]]],
+    ) -> None:
+        """Generate answer phases for beams where thinking is complete but trajectory is not.
+
+        After beam search selects the best thinking trajectory, this method generates
+        the answer phase (text after </think> with \\boxed{}) in one batched call.
+        Modifies beams in-place by appending answer StepCandidates.
+
+        Args:
+            beams_needing_answers: List of (sample_id, beam_dict) pairs
+            requests: Original requests for each sample
+        """
+        # Filter beams where thinking is done but trajectory is not
+        to_generate = []
+        for sample_id, beam in beams_needing_answers:
+            if (
+                beam["steps"]
+                and beam["steps"][-1].is_thinking_complete
+                and not beam["steps"][-1].is_trajectory_complete
+            ):
+                to_generate.append((sample_id, beam))
+
+        if not to_generate:
+            return
+
+        log.info(f"Generating {len(to_generate)} answer phases for thinking-complete beams")
+
+        batch_requests = [requests[sample_id] for sample_id, _ in to_generate]
+        batch_trajectories = [beam["steps"] for _, beam in to_generate]
+
+        answer_results = self.step_generator.generate_answer_candidates_batch(
+            batch_requests,
+            batch_trajectories,
+            candidates_per_step=1,
+        )
+
+        for batch_idx, (sample_id, beam) in enumerate(to_generate):
+            candidates = (
+                answer_results[batch_idx] if batch_idx < len(answer_results) else []
+            )
+            if candidates:
+                answer_step = candidates[0]
+                answer_step.is_trajectory_complete = True
+                beam["steps"].append(answer_step)
+                # Answer steps are NOT scored (following offline BoN pattern)
+                answer_tokens = (
+                    len(answer_step.token_ids) if answer_step.token_ids else 0
+                )
+                log.info(
+                    f"Sample {sample_id}: Answer phase appended ({answer_tokens} tokens)"
+                )
+            else:
+                log.warning(f"Sample {sample_id}: No answer candidates generated")
+
     def _finalize_sample(
         self,
         steps: List[StepCandidate],
@@ -675,6 +755,13 @@ class StrategyBeamSearch(StrategyBase):
             "completed": is_completed,
             "extracted_answer": extracted,
         }
+
+        # If answer step was appended (more steps than scores), record it separately
+        # so the eval script logs it as "Generated Answer" instead of a numbered step
+        if len(steps) > len(scores) and steps:
+            answer_step = steps[-1]
+            result["answer_step"] = answer_step.raw_text or answer_step.text
+
         if token_stats is not None:
             result["token_stats"] = token_stats
         return result
