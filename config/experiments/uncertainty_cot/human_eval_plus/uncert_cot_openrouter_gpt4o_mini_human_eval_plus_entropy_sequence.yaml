@@ -27,7 +27,7 @@ model:
   model_path: "openai/gpt-4o-mini"
   api_key: null  # Set via OPENROUTER_API_KEY env var
   supports_logprobs: true
-  prefill_mode: false
+  prefill_mode: true
   max_context_budget: 128000
 
 # System configuration
