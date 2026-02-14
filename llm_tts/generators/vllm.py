@@ -785,6 +785,22 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     if stop_reason == "</think>" and "</think>" not in text:
                         text = text + "</think>"
 
+                    # Truncate at </think> if it appeared mid-step.
+                    # This happens when min_step_tokens prevents vLLM from stopping
+                    # at </think> — the model continues into answer phase, leaking
+                    # answer tokens into the step. Discard everything after </think>.
+                    if thinking_complete and stop_reason != "</think>":
+                        think_pos = text.find("</think>")
+                        if think_pos >= 0:
+                            leaked = len(text) - (think_pos + len("</think>"))
+                            if leaked > 0:
+                                text = text[: think_pos + len("</think>")]
+                                log.info(
+                                    f"Path {traj_idx} cand {cand_idx}: "
+                                    f"truncated {leaked} chars after </think> "
+                                    f"(min_step_tokens bypassed stop)"
+                                )
+
                     if thinking_complete:
                         is_thinking_complete = True
 
