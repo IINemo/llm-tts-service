@@ -76,7 +76,7 @@ scorer:
   n_evaluate_sample: 3
   temperature: 0.7
   max_tokens: 100
-  timeout: 120
+  timeout: 600
   value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
   # Override scorer model to use Kimi K2 Think via API
   model:
