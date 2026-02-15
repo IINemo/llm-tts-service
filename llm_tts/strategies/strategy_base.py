@@ -39,13 +39,17 @@ class StrategyBase(ABC):
 
     @abstractmethod
     def generate_trajectories_batch(
-        self, requests: List[List[Dict[str, str]]], sample_indices: List[int]
+        self,
+        requests: List[List[Dict[str, str]]],
+        sample_indices: List[int],
+        save_callback: Callable = None,
     ) -> List[Dict[str, Any]]:
         """Generate trajectories for multiple samples in batch.
 
         Args:
             requests: List of input chats (one per sample)
             sample_indices: List of sample indices (for logging/tracking)
+            save_callback: Optional callback(results, phase=str) for progressive saves
 
         Returns:
             List of result dictionaries (one per sample)

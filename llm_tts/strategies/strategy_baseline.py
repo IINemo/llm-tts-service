@@ -214,7 +214,10 @@ class StrategyBaseline(StrategyBase):
         }
 
     def generate_trajectories_batch(
-        self, requests: List[List[Dict[str, str]]], sample_indices: List[int] = None
+        self,
+        requests: List[List[Dict[str, str]]],
+        sample_indices: List[int] = None,
+        save_callback=None,
     ) -> List[Dict[str, Any]]:
         """
         Generate responses for multiple requests.

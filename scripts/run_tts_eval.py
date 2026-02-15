@@ -1003,10 +1003,45 @@ def _generate_trajectories_batch(
             f"samples {batch_start}-{batch_end - 1} ({len(chunk_requests)} samples)"
         )
 
+        # Define progressive save callback for this chunk
+        def _save_callback(strategy_results, phase="post_generation"):
+            temp_results = list(results)  # copy previous chunks
+            for i_idx, inst, gold, strat_res in zip(
+                chunk_indices, chunk_instances, chunk_gold_answers, strategy_results
+            ):
+                temp_results.append(
+                    {
+                        "index": i_idx,
+                        "question": inst[question_field],
+                        "gold_answer": gold,
+                        "generated_trajectory": strat_res.get("trajectory", ""),
+                        "generated_answer": strat_res.get("extracted_answer", ""),
+                        "answer_step": strat_res.get("answer_step"),
+                        "steps": [
+                            s.text if hasattr(s, "text") else str(s)
+                            for s in strat_res.get("steps", [])
+                        ],
+                        "reasoning_steps": strat_res.get("reasoning_steps", 0),
+                        "validity_scores": strat_res.get("validity_scores", []),
+                        "aggregated_score": strat_res.get("aggregated_score", 0.0),
+                        "all_scores": strat_res.get("all_scores", []),
+                        "all_step_scores": strat_res.get("all_step_scores", []),
+                        "best_idx": strat_res.get("best_idx"),
+                        "completed": strat_res.get("completed", False),
+                        "is_correct": None,
+                        "eval": {},
+                        "scoring_phase": phase,
+                    }
+                )
+            save_results_json(temp_results, save_path_file)
+            log.info(
+                f"Progressive save ({phase}): {len(temp_results)} results to {save_path_file}"
+            )
+
         # Generate this chunk
         try:
             chunk_results = strategy.generate_trajectories_batch(
-                chunk_requests, chunk_indices
+                chunk_requests, chunk_indices, save_callback=_save_callback
             )
         except Exception as e:
             import traceback
