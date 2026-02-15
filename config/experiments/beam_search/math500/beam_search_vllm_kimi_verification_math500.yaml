@@ -1,0 +1,93 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/math500/beam_search_vllm_kimi_verification_math500
+#
+# Beam Search with Kimi K2 Think as verifier (via OpenRouter API)
+# Generation: vLLM (Qwen2.5-Math-7B), Scoring: Kimi K2 Think (API)
+
+defaults:
+  - /config
+  - /dataset/math_500
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/self_verification
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "beam_search_vllm_kimi_verification_math500_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: none
+wandb_project: llm-tts-eval-math500
+
+# Model configuration (vLLM backend for generation)
+model:
+  type: vllm
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 4096
+  disable_thinking_mode: true
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 2048
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  batch_size: 1
+  max_length: 4096
+
+# Strategy - Beam Search
+strategy:
+  type: beam_search
+  beam_size: 5
+  candidates_per_beam: 8
+  max_steps: 30
+  aggregation: mean
+  batch_generation: true
+  prompt_buffer: 500
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  min_step_tokens: 10
+  max_step_tokens: 256
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: false
+  use_reasoning: true
+  use_correction: false
+
+# Self-Verification Scorer using Kimi K2 Think via OpenRouter API
+scorer:
+  type: self_verification
+  method: value
+  n_evaluate_sample: 3
+  temperature: 0.7
+  max_tokens: 100
+  timeout: 120
+  value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
+  # Override scorer model to use Kimi K2 Think via API
+  model:
+    type: openai_api
+    provider: openrouter
+    model_name: "moonshotai/kimi-k2-instruct"
+    api_key: null  # Set via OPENROUTER_API_KEY env var or override
+
+# Dataset configuration
+dataset:
+  subset: 500
+  offset: 0
+  data_name: math
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"

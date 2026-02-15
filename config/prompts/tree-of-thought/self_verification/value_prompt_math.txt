@@ -60,3 +60,15 @@ sure
 Problem: {problem}
 Reasoning so far: {trajectory}
 Step: {step}
+
+Analyze this step carefully:
+1. Is the reasoning logically correct?
+2. Does it make progress toward the solution?
+3. Are there any errors or issues?
+
+Rate this step as one of:
+- sure: This step is definitely correct and makes good progress
+- likely: This step appears correct and reasonable
+- impossible: This step is wrong or leads to a dead end
+
+Your rating (sure/likely/impossible):
