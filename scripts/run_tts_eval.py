@@ -22,7 +22,6 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-import clearml
 import hydra
 import numpy as np
 import torch
@@ -806,10 +805,10 @@ def create_tts_strategy(
             elif hasattr(model, "vllm_engine"):
                 scorer.set_model(model.vllm_engine, use_vllm=True)
                 log.info("Self-verification scorer: using vLLM backend (wrapped)")
-        # For raw vLLM LLM instance (when uncertainty wrapper is skipped)
-        elif VLLM_AVAILABLE and isinstance(model, LLM):
-            scorer.set_model(model, use_vllm=True)
-            log.info("Self-verification scorer: using vLLM backend (raw)")
+            # For raw vLLM LLM instance (when uncertainty wrapper is skipped)
+            elif VLLM_AVAILABLE and isinstance(model, LLM):
+                scorer.set_model(model, use_vllm=True)
+                log.info("Self-verification scorer: using vLLM backend (raw)")
             # For local WhiteboxModel (lm_polygraph)
             elif isinstance(model, WhiteboxModel):
                 scorer.set_model(model, use_local=True)
@@ -2196,7 +2195,6 @@ def main(config):
 
 
 if __name__ == "__main__":
-    task = clearml.Task.init(project_name="llm-tts", task_name="tts-eval-experiment")
     # Parse custom resume arguments before Hydra processes sys.argv
     parse_resume_arguments()
     main()
