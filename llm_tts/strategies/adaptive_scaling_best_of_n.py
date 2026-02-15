@@ -588,6 +588,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         self,
         requests: List[List[Dict[str, str]]],
         sample_idxs: Optional[List[int]] = None,
+        save_callback=None,
     ) -> List[Dict[str, Any]]:
         """
         Batched version of generate_trajectory that runs multiple samples "online" in parallel.

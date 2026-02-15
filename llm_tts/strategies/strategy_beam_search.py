@@ -128,6 +128,7 @@ class StrategyBeamSearch(StrategyBase):
         self,
         requests: List[List[Dict[str, str]]],
         sample_indices: Optional[List[int]] = None,
+        save_callback=None,
     ) -> List[Dict[str, Any]]:
         """
         Generate trajectories for ALL samples in parallel using batched beam search.

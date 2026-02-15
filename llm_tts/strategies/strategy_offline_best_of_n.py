@@ -347,6 +347,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         self,
         requests: List[List[Dict[str, str]]],
         sample_indices: Optional[List[int]] = None,
+        save_callback=None,
     ) -> List[Dict[str, Any]]:
         """
         Generate N trajectories for each of M samples using generate_step_candidates_batch.
@@ -357,6 +358,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         Args:
             requests: List of M chat message lists (each is a sample's request)
             sample_indices: Optional list of sample indices for logging
+            save_callback: Optional callback(results, phase=str) for progressive saves
 
         Returns:
             List of M result dictionaries (one per sample)
@@ -453,6 +455,11 @@ class StrategyOfflineBestOfN(StrategyBase):
         # Phase 1b: Batch-generate answer phases for ALL thinking candidates in one vLLM call
         self._generate_answers(all_traj_datas, all_traj_requests)
 
+        # Progressive save: checkpoint after generation, before scoring
+        if save_callback is not None:
+            pre_scoring_results = self._build_results_from_sample_data(sample_data, N)
+            save_callback(pre_scoring_results, phase="post_generation")
+
         # Phase 1c: Compute uncertainty scores and build scoring lists
         for sample_data_idx, data in enumerate(sample_data):
             if data["failed"]:
@@ -530,7 +537,34 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "aggregated_score"
                 ] = self._aggregate_scores(step_scores)
 
+        # Progressive save: checkpoint after scoring
+        if save_callback is not None:
+            scored_results = self._build_results_from_sample_data(sample_data, N)
+            save_callback(scored_results, phase="post_scoring")
+
         # Phase 3: Select best trajectory per sample and build results
+        results = self._build_results_from_sample_data(sample_data, N)
+
+        log.info(
+            f"Offline Best-of-N batch: completed {len(results)} samples, "
+            f"total {M * N} trajectories generated and scored"
+        )
+        return results
+
+    def _build_results_from_sample_data(
+        self, sample_data: List[Dict], N: int
+    ) -> List[Dict[str, Any]]:
+        """Build result dicts from sample_data by selecting best trajectory per sample.
+
+        Handles missing PRM stats gracefully (they won't exist during pre-scoring save).
+
+        Args:
+            sample_data: List of per-sample dicts with trajectories and metadata
+            N: Number of trajectories per sample
+
+        Returns:
+            List of result dicts (one per sample)
+        """
         results = []
         for sample_data_idx, data in enumerate(sample_data):
             if data["failed"]:
@@ -548,8 +582,6 @@ class StrategyOfflineBestOfN(StrategyBase):
             )
 
             # Extract answer from best trajectory
-            # For thinking mode, the answer is in answer_step (after </think)
-            # For non-thinking mode, the answer is in full_text
             answer_text = best_result.get("answer_step") or best_result.get(
                 "full_text", ""
             )
@@ -557,27 +589,27 @@ class StrategyOfflineBestOfN(StrategyBase):
 
             # Token stats from generator's per-sample tracking
             token_stats = self.step_generator.get_sample_stats_for(sample_data_idx)
-            token_stats["generation_count"] = N  # N candidates in one vLLM call
+            token_stats["generation_count"] = N
 
             # Merge PRM scorer stats if available
-            # PRM scorer tracks tokens keyed by dataset sample_idx (passed via score_trajectories_batch)
             if hasattr(self.scorer, "get_prm_stats_for"):
                 prm_stats = self.scorer.get_prm_stats_for(sample_idx)
-                token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
-                token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-                gen_tflops = token_stats.get("tflops")
-                if gen_tflops is None:
-                    log.warning(
-                        f"Sample {sample_idx}: missing 'tflops' in token_stats when merging PRM stats"
-                    )
-                    gen_tflops = 0
-                prm_tflops = prm_stats["prm_tflops"]
-                if prm_tflops is None:
-                    log.warning(
-                        f"Sample {sample_idx}: missing 'prm_tflops' in PRM stats"
-                    )
-                    prm_tflops = 0
-                token_stats["tflops"] = gen_tflops + prm_tflops
+                if prm_stats.get("prm_input_tokens"):
+                    token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
+                    token_stats["prm_tflops"] = prm_stats["prm_tflops"]
+                    gen_tflops = token_stats.get("tflops")
+                    if gen_tflops is None:
+                        log.warning(
+                            f"Sample {sample_idx}: missing 'tflops' in token_stats when merging PRM stats"
+                        )
+                        gen_tflops = 0
+                    prm_tflops = prm_stats["prm_tflops"]
+                    if prm_tflops is None:
+                        log.warning(
+                            f"Sample {sample_idx}: missing 'prm_tflops' in PRM stats"
+                        )
+                        prm_tflops = 0
+                    token_stats["tflops"] = gen_tflops + prm_tflops
 
             log.info(
                 f"Sample {sample_idx}: best trajectory {best_idx + 1}/{N}, "
@@ -603,10 +635,6 @@ class StrategyOfflineBestOfN(StrategyBase):
                 }
             )
 
-        log.info(
-            f"Offline Best-of-N batch: completed {len(results)} samples, "
-            f"total {M * N} trajectories generated and scored"
-        )
         return results
 
     def _empty_result(self) -> Dict[str, Any]:

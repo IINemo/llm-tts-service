@@ -359,6 +359,7 @@ class StrategySelfConsistency(StrategyBase):
         self,
         requests: List[List[Dict[str, str]]],
         sample_indices: List[int] = None,
+        save_callback=None,
     ) -> List[Dict[str, Any]]:
         """
         Generate N paths for each of M samples using generate_step_candidates_batch.
