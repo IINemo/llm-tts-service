@@ -1015,7 +1015,7 @@ def _generate_trajectories_batch(
                         "question": inst[question_field],
                         "gold_answer": gold,
                         "generated_trajectory": strat_res.get("trajectory", ""),
-                        "generated_answer": strat_res.get("extracted_answer", ""),
+                        "extracted_answer": strat_res.get("extracted_answer", ""),
                         "answer_step": strat_res.get("answer_step"),
                         "steps": [
                             s.text if hasattr(s, "text") else str(s)
@@ -1163,11 +1163,7 @@ def _generate_trajectories_batch(
                     if isinstance(evaluator, EvaluatorExactMatch):
                         # EvaluatorExactMatch._score_single takes 3-tuple, returns float
                         # For self-consistency, use extracted_answer if available (trajectory is aggregated)
-                        solution = (
-                            result.get("extracted_answer")
-                            or result.get("generated_answer")
-                            or result["trajectory"]
-                        )
+                        solution = result.get("extracted_answer")
                         # Convert to string for comparison
                         if isinstance(solution, (int, float)):
                             solution = str(solution)
@@ -1182,11 +1178,21 @@ def _generate_trajectories_batch(
                             hasattr(evaluator, "mode")
                             and evaluator.mode == "answer_only"
                         ):
-                            solution = (
-                                result.get("extracted_answer")
-                                or result.get("generated_answer")
-                                or result["trajectory"]
-                            )
+                            # Get proposed answer - check if actually provided
+                            proposed_answer = result.get("extracted_answer")
+                            if not proposed_answer or (
+                                isinstance(proposed_answer, str)
+                                and proposed_answer.strip() == ""
+                            ):
+                                # No answer produced - mark as incorrect, don't waste API call on empty trajectory
+                                is_correct_eval = False
+                                eval_results[eval_name] = {
+                                    "is_correct": is_correct_eval,
+                                    "consensus": 0.0,
+                                    "response": "No answer generated",
+                                }
+                                continue
+                            solution = proposed_answer
                         else:
                             solution = result["trajectory"]
                         labels, responses, consensus_scores = evaluator(
@@ -1258,7 +1264,7 @@ def _generate_trajectories_batch(
                 "question": question,
                 "gold_answer": gold_answer_num,
                 "generated_trajectory": result["trajectory"],
-                "generated_answer": generated_text,
+                "extracted_answer": generated_text,
                 "answer_step": result.get("answer_step"),
                 "steps": result["steps"],
                 "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
@@ -1567,10 +1573,37 @@ def evaluate_results(
                     # (Running EvalPlus per-sample is inefficient)
                     continue
                 else:
-                    # Other evaluators use __call__ with extracted answer
-                    extracted_answer = result.get(
-                        "generated_answer", result.get("extracted_answer", "")
-                    )
+                    # For LLM judges in answer_only mode, check for empty answer
+                    if (
+                        hasattr(evaluator_fn, "mode")
+                        and evaluator_fn.mode == "answer_only"
+                    ):
+                        extracted_answer = result.get("extracted_answer", "")
+                        if not extracted_answer or (
+                            isinstance(extracted_answer, str)
+                            and extracted_answer.strip() == ""
+                        ):
+                            # Empty answer - mark as incorrect without calling evaluator
+                            annotation = 0
+                            is_correct = False
+                            eval_data = {
+                                "label": int(annotation),
+                                "is_correct": bool(is_correct),
+                                "response": "No answer generated",
+                            }
+                            results[i].setdefault("eval", {})[eval_name] = eval_data
+                            log.info(
+                                f"Sample {result['index']} [{eval_name}]: "
+                                f"0 (Incorrect) - No answer generated"
+                            )
+                            save_results_json(results, save_path_file)
+                            samples_evaluated += 1
+                            continue
+                    else:
+                        extracted_answer = result.get(
+                            "generated_trajectory", result.get("trajectory", "")
+                        )
+
                     eval_result = evaluator_fn(
                         [result["question"]],
                         [extracted_answer],
@@ -1655,12 +1688,16 @@ def evaluate_results(
 
         # For answer_only mode, use extracted answer; otherwise use full solution
         if hasattr(evaluator_fn, "mode") and evaluator_fn.mode == "answer_only":
-            solutions = [
-                r.get("extracted_answer")
-                or r.get("generated_answer")
-                or r.get("generated_trajectory", r.get("trajectory", ""))
-                for r in samples_to_eval
-            ]
+            # For LLM judges in answer_only mode: use extracted_answer, or mark as incorrect if empty
+            # Do NOT fall back to trajectory - empty answers should be marked incorrect
+            solutions = []
+            for r in samples_to_eval:
+                extracted = r.get("extracted_answer", "")
+                if extracted and (not isinstance(extracted, str) or extracted.strip()):
+                    solutions.append(extracted)
+                else:
+                    # Empty answer - will be marked as incorrect below
+                    solutions.append("")
         else:
             solutions = [
                 r.get("generated_trajectory", r.get("trajectory", ""))
@@ -1681,6 +1718,45 @@ def evaluate_results(
             instance_data_list = [r.get("instance_data", {}) for r in samples_to_eval]
 
         try:
+            # For answer_only mode: handle empty answers without calling evaluator
+            if hasattr(evaluator_fn, "mode") and evaluator_fn.mode == "answer_only":
+                # Check for empty answers and mark them as incorrect upfront
+                empty_answer_indices = [
+                    idx for idx, sol in enumerate(solutions) if not sol
+                ]
+                valid_indices = [idx for idx, sol in enumerate(solutions) if sol]
+
+                if empty_answer_indices:
+                    # Mark empty answers as incorrect
+                    for idx in empty_answer_indices:
+                        i = indices_to_eval[idx]
+                        results[i].setdefault("eval", {})[eval_name] = {
+                            "label": 0,
+                            "is_correct": False,
+                            "response": "No answer generated",
+                        }
+
+                if not valid_indices:
+                    # All answers are empty, skip evaluator call
+                    log.info(
+                        f"All samples have empty answers, skipping {eval_name} evaluation"
+                    )
+                    save_results_json(results, save_path_file)
+                    continue
+
+                # Filter to only evaluate samples with valid answers
+                indices_to_eval = [indices_to_eval[idx] for idx in valid_indices]
+                problems = [problems[idx] for idx in valid_indices]
+                solutions = [solutions[idx] for idx in valid_indices]
+                gold_answers = [gold_answers[idx] for idx in valid_indices]
+                # Also filter task_ids and instance_data_list if they exist
+                if task_ids is not None:
+                    task_ids = [task_ids[idx] for idx in valid_indices]
+                if instance_data_list is not None:
+                    instance_data_list = [
+                        instance_data_list[idx] for idx in valid_indices
+                    ]
+
             # Batch evaluate - pass additional params if evaluator needs them
             if isinstance(evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
                 eval_result = evaluator_fn(
