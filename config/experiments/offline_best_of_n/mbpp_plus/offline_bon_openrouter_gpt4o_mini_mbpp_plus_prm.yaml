@@ -1,7 +1,7 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/mbpp_plus/offline_bon_openrouter_gpt4o_mini_mbpp_plus_perplexity
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/mbpp_plus/offline_bon_openrouter_gpt4o_mini_mbpp_plus_entropy
 # Offline Best-of-N for MBPP+ using OpenRouter API with newline-based step boundaries
-# Uses Perplexity scorer for step evaluation
+# Uses Entropy scorer for step evaluation
 #
 # Environment variable required: OPENROUTER_API_KEY
 
@@ -10,18 +10,18 @@ defaults:
   - /model/openrouter
   - /generation/default
   - /system/default
-  - /scorer/perplexity
+  - /scorer/prm
   - /evaluation/mbpp_plus/default
   - _self_
 
 # Run naming
-run_name: "offline_bon_openrouter_gpt4o_mini_mbpp_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "offline_bon_openrouter_gpt4o_mini_mbpp_plus_prm_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-mbpp-plus
-wandb_group: "offline_bon_openrouter_gpt4o_mini_mbpp_plus_perplexity"
+wandb_group: "offline_bon_openrouter_gpt4o_mini_mbpp_plus_prm"
 
 # Model configuration (OpenRouter API)
 model:
@@ -72,9 +72,11 @@ strategy:
     - "\n"
     - "\n\n"
 
-# Perplexity scorer configuration
+# Entropy scorer configuration
 scorer:
-  type: perplexity
+  type: prm
+  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+  device: cuda:0
   batch_size: 1
 
 # Dataset configuration - MBPP+

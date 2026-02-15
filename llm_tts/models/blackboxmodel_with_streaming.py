@@ -276,6 +276,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
             token_count = 0
             stopped_early = False
             stop_reason = None
+            finish_reason = None
 
             for chunk in response:
                 if not chunk.choices:
@@ -328,10 +329,14 @@ class BlackboxModelWithStreaming(BlackboxModel):
 
                 # Check if generation finished
                 if hasattr(choice, "finish_reason") and choice.finish_reason:
+                    finish_reason = choice.finish_reason
                     break
 
             # Build result
             result = {"text": accumulated_text}
+
+            # Always propagate finish_reason from the API
+            result["finish_reason"] = stop_reason if stopped_early else finish_reason
 
             # Add logprobs if collected
             if needs_logprobs:

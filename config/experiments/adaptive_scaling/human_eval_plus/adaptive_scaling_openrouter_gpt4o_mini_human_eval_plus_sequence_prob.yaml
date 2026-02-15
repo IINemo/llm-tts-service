@@ -1,51 +1,50 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_vllm_qwen3_8b_human_eval_plus_perplexity
-# MUR (Adaptive Scaling) for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_openrouter_gpt4o_mini_human_eval_plus_perplexity
+# MUR (Adaptive Scaling) for HumanEval+ using OpenRouter API with newline-based step boundaries
 # Uses Perplexity scorer (MUR fixes perplexity as signal for scaled step selection)
+#
+# Environment variable required: OPENROUTER_API_KEY
 
 defaults:
   - /config
-  - /model/vllm_qwen3
+  - /model/openrouter
   - /generation/default
   - /system/default
-  - /scorer/perplexity
+  - /scorer/entropy
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "adaptive_scaling_vllm_qwen3_8b_human_eval_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_openrouter_gpt4o_mini_human_eval_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: null
+report_to: wandb
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "adaptive_scaling_vllm_qwen3_8b_human_eval_plus_perplexity"
+wandb_group: "adaptive_scaling_openrouter_gpt4o_mini_human_eval_plus_perplexity"
 
-# Model configuration (vLLM backend)
+# Model configuration (OpenRouter API)
 model:
-  type: "vllm"
-  model_path: "Qwen/Qwen3-8B"
-  gpu_memory_utilization: 0.85
-  tensor_parallel_size: 1
-  enable_prefix_caching: true
-  trust_remote_code: true
-  max_context_budget: 32768
-  disable_thinking_mode: false
+  type: "openai_api"
+  provider: openrouter
+  model_path: "openai/gpt-4o-mini"
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  supports_logprobs: true
+  prefill_mode: false
+  max_context_budget: 128000
 
 # System configuration
 system:
-  device: cuda
+  device: cpu
   seed: 0
 
 # Generation configuration
 generation:
-  max_new_tokens: 32768
+  max_new_tokens: 16384
   temperature: 0.6
   top_p: 0.95
   top_k: 20
-  batch_size: 512
-  checkpoint_batch_size: 198
-  max_length: 32768
+  batch_size: 1
 
 # Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
 strategy:
@@ -56,10 +55,6 @@ strategy:
   momentum_rate: 0.9
   adaptive_scaling_method: momentum
   detector_type: structured
-  # Stop tokens for Qwen models
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   min_step_tokens: 10
   max_step_tokens: 1024
   # Disable linguistic markers (not useful for code)

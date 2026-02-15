@@ -1,7 +1,7 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_vllm_qwen3_8b_human_eval_plus_entropy
-# Offline Best-of-N for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
-# Uses Entropy scorer for step evaluation
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_vllm_qwen3_8b_human_eval_plus_perplexity
+# MUR (Adaptive Scaling) for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
+# Uses entropy scorer (MUR fixes entropy as signal for scaled step selection)
 
 defaults:
   - /config
@@ -13,13 +13,13 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_qwen3_8b_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen3_8b_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: null
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "offline_bon_vllm_qwen3_8b_human_eval_plus_entropy"
+wandb_group: "adaptive_scaling_vllm_qwen3_8b_human_eval_plus_entropy"
 
 # Model configuration (vLLM backend)
 model:
@@ -30,7 +30,7 @@ model:
   enable_prefix_caching: true
   trust_remote_code: true
   max_context_budget: 32768
-  disable_thinking_mode: false  # ENABLE native thinking mode
+  disable_thinking_mode: false
 
 # System configuration
 system:
@@ -43,23 +43,24 @@ generation:
   temperature: 0.6
   top_p: 0.95
   top_k: 20
-  batch_size: 1
-  max_length: 65536
+  batch_size: 512
+  checkpoint_batch_size: 198
+  max_length: 32768
 
-# Strategy - Offline Best-of-N with newline-based step boundaries for code
+# Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8        # Number of complete trajectories to generate
-  max_steps: 100
-  score_aggregation: min     # Conservative: trajectory is only as good as its weakest step
-  batch_generation: true     # Fully batched: M×N trajectories in single vLLM call
-  # Stop tokens for Qwen3
+  type: adaptive
+  candidates_per_step: 8
+  max_steps: 250
+  scaling_rate: 0.9
+  momentum_rate: 0.9
+  adaptive_scaling_method: momentum
+  detector_type: structured
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
-  # Step boundary detector settings - used for post-hoc step splitting
-  min_step_tokens: 125
-  max_step_tokens: 500
+  min_step_tokens: 10
+  max_step_tokens: 1024
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
@@ -72,11 +73,6 @@ strategy:
   custom_words:
     - "\n"
     - "\n\n"
-
-# Entropy scorer configuration
-scorer:
-  type: entropy
-  batch_size: 1
 
 # Dataset configuration - HumanEval+
 dataset:
