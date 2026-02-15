@@ -8,38 +8,10 @@ The formula is applied correctly and arithmetic checks out: 100*101=10100, 10100
 sure
 
 ---
-Problem: Solve for x: 2x + 5 = 13.
-Reasoning so far: Subtract 5 from both sides: 2x = 8.
-Step: Divide both sides by 2: x = 3.
-8 divided by 2 is 4, not 3. The division is wrong.
-impossible
-
----
 Problem: Compute the integral of sin(x)cos(x) dx.
 Reasoning so far: (empty)
 Step: Using the identity sin(x)cos(x) = sin(2x)/2, we can rewrite the integral.
 The double angle identity is correct. This simplifies the integral but doesn't complete it yet.
-likely
-
----
-Problem: Find the derivative of f(x) = x^3 + 2x^2 - 5x + 3.
-Reasoning so far: (empty)
-Step: Using the power rule: f'(x) = 3x^2 + 4x - 5.
-Each term differentiated correctly using power rule. The constant 3 correctly vanishes.
-sure
-
----
-Problem: What is the probability of getting exactly 3 heads in 5 coin flips?
-Reasoning so far: We use the binomial formula: P = C(n,k) * p^k * (1-p)^(n-k).
-Step: P = C(5,3) * (0.5)^3 * (0.5)^2 = 10 * 0.125 * 0.25 = 0.3125.
-C(5,3)=10 is correct. 0.5^3=0.125, 0.5^2=0.25, product=0.3125. All correct.
-sure
-
----
-Problem: Solve x^2 - 5x + 6 = 0.
-Reasoning so far: (empty)
-Step: Using the quadratic formula with a=1, b=-5, c=6: discriminant = 25 - 24 = 1.
-The discriminant calculation is correct (b^2-4ac = 25-24 = 1), but the roots aren't found yet.
 likely
 
 ---
@@ -48,13 +20,6 @@ Reasoning so far: The volume formula is V = (4/3)*pi*r^3.
 Step: V = (4/3) * pi * 9 = 12*pi.
 r^3 = 27, not 9. The step confused r^2 with r^3. This gives the wrong answer.
 impossible
-
----
-Problem: How many ways can 5 people be arranged in a line?
-Reasoning so far: This is a permutation problem.
-Step: The number of arrangements is 5! = 5 * 4 * 3 * 2 * 1 = 120.
-The factorial computation is correct: 5! = 120.
-sure
 
 ---
 Problem: {problem}
