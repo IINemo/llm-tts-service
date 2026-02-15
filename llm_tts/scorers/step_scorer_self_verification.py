@@ -810,6 +810,19 @@ class StepScorerSelfVerification(StepScorerBase):
         else:
             return self._call_api(prompt)
 
+    def _format_prompt_for_vllm(self, prompt: str) -> str:
+        """Wrap prompt in chat template if the vLLM model has a tokenizer."""
+        try:
+            tokenizer = self.model.get_tokenizer()
+            messages = [{"role": "user", "content": prompt}]
+            formatted = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            return formatted
+        except Exception:
+            # Fallback to raw prompt if tokenizer/chat template not available
+            return prompt
+
     def _call_vllm(self, prompt: str) -> str:
         """Call vLLM model for evaluation."""
         try:
@@ -822,7 +835,8 @@ class StepScorerSelfVerification(StepScorerBase):
             temperature=self.temperature,
         )
 
-        outputs = self.model.generate([prompt], sampling_params)
+        formatted_prompt = self._format_prompt_for_vllm(prompt)
+        outputs = self.model.generate([formatted_prompt], sampling_params)
 
         if outputs and outputs[0].outputs:
             output = outputs[0]
@@ -849,7 +863,8 @@ class StepScorerSelfVerification(StepScorerBase):
             temperature=self.temperature,
         )
 
-        outputs = self.model.generate(prompts, sampling_params)
+        formatted_prompts = [self._format_prompt_for_vllm(p) for p in prompts]
+        outputs = self.model.generate(formatted_prompts, sampling_params)
         texts: List[str] = []
 
         for output in outputs or []:
@@ -1018,8 +1033,9 @@ class StepScorerSelfVerification(StepScorerBase):
         Matching priority (following original ToT paper):
         1. Exact match on last line (primary ToT labels)
         2. Token search on last line (primary + synonym labels)
-        3. Token search on full output (fallback)
-        4. Default to 0.0 (unmatched = no contribution, as in original ToT)
+        3. Prefix match (keyword at start of token, e.g. "likelyMK" -> "likely")
+        4. Regex search on full output (fallback)
+        5. Default to 0.0 (unmatched = no contribution, as in original ToT)
         """
         output_lower = output.lower().strip()
         all_keywords = {**self.value_map, **self.value_synonyms}
@@ -1036,7 +1052,19 @@ class StepScorerSelfVerification(StepScorerBase):
                 if token in all_keywords:
                     return all_keywords[token]
 
-        # 3. Search full output for any keyword (fallback)
+        # 3. Prefix match: check if output starts with a keyword
+        #    (handles garbage glued to keyword, e.g. "likelyMK", "surelyABC")
+        # Sort by length descending so "impossible" matches before "imp..."
+        for keyword in sorted(all_keywords.keys(), key=len, reverse=True):
+            if output_lower.startswith(keyword):
+                return all_keywords[keyword]
+
+        # 4. Regex search on full output for keyword as a word or at start of token
+        for keyword in sorted(all_keywords.keys(), key=len, reverse=True):
+            if re.search(r"\b" + re.escape(keyword) + r"\b", output_lower):
+                return all_keywords[keyword]
+
+        # 5. Search full output for any keyword (loose fallback)
         full_normalized = re.sub(r"[^a-z\s]+", " ", output_lower)
         for token in full_normalized.split():
             if token in all_keywords:

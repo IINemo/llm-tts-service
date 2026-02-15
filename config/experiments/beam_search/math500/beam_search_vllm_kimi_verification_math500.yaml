@@ -81,9 +81,10 @@ scorer:
   # Override scorer model to use Kimi K2 Think via API
   model:
     type: openai_api
-    provider: openrouter
-    model_name: "moonshotai/kimi-k2-instruct"
-    api_key: null  # Set via OPENROUTER_API_KEY env var or override
+    model_name: "MBZUAI-IFM/K2-Think-v2"
+    base_url: "https://api.k2think.ai/v1"
+    api_key: null  # Set via override or K2THINK_API_KEY env var
+    api_key_env: "K2THINK_API_KEY"
 
 # Dataset configuration
 dataset:
