@@ -65,13 +65,6 @@ strategy:
   use_structure: false
   use_reasoning: true
   use_correction: false
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
-    - "step"
-    - "therefore"
-    - "thus"
 
 # Entropy scorer configuration (uses same model, no separate GPU needed)
 scorer:

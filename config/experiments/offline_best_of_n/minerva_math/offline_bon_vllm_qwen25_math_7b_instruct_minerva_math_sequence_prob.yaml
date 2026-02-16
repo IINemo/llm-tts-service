@@ -61,13 +61,6 @@ strategy:
   max_step_tokens: 2048
   # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
   # Custom words for stop tokens
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
-    - "step"
-    - "therefore"
-    - "thus"
 
 # Sequence probability scorer configuration (uses same model, no separate GPU needed)
 scorer:

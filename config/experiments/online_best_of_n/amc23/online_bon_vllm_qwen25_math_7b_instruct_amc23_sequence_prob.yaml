@@ -66,13 +66,6 @@ strategy:
   use_reasoning: true
   use_correction: false
   # Custom words for stop tokens
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
-    - "step"
-    - "therefore"
-    - "thus"
 
 # Sequence probability scorer configuration (uses same model, no separate GPU needed)
 scorer:

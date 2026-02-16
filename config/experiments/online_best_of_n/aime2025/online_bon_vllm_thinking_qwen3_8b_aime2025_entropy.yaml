@@ -65,10 +65,6 @@ strategy:
   use_reasoning: true
   use_correction: false
   # Custom words for stop tokens
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
   detector_answer_patterns:
     - "<end of response>"
 
