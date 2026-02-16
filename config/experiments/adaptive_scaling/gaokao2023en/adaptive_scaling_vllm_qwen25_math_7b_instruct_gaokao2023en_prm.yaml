@@ -45,7 +45,6 @@ strategy:
   adaptive_scaling_method: average
   max_steps: 50
   # Detector settings
-  max_step_tokens: 1024
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  #

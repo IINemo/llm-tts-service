@@ -57,7 +57,6 @@ strategy:
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
-  max_step_tokens: 256
 
 # Sequence probability scorer configuration (uses same model, no separate GPU needed)
 scorer:

@@ -59,7 +59,6 @@ strategy:
     - 151645  # <|im_end|>
     - 151643  #
   # Step boundary detector settings - used for post-hoc step splitting
-  max_step_tokens: 500
   # These flags control how thinking is SPLIT into steps after generation
 
 # Perplexity scorer configuration

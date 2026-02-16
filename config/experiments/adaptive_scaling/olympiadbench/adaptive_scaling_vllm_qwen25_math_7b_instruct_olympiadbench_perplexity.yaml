@@ -45,7 +45,6 @@ generation:
 strategy:
   max_steps: 50
   # Detector settings
-  max_step_tokens: 512
   
   stop_token_ids:
     - 151645

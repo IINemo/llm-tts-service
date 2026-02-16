@@ -43,7 +43,6 @@ strategy:
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 50
-  max_step_tokens: 2048
 
 scorer:
   type: entropy

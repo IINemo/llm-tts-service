@@ -54,7 +54,6 @@ strategy:
   # Use VLLMStepGenerator in thinking mode
   detector_type: thinking_marker
   # Step boundary token limits
-  max_step_tokens: 300
   # Marker categories (for vLLM stop token generation)
   use_sequence: true
   use_conclusion: true
