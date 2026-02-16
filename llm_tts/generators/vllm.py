@@ -1275,6 +1275,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         max_tokens_override: Optional[int] = None,
         compute_uncertainty: bool = True,
         sample_ids: Optional[List] = None,
+        beam_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Generate step candidates with per-trajectory requests.
 
