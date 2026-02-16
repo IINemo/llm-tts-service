@@ -16,7 +16,7 @@ run_name: "baseline_vllm_qwen3_8b_human_eval_plus_seed${system.seed}_${now:%H-%M
 
 # Main configuration
 verbose: true
-report_to: null
+report_to: wandb
 wandb_project: llm-tts-human-eval-plus
 wandb_group: "baseline_vllm_qwen3_8b_human_eval_plus"
 

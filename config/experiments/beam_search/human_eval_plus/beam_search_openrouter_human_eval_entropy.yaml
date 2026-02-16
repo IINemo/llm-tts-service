@@ -18,7 +18,7 @@ run_name: "beam_search_openrouter_human_eval_plus_seed${system.seed}_${now:%H-%M
 
 # Main configuration
 verbose: true
-report_to: null
+report_to: wandb
 wandb_project: llm-tts-human-eval-plus
 
 # Model configuration (OpenRouter API)

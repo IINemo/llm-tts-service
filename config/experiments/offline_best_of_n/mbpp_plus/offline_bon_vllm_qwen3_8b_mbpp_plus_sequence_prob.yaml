@@ -17,7 +17,7 @@ run_name: "offline_bon_vllm_qwen3_8b_mbpp_plus_sequence_prob_seed${system.seed}_
 
 # Main configuration
 verbose: true
-report_to: null
+report_to: wandb
 wandb_project: llm-tts-mbpp-plus
 wandb_group: "offline_bon_vllm_qwen3_8b_mbpp_plus_sequence_prob"
 

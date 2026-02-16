@@ -16,7 +16,7 @@ run_name: "uncert_cot_openrouter_gpt4o_mini_human_eval_plus_entropy_seed${system
 
 # Main configuration
 verbose: true
-report_to: null
+report_to: wandb
 wandb_project: llm-tts-human-eval-plus
 wandb_group: "uncert_cot_openrouter_gpt4o_mini_human_eval_plus_entropy"
 
