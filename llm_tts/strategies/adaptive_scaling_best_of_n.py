@@ -171,6 +171,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
                         vs = (
                             c.other_data.get("validity_score") if c.other_data else None
                         )
+                        if vs is None:
+                            log.warning(
+                                "Candidate has None validity_score, defaulting to 0.0"
+                            )
                         scores.append(vs if vs is not None else 0.0)
                     all_scores.append(scores)
                 return all_scores
@@ -365,6 +369,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     if chosen.other_data
                     else None
                 )
+                if vs is None:
+                    log.warning(
+                        f"Sample {sample_idx}: chosen step has None validity_score, defaulting to 0.0"
+                    )
                 validity_scores[sample_idx].append(vs if vs is not None else 0.0)
                 last_selected[sample_idx] = chosen
 
