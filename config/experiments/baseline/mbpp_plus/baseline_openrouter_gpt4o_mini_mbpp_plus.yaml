@@ -9,6 +9,7 @@ defaults:
   - /model/openrouter
   - /generation/default
   - /system/default
+  - /scorer/entropy
   - /evaluation/mbpp_plus/default
   - /strategy/baseline
   - _self_
@@ -72,6 +73,3 @@ evaluation:
   mbpp_plus:
     mode: full  # "test" and "syntax" modes are deprecated, use "full" only
     timeout: 10
-
-# Scorer configuration (not used for baseline, but included for compatibility)
-scorer: null

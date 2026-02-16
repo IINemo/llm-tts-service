@@ -120,11 +120,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import (
-    StepScorerConfidence,
-    StepScorerPRM,
-    StepScorerUncertainty,
-)
+from llm_tts.scorers import StepScorerConfidence, StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 
 # vLLM step generator (optional)
@@ -544,7 +540,7 @@ def create_model(config):
                 use_reasoning=config.strategy.get("use_reasoning", False),
                 use_correction=config.strategy.get("use_correction", False),
                 use_structure=config.strategy.get("use_structure", False),
-                custom_markers=config.strategy.get("custom_words", None),
+                custom_markers=config.strategy.get("custom_markers", None),
             )
 
             # Stop token IDs (e.g., [151645, 151643] for Qwen EOS)

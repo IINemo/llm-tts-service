@@ -1,58 +1,66 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/mbpp_plus/baseline_vllm_mbpp_plus
-# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
-# Baseline evaluation for MBPP+ using local vLLM model
+# Run: CUDA_VISIBLE_DEVICES=all python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/mbpp_plus/baseline_openrouter_gpt4o_mini_mbpp_plus
+# Baseline evaluation for MBPP+ using OpenRouter API
+#
+# Environment variable required: OPENROUTER_API_KEY
 
 defaults:
   - /config
-  - /model/vllm_qwen3
+  - /model/openrouter
   - /generation/default
   - /system/default
+  - /scorer/entropy
   - /evaluation/mbpp_plus/default
-  - /strategy/baseline
   - _self_
 
 # Run naming
-run_name: "baseline_vllm_codeqwen15_7b_chat_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "baseline_openrouter_gptoss120b_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-mbpp-plus
-wandb_group: "baseline_vllm_codeqwen15_7b_chat_mbpp_plus"
+wandb_group: "baseline_openrouter_gptoss120b_mbpp_plus"
 
-# Model configuration (vLLM backend)
+# Model configuration (OpenRouter API)
 model:
-  type: "vllm"
-  model_path: "Qwen/CodeQwen1.5-7B-Chat"
-  model_short_name: "codeqwen1.5_7b_chat"
-  gpu_memory_utilization: 0.9
-  tensor_parallel_size: 1
-  enable_prefix_caching: true
-  trust_remote_code: true
-  max_model_len: 8192
-  disable_thinking_mode: true
+  type: "openai_api"
+  provider: openrouter
+  model_path: "openai/gpt-oss-120b" # Fast and cost-effective for code
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  supports_logprobs: true
+  prefill_mode: false
+  max_context_budget: 128000
+  disable_thinking_mode: false
 
 # System configuration
 system:
-  device: cuda
+  device: cpu
   seed: 0
 
 # Generation configuration
 generation:
-  max_new_tokens: 512  # Functions are typically short
-  temperature: 0.0  # Deterministic for reproducibility
-  top_p: 1.0
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
   top_k: 20
   batch_size: 1
 
 # Strategy - Baseline single-shot
 strategy:
+  type: baseline
   batch_generation: true
-  # Stop tokens for Qwen models
   # Step token limits
-  max_step_tokens: 512
+  min_step_tokens: 0
+  max_step_tokens: 32768
   # Disable semantic markers for baseline
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
 
 # Dataset configuration - MBPP+
 # Uses EvalPlus API loader which provides correct prompt format with function name
@@ -66,7 +74,6 @@ dataset:
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
-  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
 
 # Evaluation configuration
 evaluation:

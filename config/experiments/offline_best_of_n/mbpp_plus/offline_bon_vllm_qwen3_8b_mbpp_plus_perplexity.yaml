@@ -1,37 +1,36 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/mbpp_plus/adaptive_scaling_vllm_qwen3_8b_mbpp_plus_perplexity
-# MUR (Adaptive Scaling) for MBPP+ using vLLM with Qwen3-8B and newline-based step boundaries
-# Uses Perplexity scorer (MUR fixes perplexity as signal for scaled step selection)
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/mbpp_plus/offline_bon_vllm_qwen3_8b_mbpp_plus_entropy
+# Offline Best-of-N for MBPP+ using vLLM with Qwen3-8B and newline-based step boundaries
+# Uses perplexity scorer for step evaluation
 
 defaults:
   - /config
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /strategy/adaptive
   - /scorer/perplexity
   - /evaluation/mbpp_plus/default
   - _self_
 
 # Run naming
-run_name: "adaptive_scaling_vllm_qwen3_8b_mbpp_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "offline_bon_vllm_qwen3_8b_mbpp_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-mbpp-plus
-wandb_group: "adaptive_scaling_vllm_qwen3_8b_mbpp_plus_perplexity"
+wandb_group: "offline_bon_vllm_qwen3_8b_mbpp_plus_perplexity"
 
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
   model_path: "Qwen/Qwen3-8B"
-  gpu_memory_utilization: 0.85
+  gpu_memory_utilization: 0.8
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 8192
-  disable_thinking_mode: true
+  max_model_len: 32768
+  disable_thinking_mode: false
 
 # System configuration
 system:
@@ -40,18 +39,26 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 512
-  temperature: 0.7
+  max_new_tokens: 32768
+  temperature: 0.6
   top_p: 0.95
-  top_k: 50
+  top_k: 20
   batch_size: 1
 
-# Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
+# Strategy - Offline Best-of-N with newline-based step boundaries for code
 strategy:
-  max_steps: 50
-  # Stop tokens for Qwen models
+  type: offline_best_of_n
+  num_trajectories: 8        # Number of complete trajectories to generate
+  max_steps: 100
+  score_aggregation: min     # Conservative: trajectory is only as good as its weakest step
+  batch_generation: true     # Fully batched: M×N trajectories in single vLLM call
+  # Stop tokens for Qwen3
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  # Step boundary detector settings - used for post-hoc step splitting
   min_step_tokens: 10
-  max_step_tokens: 1024
+  max_step_tokens: 500
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
@@ -64,6 +71,11 @@ strategy:
   custom_markers:
     - "\n"
     - "\n\n"
+
+# Entropy scorer configuration
+scorer:
+  type: perplexity
+  batch_size: 1
 
 # Dataset configuration - MBPP+
 dataset:

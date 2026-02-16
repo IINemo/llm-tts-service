@@ -460,7 +460,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             "raw_collected": result.get("raw_collected", ""),
             "step_text": result.get("step_text", ""),
             "trajectory_complete": result.get("trajectory_complete", False),
-            "finish_reason": result.get("reason", "stop"),
+            "finish_reason": result.get("finish_reason"),
         }
 
     def _generate_batch(
@@ -610,6 +610,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         raw_text: str,
         token_count: int,
         is_streaming: bool,
+        finish_reason: Optional[str] = None,
     ) -> tuple:
         """Process generated text: detect completion, handle repetitions.
 
@@ -617,6 +618,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             raw_text: Raw text from API.
             token_count: Approximate token count.
             is_streaming: Whether this came from streaming (n=1) path.
+            finish_reason: API finish reason (e.g. 'stop' for natural EOS).
 
         Returns:
             Tuple of (processed_text, is_trajectory_complete, completion_reason, is_thinking_complete).
@@ -681,6 +683,11 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     completion_reason = CompletionReason.ANSWER_PATTERN
                 else:
                     completion_reason = CompletionReason.EOS_PATTERN
+
+            # Model reached natural EOS — response is complete
+            if not is_trajectory_complete and finish_reason == "stop":
+                is_trajectory_complete = True
+                completion_reason = CompletionReason.EOS_PATTERN
 
         return text, is_trajectory_complete, completion_reason, is_thinking_complete
 
@@ -916,7 +923,10 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     if not traj_complete:
                         _, traj_complete, completion_reason, is_thinking_complete = (
                             self._process_candidate_text(
-                                text, token_count, is_streaming=True
+                                text,
+                                token_count,
+                                is_streaming=True,
+                                finish_reason=raw.get("finish_reason"),
                             )
                         )
                     else:
@@ -935,7 +945,10 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     # Batch path — process text for completion
                     text, traj_complete, completion_reason, is_thinking_complete = (
                         self._process_candidate_text(
-                            raw_text, token_count, is_streaming=False
+                            raw_text,
+                            token_count,
+                            is_streaming=False,
+                            finish_reason=raw.get("finish_reason"),
                         )
                     )
 
@@ -1195,6 +1208,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         trajectory: Optional[List[StepCandidate]] = None,
         candidates_per_step: int = 1,
         compute_uncertainty: bool = True,
+        max_tokens_override: Optional[int] = None,
     ) -> List[StepCandidate]:
         """Callable interface for step generation.
 
@@ -1206,5 +1220,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             [trajectory],
             candidates_per_step,
             compute_uncertainty=compute_uncertainty,
+            max_tokens=max_tokens_override,
         )
         return result[0] if result else []

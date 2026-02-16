@@ -1,58 +1,64 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_vllm_codeqwen15_7b_chat_human_eval_plus_entropy
-# Offline Best-of-N for HumanEval+ using local vLLM model with newline-based step boundaries
-# Uses Entropy scorer for step evaluation
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_openrouter_gpt4o_mini_human_eval_plus_entropy
+# Offline Best-of-N for HumanEval+ using OpenRouter API with newline-based step boundaries
+# Uses prm scorer for step evaluation
+#
+# Environment variable required: OPENROUTER_API_KEY
 
 defaults:
   - /config
-  - /model/vllm_qwen3
+  - /model/openrouter
   - /generation/default
   - /system/default
-  - /strategy/offline_bon
-  - /scorer/entropy
+  - /scorer/prm
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_codeqwen15_7b_chat_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "offline_bon_openrouter_gpt4o_mini_human_eval_plus_prm_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "offline_bon_vllm_codeqwen15_7b_chat_human_eval_plus_entropy"
+wandb_group: "offline_bon_openrouter_gpt4o_mini_human_eval_plus_prm"
 
-# Model configuration (vLLM backend)
+# Model configuration (OpenRouter API)
 model:
-  type: "vllm"
-  model_path: "Qwen/CodeQwen1.5-7B-Chat"
-  gpu_memory_utilization: 0.9
-  tensor_parallel_size: 1
-  enable_prefix_caching: true
-  trust_remote_code: true
-  max_model_len: 8192
-  disable_thinking_mode: true
+  type: "openai_api"
+  provider: openrouter
+  model_path: "openai/gpt-4o-mini"  # Fast and cost-effective for code
+  # Alternative models:
+  # - "anthropic/claude-3.5-sonnet" (best quality)
+  # - "deepseek/deepseek-coder" (code-specialized)
+  # - "qwen/qwen-2.5-coder-32b-instruct" (open-source coder)
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  supports_logprobs: true
+  prefill_mode: false
+  max_context_budget: 128000
 
 # System configuration
 system:
-  device: cuda
+  device: cpu
   seed: 0
 
 # Generation configuration
 generation:
-  max_new_tokens: 512
-  temperature: 0.7
+  max_new_tokens: 16384
+  temperature: 0.6
   top_p: 0.95
-  top_k: 50
+  top_k: 20
   batch_size: 1
 
 # Strategy - Offline Best-of-N with newline-based step boundaries for code
 strategy:
-  max_steps: 20
+  type: offline_best_of_n
+  num_trajectories: 8
+  max_steps: 100
   score_aggregation: mean
-  # Stop tokens for Qwen models
-  min_step_tokens: 5
-  max_step_tokens: 128
+  batch_generation: true
+  min_step_tokens: 10
+  max_step_tokens: 2048
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
@@ -66,24 +72,24 @@ strategy:
     - "\n"
     - "\n\n"
 
-# Entropy scorer configuration
+# PRM scorer configuration
 scorer:
-  type: entropy
+  type: prm
+  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+  device: cuda:0
   batch_size: 1
 
 # Dataset configuration - HumanEval+
-# Uses EvalPlus API loader which provides correct prompt format with function signature
 dataset:
   data_name: "human_eval_plus"
   dataset_path: "evalplus/humanevalplus"
-  dataset_split: "test"  # 164 problems
+  dataset_split: "test"
   subset: null
   offset: 0
   question_field: "question"  # EvalPlus loader field (includes function signature + docstring)
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
-  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
 
 # Evaluation configuration
 evaluation:

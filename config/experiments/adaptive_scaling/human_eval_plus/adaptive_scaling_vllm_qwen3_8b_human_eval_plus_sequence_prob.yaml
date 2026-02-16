@@ -1,26 +1,25 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_vllm_qwen3_8b_human_eval_plus_entropy
-# Offline Best-of-N for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
-# Uses Entropy scorer for step evaluation
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_vllm_qwen3_8b_human_eval_plus_perplexity
+# MUR (Adaptive Scaling) for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
+# Uses sequence_prob scorer (MUR fixes sequence_prob as signal for scaled step selection)
 
 defaults:
   - /config
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /strategy/offline_bon
-  - /scorer/entropy
+  - /scorer/sequence_prob
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "offline_bon_vllm_qwen3_8b_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_vllm_qwen3_8b_human_eval_plus_sequence_prob_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: null
+report_to: wandb
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "offline_bon_vllm_qwen3_8b_human_eval_plus_entropy"
+wandb_group: "adaptive_scaling_vllm_qwen3_8b_human_eval_plus_sequence_prob"
 
 # Model configuration (vLLM backend)
 model:
@@ -30,8 +29,8 @@ model:
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 8192
-  disable_thinking_mode: true
+  max_context_budget: 32768
+  disable_thinking_mode: false
 
 # System configuration
 system:
@@ -40,19 +39,29 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 512
-  temperature: 0.7
+  max_new_tokens: 32768
+  temperature: 0.6
   top_p: 0.95
-  top_k: 50
-  batch_size: 1
+  top_k: 20
+  batch_size: 512
+  checkpoint_batch_size: 198
+  max_length: 32768
 
-# Strategy - Offline Best-of-N with newline-based step boundaries for code
+# Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
 strategy:
-  max_steps: 20
-  score_aggregation: mean
+  type: adaptive
+  candidates_per_step: 8
+  max_steps: 250
+  scaling_rate: 0.9
+  momentum_rate: 0.9
+  adaptive_scaling_method: momentum
+  detector_type: structured
   # Stop tokens for Qwen models
-  min_step_tokens: 5
-  max_step_tokens: 128
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  min_step_tokens: 10
+  max_step_tokens: 1024
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
@@ -65,11 +74,6 @@ strategy:
   custom_markers:
     - "\n"
     - "\n\n"
-
-# Entropy scorer configuration
-scorer:
-  type: entropy
-  batch_size: 1
 
 # Dataset configuration - HumanEval+
 dataset:
