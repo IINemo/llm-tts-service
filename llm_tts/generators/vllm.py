@@ -135,6 +135,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             f"VLLMStepGenerator initialized: thinking_mode={thinking_mode}, "
             f"{len(self.stop_tokens)} stop tokens"
         )
+        self._log_stop_tokens_with_strings()
         log.info(
             f"Generation parameters: temperature={self.temperature}, "
             f"top_p={self.top_p}, top_k={self.top_k}, "
@@ -174,6 +175,102 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
     # =========================================================================
     # Common utility methods
     # =========================================================================
+
+    def _log_stop_tokens_with_strings(self) -> None:
+        """Log all stop tokens used for generation, grouped by category."""
+        if not self.stop_tokens and not self.stop_token_ids:
+            log.info("No stop tokens configured")
+            return
+
+        num_ids = len(self.stop_token_ids) if self.stop_token_ids else 0
+        log.info(f"Stop tokens: {len(self.stop_tokens)} strings, {num_ids} token IDs")
+
+        # Try to categorize string stop tokens by detector category
+        detector = getattr(self, "detector", None)
+        if detector and hasattr(detector, "use_sequence"):
+            from llm_tts.step_boundary_detectors.thinking.vllm import (
+                get_stop_tokens_sentence_start,
+            )
+            from llm_tts.step_boundary_detectors.thinking.vllm.stop_tokens import (
+                ANSWER_TOKENS,
+                CONCLUSION_WORDS,
+                CORRECTION_WORDS,
+                REASONING_WORDS,
+                SEQUENCE_WORDS,
+                STRUCTURE_TOKENS,
+                THINKING_WORDS,
+                VERIFICATION_WORDS,
+            )
+
+            # Map flag names to word lists
+            flag_categories = [
+                ("Sequence", "use_sequence", SEQUENCE_WORDS),
+                ("Conclusion", "use_conclusion", CONCLUSION_WORDS),
+                ("Thinking", "use_thinking", THINKING_WORDS),
+                ("Verification", "use_verification", VERIFICATION_WORDS),
+                ("Reasoning", "use_reasoning", REASONING_WORDS),
+                ("Correction", "use_correction", CORRECTION_WORDS),
+                ("Structure", "use_structure", STRUCTURE_TOKENS),
+            ]
+
+            # For each enabled category, get its tokens using the same expansion
+            # as detector.get_vllm_stop_tokens() (get_stop_tokens_sentence_start)
+            all_flags = [
+                "use_sequence",
+                "use_conclusion",
+                "use_thinking",
+                "use_verification",
+                "use_reasoning",
+                "use_correction",
+                "use_structure",
+            ]
+            # ANSWER_TOKENS are always added by get_stop_tokens_sentence_start,
+            # exclude them from category matching to avoid misattribution
+            answer_tokens = set(ANSWER_TOKENS)
+            stop_tokens_set = set(self.stop_tokens)
+            accounted = set()
+
+            for cat_name, flag_name, word_list in flag_categories:
+                if not getattr(detector, flag_name, False):
+                    continue
+
+                # Generate tokens for just this category using the same
+                # expansion as detector.get_vllm_stop_tokens()
+                kwargs = {f: False for f in all_flags}
+                kwargs[flag_name] = True
+                cat_tokens = (
+                    set(get_stop_tokens_sentence_start(**kwargs)) - answer_tokens
+                )
+
+                matched = sorted(stop_tokens_set & cat_tokens)
+                accounted.update(matched)
+
+                words_str = ", ".join(word_list)
+                log.info(
+                    f"  {cat_name}: {len(matched)} tokens "
+                    f"from {len(word_list)} words [{words_str}]"
+                )
+
+            # Tokens not in any category (e.g., </think>, answer patterns)
+            uncategorized = sorted(stop_tokens_set - accounted)
+            if uncategorized:
+                tokens_str = ", ".join(repr(t) for t in uncategorized)
+                log.info(f"  Other: {len(uncategorized)} tokens [{tokens_str}]")
+        else:
+            # No category info, list all tokens
+            for i, token in enumerate(self.stop_tokens):
+                log.info(f"  [{i+1}] {repr(token)}")
+
+        # Log token ID stop tokens with decoded strings
+        if self.stop_token_ids:
+            parts = []
+            for token_id in self.stop_token_ids:
+                try:
+                    decoded = self.tokenizer.decode([token_id])
+                    parts.append(f"{token_id}={repr(decoded)}")
+                except Exception:
+                    parts.append(str(token_id))
+            log.info(f"  Token IDs: {', '.join(parts)}")
 
     def _extract_logprobs(
         self, token_ids: List[int], logprobs: List[Dict]
@@ -691,6 +788,22 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     # Append </think> back to text so downstream can detect it
                     if stop_reason == "</think>" and "</think>" not in text:
                         text = text + "</think>"
+
+                    # Truncate at </think> if it appeared mid-step.
+                    # This happens when min_step_tokens prevents vLLM from stopping
+                    # at </think> — the model continues into answer phase, leaking
+                    # answer tokens into the step. Discard everything after </think>.
+                    if thinking_complete and stop_reason != "</think>":
+                        think_pos = text.find("</think>")
+                        if think_pos >= 0:
+                            leaked = len(text) - (think_pos + len("</think>"))
+                            if leaked > 0:
+                                text = text[: think_pos + len("</think>")]
+                                log.info(
+                                    f"Path {traj_idx} cand {cand_idx}: "
+                                    f"truncated {leaked} chars after </think> "
+                                    f"(min_step_tokens bypassed stop)"
+                                )
 
                     if thinking_complete:
                         is_thinking_complete = True

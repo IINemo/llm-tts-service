@@ -46,7 +46,7 @@ def compute_metrics(results):
             if eval_name not in evaluator_stats:
                 evaluator_stats[eval_name] = {"correct": 0, "incorrect": 0}
 
-            if eval_data.get("label") == 1 or eval_data.get("label") == "Correct":
+            if eval_data.get("is_correct"):
                 evaluator_stats[eval_name]["correct"] += 1
             else:
                 evaluator_stats[eval_name]["incorrect"] += 1
@@ -55,10 +55,10 @@ def compute_metrics(results):
     all_steps = []
     all_validities = []
     for result in results:
-        if "metadata" in result and "steps" in result["metadata"]:
-            all_steps.append(result["metadata"]["steps"])
-        if "metadata" in result and "avg_validity_score" in result["metadata"]:
-            all_validities.append(result["metadata"]["avg_validity_score"])
+        if "reasoning_steps" in result:
+            all_steps.append(result["reasoning_steps"])
+        if "validity_scores" in result and result["validity_scores"]:
+            all_validities.append(float(np.mean(result["validity_scores"])))
 
     # Build metrics dict
     metrics = {
@@ -110,6 +110,12 @@ def main():
         help="Wandb run name (default: auto-generated)",
     )
     parser.add_argument(
+        "--group",
+        type=str,
+        default=None,
+        help="Wandb group name (default: from config wandb_group)",
+    )
+    parser.add_argument(
         "--tags", type=str, nargs="+", default=None, help="Tags for the run"
     )
 
@@ -139,9 +145,23 @@ def main():
     log.info(f"Loading config from {config_path}")
     config = load_config(config_path)
 
-    # Compute metrics
+    # Use pre-computed metrics.json if available (has compute stats),
+    # otherwise compute from results
+    metrics_path = output_dir / "metrics.json"
+    if metrics_path.exists():
+        log.info(f"Loading pre-computed metrics from {metrics_path}")
+        with open(metrics_path, "r", encoding="utf-8") as f:
+            precomputed = json.load(f)
+
+    # Compute metrics from results (for evaluator stats and summary)
     log.info("Computing metrics...")
     metrics, evaluator_stats = compute_metrics(results)
+
+    # Merge pre-computed metrics (compute stats, etc.) if available
+    if metrics_path.exists():
+        for key, value in precomputed.items():
+            if key not in metrics:
+                metrics[key] = value
 
     # Print summary
     log.info("=" * 80)
@@ -176,9 +196,14 @@ def main():
     wandb_config["original_output_dir"] = str(output_dir)
 
     # Initialize wandb
+    group = args.group or getattr(config, "wandb_group", None)
+    if group:
+        log.info(f"Wandb group: {group}")
+
     run = wandb.init(
         project=project,
         name=args.name,
+        group=group,
         config=wandb_config,
         tags=args.tags,
         dir=output_dir,
