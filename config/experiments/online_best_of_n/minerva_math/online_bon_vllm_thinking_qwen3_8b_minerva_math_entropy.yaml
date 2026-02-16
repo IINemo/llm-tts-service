@@ -39,6 +39,7 @@ system:
 
 # Generation configuration (thinking mode settings)
 generation:
+  checkpoint_batch_size: 272
   max_new_tokens: 4096
   temperature: 0.6
   top_p: 0.95

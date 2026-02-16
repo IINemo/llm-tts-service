@@ -38,6 +38,7 @@ system:
 
 # Generation configuration (non-thinking mode: temp=0.7, top_p=0.8, top_k=20)
 generation:
+  checkpoint_batch_size: 500
   max_new_tokens: 32768
   temperature: 0.7
   top_p: 0.8
