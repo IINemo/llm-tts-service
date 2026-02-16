@@ -29,7 +29,7 @@ from .step_scorer_base import CandidateScore, StepScorerBase
 log = logging.getLogger(__name__)
 
 # Default prompt file paths (relative to project root config/prompts/)
-DEFAULT_VALUE_PROMPT_FILE = "tree-of-thought/self_verification/value_prompt.txt"
+DEFAULT_VALUE_PROMPT_FILE = "tree-of-thought/self_verification/value_prompt_math.txt"
 DEFAULT_VOTE_PROMPT_FILE = "tree-of-thought/self_verification/vote_prompt.txt"
 
 

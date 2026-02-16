@@ -102,6 +102,15 @@ class StrategyBeamSearch(StrategyBase):
         self.batch_generation = batch_generation
         self.prompt_buffer = prompt_buffer
 
+        if beam_size <= 0:
+            raise ValueError(f"beam_size must be > 0, got {beam_size}")
+        if candidates_per_beam <= 0:
+            raise ValueError(
+                f"candidates_per_beam must be > 0, got {candidates_per_beam}"
+            )
+        if max_steps <= 0:
+            raise ValueError(f"max_steps must be > 0, got {max_steps}")
+
         # Get stop tokens info for logging
         stop_tokens = getattr(step_generator, "stop_tokens", [])
         eos_token_ids = getattr(step_generator, "eos_token_ids", [151645, 151643])
@@ -359,14 +368,16 @@ class StrategyBeamSearch(StrategyBase):
                 )
 
                 # 3. Single call via generate_step_candidates_batch (handles FLOP tracking)
-                # Pass sample_ids so generator records per-sample token stats
+                # Pass sample_ids and beam_ids so generator logs them
                 batch_sample_ids = [sample_id for sample_id, _, _ in prompt_metadata]
+                batch_beam_ids = [beam_idx for _, beam_idx, _ in prompt_metadata]
                 batch_results = self.step_generator.generate_step_candidates_batch(
                     requests=batch_requests,
                     trajectories=batch_trajectories,
                     candidates_per_step=self.candidates_per_beam,
                     compute_uncertainty=not use_prm_scorer,
                     sample_ids=batch_sample_ids,
+                    beam_ids=batch_beam_ids,
                 )
 
                 # 4. Process StepCandidates into candidate data
@@ -394,8 +405,9 @@ class StrategyBeamSearch(StrategyBase):
                         if _detect_garbage(text):
                             is_trajectory_complete = True
 
-                        uncertainty = candidate.other_data.get("uncertainty_score", 0.0)
-                        validity = candidate.other_data.get("validity_score", 0.0)
+                        data = candidate.other_data if candidate.other_data else {}
+                        uncertainty = data.get("uncertainty_score", 0.0)
+                        validity = data.get("validity_score", 0.0)
 
                         candidates_for_beam.append(
                             {
@@ -770,15 +782,17 @@ class StrategyBeamSearch(StrategyBase):
             prm_stats = self.scorer.get_prm_stats_for(sample_id)
             token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                prm_stats["prm_tflops"] or 0
-            )
+            gen_tflops = token_stats.get("tflops") or 0
+            prm_tflops = prm_stats["prm_tflops"] or 0
+            token_stats["tflops"] = gen_tflops + prm_tflops
+
+        is_completed = bool(steps and steps[-1].is_trajectory_complete)
 
         result = {
             "trajectory": trajectory_text,
             "steps": steps,
             "validity_scores": scores,
-            "completed": True,
+            "completed": is_completed,
             "extracted_answer": extracted,
         }
         if token_stats is not None:
@@ -788,19 +802,28 @@ class StrategyBeamSearch(StrategyBase):
     def _aggregate_scores(self, scores: list[float]) -> float:
         """Aggregate scores across steps according to selected strategy."""
         if len(scores) == 0:
-            return 0
+            return 0.0
+        # Filter out non-finite values (NaN, inf, -inf)
+        clean = [s for s in scores if np.isfinite(s)]
+        if not clean:
+            log.warning(f"All {len(scores)} scores are non-finite, returning 0.0")
+            return 0.0
+        if len(clean) < len(scores):
+            log.warning(
+                f"Dropped {len(scores) - len(clean)} non-finite scores out of {len(scores)}"
+            )
         if self.aggregation == "last":
             return scores[-1]
         elif self.aggregation == "sum":
-            return sum(scores)
+            return sum(clean)
         elif self.aggregation == "mean":
-            return np.mean(scores).item()
+            return np.mean(clean).item()
         elif self.aggregation == "product":
-            return np.prod(scores).item()
+            return np.prod(clean).item()
         elif self.aggregation == "max":
-            return np.max(scores).item()
+            return np.max(clean).item()
         elif self.aggregation == "min":
-            return np.min(scores).item()
+            return np.min(clean).item()
         else:
             raise Exception(f"Unknown aggregation {self.aggregation}")
 
@@ -818,7 +841,7 @@ class StrategyBeamSearch(StrategyBase):
     def _select_best_beam(self, beams: List[Dict]) -> Dict:
         """Select the highest scoring beam."""
         if not beams:
-            return {"steps": [], "scores": 0.0}
+            return {"steps": [], "scores": []}
         return max(beams, key=lambda b: self._aggregate_scores(b["scores"]))
 
     def cleanup(self):

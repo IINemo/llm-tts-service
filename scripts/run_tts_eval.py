@@ -84,8 +84,6 @@ from llm_tts.scorers import (
     StepScorerPRM,
     StepScorerSelfVerification,
     StepScorerUncertainty,
-    TotValueScorer,
-    TotVoteScorer,
 )
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 
@@ -105,7 +103,6 @@ from llm_tts.strategies import (
     StrategyOfflineBestOfN,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
-    StrategyTreeOfThoughts,
     StrategyUncertaintyCoT,
 )
 from llm_tts.utils import get_torch_dtype
@@ -271,19 +268,15 @@ def create_scorer(config):
             log.warning(f"Could not init PRM FLOP calculator: {e}")
     elif config.scorer.type == "self_verification":
         # Self-Verification Scorer (Tree of Thoughts paper)
-        # Model will be set later in create_model() after model is initialized
+        # Model will be set later in create_tts_strategy() after model is initialized
         scorer = StepScorerSelfVerification(
-            model=None,  # Set later
-            method=getattr(config.scorer, "method", "value"),
-            n_evaluate_sample=getattr(config.scorer, "n_evaluate_sample", 3),
-            temperature=getattr(config.scorer, "temperature", 0.7),
-            max_tokens=getattr(config.scorer, "max_tokens", 100),
-            timeout=getattr(config.scorer, "timeout", 60),
-            value_prompt=getattr(config.scorer, "value_prompt", None),
-            value_prompt_file=getattr(config.scorer, "value_prompt_file", None),
-            vote_prompt=getattr(config.scorer, "vote_prompt", None),
-            vote_prompt_file=getattr(config.scorer, "vote_prompt_file", None),
-            use_vllm=False,  # Will be set based on model type
+            method=config.scorer.method,
+            n_evaluate_sample=config.scorer.n_evaluate_sample,
+            temperature=config.scorer.temperature,
+            max_tokens=config.scorer.max_tokens,
+            timeout=config.scorer.timeout,
+            value_prompt_file=config.scorer.value_prompt_file,
+            vote_prompt_file=config.scorer.vote_prompt_file,
         )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
@@ -319,10 +312,6 @@ def create_model(config):
             enforce_eager=config.model.get("enforce_eager", False),
             seed=config.system.seed,  # Reproducibility
         )
-        quantization = config.model.get("quantization", None)
-        if quantization:
-            llm_kwargs["quantization"] = quantization
-            log.info(f"Using quantization: {quantization}")
         llm = LLM(**llm_kwargs)
 
         # Create sampling params (will be updated by strategy)
@@ -357,12 +346,16 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            # Self-consistency and baseline don't need uncertainty wrapper
-            # (self-consistency uses majority voting, baseline uses raw vLLM batch generation)
-            if config.strategy.type in ("self_consistency", "baseline"):
+            # Self-consistency, baseline, and self_verification don't need uncertainty wrapper
+            scorer_type = config.scorer.type if config.scorer else "entropy"
+            if (
+                config.strategy.type in ("self_consistency", "baseline")
+                or scorer_type == "self_verification"
+            ):
                 vllm_model = llm
                 log.info(
-                    f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
+                    f"Strategy={config.strategy.type}, scorer={scorer_type}: "
+                    f"using raw vLLM (no uncertainty wrapper)"
                 )
             else:
                 if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
@@ -395,15 +388,10 @@ def create_model(config):
                     # Use entropy wrapper for generation (scores not used for selection)
                     stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                     estimator = MeanTokenEntropy()
-                elif scorer_type == "self_verification":
-                    # Self-verification scorer uses its own model for scoring
-                    # Use entropy wrapper for generation (scores not used for selection)
-                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
-                    estimator = MeanTokenEntropy()
                 else:
                     raise ValueError(
                         f"Unsupported scorer type for vLLM: {scorer_type}. "
-                        f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm, self_verification"
+                        f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm"
                     )
 
                 vllm_model = VLLMWithUncertainty(
@@ -636,33 +624,26 @@ def _create_api_model_for_scorer(model_cfg):
 def create_tts_strategy(
     config, model, step_generator, scorer, output_dir=None, flop_calculator=None
 ):
-    if scorer is not None and isinstance(scorer, StepScorerSelfVerification):
+    if scorer is not None and hasattr(scorer, "set_model"):
         scorer_model_cfg = getattr(config.scorer, "model", None)
         if scorer_model_cfg is not None:
             if scorer_model_cfg.get("type") != "openai_api":
-                raise ValueError(
-                    "Self-verification scorer model override only supports type=openai_api"
-                )
+                raise ValueError("Scorer model override only supports type=openai_api")
             scorer_model = _create_api_model_for_scorer(scorer_model_cfg)
             scorer.set_model(scorer_model, use_vllm=False)
-            log.info("Self-verification scorer: using API override model")
+            log.info("Scorer: using API override model")
         else:
-            # For API models, use the model directly
             if isinstance(model, BlackboxModelWithStreaming):
                 scorer.set_model(model, use_vllm=False)
-                log.info("Self-verification scorer: using API backend")
-            # For vLLM models, use the underlying vLLM engine
+                log.info("Scorer: using API backend")
             elif hasattr(model, "vllm_engine"):
                 scorer.set_model(model.vllm_engine, use_vllm=True)
-                log.info("Self-verification scorer: using vLLM backend")
-            # For local WhiteboxModel (lm_polygraph)
+                log.info("Scorer: using vLLM backend")
             elif isinstance(model, WhiteboxModel):
                 scorer.set_model(model, use_local=True)
-                log.info("Self-verification scorer: using local WhiteboxModel backend")
+                log.info("Scorer: using local WhiteboxModel backend")
             else:
-                log.warning(
-                    "Self-verification scorer: unknown model type, may not work correctly"
-                )
+                log.warning("Scorer: unknown model type, may not work correctly")
                 scorer.set_model(model, use_vllm=False)
 
     if config.strategy.type == "baseline":
@@ -775,6 +756,9 @@ def create_tts_strategy(
             data_name=data_name,
         )
     elif config.strategy.type == "tree_of_thoughts":
+        from llm_tts.scorers import TotValueScorer, TotVoteScorer
+        from llm_tts.strategies import StrategyTreeOfThoughts
+
         # Tree-of-Thoughts requires API-based model for state evaluation
         if not isinstance(model, BlackboxModelWithStreaming):
             raise ValueError(

@@ -22,10 +22,8 @@ max_tokens: 100
 timeout: 60
 
 # Prompt files (relative to config/prompts/, or absolute path)
-# Defaults: tree-of-thought/self_verification/value_prompt.txt
-#           tree-of-thought/self_verification/vote_prompt.txt
-# value_prompt_file: null
-# vote_prompt_file: null
+value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
+vote_prompt_file: "tree-of-thought/self_verification/vote_prompt.txt"
 
 # Direct prompt strings (override files if set)
 # value_prompt: null
