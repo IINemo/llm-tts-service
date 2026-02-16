@@ -44,13 +44,6 @@ strategy:
   candidates_per_beam: 8
   max_steps: 50
   max_step_tokens: 2048
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false
-  use_reasoning: true
-  use_correction: false
 
 scorer:
   type: entropy
