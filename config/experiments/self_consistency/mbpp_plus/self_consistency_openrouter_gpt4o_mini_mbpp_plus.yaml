@@ -55,7 +55,7 @@ strategy:
   batch_generation: true
   data_name: "mbpp_plus"
   # Step token limits
-  min_step_tokens: 50
+  min_step_tokens: 0
   max_step_tokens: 512
   # Disable semantic markers
   use_sequence: false

@@ -50,6 +50,7 @@ generation:
 # Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
 strategy:
   max_steps: 50
+  min_step_tokens: 10
   max_step_tokens: 2048
   # Disable linguistic markers (not useful for code)
   use_sequence: false

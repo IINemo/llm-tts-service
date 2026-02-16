@@ -54,7 +54,7 @@ strategy:
   batch_generation: true
   num_paths: 5  # Generate 5 candidate solutions
   data_name: "human_eval_plus"  # For answer extraction
-  min_step_tokens: 50
+  min_step_tokens: 0
   max_step_tokens: 512
   use_sequence: false
   use_conclusion: false
