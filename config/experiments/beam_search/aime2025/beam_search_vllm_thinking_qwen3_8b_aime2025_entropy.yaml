@@ -9,6 +9,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/beam_search
   - /scorer/entropy
   - /evaluation/default
   - _self_
@@ -50,28 +51,12 @@ generation:
 
 # Strategy - Beam Search
 strategy:
-  type: beam_search
   beam_size: 3
   candidates_per_beam: 5
   max_steps: 250
-  aggregation: mean
-  batch_generation: true
-  prompt_buffer: 500
   # Stop tokens for Qwen3
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  #
   # Step boundary detector settings - used for post-hoc step splitting
-  min_step_tokens: 125
-  max_step_tokens: 500
   # These flags control how thinking is SPLIT into steps after generation
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false
-  use_reasoning: true
-  use_correction: false
 
 # Entropy scorer configuration
 scorer:

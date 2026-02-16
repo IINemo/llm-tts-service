@@ -1,7 +1,9 @@
-type: beam_search
-aggregation: mean
-batch_generation: true
-prompt_buffer: 500
+type: adaptive
+candidates_per_step: 8
+scaling_rate: 0.9
+momentum_rate: 0.9
+adaptive_scaling_method: momentum
+detector_type: structured
 min_step_tokens: 50
 stop_token_ids:
   - 151645  # <|im_end|>

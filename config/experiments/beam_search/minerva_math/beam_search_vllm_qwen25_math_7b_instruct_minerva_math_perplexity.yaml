@@ -10,6 +10,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/beam_search
   - /scorer/perplexity
   - /evaluation/default
   - _self_
@@ -50,32 +51,9 @@ generation:
 
 # Strategy - Beam Search
 strategy:
-  type: beam_search
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30
-  aggregation: mean
-  batch_generation: true
-  prompt_buffer: 500
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
-  min_step_tokens: 10
-  max_step_tokens: 256
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false
-  use_reasoning: true
-  use_correction: false
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
-    - "step"
-    - "therefore"
-    - "thus"
 
 # Perplexity scorer configuration (uses same model, no separate GPU needed)
 scorer:

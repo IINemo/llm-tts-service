@@ -10,6 +10,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/online_bon
   - /scorer/perplexity
   - /evaluation/default
   - _self_
@@ -50,16 +51,9 @@ generation:
 
 # Strategy - Online Best-of-N (always uses ThinkingMarkerDetector)
 strategy:
-  type: online_best_of_n
-  candidates_per_step: 8
   max_steps: 50
   # Stop tokens derived from detector config (use_* flags below)
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step boundary token limits
-  min_step_tokens: 50
-  max_step_tokens: 2048
   # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
   use_sequence: true
   use_conclusion: true
@@ -69,13 +63,6 @@ strategy:
   use_reasoning: true
   use_correction: false
   # Custom words for stop tokens
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
-    - "step"
-    - "therefore"
-    - "thus"
 
 # Dataset configuration
 dataset:

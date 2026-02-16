@@ -8,6 +8,7 @@ defaults:
   - /model/openai
   - /generation/default
   - /system/default
+  - /strategy/baseline
   - /scorer/entropy
   - /evaluation/default
   - _self_
@@ -45,17 +46,8 @@ generation:
 
 # Strategy - Baseline single-shot
 strategy:
-  type: baseline
-  min_step_tokens: 0
   max_step_tokens: 16384
   # Disable all semantic markers for baseline
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
   detector_answer_patterns: []
 
 # Dataset configuration - GPQA-Diamond (graduate-level science multiple choice)

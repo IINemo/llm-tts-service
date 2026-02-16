@@ -68,13 +68,6 @@ strategy:
   use_reasoning: true
   use_correction: false
   # Custom words for stop tokens
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
-    - "step"
-    - "therefore"
-    - "thus"
   # Answer patterns for checking if there's actual answer content
   detector_answer_patterns:
     - "<Answer>:"

@@ -8,6 +8,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/beam_search
   - /scorer/entropy
   - /evaluation/human_eval_plus/default
   - _self_
@@ -47,17 +48,10 @@ generation:
 
 # Strategy - Beam Search with newline-based step boundaries for code
 strategy:
-  type: beam_search
   beam_size: 3
   candidates_per_beam: 5
   max_steps: 20
-  aggregation: mean
-  batch_generation: true
-  prompt_buffer: 500
   # Stop tokens for Qwen models
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   min_step_tokens: 5
   max_step_tokens: 128
   # Disable linguistic markers (not useful for code)

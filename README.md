@@ -372,6 +372,18 @@ python service_app/main.py
 
 ---
 
+## 🔧 Troubleshooting
+
+### vLLM engine fails to start
+
+If you see `RuntimeError: Engine core initialization failed` or `Bytes object is corrupted, checksum does not match`, the vLLM torch compile cache is corrupted. Clear it:
+
+```bash
+rm -rf ~/.cache/vllm/torch_compile_cache/
+```
+
+---
+
 ## 📖 Documentation
 
 - **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Detailed architecture and components

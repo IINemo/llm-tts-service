@@ -8,6 +8,7 @@ defaults:
   - /generation/default
   - /system/default
   - /evaluation/human_eval_plus/default
+  - /strategy/baseline
   - _self_
 
 # Run naming
@@ -45,23 +46,11 @@ generation:
 
 # Strategy - Baseline single-shot
 strategy:
-  type: baseline
   batch_generation: true
   # Stop tokens for Qwen models
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step token limits
-  min_step_tokens: 0
   max_step_tokens: 512
   # Disable semantic markers for baseline
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
 
 # Dataset configuration - HumanEval+
 # Uses EvalPlus API loader which provides correct prompt format with function signature
