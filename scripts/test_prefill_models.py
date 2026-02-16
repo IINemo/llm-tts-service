@@ -19,11 +19,11 @@ Optional:
   OPENROUTER_APP_NAME=PrefillProbe
 """
 
+import argparse
+import json
 import os
 import sys
 import time
-import json
-import argparse
 from typing import Any, Dict, List, Tuple
 
 import requests
@@ -97,7 +97,11 @@ def call_prefill(
         "model": model_id,
         "content": content,
         "finish_reason": getattr(resp.choices[0], "finish_reason", None),
-        "usage": getattr(resp, "usage", None).model_dump() if getattr(resp, "usage", None) else None,
+        "usage": (
+            getattr(resp, "usage", None).model_dump()
+            if getattr(resp, "usage", None)
+            else None
+        ),
     }
     return content, raw
 
@@ -113,11 +117,23 @@ def main():
     load_dotenv()
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=0, help="Limit number of Claude models tested (0 = all).")
-    ap.add_argument("--sleep", type=float, default=0.4, help="Seconds to sleep between requests.")
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Limit number of Claude models tested (0 = all).",
+    )
+    ap.add_argument(
+        "--sleep", type=float, default=0.4, help="Seconds to sleep between requests."
+    )
     ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--max_tokens", type=int, default=120)
-    ap.add_argument("--out", type=str, default="prefill_probe_results.jsonl", help="Write JSONL results here.")
+    ap.add_argument(
+        "--out",
+        type=str,
+        default="prefill_probe_results.jsonl",
+        help="Write JSONL results here.",
+    )
     args = ap.parse_args()
 
     api_key = os.getenv("OPENROUTER_API_KEY")
@@ -132,7 +148,13 @@ def main():
     client = OpenAI(base_url=OPENROUTER_BASE, api_key=api_key)
 
     models = fetch_models(api_key)
-    claude_ids = sorted({m.get("id") for m in models if isinstance(m.get("id"), str) and is_claude_model(m["id"])})
+    claude_ids = sorted(
+        {
+            m.get("id")
+            for m in models
+            if isinstance(m.get("id"), str) and is_claude_model(m["id"])
+        }
+    )
     if args.limit and args.limit > 0:
         claude_ids = claude_ids[: args.limit]
 
@@ -200,8 +222,12 @@ def main():
         for m in supported:
             print(f"  - {m}")
     else:
-        print("\nNo models strictly continued the prefill in this run (starts_with=True).")
-        print("Note: many providers treat assistant-prefill as context only; try a different prefix or prompt.")
+        print(
+            "\nNo models strictly continued the prefill in this run (starts_with=True)."
+        )
+        print(
+            "Note: many providers treat assistant-prefill as context only; try a different prefix or prompt."
+        )
 
 
 if __name__ == "__main__":

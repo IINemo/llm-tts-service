@@ -1,4 +1,5 @@
 import os
+
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -15,8 +16,8 @@ prefill = "A transformer model is a type of neural network that"
 response = client.chat.completions.create(
     model="openai/gpt-4o-mini",
     extra_headers={
-        "HTTP-Referer": "https://example.com",   # optional but recommended
-        "X-Title": "PrefillTest"
+        "HTTP-Referer": "https://example.com",  # optional but recommended
+        "X-Title": "PrefillTest",
     },
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
