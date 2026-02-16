@@ -8,6 +8,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/offline_bon
   - /scorer/perplexity
   - /evaluation/human_eval_plus/default
   - _self_
@@ -17,7 +18,7 @@ run_name: "offline_bon_vllm_qwen3_8b_human_eval_plus_perplexity_seed${system.see
 
 # Main configuration
 verbose: true
-report_to: wandb
+report_to: null
 wandb_project: llm-tts-human-eval-plus
 wandb_group: "offline_bon_vllm_qwen3_8b_human_eval_plus_perplexity"
 
@@ -29,8 +30,8 @@ model:
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_context_budget: 32768
-  disable_thinking_mode: false  # ENABLE native thinking mode
+  max_model_len: 8192
+  disable_thinking_mode: true
 
 # System configuration
 system:
@@ -39,27 +40,19 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 32768
-  temperature: 0.6
+  max_new_tokens: 512
+  temperature: 0.7
   top_p: 0.95
-  top_k: 20
+  top_k: 50
   batch_size: 1
-  max_length: 65536
 
 # Strategy - Offline Best-of-N with newline-based step boundaries for code
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8        # Number of complete trajectories to generate
-  max_steps: 100
-  score_aggregation: min     # Conservative: trajectory is only as good as its weakest step
-  batch_generation: true     # Fully batched: M×N trajectories in single vLLM call
-  # Stop tokens for Qwen3
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
-  # Step boundary detector settings - used for post-hoc step splitting
-  min_step_tokens: 10
-  max_step_tokens: 500
+  max_steps: 20
+  score_aggregation: mean
+  # Stop tokens for Qwen models
+  min_step_tokens: 5
+  max_step_tokens: 128
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false

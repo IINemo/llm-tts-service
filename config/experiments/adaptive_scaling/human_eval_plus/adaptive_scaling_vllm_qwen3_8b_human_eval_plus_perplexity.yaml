@@ -8,6 +8,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/adaptive
   - /scorer/perplexity
   - /evaluation/human_eval_plus/default
   - _self_
@@ -29,8 +30,8 @@ model:
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_context_budget: 32768
-  disable_thinking_mode: false
+  max_model_len: 8192
+  disable_thinking_mode: true
 
 # System configuration
 system:
@@ -39,27 +40,16 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 32768
-  temperature: 0.6
+  max_new_tokens: 512
+  temperature: 0.7
   top_p: 0.95
-  top_k: 20
-  batch_size: 512
-  checkpoint_batch_size: 198
-  max_length: 32768
+  top_k: 50
+  batch_size: 1
 
 # Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
 strategy:
-  type: adaptive
-  candidates_per_step: 8
-  max_steps: 250
-  scaling_rate: 0.9
-  momentum_rate: 0.9
-  adaptive_scaling_method: momentum
-  detector_type: structured
+  max_steps: 50
   # Stop tokens for Qwen models
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   min_step_tokens: 10
   max_step_tokens: 1024
   # Disable linguistic markers (not useful for code)

@@ -526,8 +526,12 @@ def create_model(config):
                 f"(thinking_mode={thinking_mode})"
             )
 
+            if "min_step_tokens" not in config.strategy:
+                log.warning("strategy.min_step_tokens not set, defaulting to 50")
+            if "max_step_tokens" not in config.strategy:
+                log.warning("strategy.max_step_tokens not set, defaulting to 300")
             detector = ThinkingMarkerDetector(
-                min_step_tokens=config.strategy.get("min_step_tokens", 0),
+                min_step_tokens=config.strategy.get("min_step_tokens", 50),
                 max_step_tokens=config.strategy.get("max_step_tokens", 300),
                 use_sequence=config.strategy.get("use_sequence", True),
                 use_conclusion=config.strategy.get("use_conclusion", True),
@@ -607,8 +611,12 @@ def create_model(config):
 
         # Always use ThinkingMarkerDetector for step boundary detection
         log.info("Using ThinkingMarkerDetector for local model")
+        if "min_step_tokens" not in config.strategy:
+            log.warning("strategy.min_step_tokens not set, defaulting to 50")
+        if "max_step_tokens" not in config.strategy:
+            log.warning("strategy.max_step_tokens not set, defaulting to 300")
         detector = ThinkingMarkerDetector(
-            min_step_tokens=config.strategy.get("min_step_tokens", 0),
+            min_step_tokens=config.strategy.get("min_step_tokens", 50),
             max_step_tokens=config.strategy.get("max_step_tokens", 300),
             use_sequence=config.strategy.get("use_sequence", True),
             use_conclusion=config.strategy.get("use_conclusion", True),
@@ -670,8 +678,12 @@ def create_model(config):
             thinking_mode = disable_thinking_mode is False
 
             # Always use ThinkingMarkerDetector for step boundary detection
+            if "min_step_tokens" not in config.strategy:
+                log.warning("strategy.min_step_tokens not set, defaulting to 50")
+            if "max_step_tokens" not in config.strategy:
+                log.warning("strategy.max_step_tokens not set, defaulting to 300")
             detector = ThinkingMarkerDetector(
-                min_step_tokens=config.strategy.get("min_step_tokens", 0),
+                min_step_tokens=config.strategy.get("min_step_tokens", 50),
                 max_step_tokens=config.strategy.get("max_step_tokens", 300),
                 use_sequence=config.strategy.get("use_sequence", True),
                 use_conclusion=config.strategy.get("use_conclusion", True),
@@ -1166,7 +1178,8 @@ def _generate_trajectories_batch(
                         if isinstance(solution, (int, float)):
                             solution = str(solution)
                         score = evaluator._score_single(
-                            (question, solution, str(gold_answer_num))
+                            (question, solution, str(gold_answer_num)),
+                            pre_extracted=True,
                         )
                         is_correct_eval = bool(score)
                     elif isinstance(evaluator, EvaluatorLLMAsAJudge):
@@ -1424,10 +1437,12 @@ def generate_trajectories(
         phase1_evaluators = {"exact_match": exact_match_evaluator}
         log.info(f"Phase 1 evaluator: data_name={exact_match_evaluator.data_name}")
 
-    # Get checkpoint batch size from config (default: 32)
-    checkpoint_batch_size = 32
+    # Get checkpoint batch size: default to dataset subset size (process all at once)
+    checkpoint_batch_size = len(dataset)
     if config is not None and hasattr(config, "generation"):
-        checkpoint_batch_size = config.generation.get("checkpoint_batch_size", 32)
+        checkpoint_batch_size = config.generation.get(
+            "checkpoint_batch_size", checkpoint_batch_size
+        )
 
     return _generate_trajectories_batch(
         results=results,
@@ -1444,6 +1459,72 @@ def generate_trajectories(
         sample_metrics_path=sample_metrics_path,
         checkpoint_batch_size=checkpoint_batch_size,
     )
+
+
+def log_evaluation_inconsistencies(results, save_path: str):
+    """Log samples where exact_match and llm_judge disagree."""
+    # Find llm_judge evaluator name
+    llm_judge_name = None
+    for key in results[0].get("eval", {}):
+        if key.startswith("llm_judge"):
+            llm_judge_name = key
+            break
+
+    if not llm_judge_name:
+        log.info("No LLM judge evaluator found, skipping inconsistency logging")
+        return
+
+    if "exact_match" not in results[0].get("eval", {}):
+        log.info("No exact_match evaluator found, skipping inconsistency logging")
+        return
+
+    inconsistencies = []
+    for result in results:
+        eval_data = result.get("eval", {})
+        if "exact_match" not in eval_data or llm_judge_name not in eval_data:
+            continue
+
+        em_result = eval_data["exact_match"].get("is_correct", False)
+        llm_result = eval_data[llm_judge_name].get("is_correct", False)
+
+        if em_result != llm_result:
+            # Create inconsistency record with required keys
+            inconsistency = {
+                "index": result.get("index"),
+                "question": result.get("question"),
+                "gold_answer": result.get("gold_answer"),
+                "generated_trajectory": result.get("generated_trajectory", ""),
+                "extracted_answer": result.get("extracted_answer", ""),
+                "answer_step": result.get("answer_step", ""),
+                "eval": eval_data,
+                "instance_data": result.get("instance_data", {}),
+            }
+            inconsistencies.append(inconsistency)
+
+    if inconsistencies:
+        inconsistencies_path = Path(save_path) / "eval_inconsistencies.json"
+        try:
+            with open(inconsistencies_path, "w", encoding="utf-8") as f:
+                json.dump(inconsistencies, f, indent=2, ensure_ascii=False)
+            log.info(
+                f"Logged {len(inconsistencies)} inconsistencies to {inconsistencies_path}"
+            )
+
+            # Log summary of inconsistencies
+            em_correct_llm_incorrect = sum(
+                1 for i in inconsistencies if i["eval"]["exact_match"]["is_correct"]
+            )
+            llm_correct_em_incorrect = sum(
+                1 for i in inconsistencies if i["eval"][llm_judge_name]["is_correct"]
+            )
+            log.info(f"  EM correct, LLM incorrect: {em_correct_llm_incorrect}")
+            log.info(f"  LLM correct, EM incorrect: {llm_correct_em_incorrect}")
+        except Exception as e:
+            log.warning(f"Failed to save inconsistencies: {e}")
+    else:
+        log.info(
+            "No evaluation inconsistencies found between exact_match and llm_judge"
+        )
 
 
 def evaluate_results(
@@ -1930,6 +2011,9 @@ def evaluate_results(
     except Exception as e:
         log.warning(f"Failed to save metrics to {metrics_path}: {e}")
 
+    # Log evaluation inconsistencies between exact_match and llm_judge
+    log_evaluation_inconsistencies(results, save_path)
+
     # Log key metrics to wandb if enabled
     wandb_url = None
     wandb_group_url = None
@@ -1947,6 +2031,26 @@ def evaluate_results(
                 wandb_group_url = (
                     f"https://wandb.ai/{entity}/{project_name}/groups/{group}/workspace"
                 )
+
+            # Log all output files as artifacts
+            save_path_obj = Path(save_path)
+            if save_path_obj.exists():
+                # Log log files
+                for log_file in ["run_tts_eval.log", "stderr.log"]:
+                    log_path = save_path_obj / log_file
+                    if log_path.exists():
+                        wandb.save(str(log_path), base_path=str(save_path_obj))
+                        log.info(f"Logged {log_file} to wandb")
+
+                # Log all JSON files
+                for json_file in save_path_obj.glob("*.json"):
+                    wandb.save(str(json_file), base_path=str(save_path_obj))
+                    log.info(f"Logged {json_file.name} to wandb")
+
+                # Log all JSONL files
+                for jsonl_file in save_path_obj.glob("*.jsonl"):
+                    wandb.save(str(jsonl_file), base_path=str(save_path_obj))
+                    log.info(f"Logged {jsonl_file.name} to wandb")
     except ImportError:
         pass  # wandb not installed
     except Exception as e:

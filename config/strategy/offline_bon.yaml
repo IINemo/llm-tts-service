@@ -1,12 +1,11 @@
-type: beam_search
-aggregation: mean
+type: offline_best_of_n
+num_trajectories: 8
+score_aggregation: min
 batch_generation: true
-prompt_buffer: 500
 min_step_tokens: 50
 stop_token_ids:
   - 151645  # <|im_end|>
   - 151643  # <|endoftext|>
-max_step_tokens: 1024
 use_sequence: true
 use_conclusion: true
 use_thinking: true

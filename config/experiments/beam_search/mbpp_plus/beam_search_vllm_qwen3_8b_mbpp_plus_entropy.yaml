@@ -1,9 +1,14 @@
 # @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/mbpp_plus/beam_search_vllm_qwen3_8b_mbpp_plus_entropy
+# Beam Search for MBPP+ using vLLM with Qwen3-8B and newline-based step boundaries
+# Uses Entropy scorer for step evaluation
+
 defaults:
   - /config
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/beam_search
   - /scorer/entropy
   - /evaluation/mbpp_plus/default
   - _self_
@@ -21,13 +26,12 @@ wandb_group: "beam_search_vllm_qwen3_8b_mbpp_plus_entropy"
 model:
   type: "vllm"
   model_path: "Qwen/Qwen3-8B"
-  model_short_name: "vllm_thinking_qwen3_8b"
   gpu_memory_utilization: 0.85
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_context_budget: 32768
-  disable_thinking_mode: false  # ENABLE native thinking mode
+  max_model_len: 8192
+  disable_thinking_mode: true
 
 # System configuration
 system:
@@ -36,29 +40,20 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 32768
-  temperature: 0.6
+  max_new_tokens: 512
+  temperature: 0.7
   top_p: 0.95
-  top_k: 20
+  top_k: 50
   batch_size: 1
-  max_length: 65536
 
 # Strategy - Beam Search with newline-based step boundaries for code
 strategy:
-  type: beam_search
-  beam_size: 5
-  candidates_per_beam: 8
-  max_steps: 100
-  aggregation: mean
-  batch_generation: true
-  prompt_buffer: 500
-  # Stop tokens for Qwen3
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  #
-  # Step boundary detector settings - used for post-hoc step splitting
-  min_step_tokens: 1
-  max_step_tokens: 500
+  beam_size: 3
+  candidates_per_beam: 5
+  max_steps: 20
+  # Stop tokens for Qwen models
+  min_step_tokens: 5
+  max_step_tokens: 128
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
