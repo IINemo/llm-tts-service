@@ -64,7 +64,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
         # Create persistent client with optional custom base_url (e.g., OpenRouter)
         # Configure timeouts for connection, read, write, and pool
         # Read timeout handles both streaming chunks and non-streaming responses
-        from httpx import Timeout
+        from httpx import Limits, Timeout
 
         client_kwargs = {
             "api_key": openai_api_key,
@@ -72,9 +72,16 @@ class BlackboxModelWithStreaming(BlackboxModel):
                 connect=10.0,  # 10s to establish connection
                 read=60.0,  # 60s to receive response/next chunk
                 write=10.0,  # 10s to send request
-                pool=10.0,  # 10s to get connection from pool
+                pool=30.0,  # 30s to get connection from pool
             ),
             "max_retries": 0,  # Disable built-in retries (handled at strategy level)
+            "http_client": __import__("httpx").Client(
+                limits=Limits(
+                    max_connections=100,
+                    max_keepalive_connections=50,
+                ),
+                timeout=Timeout(connect=10.0, read=60.0, write=10.0, pool=30.0),
+            ),
         }
         if base_url:
             client_kwargs["base_url"] = base_url
@@ -84,9 +91,9 @@ class BlackboxModelWithStreaming(BlackboxModel):
         self.openai_api = self.client
 
         # Create thread pool executor for timeout enforcement
-        # Use max_workers=10 to handle concurrent requests in strategies
+        # Use max_workers=50 to handle concurrent batch scoring requests
         self._executor = ThreadPoolExecutor(
-            max_workers=10, thread_name_prefix="llm_api"
+            max_workers=50, thread_name_prefix="llm_api"
         )
 
         # Store early stopping configuration
@@ -104,7 +111,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
         2. Python's garbage collector will clean up the old client
         3. The old client's connections will eventually timeout on their own
         """
-        from httpx import Timeout
+        from httpx import Limits, Timeout
 
         log.info("[CLIENT] Recreating OpenAI client (abandoning old stuck connections)")
 
@@ -115,8 +122,15 @@ class BlackboxModelWithStreaming(BlackboxModel):
         # Create new client with same parameters
         client_kwargs = {
             "api_key": self._api_key,
-            "timeout": Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
+            "timeout": Timeout(connect=10.0, read=60.0, write=10.0, pool=30.0),
             "max_retries": 0,
+            "http_client": __import__("httpx").Client(
+                limits=Limits(
+                    max_connections=100,
+                    max_keepalive_connections=50,
+                ),
+                timeout=Timeout(connect=10.0, read=60.0, write=10.0, pool=30.0),
+            ),
         }
         if self._base_url:
             client_kwargs["base_url"] = self._base_url
