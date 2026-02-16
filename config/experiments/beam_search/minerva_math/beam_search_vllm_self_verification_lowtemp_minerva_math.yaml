@@ -1,0 +1,103 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/beam_search_vllm_self_verification_lowtemp_minerva_math
+#
+# Beam Search with Self-Verification Scorer - Low temperature scorer
+# Same model (Qwen2.5-Math-7B) for generation and scoring via vLLM
+# No few-shot prompt, low scorer temperature for crisp sure/likely/impossible
+
+defaults:
+  - /config
+  - /dataset/minerva_math
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/self_verification
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "beam_search_vllm_self_verification_lowtemp_minerva_math_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: none
+wandb_project: llm-tts-eval-minerva-math
+
+# Model configuration (vLLM backend)
+model:
+  type: vllm
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 4096
+  disable_thinking_mode: true
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 4096
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  batch_size: 1
+  max_length: 8192
+
+# Strategy - Beam Search
+strategy:
+  type: beam_search
+  beam_size: 5
+  candidates_per_beam: 8
+  max_steps: 30
+  aggregation: mean
+  batch_generation: true
+  prompt_buffer: 500
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+  min_step_tokens: 10
+  max_step_tokens: 256
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: false
+  use_reasoning: true
+  use_correction: false
+  custom_words:
+    - "for example"
+    - "given that"
+    - "similarly"
+    - "step"
+    - "therefore"
+    - "thus"
+
+# Self-Verification Scorer - low temperature for deterministic ratings
+scorer:
+  type: self_verification
+  method: value
+  n_evaluate_sample: 3
+  temperature: 0.1
+  max_tokens: 100
+  timeout: 120
+  value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
+
+# Dataset configuration - Minerva Math
+dataset:
+  dataset_path: "test-time-compute/test_minerva_math"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 272
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: minerva_math
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
