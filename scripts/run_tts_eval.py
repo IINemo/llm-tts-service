@@ -1441,7 +1441,9 @@ def generate_trajectories(
     # Get checkpoint batch size: default to dataset subset size (process all at once)
     checkpoint_batch_size = len(dataset)
     if config is not None and hasattr(config, "generation"):
-        checkpoint_batch_size = config.generation.get("checkpoint_batch_size", checkpoint_batch_size)
+        checkpoint_batch_size = config.generation.get(
+            "checkpoint_batch_size", checkpoint_batch_size
+        )
 
     return _generate_trajectories_batch(
         results=results,
