@@ -42,6 +42,7 @@ generation:
 
 # Strategy - Adaptive Scaling
 strategy:
+  adaptive_scaling_method: average
   max_steps: 50
   # Detector settings
   max_step_tokens: 1024
