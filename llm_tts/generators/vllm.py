@@ -159,7 +159,11 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.detector.answer_patterns = self.answer_patterns
 
         # Get min/step token limit from detector
-        self.min_step_tokens = getattr(detector, "min_step_tokens", 0)
+        if not hasattr(detector, "min_step_tokens"):
+            logger.warning("Detector does not have min_step_tokens set, defaulting to 50")
+        if not hasattr(detector, "max_step_tokens"):
+            logger.warning("Detector does not have max_step_tokens set, defaulting to 300")
+        self.min_step_tokens = getattr(detector, "min_step_tokens", 50)
         self.step_token_limit = getattr(detector, "max_step_tokens", 300)
 
         # Derive stop tokens from detector's use_* flags

@@ -56,7 +56,7 @@ strategy:
     - 151645
     - 151643
   # Step token limits
-  min_step_tokens: 0
+  min_step_tokens: 50
   max_step_tokens: 512
   # Disable semantic markers
   use_sequence: false
