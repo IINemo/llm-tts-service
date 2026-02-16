@@ -263,7 +263,13 @@ class StrategyUncertaintyCoT(StrategyBase):
             cand.other_data["uncertainty_score"] for cand in answer_cands
         ]
         # Handle None uncertainties (e.g. from already-complete trajectories)
+        none_count = sum(1 for u in answer_uncertainties if u is None)
+        if none_count > 0:
+            log.warning(
+                f"{none_count}/{len(answer_uncertainties)} candidates have None uncertainty scores"
+            )
         if all(u is None for u in answer_uncertainties):
+            log.warning("All uncertainty scores are None, picking first candidate")
             chosen_answer = answer_cands[0]
         else:
             chosen_answer = answer_cands[
