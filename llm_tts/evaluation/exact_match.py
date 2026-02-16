@@ -78,6 +78,11 @@ def _extract_single_letter_answer(text: str) -> str | None:
     if boxed_matches:
         return boxed_matches[-1].upper()
 
+    # Try to extract from \text{X} format (last occurrence)
+    text_matches = re.findall(r"\\text\{([A-Za-z])\}", text)
+    if text_matches:
+        return text_matches[-1].upper()
+
     # Single letter at end
     match = re.search(r"\b([A-Z])[.,]?\s*$", text)
     if match:
