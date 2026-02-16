@@ -48,11 +48,9 @@ generation:
 
 # Strategy - Offline Best-of-N with newline-based step boundaries for code
 strategy:
-  max_steps: 20
-  score_aggregation: mean
-  # Stop tokens for Qwen models
-  min_step_tokens: 5
-  max_step_tokens: 128
+  type: offline_best_of_n
+  min_step_tokens: 10
+  max_step_tokens: 500
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
