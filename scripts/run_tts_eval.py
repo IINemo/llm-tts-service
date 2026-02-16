@@ -1180,7 +1180,8 @@ def _generate_trajectories_batch(
                         if isinstance(solution, (int, float)):
                             solution = str(solution)
                         score = evaluator._score_single(
-                            (question, solution, str(gold_answer_num))
+                            (question, solution, str(gold_answer_num)),
+                            pre_extracted=True,
                         )
                         is_correct_eval = bool(score)
                     elif isinstance(evaluator, EvaluatorLLMAsAJudge):
