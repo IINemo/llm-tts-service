@@ -655,5 +655,5 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
             use_reasoning=self.use_reasoning,
             use_correction=self.use_correction,
             use_structure=self.use_structure,
-            custom_words=self.custom_markers,
+            custom_markers=self.custom_markers,
         )

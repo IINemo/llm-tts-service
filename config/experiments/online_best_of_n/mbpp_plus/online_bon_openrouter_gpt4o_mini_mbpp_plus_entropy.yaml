@@ -61,7 +61,7 @@ strategy:
   use_reasoning: false
   use_correction: false
   # Use newlines as step separators for code
-  custom_words:
+  custom_markers:
     - "\n"
     - "\n\n"
 
