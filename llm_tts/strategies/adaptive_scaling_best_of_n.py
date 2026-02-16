@@ -166,10 +166,16 @@ class AdaptiveScalingBestOfN(StrategyBase):
             if not use_prm:
                 all_scores = []
                 for candidates in batch_results:
-                    scores = [
-                        c.other_data.get("validity_score", 0.0) if c.other_data else 0.0
-                        for c in candidates
-                    ]
+                    scores = []
+                    for c in candidates:
+                        vs = (
+                            c.other_data.get("validity_score") if c.other_data else None
+                        )
+                        if vs is None:
+                            log.warning(
+                                "Candidate has None validity_score, defaulting to 0.0"
+                            )
+                        scores.append(vs if vs is not None else 0.0)
                     all_scores.append(scores)
                 return all_scores
             else:
@@ -358,9 +364,16 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 )
                 trajectories[sample_idx].append(chosen)
                 selected_steps[sample_idx].append(chosen)
-                validity_scores[sample_idx].append(
-                    chosen.other_data.get("validity_score", 0.0)
+                vs = (
+                    chosen.other_data.get("validity_score")
+                    if chosen.other_data
+                    else None
                 )
+                if vs is None:
+                    log.warning(
+                        f"Sample {sample_idx}: chosen step has None validity_score, defaulting to 0.0"
+                    )
+                validity_scores[sample_idx].append(vs if vs is not None else 0.0)
                 last_selected[sample_idx] = chosen
 
                 # Check for thinking mode completion

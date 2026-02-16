@@ -120,12 +120,16 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
+<<<<<<< tot-self-scorer
 from llm_tts.scorers import (
     StepScorerConfidence,
     StepScorerPRM,
     StepScorerSelfVerification,
     StepScorerUncertainty,
 )
+=======
+from llm_tts.scorers import StepScorerConfidence, StepScorerPRM, StepScorerUncertainty
+>>>>>>> main
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 
 # vLLM step generator (optional)
@@ -547,8 +551,12 @@ def create_model(config):
                 f"(thinking_mode={thinking_mode})"
             )
 
+            if "min_step_tokens" not in config.strategy:
+                log.warning("strategy.min_step_tokens not set, defaulting to 50")
+            if "max_step_tokens" not in config.strategy:
+                log.warning("strategy.max_step_tokens not set, defaulting to 300")
             detector = ThinkingMarkerDetector(
-                min_step_tokens=config.strategy.get("min_step_tokens", 0),
+                min_step_tokens=config.strategy.get("min_step_tokens", 50),
                 max_step_tokens=config.strategy.get("max_step_tokens", 300),
                 use_sequence=config.strategy.get("use_sequence", True),
                 use_conclusion=config.strategy.get("use_conclusion", True),
@@ -557,7 +565,7 @@ def create_model(config):
                 use_reasoning=config.strategy.get("use_reasoning", False),
                 use_correction=config.strategy.get("use_correction", False),
                 use_structure=config.strategy.get("use_structure", False),
-                custom_markers=config.strategy.get("custom_words", None),
+                custom_markers=config.strategy.get("custom_markers", None),
             )
 
             # Stop token IDs (e.g., [151645, 151643] for Qwen EOS)
@@ -628,8 +636,12 @@ def create_model(config):
 
         # Always use ThinkingMarkerDetector for step boundary detection
         log.info("Using ThinkingMarkerDetector for local model")
+        if "min_step_tokens" not in config.strategy:
+            log.warning("strategy.min_step_tokens not set, defaulting to 50")
+        if "max_step_tokens" not in config.strategy:
+            log.warning("strategy.max_step_tokens not set, defaulting to 300")
         detector = ThinkingMarkerDetector(
-            min_step_tokens=config.strategy.get("min_step_tokens", 0),
+            min_step_tokens=config.strategy.get("min_step_tokens", 50),
             max_step_tokens=config.strategy.get("max_step_tokens", 300),
             use_sequence=config.strategy.get("use_sequence", True),
             use_conclusion=config.strategy.get("use_conclusion", True),
@@ -690,8 +702,12 @@ def create_model(config):
             thinking_mode = disable_thinking_mode is False
 
             # Always use ThinkingMarkerDetector for step boundary detection
+            if "min_step_tokens" not in config.strategy:
+                log.warning("strategy.min_step_tokens not set, defaulting to 50")
+            if "max_step_tokens" not in config.strategy:
+                log.warning("strategy.max_step_tokens not set, defaulting to 300")
             detector = ThinkingMarkerDetector(
-                min_step_tokens=config.strategy.get("min_step_tokens", 0),
+                min_step_tokens=config.strategy.get("min_step_tokens", 50),
                 max_step_tokens=config.strategy.get("max_step_tokens", 300),
                 use_sequence=config.strategy.get("use_sequence", True),
                 use_conclusion=config.strategy.get("use_conclusion", True),
@@ -1234,7 +1250,8 @@ def _generate_trajectories_batch(
                         if isinstance(solution, (int, float)):
                             solution = str(solution)
                         score = evaluator._score_single(
-                            (question, solution, str(gold_answer_num))
+                            (question, solution, str(gold_answer_num)),
+                            pre_extracted=True,
                         )
                         is_correct_eval = bool(score)
                     elif isinstance(evaluator, EvaluatorLLMAsAJudge):
@@ -1492,10 +1509,12 @@ def generate_trajectories(
         phase1_evaluators = {"exact_match": exact_match_evaluator}
         log.info(f"Phase 1 evaluator: data_name={exact_match_evaluator.data_name}")
 
-    # Get checkpoint batch size from config (default: 32)
-    checkpoint_batch_size = 32
+    # Get checkpoint batch size: default to dataset subset size (process all at once)
+    checkpoint_batch_size = len(dataset)
     if config is not None and hasattr(config, "generation"):
-        checkpoint_batch_size = config.generation.get("checkpoint_batch_size", 32)
+        checkpoint_batch_size = config.generation.get(
+            "checkpoint_batch_size", checkpoint_batch_size
+        )
 
     return _generate_trajectories_batch(
         results=results,

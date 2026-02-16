@@ -1,6 +1,5 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/mbpp_plus/self_consistency_vllm_mbpp_plus
-# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/mbpp_plus/self_consistency_vllm_qwen25_coder_7b_instruct_mbpp_plus
 # Self-consistency evaluation for MBPP+ using local vLLM model
 
 defaults:

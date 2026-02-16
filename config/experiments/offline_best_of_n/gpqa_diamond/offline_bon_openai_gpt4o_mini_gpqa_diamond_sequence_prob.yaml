@@ -8,6 +8,7 @@ defaults:
   - /model/openai
   - /generation/default
   - /system/default
+  - /strategy/offline_bon
   - /scorer/sequence_prob
   - /evaluation/default
   - _self_
@@ -39,20 +40,8 @@ generation:
   batch_size: 1
 
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8
   max_steps: 100
-  score_aggregation: min
-  batch_generation: true
-  min_step_tokens: 10
   max_step_tokens: 2048
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false
-  use_reasoning: true
-  use_correction: false
 
 scorer:
   type: sequence_prob

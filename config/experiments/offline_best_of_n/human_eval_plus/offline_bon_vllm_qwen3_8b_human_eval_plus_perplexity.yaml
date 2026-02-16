@@ -8,6 +8,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/offline_bon
   - /scorer/perplexity
   - /evaluation/human_eval_plus/default
   - _self_
@@ -47,15 +48,9 @@ generation:
 
 # Strategy - Offline Best-of-N with newline-based step boundaries for code
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8
   max_steps: 20
   score_aggregation: mean
-  batch_generation: true
   # Stop tokens for Qwen models
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   min_step_tokens: 5
   max_step_tokens: 128
   # Disable linguistic markers (not useful for code)
@@ -67,7 +62,7 @@ strategy:
   use_reasoning: false
   use_correction: false
   # Use newlines as step separators for code
-  custom_words:
+  custom_markers:
     - "\n"
     - "\n\n"
 

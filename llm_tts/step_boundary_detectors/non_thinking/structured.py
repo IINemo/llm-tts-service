@@ -23,7 +23,7 @@ class StructuredStepDetector(StepBoundaryDetectorBase):
         step_patterns: Optional[List[str]] = None,
         answer_patterns: Optional[List[str]] = None,
         max_tokens_per_step: int = 512,
-        min_step_tokens: int = 0,
+        min_step_tokens: int = 50,
         max_step_tokens: int = 300,
         eos_patterns: Optional[List[str]] = None,
     ):

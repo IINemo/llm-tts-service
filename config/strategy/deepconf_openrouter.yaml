@@ -1,6 +1,7 @@
 # DeepConf strategy configuration with OpenRouter for real token probabilities
 
 type: deep_think_confidence
+min_step_tokens: 50
 
 # Generation parameters
 num_paths: 3  # Number of reasoning paths to generate

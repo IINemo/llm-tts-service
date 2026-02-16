@@ -224,7 +224,7 @@ def get_stop_tokens(
     use_reasoning: bool = False,
     use_correction: bool = False,
     use_structure: bool = False,
-    custom_words: List[str] = None,
+    custom_markers: List[str] = None,
     include_answer_tokens: bool = True,
     max_tokens: int = None,
 ) -> List[str]:
@@ -241,7 +241,7 @@ def get_stop_tokens(
         use_reasoning: Include reasoning markers
         use_correction: Include correction markers
         use_structure: Include structure markers
-        custom_words: Additional words to expand
+        custom_markers: Additional custom marker patterns
         include_answer_tokens: Include answer completion tokens
         max_tokens: Limit total number of tokens (vLLM may have limits)
 
@@ -267,8 +267,8 @@ def get_stop_tokens(
 
     # Split custom markers into words to expand and raw tokens to use as-is
     raw_markers = []
-    if custom_words:
-        extra_words, raw_markers = _split_custom_markers(custom_words)
+    if custom_markers:
+        extra_words, raw_markers = _split_custom_markers(custom_markers)
         words.extend(extra_words)
 
     # Expand each word to stop tokens
@@ -306,7 +306,7 @@ def get_stop_tokens_compact(
     use_reasoning: bool = False,
     use_correction: bool = False,
     use_structure: bool = False,
-    custom_words: List[str] = None,
+    custom_markers: List[str] = None,
 ) -> List[str]:
     """
     Get compact stop tokens - only newline-prefixed variants.
@@ -338,8 +338,8 @@ def get_stop_tokens_compact(
 
     # Split custom markers into words to expand and raw tokens to use as-is
     raw_markers = []
-    if custom_words:
-        extra_words, raw_markers = _split_custom_markers(custom_words)
+    if custom_markers:
+        extra_words, raw_markers = _split_custom_markers(custom_markers)
         words.extend(extra_words)
 
     # Only generate newline-prefixed variants
@@ -377,7 +377,7 @@ def get_stop_tokens_sentence_start(
     use_reasoning: bool = False,
     use_correction: bool = False,
     use_structure: bool = False,
-    custom_words: List[str] = None,
+    custom_markers: List[str] = None,
 ) -> List[str]:
     """
     Get stop tokens that match at sentence boundaries only.
@@ -412,8 +412,8 @@ def get_stop_tokens_sentence_start(
         words.extend(CORRECTION_WORDS)
     # Split custom markers into words to expand and raw tokens to use as-is
     raw_markers = []
-    if custom_words:
-        extra_words, raw_markers = _split_custom_markers(custom_words)
+    if custom_markers:
+        extra_words, raw_markers = _split_custom_markers(custom_markers)
         words.extend(extra_words)
 
     # Only use newline prefixes to preserve sentence-ending punctuation

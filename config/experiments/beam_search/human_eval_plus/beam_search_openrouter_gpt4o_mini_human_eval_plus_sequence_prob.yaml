@@ -1,38 +1,33 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/human_eval_plus/beam_search_openrouter_human_eval_plus
-# Beam Search for HumanEval+ using OpenRouter API with newline-based step boundaries
-# Uses Entropy scorer for step evaluation
-#
 # Environment variable required: OPENROUTER_API_KEY
 
 defaults:
   - /config
+  - /model/openrouter
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/sequence_prob
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "beam_search_openrouter_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "beam_search_openrouter_gpt4o_mini_human_eval_plus_sequence_prob_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: null
+report_to: wandb
 wandb_project: llm-tts-human-eval-plus
+wandb_group: "beam_search_openrouter_gpt4o_mini_human_eval_plus_sequence_prob"
 
 # Model configuration (OpenRouter API)
 model:
   type: "openai_api"
   provider: openrouter
-  model_path: "openai/gpt-4o-mini"  # Fast and cost-effective for code
-  # Alternative models:
-  # - "anthropic/claude-3.5-sonnet" (best quality)
-  # - "deepseek/deepseek-coder" (code-specialized)
-  # - "qwen/qwen-2.5-coder-32b-instruct" (open-source coder)
-  api_key: null  # Set via OPENROUTER_API_KEY env var
+  model_path: "openai/gpt-4o-mini"
+  api_key: null
   supports_logprobs: true
   prefill_mode: false
+  max_context_budget: 16384
 
 # System configuration
 system:
@@ -52,11 +47,12 @@ strategy:
   type: beam_search
   beam_size: 5
   candidates_per_beam: 8
-  max_steps: 50
+  max_steps: 100
   aggregation: mean
   batch_generation: true
-  min_step_tokens: 10
-  max_step_tokens: 2048
+  prompt_buffer: 500
+  min_step_tokens: 1
+  max_step_tokens: 500
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
@@ -66,13 +62,13 @@ strategy:
   use_reasoning: false
   use_correction: false
   # Use newlines as step separators for code
-  custom_words:
+  custom_markers:
     - "\n"
     - "\n\n"
 
 # Entropy scorer configuration
 scorer:
-  type: entropy
+  type: sequence_prob
   batch_size: 1
 
 # Dataset configuration - HumanEval+
@@ -86,6 +82,7 @@ dataset:
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
+  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
 
 # Evaluation configuration
 evaluation:

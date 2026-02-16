@@ -9,6 +9,7 @@ defaults:
   - /config
   - /generation/default
   - /system/default
+  - /strategy/online_bon
   - /scorer/perplexity
   - /evaluation/human_eval_plus/default
   - _self_
@@ -18,7 +19,7 @@ run_name: "online_bon_openrouter_human_eval_plus_entropy_seed${system.seed}_${no
 
 # Main configuration
 verbose: true
-report_to: null
+report_to: wandb
 wandb_project: llm-tts-human-eval-plus
 
 # Model configuration (OpenRouter API)
@@ -46,8 +47,6 @@ generation:
 
 # Strategy - Online Best-of-N with newline-based step boundaries for code
 strategy:
-  type: online_best_of_n
-  candidates_per_step: 8
   max_steps: 50
   min_step_tokens: 10
   max_step_tokens: 2048
@@ -60,7 +59,7 @@ strategy:
   use_reasoning: false
   use_correction: false
   # Use newlines as step separators for code
-  custom_words:
+  custom_markers:
     - "\n"
     - "\n\n"
 
