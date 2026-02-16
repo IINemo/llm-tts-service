@@ -9,6 +9,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/offline_bon
   - /scorer/sequence_prob
   - /evaluation/default
   - _self_
@@ -51,17 +52,12 @@ generation:
 
 # Strategy - Offline Best-of-N
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8        # Number of complete trajectories to generate
   max_steps: 250
-  score_aggregation: min     # Conservative: trajectory is only as good as its weakest step
-  batch_generation: true     # Fully batched: M×N trajectories in single vLLM call
   # Stop tokens for Qwen3
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
   # Step boundary detector settings - used for post-hoc step splitting
-  min_step_tokens: 125
   max_step_tokens: 500
   # These flags control how thinking is SPLIT into steps after generation
   use_sequence: true

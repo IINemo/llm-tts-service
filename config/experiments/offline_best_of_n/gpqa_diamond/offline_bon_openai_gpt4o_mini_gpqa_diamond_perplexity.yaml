@@ -9,6 +9,7 @@ defaults:
   - /model/openai
   - /generation/default
   - /system/default
+  - /strategy/offline_bon
   - /scorer/perplexity
   - /evaluation/default
   - _self_
@@ -46,13 +47,8 @@ generation:
 
 # Strategy - Offline Best-of-N
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8
   max_steps: 100
-  score_aggregation: min
-  batch_generation: true
   # Step boundary detector settings - used for post-hoc step splitting
-  min_step_tokens: 10
   max_step_tokens: 2048
   use_sequence: true
   use_conclusion: true

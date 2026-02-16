@@ -9,6 +9,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/online_bon
   - /scorer/sequence_prob
   - /evaluation/default
   - _self_
@@ -49,13 +50,10 @@ generation:
 
 # Strategy - Online Best-of-N with thinking marker detector
 strategy:
-  type: online_best_of_n
-  candidates_per_step: 8
   max_steps: 250
   # Use VLLMStepGenerator in thinking mode
   detector_type: thinking_marker
   # Step boundary token limits
-  min_step_tokens: 50
   max_step_tokens: 300
   # Marker categories (for vLLM stop token generation)
   use_sequence: true

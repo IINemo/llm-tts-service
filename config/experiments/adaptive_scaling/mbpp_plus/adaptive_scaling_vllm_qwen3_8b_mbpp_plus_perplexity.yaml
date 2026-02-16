@@ -8,6 +8,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/adaptive
   - /scorer/perplexity
   - /evaluation/mbpp_plus/default
   - _self_
@@ -47,18 +48,11 @@ generation:
 
 # Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
 strategy:
-  type: adaptive
-  candidates_per_step: 8
   max_steps: 50
-  scaling_rate: 0.9
-  momentum_rate: 0.9
-  adaptive_scaling_method: momentum
-  detector_type: structured
   # Stop tokens for Qwen models
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
-  min_step_tokens: 10
   max_step_tokens: 1024
   # Disable linguistic markers (not useful for code)
   use_sequence: false

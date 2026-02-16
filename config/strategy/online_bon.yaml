@@ -1,3 +1,3 @@
 type: online_best_of_n
-candidates_per_step: 3
-max_steps: 3
+candidates_per_step: 8
+min_step_tokens: 50

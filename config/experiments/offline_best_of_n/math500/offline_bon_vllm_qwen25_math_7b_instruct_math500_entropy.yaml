@@ -11,6 +11,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/offline_bon
   - /scorer/entropy
   - /evaluation/default
   - _self_
@@ -53,17 +54,12 @@ generation:
 
 # Strategy - Offline Best-of-N (single-call generation with post-hoc step splitting)
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8
   max_steps: 100
-  score_aggregation: min  # Conservative: trajectory is only as good as its weakest step
-  batch_generation: true  # Fully batched: M×N trajectories in single vLLM call
   # Stop tokens derived from detector config (use_* flags below)
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
   # Step boundary token limits
-  min_step_tokens: 10
   max_step_tokens: 2048
   # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
   use_sequence: true

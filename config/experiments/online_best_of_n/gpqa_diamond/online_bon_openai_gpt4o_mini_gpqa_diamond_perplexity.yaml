@@ -9,6 +9,7 @@ defaults:
   - /model/openai
   - /generation/default
   - /system/default
+  - /strategy/online_bon
   - /scorer/perplexity
   - /evaluation/default
   - _self_
@@ -39,10 +40,7 @@ generation:
   batch_size: 1
 
 strategy:
-  type: online_best_of_n
-  candidates_per_step: 8
   max_steps: 50
-  min_step_tokens: 10
   max_step_tokens: 2048
   use_sequence: true
   use_conclusion: true

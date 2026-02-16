@@ -10,6 +10,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/beam_search
   - /scorer/prm
   - /evaluation/default
   - _self_
@@ -50,19 +51,14 @@ generation:
 
 # Strategy - Beam Search
 strategy:
-  type: beam_search
   beam_size: 5              # Number of top beams to keep at each step
   candidates_per_beam: 8    # Number of candidates to generate per beam
   max_steps: 30             # Maximum reasoning steps
-  aggregation: mean         # How to aggregate scores: mean, sum, min, max, product
-  batch_generation: true    # Process ALL samples in parallel (one vLLM call per step)
-  prompt_buffer: 500        # Tokens reserved for prompt (max_trajectory = max_context_budget - prompt_buffer)
   # Stop tokens derived from detector config
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
   # Step boundary token limits
-  min_step_tokens: 10
   max_step_tokens: 256
   # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
   use_sequence: true

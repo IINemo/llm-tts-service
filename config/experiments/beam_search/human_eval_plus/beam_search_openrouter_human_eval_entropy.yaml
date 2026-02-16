@@ -9,6 +9,7 @@ defaults:
   - /config
   - /generation/default
   - /system/default
+  - /strategy/beam_search
   - /scorer/entropy
   - /evaluation/human_eval_plus/default
   - _self_
@@ -49,13 +50,9 @@ generation:
 
 # Strategy - Beam Search with newline-based step boundaries for code
 strategy:
-  type: beam_search
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 50
-  aggregation: mean
-  batch_generation: true
-  min_step_tokens: 10
   max_step_tokens: 2048
   # Disable linguistic markers (not useful for code)
   use_sequence: false

@@ -1,5 +1,5 @@
-type: "beam_search"
-beam_size: 3
-candidates_per_beam: 3
-max_steps: 3
-aggregation: "min"
+type: beam_search
+aggregation: mean
+batch_generation: true
+prompt_buffer: 500
+min_step_tokens: 50
