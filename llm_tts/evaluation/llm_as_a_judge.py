@@ -102,9 +102,22 @@ class EvaluatorLLMAsAJudge:
                   "answer_only" - compare just extracted answer vs gold (default)
         """
         # Get API key based on provider
-        api_key = os.environ.get("OPENAI_API_KEY")
         if base_url and "openrouter" in base_url:
             api_key = os.environ.get("OPENROUTER_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "OPENROUTER_API_KEY environment variable is not set. "
+                    "Required for LLM judge with OpenRouter base_url. "
+                    "Set it in your .env file or environment."
+                )
+        else:
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "OPENAI_API_KEY environment variable is not set. "
+                    "Required for LLM judge evaluation. "
+                    "Set it in your .env file or environment."
+                )
         self.client = openai.OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.prompt = prompt

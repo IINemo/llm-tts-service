@@ -26,7 +26,7 @@ model:
   type: "vllm"
   model_path: "Qwen/Qwen3-8B"
   model_short_name: "vllm_thinking_qwen3_8b"
-  gpu_memory_utilization: 0.8
+  gpu_memory_utilization: 0.85
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -45,7 +45,6 @@ generation:
   top_p: 0.95
   top_k: 20
   batch_size: 1
-  checkpoint_batch_size: 4
   max_length: 8192
 
 # Strategy - Online Best-of-N with thinking marker detector

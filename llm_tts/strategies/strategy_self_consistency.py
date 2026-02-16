@@ -105,7 +105,7 @@ class StrategySelfConsistency(StrategyBase):
         for i, candidate in enumerate(candidates):
             if (
                 getattr(self.step_generator, "thinking_mode", False)
-                and "</think>" in candidate.text
+                and candidate.is_thinking_complete
                 and not candidate.is_trajectory_complete
             ):
                 thinking_indices.append(i)
@@ -215,7 +215,7 @@ class StrategySelfConsistency(StrategyBase):
             trajectories=[[]],
             candidates_per_step=self.num_paths,
             stop_tokens_override=stop_tokens,
-            max_tokens_override=self.step_generator.max_new_tokens,
+            max_tokens=self.step_generator.generation_limit,
             compute_uncertainty=False,
             sample_ids=[0],
         )
@@ -359,6 +359,7 @@ class StrategySelfConsistency(StrategyBase):
         self,
         requests: List[List[Dict[str, str]]],
         sample_indices: List[int] = None,
+        save_callback=None,
     ) -> List[Dict[str, Any]]:
         """
         Generate N paths for each of M samples using generate_step_candidates_batch.
@@ -399,7 +400,7 @@ class StrategySelfConsistency(StrategyBase):
             trajectories=[[]] * M,
             candidates_per_step=N,
             stop_tokens_override=stop_tokens,
-            max_tokens_override=self.step_generator.max_new_tokens,
+            max_tokens=self.step_generator.generation_limit,
             compute_uncertainty=False,
             sample_ids=list(range(M)),
         )

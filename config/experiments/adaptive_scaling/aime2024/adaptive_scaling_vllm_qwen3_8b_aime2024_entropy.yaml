@@ -19,7 +19,7 @@ model:
   type: "vllm"
   model_path: "Qwen/Qwen3-8B"
   model_short_name: "vllm_thinking_qwen3_8b"
-  gpu_memory_utilization: 0.8
+  gpu_memory_utilization: 0.85
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
@@ -45,7 +45,7 @@ generation:
 strategy:
   type: adaptive
   candidates_per_step: 8
-  max_steps: 50
+  max_steps: 250
   scaling_rate: 0.9
   momentum_rate: 0.9
   adaptive_scaling_method: momentum  # momentum, random, average, always, threshold

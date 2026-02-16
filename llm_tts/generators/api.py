@@ -66,7 +66,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         detector: ThinkingMarkerDetector for step boundary detection.
         answer_patterns: Patterns marking end of response.
         max_new_tokens: Maximum tokens per generation.
-        max_answer_tokens: Maximum tokens for answer generation.
         temperature: Sampling temperature.
         top_p: Nucleus sampling parameter.
         top_k: Top-k sampling parameter (note: not all API providers support this).
@@ -85,7 +84,6 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         detector: Optional[ThinkingMarkerDetector] = None,
         answer_patterns: Optional[List[str]] = None,
         max_new_tokens: int = 4096,
-        max_answer_tokens: int = 512,
         temperature: float = 0.6,
         top_p: float = 0.95,
         top_k: int = 20,
@@ -106,14 +104,13 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self.supports_logprobs = supports_logprobs
         self.max_concurrent_requests = max_concurrent_requests
 
-        # Store generation parameters
-        self.max_new_tokens = max_new_tokens
-        self.max_answer_tokens = max_answer_tokens
+        # Store generation parameters (internal names differ from config keys)
+        self.generation_limit = max_new_tokens
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
         self.presence_penalty = presence_penalty
-        self.max_context_budget = max_context_budget
+        self.context_budget = max_context_budget
 
         # Answer patterns for response phase
         self.answer_patterns = (
@@ -136,9 +133,8 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             f"Generation parameters: temperature={self.temperature}, "
             f"top_p={self.top_p}, top_k={self.top_k}, "
             f"presence_penalty={self.presence_penalty}, "
-            f"max_new_tokens={self.max_new_tokens}, "
-            f"max_answer_tokens={self.max_answer_tokens}, "
-            f"max_context_budget={self.max_context_budget}"
+            f"generation_limit={self.generation_limit}, "
+            f"context_budget={self.context_budget}"
         )
 
     # =========================================================================
@@ -156,9 +152,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         self.detector = detector
         self.detector.answer_patterns = self.answer_patterns
 
-        # Get min/max step tokens from detector
+        # Get min/step token limit from detector
         self.min_step_tokens = getattr(detector, "min_step_tokens", 0)
-        self.max_step_tokens = getattr(detector, "max_step_tokens", 300)
+        self.step_token_limit = getattr(detector, "max_step_tokens", 300)
 
         # Derive stop tokens from detector's use_* flags
         self.stop_tokens = detector.get_vllm_stop_tokens()
@@ -438,10 +434,15 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
                     time.sleep(wait)
                 else:
+                    log.error(
+                        f"[{call_id}] Streaming call failed after {max_retries} attempts: {e}"
+                    )
                     raise
 
         if not results or len(results) == 0:
-            raise ValueError("No result returned from streaming generation")
+            raise ValueError(
+                f"[{call_id}] No result returned from streaming generation"
+            )
 
         result = results[0]
 
@@ -512,10 +513,15 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
                     time.sleep(wait)
                 else:
+                    log.error(
+                        f"[{call_id}] Batch call failed after {max_retries} attempts (n={n}): {e}"
+                    )
                     raise
 
         if not results or len(results) == 0:
-            raise ValueError("No result returned from batch generation")
+            raise ValueError(
+                f"[{call_id}] No result returned from batch generation (n={n})"
+            )
 
         # For n>1, results is List[List[dict]] — one list per chat
         chat_results = results[0]
@@ -540,35 +546,44 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             Dict with uncertainty_score, validity_score, token_ids, logprobs.
         """
         has_scorer = hasattr(self.model, "estimator")
-        if api_logprobs and has_scorer:
-            token_ids, logprobs = convert_api_logprobs(api_logprobs)
-            uncertainty_score = self.model.score(token_ids, logprobs)
+        if api_logprobs:
+            try:
+                token_ids, logprobs = convert_api_logprobs(api_logprobs)
+            except Exception as e:
+                log.warning(
+                    f"convert_api_logprobs failed ({len(api_logprobs)} entries): {e}"
+                )
+                pseudo_ids = list(range(self._count_tokens(text)))
+                return {
+                    "uncertainty_score": None,
+                    "validity_score": None,
+                    "token_ids": pseudo_ids,
+                    "logprobs": [],
+                    "raw_logprobs": [],
+                    "original_token_count": len(pseudo_ids),
+                }
             flat_logprobs = []
             for tid, lp_dict in zip(token_ids, logprobs):
                 if tid in lp_dict:
                     flat_logprobs.append(lp_dict[tid].logprob)
                 else:
                     flat_logprobs.append(-100.0)
+            if has_scorer:
+                try:
+                    uncertainty_score = self.model.score(token_ids, logprobs)
+                    validity_score = 1.0 / (1.0 + uncertainty_score)
+                except Exception as e:
+                    log.warning(
+                        f"Uncertainty scoring failed ({len(token_ids)} tokens): {e}"
+                    )
+                    uncertainty_score = None
+                    validity_score = None
+            else:
+                uncertainty_score = None
+                validity_score = None
             return {
                 "uncertainty_score": uncertainty_score,
-                "validity_score": 1.0 / (1.0 + uncertainty_score),
-                "token_ids": token_ids,
-                "logprobs": flat_logprobs,
-                "raw_logprobs": logprobs,
-                "original_token_count": len(token_ids),
-            }
-        elif api_logprobs:
-            # Have logprobs but no scorer — still convert for storage
-            token_ids, logprobs = convert_api_logprobs(api_logprobs)
-            flat_logprobs = []
-            for tid, lp_dict in zip(token_ids, logprobs):
-                if tid in lp_dict:
-                    flat_logprobs.append(lp_dict[tid].logprob)
-                else:
-                    flat_logprobs.append(-100.0)
-            return {
-                "uncertainty_score": None,
-                "validity_score": None,
+                "validity_score": validity_score,
                 "token_ids": token_ids,
                 "logprobs": flat_logprobs,
                 "raw_logprobs": logprobs,
@@ -600,10 +615,11 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             is_streaming: Whether this came from streaming (n=1) path.
 
         Returns:
-            Tuple of (processed_text, is_trajectory_complete, completion_reason).
+            Tuple of (processed_text, is_trajectory_complete, completion_reason, is_thinking_complete).
         """
         text = raw_text
         is_trajectory_complete = False
+        is_thinking_complete = False
         completion_reason = None
 
         if self.thinking_mode:
@@ -612,7 +628,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             if thinking_complete:
                 think_pos = text.find("</think>")
                 text = text[: think_pos + len("</think>")]
-                is_trajectory_complete = True
+                is_thinking_complete = True
                 completion_reason = CompletionReason.THINKING_COMPLETE
 
             # Handle repetitions
@@ -621,7 +637,12 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 completion_reason = CompletionReason.EOS_PATTERN
 
             # Truncate at sentence boundary if hit max tokens
-            if not thinking_complete and token_count >= self.max_step_tokens:
+            if not thinking_complete and token_count >= self.step_token_limit:
+                log.warning(
+                    f"API generation hit max tokens "
+                    f"({token_count} >= {self.step_token_limit}), "
+                    f"truncating at sentence boundary"
+                )
                 text = self._truncate_at_sentence_boundary(text)
                 # Match vLLM behavior: mark trajectory complete when max tokens
                 # exhausted without </think> (model ran out of budget)
@@ -634,6 +655,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 text, token_count
             )
             if was_truncated:
+                log.warning(
+                    f"API generation truncated repetitions (hit max tokens: {token_count})"
+                )
                 text = truncated_text
 
             # Check for answer patterns
@@ -654,7 +678,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 else:
                     completion_reason = CompletionReason.EOS_PATTERN
 
-        return text, is_trajectory_complete, completion_reason
+        return text, is_trajectory_complete, completion_reason, is_thinking_complete
 
     def _generate_step_candidates_impl(
         self,
@@ -662,7 +686,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
         stop_tokens_override: Optional[List[str]] = None,
-        max_tokens_override: Optional[int] = None,
+        max_tokens: Optional[int] = None,
         compute_uncertainty: bool = True,
         sample_ids: Optional[List] = None,
         beam_ids: Optional[List] = None,
@@ -677,7 +701,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             trajectories: List of trajectories.
             candidates_per_step: Number of candidates per trajectory.
             stop_tokens_override: Override stop tokens. None = use self.stop_tokens.
-            max_tokens_override: Override max tokens. None = use self.max_step_tokens.
+            max_tokens: Override max tokens. None = use self.step_token_limit.
             compute_uncertainty: If True, compute uncertainty scores.
             sample_ids: Optional sample IDs for per-sample token tracking.
             beam_ids: Optional list mapping each trajectory index to a beam_id.
@@ -694,11 +718,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             if stop_tokens_override is not None
             else self.stop_tokens
         )
-        effective_max_tokens = (
-            max_tokens_override
-            if max_tokens_override is not None
-            else self.max_step_tokens
-        )
+        max_tokens = max_tokens if max_tokens is not None else self.step_token_limit
 
         already_complete = {}
         active_indices = []
@@ -793,7 +813,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     results.append(
                         self._generate_single_streaming(
                             messages,
-                            max_tokens=effective_max_tokens,
+                            max_tokens=max_tokens,
                             call_id=f"sample={sample_id} cand=0",
                         )
                     )
@@ -806,7 +826,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                             cand_executor.submit(
                                 self._generate_single_streaming,
                                 messages,
-                                effective_max_tokens,
+                                max_tokens,
                                 f"sample={sample_id} cand={ci}",
                             )
                             for ci in range(candidates_per_step)
@@ -818,7 +838,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 results = self._generate_batch(
                     messages,
                     n=candidates_per_step,
-                    max_tokens=effective_max_tokens,
+                    max_tokens=max_tokens,
                     stop=api_stop,
                     call_id=f"sample={sample_id}",
                 )
@@ -888,18 +908,28 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     text = step_text or raw_text
 
                     # Additional completion checks
+                    is_thinking_complete = False
                     if not traj_complete:
-                        _, traj_complete, completion_reason = (
+                        _, traj_complete, completion_reason, is_thinking_complete = (
                             self._process_candidate_text(
                                 text, token_count, is_streaming=True
                             )
                         )
                     else:
-                        completion_reason = CompletionReason.EOS_PATTERN
+                        # BoundaryEarlyStopping set trajectory_complete=True.
+                        # In thinking mode, </think> means thinking is done but
+                        # the trajectory still needs an answer phase.
+                        if self.thinking_mode and "</think>" in (raw_collected or text):
+                            is_thinking_complete = True
+                            traj_complete = False
+                            completion_reason = CompletionReason.THINKING_COMPLETE
+                        else:
+                            completion_reason = CompletionReason.EOS_PATTERN
                 else:
                     step_text = ""
+                    is_thinking_complete = False
                     # Batch path — process text for completion
-                    text, traj_complete, completion_reason = (
+                    text, traj_complete, completion_reason, is_thinking_complete = (
                         self._process_candidate_text(
                             raw_text, token_count, is_streaming=False
                         )
@@ -973,6 +1003,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 if completion_reason:
                     candidate.other_data["completion_reason"] = completion_reason
 
+                candidate.is_thinking_complete = is_thinking_complete
                 candidates.append(candidate)
 
             # Emit all scoring lines for this sample as one log message
@@ -990,14 +1021,38 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                 )
                 total_tokens = ctx_tokens + max_gen
 
-                max_step = getattr(self, "max_step_tokens", 300)
-                tokens_needed = max_step + self.max_answer_tokens
-                remaining = self.max_context_budget - total_tokens
+                # After thinking is complete, we only need room for the answer
+                thinking_done = self.thinking_mode and any(
+                    c.is_thinking_complete
+                    or (
+                        c.other_data
+                        and c.other_data.get("completion_reason")
+                        == CompletionReason.THINKING_COMPLETE
+                    )
+                    for c in candidates
+                )
+                if self.thinking_mode:
+                    # Thinking mode: reserve room for the answer phase.
+                    # Answer after </think> is typically short (boxed result),
+                    # so 512 tokens is sufficient.
+                    answer_reserve = 512
+                    tokens_needed = (
+                        answer_reserve
+                        if thinking_done
+                        else self.step_token_limit + answer_reserve
+                    )
+                else:
+                    # Non-thinking: no separate answer phase
+                    tokens_needed = self.step_token_limit
+                remaining = self.context_budget - total_tokens
 
                 if remaining < tokens_needed:
                     log.warning(
-                        f"Path {traj_idx}: context limit, "
-                        f"only {remaining} remaining (need {tokens_needed})"
+                        f"Path {traj_idx}: context limit reached — "
+                        f"used {total_tokens}/{self.context_budget} tokens "
+                        f"(prompt={ctx_tokens}, generated={max_gen}), "
+                        f"remaining={remaining}, needed={tokens_needed} "
+                        f"({'answer_reserve' if thinking_done else 'step+answer_reserve'})"
                     )
                     for c in candidates:
                         c.is_trajectory_complete = True
@@ -1037,7 +1092,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
         stop_tokens_override: Optional[List[str]] = None,
-        max_tokens_override: Optional[int] = None,
+        max_tokens: Optional[int] = None,
         compute_uncertainty: bool = True,
         sample_ids: Optional[List] = None,
         beam_ids: Optional[List] = None,
@@ -1053,7 +1108,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             trajectories,
             candidates_per_step,
             stop_tokens_override=stop_tokens_override,
-            max_tokens_override=max_tokens_override,
+            max_tokens=max_tokens,
             compute_uncertainty=compute_uncertainty,
             sample_ids=sample_ids,
             beam_ids=beam_ids,
@@ -1088,29 +1143,29 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                         "</think>. Adding closing step."
                     )
                     close_thinking_step = StepCandidate(
-                        text="\n</think>\n\n<start of response>\nReasoning Steps:\n",
+                        text="</think>",
                         token_ids=[],
                         is_complete=True,
-                        is_trajectory_complete=True,
+                        is_trajectory_complete=False,
+                        is_thinking_complete=True,
                     )
                     trajectory = trajectory + [close_thinking_step]
             processed_trajectories.append(trajectory)
 
-        answer_max_tokens = (
-            self.max_new_tokens if self.thinking_mode else self.max_answer_tokens
-        )
+        answer_max_tokens = self.generation_limit  # Only called in thinking mode
         results = self._generate_step_candidates_impl(
             requests=requests,
             trajectories=processed_trajectories,
             candidates_per_step=candidates_per_step,
             stop_tokens_override=self.response_stop_tokens,
-            max_tokens_override=answer_max_tokens,
+            max_tokens=answer_max_tokens,
         )
 
         # Mark all as trajectory complete
         for candidates in results:
             for c in candidates:
                 c.is_trajectory_complete = True
+                c.is_thinking_complete = True
 
         return results
 

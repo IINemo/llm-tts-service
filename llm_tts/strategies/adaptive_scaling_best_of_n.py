@@ -72,33 +72,6 @@ class AdaptiveScalingBestOfN(StrategyBase):
         best_idx = max(range(len(scores)), key=lambda i: scores[i])
         return best_idx, candidates[best_idx]
 
-    def _generate_final_answer(
-        self, chat: List[Dict[str, str]], trajectory: List[StepCandidate]
-    ) -> tuple:
-        """Generate and select best final answer based on criterion"""
-
-        # Generate answer candidates in batches if needed
-        answer_candidates = self.step_generator.generate_answer_candidates(
-            chat, trajectory=trajectory, candidates_per_step=self.candidates_per_step
-        )
-
-        # Score answer candidates
-        answer_validity_scores = self.scorer.score_candidates(
-            chat, answer_candidates, trajectory=trajectory
-        )
-
-        # Select best answer based on criterion
-        best_idx, _ = self._select_best_candidate(
-            answer_candidates, answer_validity_scores
-        )
-
-        log.info(f"Generated {len(answer_candidates)} answer candidates")
-        log.info(f"Selected answer {best_idx}")
-        log.info(f"Validity: {answer_validity_scores[best_idx]:.3f}")
-        log.info(f"Text: {answer_candidates[best_idx].text}")
-
-        return answer_candidates[best_idx], answer_validity_scores[best_idx]
-
     def generate_trajectory_mini_batch(
         self,
         requests: List[List[Dict[str, str]]],
@@ -390,23 +363,38 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 )
                 last_selected[sample_idx] = chosen
 
-                # Check for thinking mode completion (`<end of response>` token)
+                # Check for thinking mode completion
                 if (
                     getattr(self.step_generator, "thinking_mode", False)
-                    and "</think>" in chosen.text
+                    and chosen.is_thinking_complete
                 ):
-                    # Thinking phase complete: mark for final answer generation
-                    # Reset is_trajectory_complete — the answer phase will complete it
-                    chosen.is_trajectory_complete = False
+                    # Thinking phase complete.
                     completed[sample_idx] = True
-                    needs_final_answer[sample_idx] = True
+                    if chosen.is_trajectory_complete:
+                        reason = (
+                            chosen.other_data.get("completion_reason")
+                            if chosen.other_data
+                            else None
+                        )
+                        log.warning(
+                            f"Sample {sample_idxs[sample_idx]}: "
+                            f"thinking complete but is_trajectory_complete was set "
+                            f"(reason={reason}), skipping answer generation"
+                        )
+                    else:
+                        needs_final_answer[sample_idx] = True
                     scores_str = ", ".join(
                         f"{s:.3f}" for s in validity_scores[sample_idx]
                     )
+                    action = (
+                        "marking for answer generation"
+                        if needs_final_answer[sample_idx]
+                        else "no answer generation (context limit)"
+                    )
                     log.info(
                         f"Sample {sample_idxs[sample_idx]}: "
-                        f"thinking complete (`` detected) at step {step_num}, "
-                        f"marking for answer generation, "
+                        f"thinking complete at step {step_num}, "
+                        f"{action}, "
                         f"scores=[{scores_str}]"
                     )
                     continue
@@ -449,7 +437,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         for idx in range(num_samples):
             if not completed[idx]:
                 scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
-                log.info(
+                log.warning(
                     f"Sample {sample_idxs[idx]}: Reached max_steps ({self.max_steps}) "
                     f"with {len(selected_steps[idx])} steps, "
                     f"scores=[{scores_str}]"
@@ -470,7 +458,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
             if needs_final_answer[idx]:
                 to_finalize.append(idx)
 
-        if to_finalize:
+        # Generate final answers only in thinking mode — non-thinking mode
+        # produces the answer naturally in the last reasoning step.
+        thinking_mode = getattr(self.step_generator, "thinking_mode", False)
+        if to_finalize and thinking_mode:
             log.info(
                 f"Generating final answers for {len(to_finalize)} samples "
                 f"(samples: {[sample_idxs[i] for i in to_finalize]})"
@@ -597,6 +588,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         self,
         requests: List[List[Dict[str, str]]],
         sample_idxs: Optional[List[int]] = None,
+        save_callback=None,
     ) -> List[Dict[str, Any]]:
         """
         Batched version of generate_trajectory that runs multiple samples "online" in parallel.
