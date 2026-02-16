@@ -2,7 +2,7 @@
 
 type: self_consistency
 min_step_tokens: 50
-num_paths: 10                # Number of reasoning paths to generate
+num_paths: 8                 # Number of reasoning paths to generate
 max_new_tokens: 512          # Max tokens per reasoning path
 temperature: 0.7             # Sampling temperature for diversity
 generation_batch_size: 5     # Batch size for generation (null = all at once)

@@ -41,7 +41,6 @@ system:
 
 # Generation configuration - match official Qwen3 eval parameters
 generation:
-  checkpoint_batch_size: 500
   max_new_tokens: 32768
   temperature: 0.7
   top_p: 0.8

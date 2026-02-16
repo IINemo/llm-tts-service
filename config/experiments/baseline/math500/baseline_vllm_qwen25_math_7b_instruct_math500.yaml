@@ -41,7 +41,6 @@ system:
 
 # Generation configuration - matches official Qwen2.5-Math eval exactly
 generation:
-  checkpoint_batch_size: 500
   max_new_tokens: 2048
   temperature: 0.0
   top_p: 1.0

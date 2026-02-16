@@ -1438,10 +1438,10 @@ def generate_trajectories(
         phase1_evaluators = {"exact_match": exact_match_evaluator}
         log.info(f"Phase 1 evaluator: data_name={exact_match_evaluator.data_name}")
 
-    # Get checkpoint batch size from config (default: 32)
-    checkpoint_batch_size = 32
+    # Get checkpoint batch size: default to dataset subset size (process all at once)
+    checkpoint_batch_size = len(dataset)
     if config is not None and hasattr(config, "generation"):
-        checkpoint_batch_size = config.generation.get("checkpoint_batch_size", 32)
+        checkpoint_batch_size = config.generation.get("checkpoint_batch_size", checkpoint_batch_size)
 
     return _generate_trajectories_batch(
         results=results,

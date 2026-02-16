@@ -47,7 +47,6 @@ generation:
   top_p: 0.95
   top_k: 20
   batch_size: 1
-  checkpoint_batch_size: 198
   max_length: 65536
 
 # Strategy - Offline Best-of-N
