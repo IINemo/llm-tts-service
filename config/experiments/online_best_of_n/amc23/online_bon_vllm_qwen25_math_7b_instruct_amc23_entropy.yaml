@@ -51,9 +51,6 @@ generation:
 strategy:
   max_steps: 50
   # Stop tokens derived from detector config (use_* flags below)
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step boundary token limits
   # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
   use_sequence: true

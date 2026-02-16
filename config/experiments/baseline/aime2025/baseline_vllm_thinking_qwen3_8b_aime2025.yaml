@@ -49,9 +49,6 @@ generation:
 
 # Strategy - Baseline single-shot
 strategy:
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Disable all semantic markers for baseline
   detector_answer_patterns: []
 

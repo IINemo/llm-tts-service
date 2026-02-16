@@ -54,9 +54,6 @@ strategy:
   candidates_per_beam: 8    # Number of candidates to generate per beam
   max_steps: 40             # Maximum reasoning steps
   # Stop tokens derived from detector config
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step boundary token limits
   # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
   # Custom words for stop tokens

@@ -51,9 +51,6 @@ generation:
 # Strategy - Baseline single-shot
 strategy:
   # No semantic stop tokens for baseline (full response generation)
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step token limits (required by ThinkingMarkerDetector)
   # Disable all semantic markers for baseline
   # Answer patterns for evaluation

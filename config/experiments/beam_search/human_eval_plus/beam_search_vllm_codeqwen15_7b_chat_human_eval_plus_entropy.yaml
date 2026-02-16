@@ -52,9 +52,6 @@ strategy:
   candidates_per_beam: 5
   max_steps: 20
   # Stop tokens for Qwen models
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   max_step_tokens: 128
   # Disable linguistic markers (not useful for code)
   use_sequence: false

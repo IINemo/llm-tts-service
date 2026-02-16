@@ -56,13 +56,6 @@ strategy:
   detector_type: thinking_marker
   # Step boundary token limits
   # Marker categories (for vLLM stop token generation)
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false
-  use_reasoning: true
-  use_correction: false
   # Custom words for stop tokens
   detector_answer_patterns:
     - "<end of response>"

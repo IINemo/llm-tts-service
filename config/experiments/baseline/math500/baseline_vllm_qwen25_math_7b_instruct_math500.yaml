@@ -50,9 +50,6 @@ generation:
 strategy:
   # No semantic stop tokens for baseline (full response generation)
   # Only EOS token IDs stop generation
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step token limits (required by ThinkingMarkerDetector)
   max_step_tokens: 2048  # Match generation.max_new_tokens
   # Disable all semantic markers for baseline

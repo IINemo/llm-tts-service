@@ -50,9 +50,6 @@ generation:
 strategy:
   batch_generation: true
   # Stop tokens for Qwen models
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step token limits
   # Disable semantic markers for baseline
 

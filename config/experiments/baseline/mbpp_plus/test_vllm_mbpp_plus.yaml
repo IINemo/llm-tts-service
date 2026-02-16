@@ -53,9 +53,6 @@ generation:
 # Strategy - Baseline single-shot
 strategy:
   batch_generation: true
-  stop_token_ids:
-    - 151645
-    - 151643
   max_step_tokens: 256
 
 # Dataset configuration - MBPP+ (small subset for testing)

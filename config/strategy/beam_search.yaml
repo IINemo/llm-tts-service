@@ -3,6 +3,9 @@ aggregation: mean
 batch_generation: true
 prompt_buffer: 500
 min_step_tokens: 50
+stop_token_ids:
+  - 151645  # <|im_end|>
+  - 151643  # <|endoftext|>
 max_step_tokens: 1024
 use_sequence: true
 use_conclusion: true

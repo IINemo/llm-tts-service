@@ -1,5 +1,8 @@
 type: baseline
 min_step_tokens: 0
+stop_token_ids:
+  - 151645  # <|im_end|>
+  - 151643  # <|endoftext|>
 max_step_tokens: 32768
 # Disable all semantic markers for baseline
 use_sequence: false

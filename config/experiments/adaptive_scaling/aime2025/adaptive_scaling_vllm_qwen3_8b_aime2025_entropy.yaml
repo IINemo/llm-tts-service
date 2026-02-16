@@ -47,9 +47,6 @@ strategy:
   max_steps: 250
   # Detector settings
 
-  stop_token_ids:
-    - 151645
-    - 151643
 
 # Dataset configuration
 dataset:

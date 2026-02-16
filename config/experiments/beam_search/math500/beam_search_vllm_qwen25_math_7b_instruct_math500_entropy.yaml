@@ -55,9 +55,6 @@ strategy:
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
 
 # Entropy scorer configuration (uses same model, no separate GPU needed)
 scorer:

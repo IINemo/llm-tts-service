@@ -45,9 +45,6 @@ generation:
 strategy:
   max_steps: 50
   # Detector settings
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step boundary token limits
 
   # detector_answer_patterns:

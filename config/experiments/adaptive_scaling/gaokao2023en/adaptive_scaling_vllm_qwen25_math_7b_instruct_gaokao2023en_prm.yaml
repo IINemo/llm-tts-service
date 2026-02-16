@@ -45,9 +45,6 @@ strategy:
   adaptive_scaling_method: average
   max_steps: 50
   # Detector settings
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  #
   # Step boundary token limits
 
 # PRM scorer configuration

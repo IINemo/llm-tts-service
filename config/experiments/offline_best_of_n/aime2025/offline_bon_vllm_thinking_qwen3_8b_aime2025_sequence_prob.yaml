@@ -53,9 +53,6 @@ generation:
 strategy:
   max_steps: 250
   # Stop tokens for Qwen3
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step boundary detector settings - used for post-hoc step splitting
   max_step_tokens: 500
   # These flags control how thinking is SPLIT into steps after generation
