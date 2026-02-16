@@ -1,3 +1,4 @@
+# @package _global_
 defaults:
   - /config
   - /model/vllm_qwen3
