@@ -22,15 +22,6 @@ from llm_tts.generators import (
 from llm_tts.generators.base import StepCandidate
 from llm_tts.utils.answer_extraction import extract_answer
 
-# Self-verification scorer (optional import)
-try:
-    from llm_tts.scorers.step_scorer_self_verification import StepScorerSelfVerification
-
-    SELF_VERIFICATION_AVAILABLE = True
-except ImportError:
-    SELF_VERIFICATION_AVAILABLE = False
-    StepScorerSelfVerification = None
-
 from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
@@ -133,6 +124,117 @@ class StrategyBeamSearch(StrategyBase):
             f"eos_token_ids={eos_token_ids}"
         )
 
+    def generate_trajectory(
+        self, request: List[Dict[str, str]], sample_idx: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Generate a reasoning trajectory using beam search.
+
+        Args:
+            request: Input chat or prompt context.
+            sample_idx: Index of current sample (for logging).
+
+        Returns:
+            Dictionary with trajectory, steps, score, and metadata.
+        """
+
+        # Reset token tracking for this sample
+        self.step_generator.reset_sample_stats()
+        if hasattr(self.scorer, "reset_prm_stats"):
+            self.scorer.reset_prm_stats()
+
+        # Initialize beams with empty trajectory
+        beams = [{"steps": [], "scores": []}]
+        completed_beams = []
+
+        for step in range(self.max_steps):
+            log.info(f"\n=== Beam Search Step {step} ===")
+            new_beams = []
+
+            # Expand each current beam
+            for beam_idx, beam in enumerate(beams):
+                log.info(
+                    f"Expanding beam {beam_idx} with score "
+                    f"{self._aggregate_scores(beam['scores']):.3f}"
+                )
+
+                candidates = self.step_generator(
+                    request,
+                    trajectory=beam["steps"],
+                    candidates_per_step=self.candidates_per_beam,
+                )
+
+                if not candidates:
+                    log.info(f"  No candidates for beam {beam_idx}, skipping")
+                    continue
+
+                # Pass trajectory context so PRM can score candidate in context of previous steps
+                scores = self.scorer.score_candidates(
+                    request, candidates, trajectory=beam["steps"]
+                )
+
+                # Expand with new candidates
+                for cand, score in zip(candidates, scores):
+                    scores = beam["scores"] + [score]
+                    new_beams.append(
+                        {"steps": beam["steps"] + [cand], "scores": scores}
+                    )
+
+                    log.info(
+                        f"    Candidate: score={score:.3f}, aggregated score={self._aggregate_scores(scores):.3f}, text='{cand.text[:80]}'"
+                    )
+
+            if not new_beams:
+                log.info("No new beams generated, stopping early.")
+                break
+
+            # Sort and prune to top-k beams
+            new_beams.sort(
+                key=lambda b: self._aggregate_scores(b["scores"]),
+                reverse=True,
+            )
+            beams = new_beams[: self.beam_size]
+            log.info(f"Kept top {len(beams)} beams for next step")
+
+            # Separate completed beams
+            done, active = self._split_completed(beams)
+            completed_beams.extend(done)
+            beams = active
+
+            # Stop if all beams are completed
+            if not beams:
+                log.info("All beams completed early.")
+                break
+
+        # Choose best final beam
+        best_beam = self._select_best_beam(completed_beams or beams)
+        trajectory_text = convert_trajectory_to_string(best_beam["steps"])
+
+        # Extract answer from trajectory (e.g., from \boxed{})
+        extracted = extract_answer(trajectory_text)
+
+        # Get token stats from generator
+        self.step_generator.finalize_sample_stats()
+        token_stats = self.step_generator.get_sample_stats()
+
+        # Merge PRM scorer stats if available
+        if hasattr(self.scorer, "get_prm_total_stats"):
+            prm_stats = self.scorer.get_prm_total_stats()
+            token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
+            token_stats["prm_tflops"] = prm_stats["prm_tflops"]
+            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
+                prm_stats["prm_tflops"] or 0
+            )
+
+        return {
+            "trajectory": trajectory_text,
+            "steps": best_beam["steps"],
+            "validity_scores": best_beam["scores"],
+            "completed": len(completed_beams) > 0,
+            "extracted_answer": extracted,
+            "token_stats": token_stats,
+        }
+
     def generate_trajectories_batch(
         self,
         requests: List[List[Dict[str, str]]],
@@ -170,12 +272,6 @@ class StrategyBeamSearch(StrategyBase):
         )
         log.info(f"Using PRM scorer: {use_prm_scorer}")
 
-        # Check if scorer is a Self-Verification scorer (Tree of Thoughts style)
-        use_self_verification_scorer = SELF_VERIFICATION_AVAILABLE and isinstance(
-            self.scorer, StepScorerSelfVerification
-        )
-        log.info(f"Using Self-Verification scorer: {use_self_verification_scorer}")
-
         # Reset per-sample token tracking in generator
         self.step_generator.reset_per_sample_stats()
         if hasattr(self.scorer, "reset_prm_stats"):
@@ -193,25 +289,17 @@ class StrategyBeamSearch(StrategyBase):
 
         # Context limit for trajectories
         # Calculated as min of:
-        #   1. max_context_budget - prompt_buffer (leave room for prompt)
+        #   1. max_model_len - prompt_buffer (leave room for prompt)
         #   2. max_steps * max_step_tokens (theoretical max from step limits)
-        max_context_budget = getattr(self.step_generator, "max_context_budget", 4096)
+        max_model_len = getattr(self.step_generator, "max_model_len", 4096)
         max_step_tokens = getattr(self.step_generator, "max_step_tokens", 256)
-        max_trajectory_tokens = max(
-            0,
-            min(
-                max_context_budget - self.prompt_buffer,
-                self.max_steps * max_step_tokens,
-            ),
+        max_trajectory_tokens = min(
+            max_model_len - self.prompt_buffer,
+            self.max_steps * max_step_tokens,
         )
-        if max_trajectory_tokens == 0:
-            log.warning(
-                f"max_trajectory_tokens is 0 (max_context_budget={max_context_budget}, "
-                f"prompt_buffer={self.prompt_buffer}) — all samples will complete immediately"
-            )
         log.info(
             f"Max trajectory tokens: {max_trajectory_tokens} "
-            f"(max_context_budget={max_context_budget}, prompt_buffer={self.prompt_buffer}, "
+            f"(max_model_len={max_model_len}, prompt_buffer={self.prompt_buffer}, "
             f"max_steps={self.max_steps}, max_step_tokens={max_step_tokens})"
         )
         completed_results: Dict[int, Dict[str, Any]] = {}
@@ -318,18 +406,8 @@ class StrategyBeamSearch(StrategyBase):
                             is_trajectory_complete = True
 
                         data = candidate.other_data if candidate.other_data else {}
-                        uncertainty = data.get("uncertainty_score")
-                        if uncertainty is None:
-                            log.warning(
-                                f"Sample {sample_id}, beam {beam_idx}: missing 'uncertainty_score' in candidate other_data"
-                            )
-                            uncertainty = 0.0
-                        validity = data.get("validity_score")
-                        if validity is None:
-                            log.warning(
-                                f"Sample {sample_id}, beam {beam_idx}: missing 'validity_score' in candidate other_data"
-                            )
-                            validity = 0.0
+                        uncertainty = data.get("uncertainty_score", 0.0)
+                        validity = data.get("validity_score", 0.0)
 
                         candidates_for_beam.append(
                             {
@@ -352,10 +430,9 @@ class StrategyBeamSearch(StrategyBase):
                     all_candidates_data = self._batch_score_with_prm(
                         requests, all_candidates_data, prompt_metadata
                     )
-
-                # 6) Self-Verification scoring (optional, Tree of Thoughts style)
-                if use_self_verification_scorer:
-                    all_candidates_data = self._batch_score_with_self_verification(
+                elif hasattr(self.scorer, "score_candidates_batch"):
+                    # Use scorer-provided batch scoring (e.g., self-verification)
+                    all_candidates_data = self._batch_score_with_scorer(
                         requests, all_candidates_data, prompt_metadata
                     )
 
@@ -377,11 +454,7 @@ class StrategyBeamSearch(StrategyBase):
                         },
                     )
 
-                    # Priority: PRM score > Self-verification score > Validity score
-                    score = cand_data.get(
-                        "prm_score",
-                        cand_data.get("self_verification_score", cand_data["validity"]),
-                    )
+                    score = cand_data.get("prm_score", cand_data["validity"])
 
                     new_tokens = len(cand_data["token_ids"])
                     new_total_tokens = parent_beam.get("total_tokens", 0) + new_tokens
@@ -647,17 +720,14 @@ class StrategyBeamSearch(StrategyBase):
 
         return all_candidates_data
 
-    def _batch_score_with_self_verification(
+    def _batch_score_with_scorer(
         self,
         requests: List[List[Dict[str, str]]],
         all_candidates_data: List[List[Dict]],
         prompt_metadata: List[tuple],
     ) -> List[List[Dict]]:
         """
-        Batch score all candidates using Self-Verification scorer (Tree of Thoughts).
-
-        Groups candidates by (sample_id, beam) and calls the scorer's
-        score_candidates_detailed method for each group.
+        Batch score all candidates using a scorer that supports score_candidates_batch.
 
         Args:
             requests: Original requests for each sample
@@ -665,64 +735,30 @@ class StrategyBeamSearch(StrategyBase):
             prompt_metadata: List of (sample_id, beam_idx, parent_beam) tuples
 
         Returns:
-            all_candidates_data with 'self_verification_score' added to each candidate
+            all_candidates_data with 'validity' updated from scorer
         """
-        total_candidates = sum(len(cands) for cands in all_candidates_data)
-        log.info(f"Batch Self-Verification scoring {total_candidates} candidates")
+        chats = []
+        candidates_list = []
+        trajectories = []
 
-        # Process each (sample, beam) group
         for prompt_idx, candidates in enumerate(all_candidates_data):
-            if not candidates:
-                continue
+            sample_id, _, parent_beam = prompt_metadata[prompt_idx]
+            chats.append(requests[sample_id])
+            candidates_list.append([c["text"] for c in candidates])
+            trajectories.append(parent_beam["steps"])
 
-            sample_id, beam_idx, parent_beam = prompt_metadata[prompt_idx]
-            request = requests[sample_id]
-            trajectory = parent_beam["steps"]
+        if not candidates_list:
+            return all_candidates_data
 
-            # Create StepCandidate objects for scoring
-            step_candidates = []
-            for cand_data in candidates:
-                step_candidate = StepCandidate(
-                    text=cand_data["text"],
-                    token_ids=cand_data.get("token_ids", []),
-                    is_complete=True,
-                    is_trajectory_complete=cand_data.get("is_complete", False),
-                )
-                step_candidates.append(step_candidate)
+        log.info(f"Batch scorer evaluation for {len(candidates_list)} prompt groups")
 
-            # Call self-verification scorer
-            try:
-                scored_results = self.scorer.score_candidates_detailed(
-                    chat=request,
-                    candidates=step_candidates,
-                    trajectory=trajectory,
-                )
+        all_scores = self.scorer.score_candidates_batch(
+            chats, candidates_list, trajectories=trajectories
+        )
 
-                # Extract scores and update candidate data
-                for cand_idx, (cand_data, score_result) in enumerate(
-                    zip(candidates, scored_results)
-                ):
-                    # Get the aggregate score (value method returns 'value', vote returns 'votes')
-                    if hasattr(score_result, "aggregate_scores"):
-                        agg_scores = score_result.aggregate_scores
-                        score = agg_scores.get("value", agg_scores.get("votes", 1.0))
-                    else:
-                        score = 1.0
-
-                    cand_data["self_verification_score"] = score
-
-                    log.debug(
-                        f"Sample {sample_id}, beam {beam_idx}, cand {cand_idx}: "
-                        f"self_verification_score={score:.3f}"
-                    )
-
-            except Exception as e:
-                log.warning(
-                    f"Self-verification scoring failed for sample {sample_id}, "
-                    f"beam {beam_idx}: {e}. Using default score 1.0"
-                )
-                for cand_data in candidates:
-                    cand_data["self_verification_score"] = 1.0
+        for prompt_idx, scores in enumerate(all_scores):
+            for cand_idx, score in enumerate(scores):
+                all_candidates_data[prompt_idx][cand_idx]["validity"] = score
 
         return all_candidates_data
 
@@ -746,19 +782,10 @@ class StrategyBeamSearch(StrategyBase):
             prm_stats = self.scorer.get_prm_stats_for(sample_id)
             token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            gen_tflops = token_stats.get("tflops")
-            if gen_tflops is None:
-                log.warning(
-                    f"Sample {sample_id}: missing 'tflops' in token_stats when merging PRM stats"
-                )
-                gen_tflops = 0
-            prm_tflops = prm_stats["prm_tflops"]
-            if prm_tflops is None:
-                log.warning(f"Sample {sample_id}: missing 'prm_tflops' in PRM stats")
-                prm_tflops = 0
+            gen_tflops = token_stats.get("tflops") or 0
+            prm_tflops = prm_stats["prm_tflops"] or 0
             token_stats["tflops"] = gen_tflops + prm_tflops
 
-        # Determine actual completion status from beam steps
         is_completed = bool(steps and steps[-1].is_trajectory_complete)
 
         result = {

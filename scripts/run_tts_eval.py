@@ -24,6 +24,7 @@ from pathlib import Path
 
 import hydra
 import numpy as np
+import openai
 import torch
 from datasets import Dataset, load_dataset
 from dotenv import load_dotenv
@@ -154,6 +155,57 @@ load_dotenv()
 log = logging.getLogger(__name__)
 
 _tflops_warned = set()
+
+
+def _validate_api_keys(config):
+    """Validate that required API keys are set and working before starting experiments.
+
+    Checks all evaluators (both per-sample and batch) that need API access.
+    Fails fast with a clear error message instead of failing hours later.
+    """
+    evaluator_names = list(config.evaluation.get("evaluators", []))
+    evaluator_names += list(config.evaluation.get("batch_evaluators", []))
+
+    if "llm_judge" not in evaluator_names:
+        return
+
+    llm_cfg = config.evaluation.get("llm_judge", {})
+    provider = llm_cfg.get("provider", "openai")
+    base_url = llm_cfg.get("base_url", None)
+    model = llm_cfg.get("model", "unknown")
+
+    # Determine which key is needed
+    if provider == "openrouter":
+        key_name = "OPENROUTER_API_KEY"
+    elif provider == "deepseek":
+        key_name = "DEEPSEEK_API_KEY"
+    else:
+        key_name = "OPENAI_API_KEY"
+
+    api_key = os.environ.get(key_name)
+    if not api_key:
+        raise ValueError(
+            f"LLM judge requires {key_name} but it is not set. "
+            f"Set it in your .env file or environment. "
+            f"(provider={provider}, model={model})"
+        )
+
+    # Ping the API with a minimal request to verify the key works
+    log.info(f"Validating {key_name} for LLM judge ({provider}/{model})...")
+    try:
+        client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_completion_tokens=16,
+        )
+        log.info(f"API key validated successfully: {key_name}")
+    except Exception as e:
+        raise ValueError(
+            f"LLM judge API key validation failed for {key_name}: {e}. "
+            f"Check that your API key is valid and the provider is accessible. "
+            f"(provider={provider}, model={model}, base_url={base_url})"
+        ) from e
 
 
 def _safe_tflops(stats: dict, key: str = "tflops") -> float:
@@ -346,19 +398,15 @@ def create_scorer(config):
             log.warning(f"Could not init PRM FLOP calculator: {e}")
     elif config.scorer.type == "self_verification":
         # Self-Verification Scorer (Tree of Thoughts paper)
-        # Model will be set later in create_model() after model is initialized
+        # Model will be set later in create_tts_strategy() after model is initialized
         scorer = StepScorerSelfVerification(
-            model=None,  # Set later
-            method=getattr(config.scorer, "method", "value"),
-            n_evaluate_sample=getattr(config.scorer, "n_evaluate_sample", 3),
-            temperature=getattr(config.scorer, "temperature", 0.7),
-            max_tokens=getattr(config.scorer, "max_tokens", 100),
-            timeout=getattr(config.scorer, "timeout", 60),
-            value_prompt=getattr(config.scorer, "value_prompt", None),
-            value_prompt_file=getattr(config.scorer, "value_prompt_file", None),
-            vote_prompt=getattr(config.scorer, "vote_prompt", None),
-            vote_prompt_file=getattr(config.scorer, "vote_prompt_file", None),
-            use_vllm=False,  # Will be set based on model type
+            method=config.scorer.method,
+            n_evaluate_sample=config.scorer.n_evaluate_sample,
+            temperature=config.scorer.temperature,
+            max_tokens=config.scorer.max_tokens,
+            timeout=config.scorer.timeout,
+            value_prompt_file=config.scorer.value_prompt_file,
+            vote_prompt_file=config.scorer.vote_prompt_file,
         )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
@@ -384,7 +432,7 @@ def create_model(config):
             raise ImportError("vLLM not installed. Run: pip install vllm")
 
         # Initialize vLLM engine with seed for reproducibility
-        llm_kwargs = dict(
+        llm = LLM(
             model=config.model.model_path,
             gpu_memory_utilization=config.model.get("gpu_memory_utilization", 0.9),
             tensor_parallel_size=config.model.get("tensor_parallel_size", 1),
@@ -395,11 +443,6 @@ def create_model(config):
             ),
             seed=config.system.seed,  # Reproducibility
         )
-        quantization = config.model.get("quantization", None)
-        if quantization:
-            llm_kwargs["quantization"] = quantization
-            log.info(f"Using quantization: {quantization}")
-        llm = LLM(**llm_kwargs)
 
         # Create sampling params (will be updated by strategy)
         sampling_params = SamplingParams(
@@ -434,8 +477,6 @@ def create_model(config):
                 )
 
             # Self-consistency, baseline, and self_verification don't need uncertainty wrapper
-            # (self-consistency uses majority voting, baseline uses raw vLLM batch generation,
-            # self_verification uses the LLM directly for evaluation)
             scorer_type = config.scorer.type if config.scorer else "entropy"
             if (
                 config.strategy.type in ("self_consistency", "baseline")
@@ -443,7 +484,8 @@ def create_model(config):
             ):
                 vllm_model = llm
                 log.info(
-                    f"Strategy={config.strategy.type}, scorer={scorer_type}: using raw vLLM (no uncertainty wrapper)"
+                    f"Strategy={config.strategy.type}, scorer={scorer_type}: "
+                    f"using raw vLLM (no uncertainty wrapper)"
                 )
             else:
                 if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
@@ -453,6 +495,7 @@ def create_model(config):
                     )
 
                 # Select estimator based on scorer config
+                scorer_type = config.scorer.type if config.scorer else "entropy"
                 if scorer_type == "perplexity":
                     stat_calculators = [VLLMLogprobsCalculator()]
                     estimator = Perplexity()
@@ -475,15 +518,10 @@ def create_model(config):
                     # Use entropy wrapper for generation (scores not used for selection)
                     stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                     estimator = MeanTokenEntropy()
-                elif scorer_type == "self_verification":
-                    # Self-verification scorer uses its own model for scoring
-                    # Use entropy wrapper for generation (scores not used for selection)
-                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
-                    estimator = MeanTokenEntropy()
                 else:
                     raise ValueError(
                         f"Unsupported scorer type for vLLM: {scorer_type}. "
-                        f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm, self_verification"
+                        f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm"
                     )
 
                 vllm_model = VLLMWithUncertainty(
@@ -730,7 +768,6 @@ def create_model(config):
                     [],
                 ),
                 max_new_tokens=config.generation.max_new_tokens,
-                max_answer_tokens=config.generation.get("max_answer_tokens", 512),
                 temperature=config.generation.temperature,
                 top_p=config.generation.top_p,
                 top_k=config.generation.get("top_k", 20),
@@ -758,7 +795,6 @@ def create_model(config):
 
 def _create_api_model_for_scorer(model_cfg):
     """Create an API-backed model instance for scoring only."""
-    # Use model_name if available, otherwise fall back to model_path
     model_path = model_cfg.get("model_name") or model_cfg.get("model_path")
     log.info(f"Self-verification scorer API model: {model_path}")
 
@@ -786,37 +822,27 @@ def _create_api_model_for_scorer(model_cfg):
 def create_tts_strategy(
     config, model, step_generator, scorer, output_dir=None, flop_calculator=None
 ):
-    if scorer is not None and isinstance(scorer, StepScorerSelfVerification):
+    # Set model on scorer if it supports it (e.g., StepScorerSelfVerification)
+    if scorer is not None and hasattr(scorer, "set_model"):
         scorer_model_cfg = getattr(config.scorer, "model", None)
         if scorer_model_cfg is not None:
             if scorer_model_cfg.get("type") != "openai_api":
-                raise ValueError(
-                    "Self-verification scorer model override only supports type=openai_api"
-                )
+                raise ValueError("Scorer model override only supports type=openai_api")
             scorer_model = _create_api_model_for_scorer(scorer_model_cfg)
             scorer.set_model(scorer_model, use_vllm=False)
-            log.info("Self-verification scorer: using API override model")
+            log.info("Scorer: using API override model")
         else:
-            # For API models, use the model directly
             if isinstance(model, BlackboxModelWithStreaming):
                 scorer.set_model(model, use_vllm=False)
-                log.info("Self-verification scorer: using API backend")
-            # For vLLM models wrapped with VLLMWithUncertainty
+                log.info("Scorer: using API backend")
             elif hasattr(model, "vllm_engine"):
                 scorer.set_model(model.vllm_engine, use_vllm=True)
-                log.info("Self-verification scorer: using vLLM backend (wrapped)")
-            # For raw vLLM LLM instance (when uncertainty wrapper is skipped)
-            elif VLLM_AVAILABLE and isinstance(model, LLM):
-                scorer.set_model(model, use_vllm=True)
-                log.info("Self-verification scorer: using vLLM backend (raw)")
-            # For local WhiteboxModel (lm_polygraph)
+                log.info("Scorer: using vLLM backend")
             elif isinstance(model, WhiteboxModel):
                 scorer.set_model(model, use_local=True)
-                log.info("Self-verification scorer: using local WhiteboxModel backend")
+                log.info("Scorer: using local WhiteboxModel backend")
             else:
-                log.warning(
-                    "Self-verification scorer: unknown model type, may not work correctly"
-                )
+                log.warning("Scorer: unknown model type, may not work correctly")
                 scorer.set_model(model, use_vllm=False)
 
     if config.strategy.type == "baseline":
@@ -1043,13 +1069,51 @@ def _generate_trajectories_batch(
             f"samples {batch_start}-{batch_end - 1} ({len(chunk_requests)} samples)"
         )
 
+        # Define progressive save callback for this chunk
+        def _save_callback(strategy_results, phase="post_generation"):
+            temp_results = list(results)  # copy previous chunks
+            for i_idx, inst, gold, strat_res in zip(
+                chunk_indices, chunk_instances, chunk_gold_answers, strategy_results
+            ):
+                temp_results.append(
+                    {
+                        "index": i_idx,
+                        "question": inst[question_field],
+                        "gold_answer": gold,
+                        "generated_trajectory": strat_res.get("trajectory", ""),
+                        "extracted_answer": strat_res.get("extracted_answer", ""),
+                        "answer_step": strat_res.get("answer_step"),
+                        "steps": [
+                            s.text if hasattr(s, "text") else str(s)
+                            for s in strat_res.get("steps", [])
+                        ],
+                        "reasoning_steps": strat_res.get("reasoning_steps", 0),
+                        "validity_scores": strat_res.get("validity_scores", []),
+                        "aggregated_score": strat_res.get("aggregated_score", 0.0),
+                        "all_scores": strat_res.get("all_scores", []),
+                        "all_step_scores": strat_res.get("all_step_scores", []),
+                        "best_idx": strat_res.get("best_idx"),
+                        "completed": strat_res.get("completed", False),
+                        "is_correct": None,
+                        "eval": {},
+                        "scoring_phase": phase,
+                    }
+                )
+            save_results_json(temp_results, save_path_file)
+            log.info(
+                f"Progressive save ({phase}): {len(temp_results)} results to {save_path_file}"
+            )
+
         # Generate this chunk
         try:
             chunk_results = strategy.generate_trajectories_batch(
-                chunk_requests, chunk_indices
+                chunk_requests, chunk_indices, save_callback=_save_callback
             )
         except Exception as e:
+            import traceback
+
             log.error(f"Chunk {chunk_idx + 1} generation failed: {e}")
+            log.error(f"Traceback:\n{traceback.format_exc()}")
             log.error("Saving partial results collected so far and exiting")
             save_results_json(results, save_path_file)
             log.info(f"Checkpoint saved: {len(results)}/{subset_size} samples complete")
@@ -1165,11 +1229,7 @@ def _generate_trajectories_batch(
                     if isinstance(evaluator, EvaluatorExactMatch):
                         # EvaluatorExactMatch._score_single takes 3-tuple, returns float
                         # For self-consistency, use extracted_answer if available (trajectory is aggregated)
-                        solution = (
-                            result.get("extracted_answer")
-                            or result.get("generated_answer")
-                            or result["trajectory"]
-                        )
+                        solution = result.get("extracted_answer")
                         # Convert to string for comparison
                         if isinstance(solution, (int, float)):
                             solution = str(solution)
@@ -1184,11 +1244,21 @@ def _generate_trajectories_batch(
                             hasattr(evaluator, "mode")
                             and evaluator.mode == "answer_only"
                         ):
-                            solution = (
-                                result.get("extracted_answer")
-                                or result.get("generated_answer")
-                                or result["trajectory"]
-                            )
+                            # Get proposed answer - check if actually provided
+                            proposed_answer = result.get("extracted_answer")
+                            if not proposed_answer or (
+                                isinstance(proposed_answer, str)
+                                and proposed_answer.strip() == ""
+                            ):
+                                # No answer produced - mark as incorrect, don't waste API call on empty trajectory
+                                is_correct_eval = False
+                                eval_results[eval_name] = {
+                                    "is_correct": is_correct_eval,
+                                    "consensus": 0.0,
+                                    "response": "No answer generated",
+                                }
+                                continue
+                            solution = proposed_answer
                         else:
                             solution = result["trajectory"]
                         labels, responses, consensus_scores = evaluator(
@@ -1260,7 +1330,7 @@ def _generate_trajectories_batch(
                 "question": question,
                 "gold_answer": gold_answer_num,
                 "generated_trajectory": result["trajectory"],
-                "generated_answer": generated_text,
+                "extracted_answer": generated_text,
                 "answer_step": result.get("answer_step"),
                 "steps": result["steps"],
                 "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
@@ -1569,10 +1639,37 @@ def evaluate_results(
                     # (Running EvalPlus per-sample is inefficient)
                     continue
                 else:
-                    # Other evaluators use __call__ with extracted answer
-                    extracted_answer = result.get(
-                        "generated_answer", result.get("extracted_answer", "")
-                    )
+                    # For LLM judges in answer_only mode, check for empty answer
+                    if (
+                        hasattr(evaluator_fn, "mode")
+                        and evaluator_fn.mode == "answer_only"
+                    ):
+                        extracted_answer = result.get("extracted_answer", "")
+                        if not extracted_answer or (
+                            isinstance(extracted_answer, str)
+                            and extracted_answer.strip() == ""
+                        ):
+                            # Empty answer - mark as incorrect without calling evaluator
+                            annotation = 0
+                            is_correct = False
+                            eval_data = {
+                                "label": int(annotation),
+                                "is_correct": bool(is_correct),
+                                "response": "No answer generated",
+                            }
+                            results[i].setdefault("eval", {})[eval_name] = eval_data
+                            log.info(
+                                f"Sample {result['index']} [{eval_name}]: "
+                                f"0 (Incorrect) - No answer generated"
+                            )
+                            save_results_json(results, save_path_file)
+                            samples_evaluated += 1
+                            continue
+                    else:
+                        extracted_answer = result.get(
+                            "generated_trajectory", result.get("trajectory", "")
+                        )
+
                     eval_result = evaluator_fn(
                         [result["question"]],
                         [extracted_answer],
@@ -1657,12 +1754,16 @@ def evaluate_results(
 
         # For answer_only mode, use extracted answer; otherwise use full solution
         if hasattr(evaluator_fn, "mode") and evaluator_fn.mode == "answer_only":
-            solutions = [
-                r.get("extracted_answer")
-                or r.get("generated_answer")
-                or r.get("generated_trajectory", r.get("trajectory", ""))
-                for r in samples_to_eval
-            ]
+            # For LLM judges in answer_only mode: use extracted_answer, or mark as incorrect if empty
+            # Do NOT fall back to trajectory - empty answers should be marked incorrect
+            solutions = []
+            for r in samples_to_eval:
+                extracted = r.get("extracted_answer", "")
+                if extracted and (not isinstance(extracted, str) or extracted.strip()):
+                    solutions.append(extracted)
+                else:
+                    # Empty answer - will be marked as incorrect below
+                    solutions.append("")
         else:
             solutions = [
                 r.get("generated_trajectory", r.get("trajectory", ""))
@@ -1683,6 +1784,45 @@ def evaluate_results(
             instance_data_list = [r.get("instance_data", {}) for r in samples_to_eval]
 
         try:
+            # For answer_only mode: handle empty answers without calling evaluator
+            if hasattr(evaluator_fn, "mode") and evaluator_fn.mode == "answer_only":
+                # Check for empty answers and mark them as incorrect upfront
+                empty_answer_indices = [
+                    idx for idx, sol in enumerate(solutions) if not sol
+                ]
+                valid_indices = [idx for idx, sol in enumerate(solutions) if sol]
+
+                if empty_answer_indices:
+                    # Mark empty answers as incorrect
+                    for idx in empty_answer_indices:
+                        i = indices_to_eval[idx]
+                        results[i].setdefault("eval", {})[eval_name] = {
+                            "label": 0,
+                            "is_correct": False,
+                            "response": "No answer generated",
+                        }
+
+                if not valid_indices:
+                    # All answers are empty, skip evaluator call
+                    log.info(
+                        f"All samples have empty answers, skipping {eval_name} evaluation"
+                    )
+                    save_results_json(results, save_path_file)
+                    continue
+
+                # Filter to only evaluate samples with valid answers
+                indices_to_eval = [indices_to_eval[idx] for idx in valid_indices]
+                problems = [problems[idx] for idx in valid_indices]
+                solutions = [solutions[idx] for idx in valid_indices]
+                gold_answers = [gold_answers[idx] for idx in valid_indices]
+                # Also filter task_ids and instance_data_list if they exist
+                if task_ids is not None:
+                    task_ids = [task_ids[idx] for idx in valid_indices]
+                if instance_data_list is not None:
+                    instance_data_list = [
+                        instance_data_list[idx] for idx in valid_indices
+                    ]
+
             # Batch evaluate - pass additional params if evaluator needs them
             if isinstance(evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
                 eval_result = evaluator_fn(
@@ -1982,6 +2122,9 @@ def main(config):
             )
             log.info(f"WandB group URL: {group_url}")
         wandb_save_directory(Path(output_dir) / ".hydra")
+
+    # Validate API keys early (before spending hours on model loading / generation)
+    _validate_api_keys(config)
 
     # Set random seeds
     set_random_seeds(config.system.seed)

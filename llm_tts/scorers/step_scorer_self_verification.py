@@ -29,7 +29,7 @@ from .step_scorer_base import CandidateScore, StepScorerBase
 log = logging.getLogger(__name__)
 
 # Default prompt file paths (relative to project root config/prompts/)
-DEFAULT_VALUE_PROMPT_FILE = "tree-of-thought/self_verification/value_prompt.txt"
+DEFAULT_VALUE_PROMPT_FILE = "tree-of-thought/self_verification/value_prompt_math.txt"
 DEFAULT_VOTE_PROMPT_FILE = "tree-of-thought/self_verification/vote_prompt.txt"
 
 
@@ -548,12 +548,9 @@ class StepScorerSelfVerification(StepScorerBase):
 
         From ToT paper: "V(pθ, S)(s) ∼ p_value_θ(v|s)"
         Prompts LLM to classify each state as sure/likely/unlikely/impossible.
-
-        Note: Uses SUM aggregation as in original ToT paper (not mean).
-        Duplicate candidates in the same batch get score 0 to avoid redundancy.
         """
         results = []
-        # Track duplicates within this batch (as in original ToT implementation)
+        # Track duplicates within this batch (as in original ToT)
         local_seen_texts: Dict[str, bool] = {}
 
         pending: List[Dict[str, Any]] = []
@@ -569,21 +566,20 @@ class StepScorerSelfVerification(StepScorerBase):
                 log.debug(
                     f"Duplicate candidate {cand_idx}: score=0 (duplicate in batch)"
                 )
+            # Check cache
+            elif cache_key in self.cache:
+                scores[cand_idx] = self.cache[cache_key]
+                log.debug(
+                    f"Cache hit for candidate {cand_idx}: score={scores[cand_idx]:.3f}"
+                )
             else:
-                local_seen_texts[step_text] = True
-
-                # Check global cache
-                cache_key = f"{problem}|||{trajectory_text}|||{step_text}"
-                if cache_key in self.cache:
-                    score = self.cache[cache_key]
-                    log.debug(f"Cache hit for candidate {cand_idx}: score={score:.3f}")
-                else:
-                    # Evaluate step
-                    score = self._evaluate_single_step(
-                        problem, trajectory_text, step_text
-                    )
-                    self.cache[cache_key] = score
-                    self.total_evaluations += 1
+                pending.append(
+                    {
+                        "idx": cand_idx,
+                        "step_text": step_text,
+                        "cache_key": cache_key,
+                    }
+                )
 
             local_seen_texts[step_text] = True
 
@@ -716,13 +712,7 @@ class StepScorerSelfVerification(StepScorerBase):
         """
         Evaluate a single step using value method.
 
-        Calls the LLM n_evaluate_sample times and aggregates scores using SUM.
-
-        From original ToT paper (game24.py:86-92):
-            value = sum(value * value_names.count(name) for name, value in value_map.items())
-
-        This means with n_evaluate_sample=3 and all "sure" responses:
-            score = 20 + 20 + 20 = 60 (not 20 as with mean)
+        Calls the LLM n_evaluate_sample times and aggregates scores.
         """
         # Build prompt
         prompt = self.value_prompt.format(
@@ -820,6 +810,19 @@ class StepScorerSelfVerification(StepScorerBase):
         else:
             return self._call_api(prompt)
 
+    def _format_prompt_for_vllm(self, prompt: str) -> str:
+        """Wrap prompt in chat template if the vLLM model has a tokenizer."""
+        try:
+            tokenizer = self.model.get_tokenizer()
+            messages = [{"role": "user", "content": prompt}]
+            formatted = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            return formatted
+        except Exception:
+            # Fallback to raw prompt if tokenizer/chat template not available
+            return prompt
+
     def _call_vllm(self, prompt: str) -> str:
         """Call vLLM model for evaluation."""
         try:
@@ -832,7 +835,8 @@ class StepScorerSelfVerification(StepScorerBase):
             temperature=self.temperature,
         )
 
-        outputs = self.model.generate([prompt], sampling_params)
+        formatted_prompt = self._format_prompt_for_vllm(prompt)
+        outputs = self.model.generate([formatted_prompt], sampling_params)
 
         if outputs and outputs[0].outputs:
             output = outputs[0]
@@ -859,7 +863,8 @@ class StepScorerSelfVerification(StepScorerBase):
             temperature=self.temperature,
         )
 
-        outputs = self.model.generate(prompts, sampling_params)
+        formatted_prompts = [self._format_prompt_for_vllm(p) for p in prompts]
+        outputs = self.model.generate(formatted_prompts, sampling_params)
         texts: List[str] = []
 
         for output in outputs or []:
@@ -1028,8 +1033,9 @@ class StepScorerSelfVerification(StepScorerBase):
         Matching priority (following original ToT paper):
         1. Exact match on last line (primary ToT labels)
         2. Token search on last line (primary + synonym labels)
-        3. Token search on full output (fallback)
-        4. Default to 0.0 (unmatched = no contribution, as in original ToT)
+        3. Prefix match (keyword at start of token, e.g. "likelyMK" -> "likely")
+        4. Regex search on full output (fallback)
+        5. Default to 0.0 (unmatched = no contribution, as in original ToT)
         """
         output_lower = output.lower().strip()
         all_keywords = {**self.value_map, **self.value_synonyms}
@@ -1046,7 +1052,19 @@ class StepScorerSelfVerification(StepScorerBase):
                 if token in all_keywords:
                     return all_keywords[token]
 
-        # 3. Search full output for any keyword (fallback)
+        # 3. Prefix match: check if output starts with a keyword
+        #    (handles garbage glued to keyword, e.g. "likelyMK", "surelyABC")
+        # Sort by length descending so "impossible" matches before "imp..."
+        for keyword in sorted(all_keywords.keys(), key=len, reverse=True):
+            if output_lower.startswith(keyword):
+                return all_keywords[keyword]
+
+        # 4. Regex search on full output for keyword as a word or at start of token
+        for keyword in sorted(all_keywords.keys(), key=len, reverse=True):
+            if re.search(r"\b" + re.escape(keyword) + r"\b", output_lower):
+                return all_keywords[keyword]
+
+        # 5. Search full output for any keyword (loose fallback)
         full_normalized = re.sub(r"[^a-z\s]+", " ", output_lower)
         for token in full_normalized.split():
             if token in all_keywords:

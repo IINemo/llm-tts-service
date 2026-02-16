@@ -85,7 +85,7 @@ scorer:
   method: value  # "value" or "vote"
   n_evaluate_sample: 3  # Paper uses 3 samples
   temperature: 0.7
-  max_tokens: 100
+  max_tokens: 256
   timeout: 120
   value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
 

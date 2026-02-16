@@ -16,16 +16,14 @@ n_evaluate_sample: 3
 temperature: 0.7
 
 # Maximum tokens for evaluation response
-max_tokens: 100
+max_tokens: 300
 
 # Timeout in seconds for API calls
 timeout: 60
 
 # Prompt files (relative to config/prompts/, or absolute path)
-# Defaults: tree-of-thought/self_verification/value_prompt.txt
-#           tree-of-thought/self_verification/vote_prompt.txt
-# value_prompt_file: null
-# vote_prompt_file: null
+value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
+vote_prompt_file: "tree-of-thought/self_verification/vote_prompt.txt"
 
 # Direct prompt strings (override files if set)
 # value_prompt: null
