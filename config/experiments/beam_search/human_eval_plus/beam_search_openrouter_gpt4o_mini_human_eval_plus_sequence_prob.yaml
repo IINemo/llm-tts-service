@@ -1,8 +1,3 @@
-# @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_openrouter_gpt4o_mini_human_eval_plus_perplexity
-# MUR (Adaptive Scaling) for HumanEval+ using OpenRouter API with newline-based step boundaries
-# Uses Perplexity scorer (MUR fixes perplexity as signal for scaled step selection)
-#
 # Environment variable required: OPENROUTER_API_KEY
 
 defaults:
@@ -10,28 +5,28 @@ defaults:
   - /model/openrouter
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/sequence_prob
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "adaptive_scaling_openrouter_gpt4o_mini_human_eval_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "beam_search_openrouter_gpt4o_mini_human_eval_plus_sequence_prob_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "adaptive_scaling_openrouter_gpt4o_mini_human_eval_plus_perplexity"
+wandb_group: "beam_search_openrouter_gpt4o_mini_human_eval_plus_sequence_prob"
 
 # Model configuration (OpenRouter API)
 model:
   type: "openai_api"
   provider: openrouter
   model_path: "openai/gpt-4o-mini"
-  api_key: null  # Set via OPENROUTER_API_KEY env var
+  api_key: null
   supports_logprobs: true
   prefill_mode: false
-  max_context_budget: 128000
+  max_context_budget: 16384
 
 # System configuration
 system:
@@ -46,17 +41,17 @@ generation:
   top_k: 20
   batch_size: 1
 
-# Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
+# Strategy - Beam Search with newline-based step boundaries for code
 strategy:
-  type: adaptive
-  candidates_per_step: 8
-  max_steps: 250
-  scaling_rate: 0.9
-  momentum_rate: 0.9
-  adaptive_scaling_method: momentum
-  detector_type: structured
-  min_step_tokens: 10
-  max_step_tokens: 1024
+  type: beam_search
+  beam_size: 5
+  candidates_per_beam: 8
+  max_steps: 100
+  aggregation: mean
+  batch_generation: true
+  prompt_buffer: 500
+  min_step_tokens: 1
+  max_step_tokens: 500
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
@@ -70,22 +65,28 @@ strategy:
     - "\n"
     - "\n\n"
 
+# Entropy scorer configuration
+scorer:
+  type: sequence_prob
+  batch_size: 1
+
 # Dataset configuration - HumanEval+
 dataset:
   data_name: "human_eval_plus"
   dataset_path: "evalplus/humanevalplus"
-  dataset_split: "test"  # 164 problems
+  dataset_split: "test"
   subset: null
   offset: 0
-  question_field: "question"
-  answer_field: "answer"
+  question_field: "question"  # EvalPlus loader field (includes function signature + docstring)
+  answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
-  prompt_file: null
+  prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
+  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
 
 # Evaluation configuration
 evaluation:
   evaluators:
     - human_eval_plus
   human_eval_plus:
-    mode: full
+    mode: full  # "test" and "syntax" modes are deprecated, use "full" only
     timeout: 10

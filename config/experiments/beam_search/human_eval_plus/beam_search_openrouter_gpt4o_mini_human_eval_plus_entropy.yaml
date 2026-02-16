@@ -1,8 +1,3 @@
-# @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/human_eval_plus/beam_search_openrouter_gpt4o_mini_human_eval_plus_entropy
-# Beam Search for HumanEval+ using OpenRouter API with newline-based step boundaries
-# Uses Entropy scorer for step evaluation
-#
 # Environment variable required: OPENROUTER_API_KEY
 
 defaults:
@@ -27,15 +22,11 @@ wandb_group: "beam_search_openrouter_gpt4o_mini_human_eval_plus_entropy"
 model:
   type: "openai_api"
   provider: openrouter
-  model_path: "openai/gpt-4o-mini"  # Fast and cost-effective for code
-  # Alternative models:
-  # - "anthropic/claude-3.5-sonnet" (best quality)
-  # - "deepseek/deepseek-coder" (code-specialized)
-  # - "qwen/qwen-2.5-coder-32b-instruct" (open-source coder)
-  api_key: null  # Set via OPENROUTER_API_KEY env var
+  model_path: "openai/gpt-4o-mini"
+  api_key: null
   supports_logprobs: true
   prefill_mode: false
-  max_context_budget: 128000
+  max_context_budget: 16384
 
 # System configuration
 system:
@@ -44,23 +35,23 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 512
-  temperature: 0.7
+  max_new_tokens: 16384
+  temperature: 0.6
   top_p: 0.95
-  top_k: 50
+  top_k: 20
   batch_size: 1
 
 # Strategy - Beam Search with newline-based step boundaries for code
 strategy:
   type: beam_search
-  beam_size: 3
-  candidates_per_beam: 5
-  max_steps: 20
+  beam_size: 5
+  candidates_per_beam: 8
+  max_steps: 100
   aggregation: mean
   batch_generation: true
   prompt_buffer: 500
-  min_step_tokens: 5
-  max_step_tokens: 128
+  min_step_tokens: 1
+  max_step_tokens: 500
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false

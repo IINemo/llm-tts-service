@@ -1,25 +1,20 @@
-# @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/human_eval_plus/beam_search_vllm_qwen3_8b_human_eval_plus_entropy
-# Beam Search for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
-# Uses Entropy scorer for step evaluation
-
 defaults:
   - /config
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/sequence_prob
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_qwen3_8b_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_qwen3_8b_human_eval_plus_sequence_prob_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "beam_search_vllm_qwen3_8b_human_eval_plus_entropy"
+wandb_group: "beam_search_vllm_qwen3_8b_human_eval_plus_sequence_prob"
 
 # Model configuration (vLLM backend)
 model:
@@ -78,7 +73,7 @@ strategy:
 
 # Entropy scorer configuration
 scorer:
-  type: entropy
+  type: sequence_prob
   batch_size: 1
 
 # Dataset configuration - HumanEval+
