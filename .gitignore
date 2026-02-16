@@ -179,6 +179,7 @@ outputs/
 *.tex
 *.sty
 
+wandb/
 workdir/
 
 # Reference implementations and external repos
