@@ -971,34 +971,54 @@ class StepScorerSelfVerification(StepScorerBase):
         return ""
 
     def _call_api_single(self, prompt: str) -> str:
-        """Call API for a single prompt with retry logic. Thread-safe."""
+        """Call API for a single prompt with retry logic. Thread-safe.
+
+        Calls the OpenAI client directly (bypassing model.generate_texts executor)
+        for better concurrency in batch scoring scenarios.
+        """
         import openai
 
         messages = [{"role": "user", "content": prompt}]
         max_retries = 3
         base_delay = 2.0
 
+        # Use model's openai client directly for thread-safe concurrent calls
+        client = getattr(self.model, "client", None) or getattr(
+            self.model, "openai_api", None
+        )
+        model_name = getattr(self.model, "model_path", None) or getattr(
+            self.model, "model_name", "unknown"
+        )
+
+        if client is None:
+            log.error("No OpenAI client found on model, falling back to generate_texts")
+            return self._call_api(prompt)
+
         for attempt in range(max_retries):
             try:
-                results = self.model.generate_texts(
-                    chats=[messages],
-                    n=1,
-                    max_new_tokens=self.max_tokens,
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    max_tokens=self.max_tokens,
                     temperature=self.temperature,
+                    n=1,
                     timeout=self.timeout,
                 )
 
-                if results and results[0]:
-                    result = results[0]
-                    text = result.get("text", "")
-                    input_tokens = result.get("prompt_tokens", 0)
-                    output_tokens = result.get("completion_tokens", 0)
-                    if input_tokens == 0 and output_tokens == 0:
-                        input_tokens = len(prompt) // 4
-                        output_tokens = len(text) // 4
-                    self._record_tokens(input_tokens, output_tokens)
-                    return text
-                return ""
+                text = (
+                    response.choices[0].message.content or ""
+                    if response.choices
+                    else ""
+                )
+                input_tokens = response.usage.prompt_tokens if response.usage else 0
+                output_tokens = (
+                    response.usage.completion_tokens if response.usage else 0
+                )
+                if input_tokens == 0 and output_tokens == 0:
+                    input_tokens = len(prompt) // 4
+                    output_tokens = len(text) // 4
+                self._record_tokens(input_tokens, output_tokens)
+                return text
 
             except (openai.APITimeoutError, openai.APIConnectionError) as e:
                 if attempt < max_retries - 1:
