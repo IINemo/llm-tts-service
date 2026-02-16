@@ -18,6 +18,7 @@ Supports both:
 import logging
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -132,6 +133,7 @@ class StepScorerSelfVerification(StepScorerBase):
         self.cache: Dict[str, float] = {}
 
         # FLOP/token tracking for self-verification evaluations
+        self._token_lock = threading.Lock()
         self.flop_calculator: Optional[FLOPCalculator] = None
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
@@ -197,18 +199,19 @@ class StepScorerSelfVerification(StepScorerBase):
     def _record_tokens(
         self, input_tokens: int, output_tokens: int, sample_id: Any = None
     ):
-        """Record input and output tokens for tracking."""
-        self._total_input_tokens += input_tokens
-        self._total_output_tokens += output_tokens
+        """Record input and output tokens for tracking. Thread-safe."""
+        with self._token_lock:
+            self._total_input_tokens += input_tokens
+            self._total_output_tokens += output_tokens
 
-        sid = sample_id if sample_id is not None else self._current_sample_id
-        if sid is not None:
-            self._per_sample_input_tokens[sid] = (
-                self._per_sample_input_tokens.get(sid, 0) + input_tokens
-            )
-            self._per_sample_output_tokens[sid] = (
-                self._per_sample_output_tokens.get(sid, 0) + output_tokens
-            )
+            sid = sample_id if sample_id is not None else self._current_sample_id
+            if sid is not None:
+                self._per_sample_input_tokens[sid] = (
+                    self._per_sample_input_tokens.get(sid, 0) + input_tokens
+                )
+                self._per_sample_output_tokens[sid] = (
+                    self._per_sample_output_tokens.get(sid, 0) + output_tokens
+                )
 
     def set_current_sample_id(self, sample_id: Any):
         """Set the current sample ID for token tracking."""
@@ -967,40 +970,35 @@ class StepScorerSelfVerification(StepScorerBase):
 
         return ""
 
-    def _call_api_batch(self, prompts: List[str]) -> List[str]:
-        """Call API-based model for evaluation with batched prompts and retry logic."""
+    def _call_api_single(self, prompt: str) -> str:
+        """Call API for a single prompt with retry logic. Thread-safe."""
         import openai
 
-        messages_list = [[{"role": "user", "content": prompt}] for prompt in prompts]
-
+        messages = [{"role": "user", "content": prompt}]
         max_retries = 3
         base_delay = 2.0
 
         for attempt in range(max_retries):
             try:
                 results = self.model.generate_texts(
-                    chats=messages_list,
+                    chats=[messages],
                     n=1,
                     max_new_tokens=self.max_tokens,
                     temperature=self.temperature,
                     timeout=self.timeout,
                 )
 
-                texts: List[str] = []
-                for prompt, result in zip(prompts, results or []):
-                    if result:
-                        text = result.get("text", "")
-                        input_tokens = result.get("prompt_tokens", 0)
-                        output_tokens = result.get("completion_tokens", 0)
-                        if input_tokens == 0 and output_tokens == 0:
-                            input_tokens = len(prompt) // 4
-                            output_tokens = len(text) // 4
-                        self._record_tokens(input_tokens, output_tokens)
-                        texts.append(text)
-                    else:
-                        texts.append("")
-
-                return texts
+                if results and results[0]:
+                    result = results[0]
+                    text = result.get("text", "")
+                    input_tokens = result.get("prompt_tokens", 0)
+                    output_tokens = result.get("completion_tokens", 0)
+                    if input_tokens == 0 and output_tokens == 0:
+                        input_tokens = len(prompt) // 4
+                        output_tokens = len(text) // 4
+                    self._record_tokens(input_tokens, output_tokens)
+                    return text
+                return ""
 
             except (openai.APITimeoutError, openai.APIConnectionError) as e:
                 if attempt < max_retries - 1:
@@ -1011,7 +1009,7 @@ class StepScorerSelfVerification(StepScorerBase):
                     time.sleep(delay)
                 else:
                     log.error(f"API call failed after {max_retries} attempts: {e}")
-                    raise
+                    return ""
 
             except openai.RateLimitError as e:
                 if attempt < max_retries - 1:
@@ -1022,9 +1020,33 @@ class StepScorerSelfVerification(StepScorerBase):
                     time.sleep(delay)
                 else:
                     log.error(f"Rate limit persists after {max_retries} attempts: {e}")
-                    raise
+                    return ""
 
-        return ["" for _ in prompts]
+        return ""
+
+    def _call_api_batch(self, prompts: List[str]) -> List[str]:
+        """Call API for multiple prompts in parallel using ThreadPoolExecutor."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        max_workers = min(len(prompts), 50)
+        log.info(f"Parallel API batch: {len(prompts)} prompts, {max_workers} workers")
+
+        results = [""] * len(prompts)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_idx = {
+                executor.submit(self._call_api_single, prompt): idx
+                for idx, prompt in enumerate(prompts)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    results[idx] = future.result()
+                except Exception as e:
+                    log.error(f"Prompt {idx} failed: {e}")
+                    results[idx] = ""
+
+        return results
 
     def _parse_value_output(self, output: str) -> float:
         """
