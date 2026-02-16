@@ -58,7 +58,7 @@ strategy:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
   # Step boundary detector settings - used for post-hoc step splitting
-  min_step_tokens: 125
+  min_step_tokens: 10
   max_step_tokens: 500
   # Disable linguistic markers (not useful for code)
   use_sequence: false
