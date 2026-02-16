@@ -3,3 +3,10 @@ num_trajectories: 8
 score_aggregation: min
 batch_generation: true
 min_step_tokens: 50
+use_sequence: true
+use_conclusion: true
+use_thinking: true
+use_verification: true
+use_structure: false
+use_reasoning: true
+use_correction: false

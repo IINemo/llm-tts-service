@@ -59,13 +59,6 @@ strategy:
   # Step boundary detector settings - used for post-hoc step splitting
   max_step_tokens: 500
   # These flags control how thinking is SPLIT into steps after generation
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false
-  use_reasoning: true
-  use_correction: false
 
 # Sequence Probability scorer configuration (uses same model, no separate GPU needed)
 scorer:

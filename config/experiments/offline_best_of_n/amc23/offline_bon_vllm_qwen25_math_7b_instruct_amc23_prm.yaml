@@ -59,13 +59,6 @@ strategy:
   # Step boundary token limits
   max_step_tokens: 2048
   # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false  # Disabled to avoid splitting on bullet points and paragraph breaks
-  use_reasoning: true
-  use_correction: false
   # Custom words for stop tokens
   custom_words:
     - "for example"

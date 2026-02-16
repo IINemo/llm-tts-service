@@ -50,13 +50,6 @@ strategy:
   max_steps: 100
   # Step boundary detector settings - used for post-hoc step splitting
   max_step_tokens: 2048
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false
-  use_reasoning: true
-  use_correction: false
 
 # Perplexity scorer configuration
 scorer:
