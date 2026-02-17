@@ -2304,7 +2304,7 @@ def main(config):
         raise ValueError("data_name must be set in config.dataset or config.strategy")
 
     # Start GPU monitoring in background
-    gpu_monitor_log = Path(output_dir) / "gpu_monitor.log"
+    gpu_monitor_log = Path(output_dir) / "gpu_monitor.csv"
     log.info(f"Starting GPU monitoring, writing to {gpu_monitor_log}")
 
     def monitor_gpu():
@@ -2312,9 +2312,18 @@ def main(config):
         import threading
         import time
         import subprocess
+        import csv
 
         stop_flag = threading.Event()
         def _monitor():
+            # Write CSV header
+            try:
+                with open(gpu_monitor_log, "w") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["timestamp", "gpu_id", "name", "total_gb", "used_gb", "free_gb", "util_pct"])
+            except Exception:
+                return
+
             while not stop_flag.is_set():
                 try:
                     # Use nvidia-smi to get actual GPU memory (works with vLLM)
@@ -2326,23 +2335,25 @@ def main(config):
 
                     if result.returncode == 0:
                         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                        rows = []
+                        for line in result.stdout.strip().split('\n'):
+                            if line:
+                                parts = line.split(', ')
+                                if len(parts) >= 5:
+                                    idx, name, total, used, free = parts[:5]
+                                    total_gb = float(total) / 1024
+                                    used_gb = float(used) / 1024
+                                    free_gb = float(free) / 1024
+                                    util_pct = 100 * used_gb / total_gb if total_gb > 0 else 0
+                                    rows.append([timestamp, idx, name, f"{total_gb:.2f}", f"{used_gb:.2f}", f"{free_gb:.2f}", f"{util_pct:.1f}"])
+
+                        # Append to CSV
                         with open(gpu_monitor_log, "a") as f:
-                            f.write(f"[{timestamp}] GPU State (nvidia-smi):\n")
-                            for line in result.stdout.strip().split('\n'):
-                                if line:
-                                    parts = line.split(', ')
-                                    if len(parts) >= 5:
-                                        idx, name, total, used, free = parts[:5]
-                                        total_gb = float(total) / 1024
-                                        used_gb = float(used) / 1024
-                                        free_gb = float(free) / 1024
-                                        util_pct = 100 * used_gb / total_gb if total_gb > 0 else 0
-                                        f.write(f"  GPU {idx}: {name}\n")
-                                        f.write(f"    Total: {total_gb:.2f} GB, Used: {used_gb:.2f} GB, Free: {free_gb:.2f} GB ({util_pct:.1f}% used)\n")
-                            f.write("\n")
+                            writer = csv.writer(f)
+                            writer.writerows(rows)
                 except Exception:
                     pass  # Don't let monitoring crash the main process
-                time.sleep(30)  # Log every 30 seconds
+                time.sleep(10)  # Log every 10 seconds
 
         monitor_thread = threading.Thread(target=_monitor, daemon=True)
         monitor_thread.start()
@@ -2350,7 +2361,7 @@ def main(config):
 
     gpu_stop_flag = monitor_gpu()
 
-    # Log initial GPU state
+    # Log initial GPU state (as comment in CSV)
     try:
         import subprocess
         result = subprocess.run(
@@ -2360,23 +2371,8 @@ def main(config):
         )
         if result.returncode == 0:
             with open(gpu_monitor_log, "w") as f:
-                f.write("=" * 60 + "\n")
-                f.write("GPU Monitoring Log\n")
-                f.write("=" * 60 + "\n\n")
-                f.write(f"[STARTUP] Initial GPU State:\n")
-                for line in result.stdout.strip().split('\n'):
-                    if line:
-                        parts = line.split(', ')
-                        if len(parts) >= 5:
-                            idx, name, total, used, free = parts[:5]
-                            total_gb = float(total) / 1024
-                            used_gb = float(used) / 1024
-                            free_gb = float(free) / 1024
-                            f.write(f"  GPU {idx}: {name}\n")
-                            f.write(f"    Total: {total_gb:.2f} GB, Used: {used_gb:.2f} GB, Free: {free_gb:.2f} GB\n")
-                f.write(f"  Config: gpu_memory_utilization={config.model.get('gpu_memory_utilization', 'N/A')}\n")
-                f.write(f"  Config: tensor_parallel_size={config.model.get('tensor_parallel_size', 'N/A')}\n")
-                f.write("\n")
+                f.write(f"# Startup: gpu_memory_utilization={config.model.get('gpu_memory_utilization', 'N/A')}\n")
+                f.write(f"# Startup: tensor_parallel_size={config.model.get('tensor_parallel_size', 'N/A')}\n")
     except Exception as e:
         log.warning(f"Failed to log initial GPU state: {e}")
 
@@ -2408,18 +2404,9 @@ def main(config):
                 capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0:
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
                 with open(gpu_monitor_log, "a") as f:
-                    f.write(f"\n[FINAL] Trajectory generation completed - Final GPU State:\n")
-                    for line in result.stdout.strip().split('\n'):
-                        if line:
-                            parts = line.split(', ')
-                            if len(parts) >= 4:
-                                idx, total, used, free = parts[:4]
-                                total_gb = float(total) / 1024
-                                used_gb = float(used) / 1024
-                                free_gb = float(free) / 1024
-                                f.write(f"  GPU {idx}: {total_gb:.2f} GB total, {used_gb:.2f} GB used, {free_gb:.2f} GB free\n")
-                    f.write("\n")
+                    f.write(f"# [FINAL] Trajectory generation completed at {timestamp}\n")
         except Exception:
             pass
 
@@ -2435,8 +2422,11 @@ def main(config):
                 capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0:
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
                 with open(gpu_monitor_log, "a") as f:
-                    f.write(f"\n[CRASH] Trajectory generation FAILED - GPU State at crash:\n")
+                    f.write(f"# [CRASH] Trajectory generation FAILED at {timestamp}: {e}\n")
+                    # Also log the crash state as a data row
+                    import csv
                     for line in result.stdout.strip().split('\n'):
                         if line:
                             parts = line.split(', ')
@@ -2445,9 +2435,9 @@ def main(config):
                                 total_gb = float(total) / 1024
                                 used_gb = float(used) / 1024
                                 free_gb = float(free) / 1024
-                                f.write(f"  GPU {idx}: {name}\n")
-                                f.write(f"    Total: {total_gb:.2f} GB, Used: {used_gb:.2f} GB, Free: {free_gb:.2f} GB\n")
-                    f.write(f"  Exception: {e}\n\n")
+                                util_pct = 100 * used_gb / total_gb if total_gb > 0 else 0
+                                writer = csv.writer(f)
+                                writer.writerow([timestamp, idx, name, f"{total_gb:.2f}", f"{used_gb:.2f}", f"{free_gb:.2f}", f"{util_pct:.1f}"])
         except Exception as monitor_err:
             log.error(f"Failed to log GPU state at crash: {monitor_err}")
 
