@@ -2316,14 +2316,6 @@ def main(config):
 
         stop_flag = threading.Event()
         def _monitor():
-            # Write CSV header
-            try:
-                with open(gpu_monitor_log, "w") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(["timestamp", "gpu_id", "name", "total_gb", "used_gb", "free_gb", "util_pct"])
-            except Exception:
-                return
-
             while not stop_flag.is_set():
                 try:
                     # Use nvidia-smi to get actual GPU memory (works with vLLM)
@@ -2373,6 +2365,7 @@ def main(config):
             with open(gpu_monitor_log, "w") as f:
                 f.write(f"# Startup: gpu_memory_utilization={config.model.get('gpu_memory_utilization', 'N/A')}\n")
                 f.write(f"# Startup: tensor_parallel_size={config.model.get('tensor_parallel_size', 'N/A')}\n")
+                f.write("timestamp,gpu_id,name,total_gb,used_gb,free_gb,util_pct\n")
     except Exception as e:
         log.warning(f"Failed to log initial GPU state: {e}")
 
