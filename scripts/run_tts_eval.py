@@ -2303,72 +2303,6 @@ def main(config):
     if not data_name:
         raise ValueError("data_name must be set in config.dataset or config.strategy")
 
-    # Start GPU monitoring in background
-    gpu_monitor_log = Path(output_dir) / "gpu_monitor.csv"
-    log.info(f"Starting GPU monitoring, writing to {gpu_monitor_log}")
-
-    def monitor_gpu():
-        """Background thread to monitor GPU state periodically."""
-        import threading
-        import time
-        import subprocess
-        import csv
-
-        stop_flag = threading.Event()
-        def _monitor():
-            while not stop_flag.is_set():
-                try:
-                    # Use nvidia-smi to get actual GPU memory (works with vLLM)
-                    result = subprocess.run(
-                        ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,memory.free",
-                         "--format=csv,noheader,nounits"],
-                        capture_output=True, text=True, timeout=5
-                    )
-
-                    if result.returncode == 0:
-                        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                        rows = []
-                        for line in result.stdout.strip().split('\n'):
-                            if line:
-                                parts = line.split(', ')
-                                if len(parts) >= 5:
-                                    idx, name, total, used, free = parts[:5]
-                                    total_gb = float(total) / 1024
-                                    used_gb = float(used) / 1024
-                                    free_gb = float(free) / 1024
-                                    util_pct = 100 * used_gb / total_gb if total_gb > 0 else 0
-                                    rows.append([timestamp, idx, name, f"{total_gb:.2f}", f"{used_gb:.2f}", f"{free_gb:.2f}", f"{util_pct:.1f}"])
-
-                        # Append to CSV
-                        with open(gpu_monitor_log, "a") as f:
-                            writer = csv.writer(f)
-                            writer.writerows(rows)
-                except Exception:
-                    pass  # Don't let monitoring crash the main process
-                time.sleep(10)  # Log every 10 seconds
-
-        monitor_thread = threading.Thread(target=_monitor, daemon=True)
-        monitor_thread.start()
-        return stop_flag
-
-    gpu_stop_flag = monitor_gpu()
-
-    # Log initial GPU state (as comment in CSV)
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,memory.free",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0:
-            with open(gpu_monitor_log, "w") as f:
-                f.write(f"# Startup: gpu_memory_utilization={config.model.get('gpu_memory_utilization', 'N/A')}\n")
-                f.write(f"# Startup: tensor_parallel_size={config.model.get('tensor_parallel_size', 'N/A')}\n")
-                f.write("timestamp,gpu_id,name,total_gb,used_gb,free_gb,util_pct\n")
-    except Exception as e:
-        log.warning(f"Failed to log initial GPU state: {e}")
-
     # Generate trajectories with error logging
     log.info("Starting trajectory generation...")
     try:
@@ -2388,51 +2322,8 @@ def main(config):
         )
         log.info("Trajectory generation completed successfully")
 
-        # Log final GPU state after generation
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=index,memory.total,memory.used,memory.free",
-                 "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0:
-                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                with open(gpu_monitor_log, "a") as f:
-                    f.write(f"# [FINAL] Trajectory generation completed at {timestamp}\n")
-        except Exception:
-            pass
-
     except Exception as e:
         log.exception(f"Trajectory generation failed: {e}")
-
-        # Log GPU state at time of crash
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,memory.free",
-                 "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0:
-                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                with open(gpu_monitor_log, "a") as f:
-                    f.write(f"# [CRASH] Trajectory generation FAILED at {timestamp}: {e}\n")
-                    # Also log the crash state as a data row
-                    import csv
-                    for line in result.stdout.strip().split('\n'):
-                        if line:
-                            parts = line.split(', ')
-                            if len(parts) >= 5:
-                                idx, name, total, used, free = parts[:5]
-                                total_gb = float(total) / 1024
-                                used_gb = float(used) / 1024
-                                free_gb = float(free) / 1024
-                                util_pct = 100 * used_gb / total_gb if total_gb > 0 else 0
-                                writer = csv.writer(f)
-                                writer.writerow([timestamp, idx, name, f"{total_gb:.2f}", f"{used_gb:.2f}", f"{free_gb:.2f}", f"{util_pct:.1f}"])
-        except Exception as monitor_err:
-            log.error(f"Failed to log GPU state at crash: {monitor_err}")
 
         # Save partial results before crashing
         try:
@@ -2443,10 +2334,6 @@ def main(config):
         except Exception as save_err:
             log.error(f"Failed to save partial results: {save_err}")
         raise
-    finally:
-        # Stop GPU monitoring
-        if gpu_stop_flag is not None:
-            gpu_stop_flag.set()
 
     # Free GPU memory before evaluation (model not needed for LLM judge API calls)
     log.info("Freeing GPU memory before evaluation phase...")
