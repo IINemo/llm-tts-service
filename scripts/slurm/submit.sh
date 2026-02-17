@@ -426,7 +426,7 @@ if [[ -z \"\${SEED+x}\" ]]; then
 fi
 
 python scripts/run_tts_eval.py \\
-    --config-path=../config \\
+    --config-path=${PROJECT_DIR}/config \\
     --config-name=${config_name} \\
     system.seed=\${SEED} \\
     ${SUBSET:+dataset.subset=${SUBSET}}

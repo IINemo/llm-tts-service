@@ -34,42 +34,6 @@ from lm_polygraph.utils.generation_parameters import GenerationParameters
 from omegaconf import OmegaConf
 
 
-# Register CUDA OOM handler to log GPU memory state before crash
-def handle_cuda_oom():
-    """Log CUDA memory state when OOM occurs."""
-    import logging
-    log = logging.getLogger(__name__)
-    log.error("CUDA Out of Memory (OOM) detected!")
-    if torch.cuda.is_available():
-        for i in range(torch.cuda.device_count()):
-            props = torch.cuda.get_device_properties(i)
-            allocated = torch.cuda.memory_allocated(i) / 1024**3
-            reserved = torch.cuda.memory_reserved(i) / 1020**3
-            log.error(
-                f"GPU {i} ({props.name}): "
-                f"Total={props.total_memory / 1024**3:.2f}GB, "
-                f"Allocated={allocated:.2f}GB, "
-                f"Reserved={reserved:.2f}GB"
-            )
-    raise MemoryError("CUDA Out of Memory")
-
-
-# Monkey-patch torch.cuda.alloc to catch OOM
-_original_cuda_alloc = torch.cuda.alloc
-def _cuda_alloc_wrapper(size, device=0):
-    try:
-        return _original_cuda_alloc(size, device)
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower():
-            handle_cuda_oom()
-        raise
-
-try:
-    torch.cuda.alloc = _cuda_alloc_wrapper
-except Exception:
-    pass  # May not work on all torch versions
-
-
 def _make_output_name(run_name: str, strategy_type: str, data_name: str) -> str:
     """Strip strategy prefix and dataset name from run_name for shorter output dirs."""
     name = run_name
@@ -2339,6 +2303,79 @@ def main(config):
     if not data_name:
         raise ValueError("data_name must be set in config.dataset or config.strategy")
 
+    # Start GPU monitoring in background
+    gpu_monitor_log = Path(output_dir) / "gpu_monitor.log"
+    log.info(f"Starting GPU monitoring, writing to {gpu_monitor_log}")
+
+    def monitor_gpu():
+        """Background thread to monitor GPU state periodically."""
+        import threading
+        import time
+        try:
+            import torch
+        except ImportError:
+            return None
+
+        stop_flag = threading.Event()
+        def _monitor():
+            while not stop_flag.is_set():
+                try:
+                    if torch.cuda.is_available():
+                        state = {}
+                        for i in range(torch.cuda.device_count()):
+                            props = torch.cuda.get_device_properties(i)
+                            allocated = torch.cuda.memory_allocated(i) / 1024**3
+                            reserved = torch.cuda.memory_reserved(i) / 1024**3
+                            total = props.total_memory / 1024**3
+                            state[f"gpu_{i}"] = {
+                                "name": props.name,
+                                "total_gb": f"{total:.2f}",
+                                "allocated_gb": f"{allocated:.2f}",
+                                "reserved_gb": f"{reserved:.2f}",
+                                "free_gb": f"{total - reserved:.2f}",
+                                "util_percent": f"{100 * allocated / total:.1f}" if total > 0 else "0"
+                            }
+
+                        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                        with open(gpu_monitor_log, "a") as f:
+                            f.write(f"[{timestamp}] GPU State:\n")
+                            for gpu_id, info in state.items():
+                                f.write(f"  {gpu_id}: {info['name']}\n")
+                                f.write(f"    Total: {info['total_gb']} GB, Allocated: {info['allocated_gb']} GB, Reserved: {info['reserved_gb']} GB, Free: {info['free_gb']} GB ({info['util_percent']} used)\n")
+                            f.write("\n")
+                except Exception:
+                    pass  # Don't let monitoring crash the main process
+                time.sleep(30)  # Log every 30 seconds
+
+        monitor_thread = threading.Thread(target=_monitor, daemon=True)
+        monitor_thread.start()
+        return stop_flag
+
+    gpu_stop_flag = monitor_gpu()
+
+    # Log initial GPU state
+    try:
+        import torch
+        if torch.cuda.is_available():
+            with open(gpu_monitor_log, "w") as f:
+                f.write("=" * 60 + "\n")
+                f.write("GPU Monitoring Log\n")
+                f.write("=" * 60 + "\n\n")
+                f.write(f"[STARTUP] Initial GPU State:\n")
+                for i in range(torch.cuda.device_count()):
+                    props = torch.cuda.get_device_properties(i)
+                    allocated = torch.cuda.memory_allocated(i) / 1024**3
+                    reserved = torch.cuda.memory_reserved(i) / 1024**3
+                    total = props.total_memory / 1024**3
+                    f.write(f"  GPU {i}: {props.name}\n")
+                    f.write(f"    Total: {total:.2f} GB, Allocated: {allocated:.2f} GB, Reserved: {reserved:.2f} GB, Free: {total - reserved:.2f} GB\n")
+                    f.write(f"    Compute Capability: {props.major}.{props.minor}, Multi-Processor Count: {props.multi_processor_count}\n")
+                f.write(f"  Config: gpu_memory_utilization={config.model.get('gpu_memory_utilization', 'N/A')}\n")
+                f.write(f"  Config: tensor_parallel_size={config.model.get('tensor_parallel_size', 'N/A')}\n")
+                f.write("\n")
+    except Exception as e:
+        log.warning(f"Failed to log initial GPU state: {e}")
+
     # Generate trajectories with error logging
     log.info("Starting trajectory generation...")
     try:
@@ -2357,8 +2394,45 @@ def main(config):
             config=config,  # Pass config for multi-evaluator support
         )
         log.info("Trajectory generation completed successfully")
+
+        # Log final GPU state after generation
+        try:
+            import torch
+            if torch.cuda.is_available():
+                with open(gpu_monitor_log, "a") as f:
+                    f.write(f"\n[FINAL] Trajectory generation completed - Final GPU State:\n")
+                    for i in range(torch.cuda.device_count()):
+                        allocated = torch.cuda.memory_allocated(i) / 1024**3
+                        reserved = torch.cuda.memory_reserved(i) / 1024**3
+                        total = torch.cuda.get_device_properties(i).total_memory / 1024**3
+                        f.write(f"  GPU {i}: {total:.2f} GB total, {allocated:.2f} GB allocated, {reserved:.2f} GB reserved\n")
+                    f.write("\n")
+        except Exception:
+            pass
+
     except Exception as e:
         log.exception(f"Trajectory generation failed: {e}")
+
+        # Log GPU state at time of crash
+        try:
+            import torch
+            if torch.cuda.is_available():
+                with open(gpu_monitor_log, "a") as f:
+                    f.write(f"\n[CRASH] Trajectory generation FAILED - GPU State at crash:\n")
+                    for i in range(torch.cuda.device_count()):
+                        allocated = torch.cuda.memory_allocated(i) / 1024**3
+                        reserved = torch.cuda.memory_reserved(i) / 1024**3
+                        total = torch.cuda.get_device_properties(i).total_memory / 1024**3
+                        f.write(f"  GPU {i}: {total:.2f} GB total, {allocated:.2f} GB allocated, {reserved:.2f} GB reserved\n")
+                        # Try to get CUDA error
+                        try:
+                            torch.cuda.empty_cache()  # May trigger CUDA error
+                        except Exception as cuda_err:
+                            f.write(f"  GPU {i} CUDA Error: {cuda_err}\n")
+                    f.write(f"  Exception: {e}\n\n")
+        except Exception as monitor_err:
+            log.error(f"Failed to log GPU state at crash: {monitor_err}")
+
         # Save partial results before crashing
         try:
             partial_results_path = Path(output_dir) / "results_partial.json"
@@ -2368,19 +2442,10 @@ def main(config):
         except Exception as save_err:
             log.error(f"Failed to save partial results: {save_err}")
         raise
-        results=results,
-        save_path=output_dir,
-        strategy=generator,
-        dataset=dataset,
-        processed_indices=processed_indices,
-        prompt_template=prompt_template,
-        system_prompt=system_prompt,
-        question_field=config.dataset.get("question_field", "question"),
-        answer_field=config.dataset.get("answer_field", "answer"),
-        exact_match_dataset_answer_format=config.dataset.answer_format,
-        data_name=data_name,
-        config=config,  # Pass config for multi-evaluator support
-    )
+    finally:
+        # Stop GPU monitoring
+        if gpu_stop_flag is not None:
+            gpu_stop_flag.set()
 
     # Free GPU memory before evaluation (model not needed for LLM judge API calls)
     log.info("Freeing GPU memory before evaluation phase...")
