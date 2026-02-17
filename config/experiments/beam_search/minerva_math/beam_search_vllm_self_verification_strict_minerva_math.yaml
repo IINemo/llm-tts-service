@@ -1,8 +1,9 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/beam_search_vllm_qwen25_72b_verification_minerva_math
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/beam_search_vllm_self_verification_strict_minerva_math
 #
-# Beam Search with Qwen2.5-72B-Instruct as verifier (via OpenRouter API)
-# Generation: vLLM (Qwen2.5-Math-7B), Scoring: Qwen2.5-72B-Instruct (API)
+# Beam Search with strict self-verification prompt
+# Same model (Qwen2.5-Math-7B) for generation and scoring via vLLM
+# Strict verification prompt forces model to re-check calculations
 
 defaults:
   - /config
@@ -15,14 +16,14 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_qwen25_72b_verification_minerva_math_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_self_verification_strict_minerva_math_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: none
 wandb_project: llm-tts-eval-minerva-math
 
-# Model configuration (vLLM backend for generation)
+# Model configuration (vLLM backend)
 model:
   type: vllm
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
@@ -76,7 +77,7 @@ strategy:
     - "therefore"
     - "thus"
 
-# Self-Verification Scorer using Qwen2.5-72B-Instruct via OpenRouter API
+# Self-Verification Scorer - strict prompt, low temperature
 scorer:
   type: self_verification
   method: value
@@ -85,12 +86,6 @@ scorer:
   max_tokens: 500
   timeout: 120
   value_prompt_file: "tree-of-thought/self_verification/value_prompt_math_strict.txt"
-  model:
-    type: openai_api
-    model_name: "qwen/qwen-2.5-72b-instruct"
-    base_url: "https://openrouter.ai/api/v1"
-    provider: openrouter
-    api_key: null
 
 # Dataset configuration - Minerva Math
 dataset:
