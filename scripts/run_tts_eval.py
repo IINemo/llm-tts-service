@@ -654,7 +654,7 @@ def create_model(config):
             base_url = "https://openrouter.ai/api/v1"
         else:
             api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
-            base_url = None
+            base_url = config.model.get("base_url", None)
 
         # Check if DeepConf strategy
         if config.strategy.type == "deepconf":

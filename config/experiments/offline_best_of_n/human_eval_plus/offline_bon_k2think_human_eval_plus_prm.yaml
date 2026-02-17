@@ -1,9 +1,9 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_openrouter_gpt4o_mini_human_eval_plus_entropy
-# Offline Best-of-N for HumanEval+ using OpenRouter API with newline-based step boundaries
-# Uses Entropy scorer for step evaluation
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_k2think_human_eval_plus_prm
+# Offline Best-of-N for HumanEval+ using K2-Think custom endpoint
+# Uses PRM scorer for step evaluation
 #
-# Environment variable required: OPENROUTER_API_KEY
+# Environment variable required: OPENAI_API_KEY (set to K2-Think API key)
 
 defaults:
   - /config
@@ -16,24 +16,24 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "offline_bon_openrouter_gptoss120b_human_eval_plus_prm_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "offline_bon_k2think_human_eval_plus_prm_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "offline_bon_openrouter_gposs120b_human_eval_plus_prm"
+wandb_group: "offline_bon_k2think_human_eval_plus_prm"
 
-# Model configuration (OpenRouter API)
+# Model configuration (K2-Think custom endpoint)
 model:
   type: "openai_api"
-  provider: openrouter
-  model_path: "openai/gpt-oss-120b"  # Fast and cost-effective for code
-  api_key: null  # Set via OPENROUTER_API_KEY env var
+  provider: null
+  base_url: "https://api.k2think.ai/v1"
+  model_path: "MBZUAI-IFM/K2-Think-v2"
+  api_key: null  # Set via OPENAI_API_KEY env var
   supports_logprobs: true
-  prefill_mode: false
-  max_context_budget: 128000
-  disable_thinking_mode: false
+  prefill_mode: true
+  max_context_budget: 200000
 
 # System configuration
 system:
@@ -47,14 +47,15 @@ generation:
   top_p: 0.95
   top_k: 20
   batch_size: 1
+  max_length: 65536
 
 # Strategy - Offline Best-of-N with newline-based step boundaries for code
 strategy:
   type: offline_best_of_n
+  batch_generation: true
+  max_steps: 100
   min_step_tokens: 10
   max_step_tokens: 1024
-  max_steps: 100
-  # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
   use_thinking: false
@@ -62,12 +63,11 @@ strategy:
   use_structure: false
   use_reasoning: false
   use_correction: false
-  # Use newlines as step separators for code
   custom_markers:
     - "\n"
     - "\n\n"
 
-# Entropy scorer configuration
+# PRM scorer configuration
 scorer:
   type: prm
   model_path: "Qwen/Qwen2.5-Math-PRM-7B"
@@ -78,13 +78,13 @@ scorer:
 dataset:
   data_name: "human_eval_plus"
   dataset_path: "evalplus/humanevalplus"
-  dataset_split: "test"
+  dataset_split: "test"  # 164 problems
   subset: null
   offset: 0
-  question_field: "question"  # EvalPlus loader field (includes function signature + docstring)
-  answer_field: "answer"  # EvalPlus loader field (canonical solution)
+  question_field: "question"
+  answer_field: "answer"
   answer_format: "code"
-  prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
+  prompt_file: null
   system_prompt: "Do not output any other code except for asked self-contained Python script. Do not provide any guides on how to run it. Code will be parsed from codeblock to check it's correct."
 
 # Evaluation configuration
@@ -92,5 +92,5 @@ evaluation:
   evaluators:
     - human_eval_plus
   human_eval_plus:
-    mode: full  # "test" and "syntax" modes are deprecated, use "full" only
+    mode: full
     timeout: 10

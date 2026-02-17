@@ -1,8 +1,4 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_openrouter_gpt4o_mini_human_eval_plus_entropy
-# Offline Best-of-N for HumanEval+ using OpenRouter API with newline-based step boundaries
-# Uses prm scorer for step evaluation
-#
 # Environment variable required: OPENROUTER_API_KEY
 
 defaults:
@@ -10,29 +6,28 @@ defaults:
   - /model/openrouter
   - /generation/default
   - /system/default
-  - /scorer/prm
-  - /strategy/offline_bon
+  - /scorer/entropy
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "offline_bon_openrouter_gpt4o_mini_human_eval_plus_prm_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "baseline_openrouter_claude_sonnet4_human_eval_plus_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: wandb
+report_to: "wandb"
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "offline_bon_openrouter_gpt4o_mini_human_eval_plus_prm"
+wandb_group: "baseline_openrouter_claude_sonnet4_human_eval_plus"
 
 # Model configuration (OpenRouter API)
 model:
   type: "openai_api"
   provider: openrouter
-  model_path: "openai/gpt-4o-mini"  # Fast and cost-effective for code
+  model_path: "anthropic/claude-sonnet-4"
   api_key: null  # Set via OPENROUTER_API_KEY env var
-  supports_logprobs: true
-  prefill_mode: false
-  max_context_budget: 128000
+  supports_logprobs: false
+  prefill_mode: true
+  max_context_budget: 200000
 
 # System configuration
 system:
@@ -47,13 +42,14 @@ generation:
   top_k: 20
   batch_size: 1
 
-# Strategy - Offline Best-of-N with newline-based step boundaries for code
+# Strategy - Baseline single-shot
 strategy:
-  type: offline_best_of_n
-  min_step_tokens: 10
-  max_step_tokens: 500
-  max_steps: 100
-  # Disable linguistic markers (not useful for code)
+  type: baseline
+  batch_generation: true
+  # Step token limits
+  min_step_tokens: 0
+  max_step_tokens: 16384
+  # Disable semantic markers for baseline
   use_sequence: false
   use_conclusion: false
   use_thinking: false
@@ -61,23 +57,13 @@ strategy:
   use_structure: false
   use_reasoning: false
   use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
-
-# PRM scorer configuration
-scorer:
-  type: prm
-  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
-  device: cuda:0
-  batch_size: 1
 
 # Dataset configuration - HumanEval+
+# Uses EvalPlus API loader which provides correct prompt format with function signature
 dataset:
   data_name: "human_eval_plus"
   dataset_path: "evalplus/humanevalplus"
-  dataset_split: "test"
+  dataset_split: "test"  # 164 problems
   subset: null
   offset: 0
   question_field: "question"  # EvalPlus loader field (includes function signature + docstring)
