@@ -145,19 +145,19 @@ class StrategyOnlineBestOfN(StrategyBase):
             )
 
             # 2. Skip samples whose trajectory exceeds context limit
-            # batch_sample_ids = []
-            # for i in active_sample_ids:
-            #     if total_tokens[i] >= max_trajectory_tokens - 200:
-            #         log.info(
-            #             f"Sample {sample_indices[i]}: Context limit reached "
-            #             f"(tokens: {total_tokens[i]} >= {max_trajectory_tokens - 200}), "
-            #             f"marking for final answer"
-            #         )
-            #         completed[i] = True
-            #         needs_final_answer[i] = True
-            #     else:
-            #         batch_sample_ids.append(i)
-            batch_sample_ids = active_sample_ids
+            batch_sample_ids = []
+            for i in active_sample_ids:
+                if total_tokens[i] >= max_trajectory_tokens - 200:
+                    log.info(
+                        f"Sample {sample_indices[i]}: Context limit reached "
+                        f"(tokens: {total_tokens[i]} >= {max_trajectory_tokens - 200}), "
+                        f"marking for final answer"
+                    )
+                    completed[i] = True
+                    needs_final_answer[i] = True
+                else:
+                    batch_sample_ids.append(i)
+            # batch_sample_ids = active_sample_ids
 
             if not batch_sample_ids:
                 log.info("No active samples to process after context limit check")
