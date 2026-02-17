@@ -2395,7 +2395,9 @@ def main(config):
                             wandb.save(str(output_file))
                             log.debug(f"Saved {output_file.name} to wandb")
                         except Exception as save_err:
-                            log.warning(f"Failed to save {output_file.name}: {save_err}")
+                            log.warning(
+                                f"Failed to save {output_file.name}: {save_err}"
+                            )
             wandb.finish()
             log.info("Finished wandb session")
         except Exception as e:
@@ -2420,12 +2422,14 @@ if __name__ == "__main__":
         main()
     except (KeyboardInterrupt, MemoryError, Exception) as e:
         import logging
+
         error_log = logging.getLogger(__name__)
 
         # Try to get output_dir from HydraConfig if main() didn't set it
         if output_dir is None:
             try:
                 from hydra.core.hydra_config import HydraConfig
+
                 output_dir = HydraConfig.get().runtime.output_dir
             except Exception:
                 error_log.warning("Could not get output_dir from HydraConfig")
@@ -2455,7 +2459,9 @@ if __name__ == "__main__":
                                 wandb.save(str(log_file))
                                 error_log.info(f"Saved {log_file.name} to wandb")
                             except Exception as save_err:
-                                error_log.warning(f"Failed to save {log_file.name}: {save_err}")
+                                error_log.warning(
+                                    f"Failed to save {log_file.name}: {save_err}"
+                                )
 
                     # Finish wandb run with error status
                     wandb.finish(exit_code=1)
