@@ -2311,37 +2311,34 @@ def main(config):
         """Background thread to monitor GPU state periodically."""
         import threading
         import time
-        try:
-            import torch
-        except ImportError:
-            return None
+        import subprocess
 
         stop_flag = threading.Event()
         def _monitor():
             while not stop_flag.is_set():
                 try:
-                    if torch.cuda.is_available():
-                        state = {}
-                        for i in range(torch.cuda.device_count()):
-                            props = torch.cuda.get_device_properties(i)
-                            allocated = torch.cuda.memory_allocated(i) / 1024**3
-                            reserved = torch.cuda.memory_reserved(i) / 1024**3
-                            total = props.total_memory / 1024**3
-                            state[f"gpu_{i}"] = {
-                                "name": props.name,
-                                "total_gb": f"{total:.2f}",
-                                "allocated_gb": f"{allocated:.2f}",
-                                "reserved_gb": f"{reserved:.2f}",
-                                "free_gb": f"{total - reserved:.2f}",
-                                "util_percent": f"{100 * allocated / total:.1f}" if total > 0 else "0"
-                            }
+                    # Use nvidia-smi to get actual GPU memory (works with vLLM)
+                    result = subprocess.run(
+                        ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,memory.free",
+                         "--format=csv,noheader,nounits"],
+                        capture_output=True, text=True, timeout=5
+                    )
 
+                    if result.returncode == 0:
                         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
                         with open(gpu_monitor_log, "a") as f:
-                            f.write(f"[{timestamp}] GPU State:\n")
-                            for gpu_id, info in state.items():
-                                f.write(f"  {gpu_id}: {info['name']}\n")
-                                f.write(f"    Total: {info['total_gb']} GB, Allocated: {info['allocated_gb']} GB, Reserved: {info['reserved_gb']} GB, Free: {info['free_gb']} GB ({info['util_percent']} used)\n")
+                            f.write(f"[{timestamp}] GPU State (nvidia-smi):\n")
+                            for line in result.stdout.strip().split('\n'):
+                                if line:
+                                    parts = line.split(', ')
+                                    if len(parts) >= 5:
+                                        idx, name, total, used, free = parts[:5]
+                                        total_gb = float(total) / 1024
+                                        used_gb = float(used) / 1024
+                                        free_gb = float(free) / 1024
+                                        util_pct = 100 * used_gb / total_gb if total_gb > 0 else 0
+                                        f.write(f"  GPU {idx}: {name}\n")
+                                        f.write(f"    Total: {total_gb:.2f} GB, Used: {used_gb:.2f} GB, Free: {free_gb:.2f} GB ({util_pct:.1f}% used)\n")
                             f.write("\n")
                 except Exception:
                     pass  # Don't let monitoring crash the main process
@@ -2355,21 +2352,28 @@ def main(config):
 
     # Log initial GPU state
     try:
-        import torch
-        if torch.cuda.is_available():
+        import subprocess
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,memory.free",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
             with open(gpu_monitor_log, "w") as f:
                 f.write("=" * 60 + "\n")
                 f.write("GPU Monitoring Log\n")
                 f.write("=" * 60 + "\n\n")
                 f.write(f"[STARTUP] Initial GPU State:\n")
-                for i in range(torch.cuda.device_count()):
-                    props = torch.cuda.get_device_properties(i)
-                    allocated = torch.cuda.memory_allocated(i) / 1024**3
-                    reserved = torch.cuda.memory_reserved(i) / 1024**3
-                    total = props.total_memory / 1024**3
-                    f.write(f"  GPU {i}: {props.name}\n")
-                    f.write(f"    Total: {total:.2f} GB, Allocated: {allocated:.2f} GB, Reserved: {reserved:.2f} GB, Free: {total - reserved:.2f} GB\n")
-                    f.write(f"    Compute Capability: {props.major}.{props.minor}, Multi-Processor Count: {props.multi_processor_count}\n")
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        parts = line.split(', ')
+                        if len(parts) >= 5:
+                            idx, name, total, used, free = parts[:5]
+                            total_gb = float(total) / 1024
+                            used_gb = float(used) / 1024
+                            free_gb = float(free) / 1024
+                            f.write(f"  GPU {idx}: {name}\n")
+                            f.write(f"    Total: {total_gb:.2f} GB, Used: {used_gb:.2f} GB, Free: {free_gb:.2f} GB\n")
                 f.write(f"  Config: gpu_memory_utilization={config.model.get('gpu_memory_utilization', 'N/A')}\n")
                 f.write(f"  Config: tensor_parallel_size={config.model.get('tensor_parallel_size', 'N/A')}\n")
                 f.write("\n")
@@ -2397,15 +2401,24 @@ def main(config):
 
         # Log final GPU state after generation
         try:
-            import torch
-            if torch.cuda.is_available():
+            import subprocess
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=index,memory.total,memory.used,memory.free",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
                 with open(gpu_monitor_log, "a") as f:
                     f.write(f"\n[FINAL] Trajectory generation completed - Final GPU State:\n")
-                    for i in range(torch.cuda.device_count()):
-                        allocated = torch.cuda.memory_allocated(i) / 1024**3
-                        reserved = torch.cuda.memory_reserved(i) / 1024**3
-                        total = torch.cuda.get_device_properties(i).total_memory / 1024**3
-                        f.write(f"  GPU {i}: {total:.2f} GB total, {allocated:.2f} GB allocated, {reserved:.2f} GB reserved\n")
+                    for line in result.stdout.strip().split('\n'):
+                        if line:
+                            parts = line.split(', ')
+                            if len(parts) >= 4:
+                                idx, total, used, free = parts[:4]
+                                total_gb = float(total) / 1024
+                                used_gb = float(used) / 1024
+                                free_gb = float(free) / 1024
+                                f.write(f"  GPU {idx}: {total_gb:.2f} GB total, {used_gb:.2f} GB used, {free_gb:.2f} GB free\n")
                     f.write("\n")
         except Exception:
             pass
@@ -2415,20 +2428,25 @@ def main(config):
 
         # Log GPU state at time of crash
         try:
-            import torch
-            if torch.cuda.is_available():
+            import subprocess
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,memory.free",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
                 with open(gpu_monitor_log, "a") as f:
                     f.write(f"\n[CRASH] Trajectory generation FAILED - GPU State at crash:\n")
-                    for i in range(torch.cuda.device_count()):
-                        allocated = torch.cuda.memory_allocated(i) / 1024**3
-                        reserved = torch.cuda.memory_reserved(i) / 1024**3
-                        total = torch.cuda.get_device_properties(i).total_memory / 1024**3
-                        f.write(f"  GPU {i}: {total:.2f} GB total, {allocated:.2f} GB allocated, {reserved:.2f} GB reserved\n")
-                        # Try to get CUDA error
-                        try:
-                            torch.cuda.empty_cache()  # May trigger CUDA error
-                        except Exception as cuda_err:
-                            f.write(f"  GPU {i} CUDA Error: {cuda_err}\n")
+                    for line in result.stdout.strip().split('\n'):
+                        if line:
+                            parts = line.split(', ')
+                            if len(parts) >= 5:
+                                idx, name, total, used, free = parts[:5]
+                                total_gb = float(total) / 1024
+                                used_gb = float(used) / 1024
+                                free_gb = float(free) / 1024
+                                f.write(f"  GPU {idx}: {name}\n")
+                                f.write(f"    Total: {total_gb:.2f} GB, Used: {used_gb:.2f} GB, Free: {free_gb:.2f} GB\n")
                     f.write(f"  Exception: {e}\n\n")
         except Exception as monitor_err:
             log.error(f"Failed to log GPU state at crash: {monitor_err}")
