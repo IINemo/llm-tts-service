@@ -1,5 +1,5 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_openrouter_gpt4o_mini_human_eval_plus_entropy
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_openrouter_claude_sonnet4_human_eval_plus_prm
 # Offline Best-of-N for HumanEval+ using OpenRouter API with newline-based step boundaries
 # Uses prm scorer for step evaluation
 #
@@ -10,25 +10,25 @@ defaults:
   - /model/openrouter
   - /generation/default
   - /system/default
-  - /scorer/prm
   - /strategy/offline_bon
+  - /scorer/prm
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "offline_bon_openrouter_gpt4o_mini_human_eval_plus_prm_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "offline_bon_openrouter_claude_sonnet4_human_eval_plus_prm_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "offline_bon_openrouter_gpt4o_mini_human_eval_plus_prm"
+wandb_group: "offline_bon_openrouter_claude_sonnet4_human_eval_plus_prm"
 
 # Model configuration (OpenRouter API)
 model:
   type: "openai_api"
   provider: openrouter
-  model_path: "openai/gpt-4o-mini"  # Fast and cost-effective for code
+  model_path: "anthropic/claude-sonnet-4"
   api_key: null  # Set via OPENROUTER_API_KEY env var
   supports_logprobs: true
   prefill_mode: false
@@ -41,11 +41,12 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 16384
+  max_new_tokens: 32768
   temperature: 0.6
   top_p: 0.95
   top_k: 20
   batch_size: 1
+  max_length: 65536
 
 # Strategy - Offline Best-of-N with newline-based step boundaries for code
 strategy:
@@ -66,7 +67,7 @@ strategy:
     - "\n"
     - "\n\n"
 
-# PRM scorer configuration
+# prm scorer configuration
 scorer:
   type: prm
   model_path: "Qwen/Qwen2.5-Math-PRM-7B"

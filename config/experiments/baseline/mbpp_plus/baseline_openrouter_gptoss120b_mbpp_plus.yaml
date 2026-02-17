@@ -74,6 +74,7 @@ dataset:
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
+  system_prompt: "Do not output any other code except for asked self-contained Python script. Do not provide any guides on how to run it. Code will be parsed from codeblock to check it's correct."
 
 # Evaluation configuration
 evaluation:

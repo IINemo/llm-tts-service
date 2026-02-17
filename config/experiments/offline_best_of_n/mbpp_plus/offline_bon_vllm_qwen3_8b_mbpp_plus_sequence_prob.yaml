@@ -9,6 +9,7 @@ defaults:
   - /generation/default
   - /system/default
   - /scorer/sequence_prob
+  - /strategy/offline_bon
   - /evaluation/mbpp_plus/default
   - _self_
 
@@ -50,6 +51,7 @@ strategy:
   type: offline_best_of_n
   min_step_tokens: 10
   max_step_tokens: 500
+  max_steps: 100
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false

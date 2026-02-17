@@ -8,6 +8,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/offline_bon
   - /scorer/prm
   - /evaluation/human_eval_plus/default
   - _self_
@@ -52,6 +53,7 @@ strategy:
   type: offline_best_of_n
   min_step_tokens: 10
   max_step_tokens: 500
+  max_steps: 100
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
