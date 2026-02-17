@@ -417,11 +417,11 @@ class AdaptiveScalingBestOfN(StrategyBase):
                         )
                         continue
 
-                    if not self._has_answer_content(chosen):
-                        trajectories[sample_idx].pop()
-                        selected_steps[sample_idx].pop()
-                        validity_scores[sample_idx].pop()
-                        needs_final_answer[sample_idx] = True
+                    # if not self._has_answer_content(chosen):
+                    #     trajectories[sample_idx].pop()
+                    #     selected_steps[sample_idx].pop()
+                    #     validity_scores[sample_idx].pop()
+                    #     needs_final_answer[sample_idx] = True
                     completed[sample_idx] = True
                     scores_str = ", ".join(
                         f"{s:.3f}" for s in validity_scores[sample_idx]
@@ -460,8 +460,8 @@ class AdaptiveScalingBestOfN(StrategyBase):
 
         # Generate final answers only in thinking mode — non-thinking mode
         # produces the answer naturally in the last reasoning step.
-        thinking_mode = getattr(self.step_generator, "thinking_mode", False)
-        if to_finalize and thinking_mode:
+        # thinking_mode = getattr(self.step_generator, "thinking_mode", False)
+        if to_finalize:
             log.info(
                 f"Generating final answers for {len(to_finalize)} samples "
                 f"(samples: {[sample_idxs[i] for i in to_finalize]})"

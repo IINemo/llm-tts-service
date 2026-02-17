@@ -145,18 +145,19 @@ class StrategyOnlineBestOfN(StrategyBase):
             )
 
             # 2. Skip samples whose trajectory exceeds context limit
-            batch_sample_ids = []
-            for i in active_sample_ids:
-                if total_tokens[i] >= max_trajectory_tokens - 200:
-                    log.info(
-                        f"Sample {sample_indices[i]}: Context limit reached "
-                        f"(tokens: {total_tokens[i]} >= {max_trajectory_tokens - 200}), "
-                        f"marking for final answer"
-                    )
-                    completed[i] = True
-                    needs_final_answer[i] = True
-                else:
-                    batch_sample_ids.append(i)
+            # batch_sample_ids = []
+            # for i in active_sample_ids:
+            #     if total_tokens[i] >= max_trajectory_tokens - 200:
+            #         log.info(
+            #             f"Sample {sample_indices[i]}: Context limit reached "
+            #             f"(tokens: {total_tokens[i]} >= {max_trajectory_tokens - 200}), "
+            #             f"marking for final answer"
+            #         )
+            #         completed[i] = True
+            #         needs_final_answer[i] = True
+            #     else:
+            #         batch_sample_ids.append(i)
+            batch_sample_ids = active_sample_ids
 
             if not batch_sample_ids:
                 log.info("No active samples to process after context limit check")
@@ -285,7 +286,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                     has_boxed = bool(extract_answer(full_traj_text, "boxed"))
                     if has_boxed:
                         selected.is_trajectory_complete = True
-                        forced_complete = True
+                        # forced_complete = True
                         log.info(
                             f"Sample {sample_indices[sample_id]}: Boxed answer detected"
                         )
@@ -298,7 +299,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                     and _detect_garbage(selected.text)
                 ):
                     selected.is_trajectory_complete = True
-                    forced_complete = True
+                    # forced_complete = True
                     log.info(
                         f"Sample {sample_indices[sample_id]}: Garbage output detected, "
                         f"marking complete"
@@ -358,21 +359,21 @@ class StrategyOnlineBestOfN(StrategyBase):
                     if completion_reason == CompletionReason.EOS_PATTERN:
                         log.info(f"Sample {sample_indices[sample_id]}: Stopped at EOS")
                         completed[sample_id] = True
-                    elif not self._has_answer_content(selected):
-                        log.info(
-                            f"Sample {sample_indices[sample_id]}: Answer pattern without content, "
-                            f"removing step and marking for final answer"
-                        )
-                        trajectories[sample_id].pop()
-                        selected_steps[sample_id].pop()
-                        validity_scores[sample_id].pop()
-                        completed[sample_id] = True
-                        needs_final_answer[sample_id] = True
-                    else:
-                        log.info(
-                            f"Sample {sample_indices[sample_id]}: Answer pattern with content, done"
-                        )
-                        completed[sample_id] = True
+                    # elif not self._has_answer_content(selected):
+                    #     log.info(
+                    #         f"Sample {sample_indices[sample_id]}: Answer pattern without content, "
+                    #         f"removing step and marking for final answer"
+                    #     )
+                    #     trajectories[sample_id].pop()
+                    #     selected_steps[sample_id].pop()
+                    #     validity_scores[sample_id].pop()
+                    #     completed[sample_id] = True
+                    #     needs_final_answer[sample_id] = True
+                    # else:
+                    #     log.info(
+                    #         f"Sample {sample_indices[sample_id]}: Answer pattern with content, done"
+                    #     )
+                    #     completed[sample_id] = True
 
                 # Context limit check after appending
                 if (
@@ -398,8 +399,8 @@ class StrategyOnlineBestOfN(StrategyBase):
 
         # 10. Batch generate final answers (thinking mode only —
         #     non-thinking mode produces the answer naturally in reasoning steps)
-        thinking_mode = getattr(self.step_generator, "thinking_mode", False)
-        if to_finalize and thinking_mode:
+        # thinking_mode = getattr(self.step_generator, "thinking_mode", False)
+        if to_finalize:
             log.info(
                 f"Generating final answers for {len(to_finalize)} samples "
                 f"(samples: {[sample_indices[i] for i in to_finalize]})"
