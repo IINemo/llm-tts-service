@@ -1,5 +1,5 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_openrouter_claude_haiku45_human_eval_plus_prm
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_openrouter_claude_sonnet4_human_eval_plus_prm
 # MUR (Adaptive Scaling) for HumanEval+ using OpenRouter API with Claude Haiku 4.5
 # Uses native assistant prefill (Claude supports it) + prm scorer
 # Note: Claude models do NOT return logprobs on OpenRouter, so prm scores will be 0
@@ -16,15 +16,14 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "adaptive_scaling_openrouter_claude_haiku45_human_eval_plus_prm_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "adaptive_scaling_openrouter_claude_sonnet4_human_eval_plus_prm_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "adaptive_scaling_openrouter_claude_haiku45_human_eval_plus_prm"
+wandb_group: "adaptive_scaling_openrouter_claude_sonnet4_human_eval_plus_prm"
 
-# Model configuration (OpenRouter API - Claude Haiku 4.5 with native prefill)
 model:
   type: "openai_api"
   provider: openrouter
@@ -57,7 +56,7 @@ strategy:
   momentum_rate: 0.9
   adaptive_scaling_method: momentum
   detector_type: structured
-  min_step_tokens: 50
+  min_step_tokens: 10
   max_step_tokens: 1024
   # Disable linguistic markers (not useful for code)
   use_sequence: false
