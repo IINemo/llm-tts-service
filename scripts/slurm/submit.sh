@@ -189,11 +189,11 @@ SCORER_CONFIGS[sequence_prob]="sequence_prob"
 SCORER_CONFIGS[prm]="prm"
 
 declare -A MODEL_CONFIGS
-MODEL_CONFIGS[qwen25_7b]="vllm_qwen25_math_7b_instruct"
+MODEL_CONFIGS[qwen25_7b]="vllm_qwen25_math_7b"
 MODEL_CONFIGS[qwen3_8b_thinking]="vllm_thinking_qwen3_8b"
 MODEL_CONFIGS[qwen3_8b]="vllm_qwen3_8b"
-MODEL_CONFIGS[qwen25_math_7b]="vllm_qwen25_math_7b_instruct"
-MODEL_CONFIGS[qwen25_math_15b]="vllm_qwen25_math_15b_instruct"
+MODEL_CONFIGS[qwen25_math_7b]="vllm_qwen25_math_7b"
+MODEL_CONFIGS[qwen25_math_15b]="vllm_qwen25_math_15b"
 MODEL_CONFIGS[openai]="openai_gpt4o_mini"
 
 # Function to get config path
@@ -229,7 +229,9 @@ get_config_name() {
             echo "Error: Unknown scorer: $scorer"
             exit 1
         fi
-        echo "experiments/${strategy_key}/${dataset_key}/${strategy}_${model_key}_${dataset_key}_${scorer_key}"
+        # offline_best_of_n, beam_search, online_best_of_n, adaptive_scaling use _instruct suffix
+        local model_key_with_instruct="${model_key}_instruct"
+        echo "experiments/${strategy_key}/${dataset_key}/${strategy}_${model_key_with_instruct}_${dataset_key}_${scorer_key}"
     fi
 }
 
