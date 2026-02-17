@@ -2445,8 +2445,9 @@ if __name__ == "__main__":
         # Save logs to wandb even on error
         if output_dir:
             try:
-                import wandb
                 from pathlib import Path
+
+                import wandb
 
                 # Sync all output files to wandb before crashing
                 if wandb.run is not None:
