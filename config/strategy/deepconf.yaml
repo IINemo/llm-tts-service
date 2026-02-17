@@ -1,6 +1,7 @@
 # DeepConf strategy configuration
 
 type: deepconf
+min_step_tokens: 50
 budget: 8  # Number of reasoning traces to generate
 window_size: 2048  # Sliding window size for confidence computation
 filter_method: "top10"  # Options: "none", "top10", "threshold"

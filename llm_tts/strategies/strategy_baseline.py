@@ -105,7 +105,7 @@ class StrategyBaseline(StrategyBase):
         # Thinking mode: step 1 produces <think>...</think>, step 2 generates final answer
         if (
             getattr(self.step_generator, "thinking_mode", False)
-            and "</think>" in candidate.text
+            and candidate.is_thinking_complete
             and not candidate.is_trajectory_complete
         ):
             log.info("Thinking phase complete, generating final answer (step 2)")
@@ -214,7 +214,10 @@ class StrategyBaseline(StrategyBase):
         }
 
     def generate_trajectories_batch(
-        self, requests: List[List[Dict[str, str]]], sample_indices: List[int] = None
+        self,
+        requests: List[List[Dict[str, str]]],
+        sample_indices: List[int] = None,
+        save_callback=None,
     ) -> List[Dict[str, Any]]:
         """
         Generate responses for multiple requests.
@@ -278,7 +281,7 @@ class StrategyBaseline(StrategyBase):
             trajectories=[[]] * M,
             candidates_per_step=1,
             stop_tokens_override=stop_tokens,
-            max_tokens_override=self.step_generator.max_new_tokens,
+            max_tokens=self.step_generator.generation_limit,
             compute_uncertainty=False,
             sample_ids=list(range(M)),
         )
@@ -290,7 +293,7 @@ class StrategyBaseline(StrategyBase):
                 candidate = candidates[0]
                 if (
                     getattr(self.step_generator, "thinking_mode", False)
-                    and "</think>" in candidate.text
+                    and candidate.is_thinking_complete
                     and not candidate.is_trajectory_complete
                 ):
                     thinking_indices.append(idx)

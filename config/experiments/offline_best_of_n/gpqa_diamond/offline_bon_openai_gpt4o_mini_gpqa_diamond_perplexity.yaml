@@ -1,5 +1,6 @@
 # @package _global_
 # Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gpqa_diamond/offline_bon_openai_gpt4o_mini_gpqa_diamond_perplexity
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Offline Best-of-N with GPT-4o-mini (OpenAI API) + Perplexity scorer on GPQA-Diamond
 # Generates N complete trajectories, splits post-hoc, selects best based on min step perplexity
 
@@ -8,6 +9,7 @@ defaults:
   - /model/openai
   - /generation/default
   - /system/default
+  - /strategy/offline_bon
   - /scorer/perplexity
   - /evaluation/default
   - _self_
@@ -45,21 +47,9 @@ generation:
 
 # Strategy - Offline Best-of-N
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8
   max_steps: 100
-  score_aggregation: min
-  batch_generation: true
   # Step boundary detector settings - used for post-hoc step splitting
-  min_step_tokens: 10
   max_step_tokens: 2048
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false
-  use_reasoning: true
-  use_correction: false
 
 # Perplexity scorer configuration
 scorer:

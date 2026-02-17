@@ -34,11 +34,13 @@ class StepCandidate:
         generation_scores: Optional[torch.Tensor] = None,
         raw_text: str = None,
         other_data: Dict[str, Any] = None,
+        is_thinking_complete: bool = False,
     ):
         self.text = text
         self.token_ids = token_ids
         self.is_complete = is_complete
         self.is_trajectory_complete = is_trajectory_complete
+        self.is_thinking_complete = is_thinking_complete
         self.generation_scores = generation_scores
         self.raw_text = raw_text or text
         self.other_data = other_data
@@ -51,8 +53,9 @@ def convert_trajectory_to_string(trajectory: List[StepCandidate]) -> str:
     """Convert trajectory to string.
 
     Each step.text should already end with newline, so we just concatenate.
+    Uses raw_text if available to preserve original model output.
     """
-    return "".join([step.text for step in trajectory])
+    return "".join([step.raw_text or step.text for step in trajectory])
 
 
 class StepCandidateGeneratorBase:
@@ -238,7 +241,7 @@ class StepCandidateGeneratorBase:
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
         stop_tokens_override=None,
-        max_tokens_override=None,
+        max_tokens=None,
         compute_uncertainty: bool = True,
         sample_ids=None,
         beam_ids=None,
@@ -252,7 +255,7 @@ class StepCandidateGeneratorBase:
             trajectories: List of trajectories (each a list of StepCandidates).
             candidates_per_step: Number of candidates per trajectory.
             stop_tokens_override: Override stop tokens (None = use defaults).
-            max_tokens_override: Override max tokens (None = use defaults).
+            max_tokens: Override max tokens (None = use defaults).
             compute_uncertainty: Whether to compute uncertainty scores.
             sample_ids: Optional per-trajectory sample IDs for token tracking.
             beam_ids: Optional per-trajectory beam IDs for logging.

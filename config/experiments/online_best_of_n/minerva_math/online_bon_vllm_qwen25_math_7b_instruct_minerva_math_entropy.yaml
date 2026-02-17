@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/minerva_math/online_bon_vllm_nothink_qwen25_7b_minerva_math_entropy
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on Minerva Math
 
 defaults:
@@ -7,6 +8,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/online_bon
   - /scorer/entropy
   - /evaluation/default
   - _self_
@@ -47,16 +49,9 @@ generation:
 
 # Strategy - Online Best-of-N (always uses ThinkingMarkerDetector)
 strategy:
-  type: online_best_of_n
-  candidates_per_step: 8
   max_steps: 50
   # Stop tokens derived from detector config (use_* flags below)
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step boundary token limits
-  min_step_tokens: 50
-  max_step_tokens: 2048
   # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
   use_sequence: true
   use_conclusion: true
@@ -66,13 +61,6 @@ strategy:
   use_reasoning: true
   use_correction: false
   # Custom words for stop tokens
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
-    - "step"
-    - "therefore"
-    - "thus"
 
 # Dataset configuration - Minerva Math
 dataset:

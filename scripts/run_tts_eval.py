@@ -24,6 +24,7 @@ from pathlib import Path
 
 import hydra
 import numpy as np
+import openai
 import torch
 from datasets import Dataset, load_dataset
 from dotenv import load_dotenv
@@ -110,6 +111,7 @@ from utils.results import load_results_json, parse_resume_arguments, save_result
 from llm_tts.evaluation import (
     EvaluatorAlignScore,
     EvaluatorExactMatch,
+    EvaluatorHumanEvalPlus,
     EvaluatorLLMAsAJudge,
     EvaluatorMBPPPlus,
 )
@@ -118,11 +120,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import (
-    StepScorerConfidence,
-    StepScorerPRM,
-    StepScorerUncertainty,
-)
+from llm_tts.scorers import StepScorerConfidence, StepScorerPRM, StepScorerUncertainty
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 
 # vLLM step generator (optional)
@@ -152,6 +150,57 @@ load_dotenv()
 log = logging.getLogger(__name__)
 
 _tflops_warned = set()
+
+
+def _validate_api_keys(config):
+    """Validate that required API keys are set and working before starting experiments.
+
+    Checks all evaluators (both per-sample and batch) that need API access.
+    Fails fast with a clear error message instead of failing hours later.
+    """
+    evaluator_names = list(config.evaluation.get("evaluators", []))
+    evaluator_names += list(config.evaluation.get("batch_evaluators", []))
+
+    if "llm_judge" not in evaluator_names:
+        return
+
+    llm_cfg = config.evaluation.get("llm_judge", {})
+    provider = llm_cfg.get("provider", "openai")
+    base_url = llm_cfg.get("base_url", None)
+    model = llm_cfg.get("model", "unknown")
+
+    # Determine which key is needed
+    if provider == "openrouter":
+        key_name = "OPENROUTER_API_KEY"
+    elif provider == "deepseek":
+        key_name = "DEEPSEEK_API_KEY"
+    else:
+        key_name = "OPENAI_API_KEY"
+
+    api_key = os.environ.get(key_name)
+    if not api_key:
+        raise ValueError(
+            f"LLM judge requires {key_name} but it is not set. "
+            f"Set it in your .env file or environment. "
+            f"(provider={provider}, model={model})"
+        )
+
+    # Ping the API with a minimal request to verify the key works
+    log.info(f"Validating {key_name} for LLM judge ({provider}/{model})...")
+    try:
+        client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_completion_tokens=16,
+        )
+        log.info(f"API key validated successfully: {key_name}")
+    except Exception as e:
+        raise ValueError(
+            f"LLM judge API key validation failed for {key_name}: {e}. "
+            f"Check that your API key is valid and the provider is accessible. "
+            f"(provider={provider}, model={model}, base_url={base_url})"
+        ) from e
 
 
 def _safe_tflops(stats: dict, key: str = "tflops") -> float:
@@ -282,6 +331,18 @@ def build_evaluators(config):
             evaluators["mbpp_plus"] = EvaluatorMBPPPlus(
                 mode=mbpp_cfg.get("mode", "full"),
                 timeout=mbpp_cfg.get("timeout", 10),
+            )
+
+        elif evaluator_name == "human_eval_plus":
+            # HumanEval+ evaluator for code generation (uses EvalPlus)
+            he_cfg = config.evaluation.get("human_eval_plus", {})
+            if he_cfg:
+                he_cfg = OmegaConf.to_container(he_cfg, resolve=True)
+            else:
+                he_cfg = {}
+            evaluators["human_eval_plus"] = EvaluatorHumanEvalPlus(
+                mode=he_cfg.get("mode", "full"),
+                timeout=he_cfg.get("timeout", 10),
             )
 
         else:
@@ -465,8 +526,12 @@ def create_model(config):
                 f"(thinking_mode={thinking_mode})"
             )
 
+            if "min_step_tokens" not in config.strategy:
+                log.warning("strategy.min_step_tokens not set, defaulting to 50")
+            if "max_step_tokens" not in config.strategy:
+                log.warning("strategy.max_step_tokens not set, defaulting to 300")
             detector = ThinkingMarkerDetector(
-                min_step_tokens=config.strategy.get("min_step_tokens", 0),
+                min_step_tokens=config.strategy.get("min_step_tokens", 50),
                 max_step_tokens=config.strategy.get("max_step_tokens", 300),
                 use_sequence=config.strategy.get("use_sequence", True),
                 use_conclusion=config.strategy.get("use_conclusion", True),
@@ -475,7 +540,7 @@ def create_model(config):
                 use_reasoning=config.strategy.get("use_reasoning", False),
                 use_correction=config.strategy.get("use_correction", False),
                 use_structure=config.strategy.get("use_structure", False),
-                custom_markers=config.strategy.get("custom_words", None),
+                custom_markers=config.strategy.get("custom_markers", None),
             )
 
             # Stop token IDs (e.g., [151645, 151643] for Qwen EOS)
@@ -546,8 +611,12 @@ def create_model(config):
 
         # Always use ThinkingMarkerDetector for step boundary detection
         log.info("Using ThinkingMarkerDetector for local model")
+        if "min_step_tokens" not in config.strategy:
+            log.warning("strategy.min_step_tokens not set, defaulting to 50")
+        if "max_step_tokens" not in config.strategy:
+            log.warning("strategy.max_step_tokens not set, defaulting to 300")
         detector = ThinkingMarkerDetector(
-            min_step_tokens=config.strategy.get("min_step_tokens", 0),
+            min_step_tokens=config.strategy.get("min_step_tokens", 50),
             max_step_tokens=config.strategy.get("max_step_tokens", 300),
             use_sequence=config.strategy.get("use_sequence", True),
             use_conclusion=config.strategy.get("use_conclusion", True),
@@ -608,8 +677,12 @@ def create_model(config):
             thinking_mode = disable_thinking_mode is False
 
             # Always use ThinkingMarkerDetector for step boundary detection
+            if "min_step_tokens" not in config.strategy:
+                log.warning("strategy.min_step_tokens not set, defaulting to 50")
+            if "max_step_tokens" not in config.strategy:
+                log.warning("strategy.max_step_tokens not set, defaulting to 300")
             detector = ThinkingMarkerDetector(
-                min_step_tokens=config.strategy.get("min_step_tokens", 0),
+                min_step_tokens=config.strategy.get("min_step_tokens", 50),
                 max_step_tokens=config.strategy.get("max_step_tokens", 300),
                 use_sequence=config.strategy.get("use_sequence", True),
                 use_conclusion=config.strategy.get("use_conclusion", True),
@@ -686,7 +759,6 @@ def create_model(config):
                     [],
                 ),
                 max_new_tokens=config.generation.max_new_tokens,
-                max_answer_tokens=config.generation.get("max_answer_tokens", 512),
                 temperature=config.generation.temperature,
                 top_p=config.generation.top_p,
                 top_k=config.generation.get("top_k", 20),
@@ -939,13 +1011,51 @@ def _generate_trajectories_batch(
             f"samples {batch_start}-{batch_end - 1} ({len(chunk_requests)} samples)"
         )
 
+        # Define progressive save callback for this chunk
+        def _save_callback(strategy_results, phase="post_generation"):
+            temp_results = list(results)  # copy previous chunks
+            for i_idx, inst, gold, strat_res in zip(
+                chunk_indices, chunk_instances, chunk_gold_answers, strategy_results
+            ):
+                temp_results.append(
+                    {
+                        "index": i_idx,
+                        "question": inst[question_field],
+                        "gold_answer": gold,
+                        "generated_trajectory": strat_res.get("trajectory", ""),
+                        "extracted_answer": strat_res.get("extracted_answer", ""),
+                        "answer_step": strat_res.get("answer_step"),
+                        "steps": [
+                            s.text if hasattr(s, "text") else str(s)
+                            for s in strat_res.get("steps", [])
+                        ],
+                        "reasoning_steps": strat_res.get("reasoning_steps", 0),
+                        "validity_scores": strat_res.get("validity_scores", []),
+                        "aggregated_score": strat_res.get("aggregated_score", 0.0),
+                        "all_scores": strat_res.get("all_scores", []),
+                        "all_step_scores": strat_res.get("all_step_scores", []),
+                        "best_idx": strat_res.get("best_idx"),
+                        "completed": strat_res.get("completed", False),
+                        "is_correct": None,
+                        "eval": {},
+                        "scoring_phase": phase,
+                    }
+                )
+            save_results_json(temp_results, save_path_file)
+            log.info(
+                f"Progressive save ({phase}): {len(temp_results)} results to {save_path_file}"
+            )
+
         # Generate this chunk
         try:
             chunk_results = strategy.generate_trajectories_batch(
-                chunk_requests, chunk_indices
+                chunk_requests, chunk_indices, save_callback=_save_callback
             )
         except Exception as e:
+            import traceback
+
             log.error(f"Chunk {chunk_idx + 1} generation failed: {e}")
+            log.error(f"Traceback:\n{traceback.format_exc()}")
             log.error("Saving partial results collected so far and exiting")
             save_results_json(results, save_path_file)
             log.info(f"Checkpoint saved: {len(results)}/{subset_size} samples complete")
@@ -1060,8 +1170,14 @@ def _generate_trajectories_batch(
                 try:
                     if isinstance(evaluator, EvaluatorExactMatch):
                         # EvaluatorExactMatch._score_single takes 3-tuple, returns float
+                        # For self-consistency, use extracted_answer if available (trajectory is aggregated)
+                        solution = result.get("extracted_answer")
+                        # Convert to string for comparison
+                        if isinstance(solution, (int, float)):
+                            solution = str(solution)
                         score = evaluator._score_single(
-                            (question, result["trajectory"], str(gold_answer_num))
+                            (question, solution, str(gold_answer_num)),
+                            pre_extracted=True,
                         )
                         is_correct_eval = bool(score)
                     elif isinstance(evaluator, EvaluatorLLMAsAJudge):
@@ -1071,11 +1187,21 @@ def _generate_trajectories_batch(
                             hasattr(evaluator, "mode")
                             and evaluator.mode == "answer_only"
                         ):
-                            solution = (
-                                result.get("extracted_answer")
-                                or result.get("generated_answer")
-                                or result["trajectory"]
-                            )
+                            # Get proposed answer - check if actually provided
+                            proposed_answer = result.get("extracted_answer")
+                            if not proposed_answer or (
+                                isinstance(proposed_answer, str)
+                                and proposed_answer.strip() == ""
+                            ):
+                                # No answer produced - mark as incorrect, don't waste API call on empty trajectory
+                                is_correct_eval = False
+                                eval_results[eval_name] = {
+                                    "is_correct": is_correct_eval,
+                                    "consensus": 0.0,
+                                    "response": "No answer generated",
+                                }
+                                continue
+                            solution = proposed_answer
                         else:
                             solution = result["trajectory"]
                         labels, responses, consensus_scores = evaluator(
@@ -1090,11 +1216,13 @@ def _generate_trajectories_batch(
                             "response": responses[0] if responses else "",
                         }
                         continue
-                    elif isinstance(evaluator, EvaluatorMBPPPlus):
-                        # Skip MBPP+ in phase 1 - will run batch evaluation once in phase 2
-                        # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
+                    elif isinstance(
+                        evaluator, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)
+                    ):
+                        # Skip EvalPlus in phase 1 - will run batch evaluation once in phase 2
+                        # (Running EvalPlus per-sample is inefficient)
                         log.debug(
-                            f"Skipping MBPP+ evaluation for sample {i} in phase 1"
+                            f"Skipping EvalPlus evaluation for sample {i} in phase 1"
                         )
                         continue
                     else:
@@ -1145,7 +1273,7 @@ def _generate_trajectories_batch(
                 "question": question,
                 "gold_answer": gold_answer_num,
                 "generated_trajectory": result["trajectory"],
-                "generated_answer": generated_text,
+                "extracted_answer": generated_text,
                 "answer_step": result.get("answer_step"),
                 "steps": result["steps"],
                 "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
@@ -1307,10 +1435,12 @@ def generate_trajectories(
         phase1_evaluators = {"exact_match": exact_match_evaluator}
         log.info(f"Phase 1 evaluator: data_name={exact_match_evaluator.data_name}")
 
-    # Get checkpoint batch size from config (default: 32)
-    checkpoint_batch_size = 32
+    # Get checkpoint batch size: default to dataset subset size (process all at once)
+    checkpoint_batch_size = len(dataset)
     if config is not None and hasattr(config, "generation"):
-        checkpoint_batch_size = config.generation.get("checkpoint_batch_size", 32)
+        checkpoint_batch_size = config.generation.get(
+            "checkpoint_batch_size", checkpoint_batch_size
+        )
 
     return _generate_trajectories_batch(
         results=results,
@@ -1329,6 +1459,72 @@ def generate_trajectories(
     )
 
 
+def log_evaluation_inconsistencies(results, save_path: str):
+    """Log samples where exact_match and llm_judge disagree."""
+    # Find llm_judge evaluator name
+    llm_judge_name = None
+    for key in results[0].get("eval", {}):
+        if key.startswith("llm_judge"):
+            llm_judge_name = key
+            break
+
+    if not llm_judge_name:
+        log.info("No LLM judge evaluator found, skipping inconsistency logging")
+        return
+
+    if "exact_match" not in results[0].get("eval", {}):
+        log.info("No exact_match evaluator found, skipping inconsistency logging")
+        return
+
+    inconsistencies = []
+    for result in results:
+        eval_data = result.get("eval", {})
+        if "exact_match" not in eval_data or llm_judge_name not in eval_data:
+            continue
+
+        em_result = eval_data["exact_match"].get("is_correct", False)
+        llm_result = eval_data[llm_judge_name].get("is_correct", False)
+
+        if em_result != llm_result:
+            # Create inconsistency record with required keys
+            inconsistency = {
+                "index": result.get("index"),
+                "question": result.get("question"),
+                "gold_answer": result.get("gold_answer"),
+                "generated_trajectory": result.get("generated_trajectory", ""),
+                "extracted_answer": result.get("extracted_answer", ""),
+                "answer_step": result.get("answer_step", ""),
+                "eval": eval_data,
+                "instance_data": result.get("instance_data", {}),
+            }
+            inconsistencies.append(inconsistency)
+
+    if inconsistencies:
+        inconsistencies_path = Path(save_path) / "eval_inconsistencies.json"
+        try:
+            with open(inconsistencies_path, "w", encoding="utf-8") as f:
+                json.dump(inconsistencies, f, indent=2, ensure_ascii=False)
+            log.info(
+                f"Logged {len(inconsistencies)} inconsistencies to {inconsistencies_path}"
+            )
+
+            # Log summary of inconsistencies
+            em_correct_llm_incorrect = sum(
+                1 for i in inconsistencies if i["eval"]["exact_match"]["is_correct"]
+            )
+            llm_correct_em_incorrect = sum(
+                1 for i in inconsistencies if i["eval"][llm_judge_name]["is_correct"]
+            )
+            log.info(f"  EM correct, LLM incorrect: {em_correct_llm_incorrect}")
+            log.info(f"  LLM correct, EM incorrect: {llm_correct_em_incorrect}")
+        except Exception as e:
+            log.warning(f"Failed to save inconsistencies: {e}")
+    else:
+        log.info(
+            "No evaluation inconsistencies found between exact_match and llm_judge"
+        )
+
+
 def evaluate_results(
     config,
     results,
@@ -1343,8 +1539,9 @@ def evaluate_results(
     evaluators = build_evaluators(config)
     log.info(f"Using evaluators: {list(evaluators.keys())}")
 
-    # Move MBPP+ to batch evaluation (running EvalPlus per-sample is inefficient)
+    # Move EvalPlus evaluators to batch evaluation (running per-sample is inefficient)
     mbpp_evaluator = evaluators.pop("mbpp_plus", None)
+    human_eval_plus_evaluator = evaluators.pop("human_eval_plus", None)
 
     # Build batch evaluators (from config.evaluation.batch_evaluators)
     batch_evaluator_names = config.evaluation.get("batch_evaluators", [])
@@ -1384,10 +1581,13 @@ def evaluate_results(
             eval_key = f"llm_judge_{sanitized_model}"
             batch_evaluators[eval_key] = EvaluatorLLMAsAJudge(**llm_cfg)
 
-    # Add MBPP+ to batch evaluators (single EvalPlus run is much more efficient)
+    # Add EvalPlus evaluators to batch (single EvalPlus run is much more efficient)
     if mbpp_evaluator is not None:
         batch_evaluators["mbpp_plus"] = mbpp_evaluator
         log.info("MBPP+ moved to batch evaluation (single EvalPlus run)")
+    if human_eval_plus_evaluator is not None:
+        batch_evaluators["human_eval_plus"] = human_eval_plus_evaluator
+        log.info("HumanEval+ moved to batch evaluation (single EvalPlus run)")
 
     if batch_evaluators:
         log.info(f"Batch evaluators: {list(batch_evaluators.keys())}")
@@ -1443,15 +1643,44 @@ def evaluate_results(
                         log.warning(
                             f"  solution_len={len(solution)}, gold={repr(gold_str[:50])}"
                         )
-                elif isinstance(evaluator_fn, EvaluatorMBPPPlus):
-                    # Skip MBPP+ in per-sample loop - will run batch evaluation once
-                    # (Running EvalPlus per-sample is inefficient: 1 real + 377 dummies each time)
+                elif isinstance(
+                    evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)
+                ):
+                    # Skip EvalPlus in per-sample loop - will run batch evaluation once
+                    # (Running EvalPlus per-sample is inefficient)
                     continue
                 else:
-                    # Other evaluators use __call__ with extracted answer
-                    extracted_answer = result.get(
-                        "generated_answer", result.get("extracted_answer", "")
-                    )
+                    # For LLM judges in answer_only mode, check for empty answer
+                    if (
+                        hasattr(evaluator_fn, "mode")
+                        and evaluator_fn.mode == "answer_only"
+                    ):
+                        extracted_answer = result.get("extracted_answer", "")
+                        if not extracted_answer or (
+                            isinstance(extracted_answer, str)
+                            and extracted_answer.strip() == ""
+                        ):
+                            # Empty answer - mark as incorrect without calling evaluator
+                            annotation = 0
+                            is_correct = False
+                            eval_data = {
+                                "label": int(annotation),
+                                "is_correct": bool(is_correct),
+                                "response": "No answer generated",
+                            }
+                            results[i].setdefault("eval", {})[eval_name] = eval_data
+                            log.info(
+                                f"Sample {result['index']} [{eval_name}]: "
+                                f"0 (Incorrect) - No answer generated"
+                            )
+                            save_results_json(results, save_path_file)
+                            samples_evaluated += 1
+                            continue
+                    else:
+                        extracted_answer = result.get(
+                            "generated_trajectory", result.get("trajectory", "")
+                        )
+
                     eval_result = evaluator_fn(
                         [result["question"]],
                         [extracted_answer],
@@ -1536,22 +1765,26 @@ def evaluate_results(
 
         # For answer_only mode, use extracted answer; otherwise use full solution
         if hasattr(evaluator_fn, "mode") and evaluator_fn.mode == "answer_only":
-            solutions = [
-                r.get("extracted_answer")
-                or r.get("generated_answer")
-                or r.get("generated_trajectory", r.get("trajectory", ""))
-                for r in samples_to_eval
-            ]
+            # For LLM judges in answer_only mode: use extracted_answer, or mark as incorrect if empty
+            # Do NOT fall back to trajectory - empty answers should be marked incorrect
+            solutions = []
+            for r in samples_to_eval:
+                extracted = r.get("extracted_answer", "")
+                if extracted and (not isinstance(extracted, str) or extracted.strip()):
+                    solutions.append(extracted)
+                else:
+                    # Empty answer - will be marked as incorrect below
+                    solutions.append("")
         else:
             solutions = [
                 r.get("generated_trajectory", r.get("trajectory", ""))
                 for r in samples_to_eval
             ]
 
-        # Prepare optional parameters for evaluators that need them (e.g., MBPP+)
+        # Prepare optional parameters for evaluators that need them (e.g., EvalPlus)
         task_ids = None
         instance_data_list = None
-        if isinstance(evaluator_fn, EvaluatorMBPPPlus):
+        if isinstance(evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
             # Get task_ids from instance_data or direct field
             task_ids = []
             for r in samples_to_eval:
@@ -1562,8 +1795,47 @@ def evaluate_results(
             instance_data_list = [r.get("instance_data", {}) for r in samples_to_eval]
 
         try:
+            # For answer_only mode: handle empty answers without calling evaluator
+            if hasattr(evaluator_fn, "mode") and evaluator_fn.mode == "answer_only":
+                # Check for empty answers and mark them as incorrect upfront
+                empty_answer_indices = [
+                    idx for idx, sol in enumerate(solutions) if not sol
+                ]
+                valid_indices = [idx for idx, sol in enumerate(solutions) if sol]
+
+                if empty_answer_indices:
+                    # Mark empty answers as incorrect
+                    for idx in empty_answer_indices:
+                        i = indices_to_eval[idx]
+                        results[i].setdefault("eval", {})[eval_name] = {
+                            "label": 0,
+                            "is_correct": False,
+                            "response": "No answer generated",
+                        }
+
+                if not valid_indices:
+                    # All answers are empty, skip evaluator call
+                    log.info(
+                        f"All samples have empty answers, skipping {eval_name} evaluation"
+                    )
+                    save_results_json(results, save_path_file)
+                    continue
+
+                # Filter to only evaluate samples with valid answers
+                indices_to_eval = [indices_to_eval[idx] for idx in valid_indices]
+                problems = [problems[idx] for idx in valid_indices]
+                solutions = [solutions[idx] for idx in valid_indices]
+                gold_answers = [gold_answers[idx] for idx in valid_indices]
+                # Also filter task_ids and instance_data_list if they exist
+                if task_ids is not None:
+                    task_ids = [task_ids[idx] for idx in valid_indices]
+                if instance_data_list is not None:
+                    instance_data_list = [
+                        instance_data_list[idx] for idx in valid_indices
+                    ]
+
             # Batch evaluate - pass additional params if evaluator needs them
-            if isinstance(evaluator_fn, EvaluatorMBPPPlus):
+            if isinstance(evaluator_fn, (EvaluatorMBPPPlus, EvaluatorHumanEvalPlus)):
                 eval_result = evaluator_fn(
                     problems, solutions, gold_answers, task_ids, instance_data_list
                 )
@@ -1737,6 +2009,9 @@ def evaluate_results(
     except Exception as e:
         log.warning(f"Failed to save metrics to {metrics_path}: {e}")
 
+    # Log evaluation inconsistencies between exact_match and llm_judge
+    log_evaluation_inconsistencies(results, save_path)
+
     # Log key metrics to wandb if enabled
     wandb_url = None
     wandb_group_url = None
@@ -1754,6 +2029,26 @@ def evaluate_results(
                 wandb_group_url = (
                     f"https://wandb.ai/{entity}/{project_name}/groups/{group}/workspace"
                 )
+
+            # Log all output files as artifacts
+            save_path_obj = Path(save_path)
+            if save_path_obj.exists():
+                # Log log files
+                for log_file in ["run_tts_eval.log", "stderr.log"]:
+                    log_path = save_path_obj / log_file
+                    if log_path.exists():
+                        wandb.save(str(log_path), base_path=str(save_path_obj))
+                        log.info(f"Logged {log_file} to wandb")
+
+                # Log all JSON files
+                for json_file in save_path_obj.glob("*.json"):
+                    wandb.save(str(json_file), base_path=str(save_path_obj))
+                    log.info(f"Logged {json_file.name} to wandb")
+
+                # Log all JSONL files
+                for jsonl_file in save_path_obj.glob("*.jsonl"):
+                    wandb.save(str(jsonl_file), base_path=str(save_path_obj))
+                    log.info(f"Logged {jsonl_file.name} to wandb")
     except ImportError:
         pass  # wandb not installed
     except Exception as e:
@@ -1862,6 +2157,9 @@ def main(config):
             log.info(f"WandB group URL: {group_url}")
         wandb_save_directory(Path(output_dir) / ".hydra")
 
+    # Validate API keys early (before spending hours on model loading / generation)
+    _validate_api_keys(config)
+
     # Set random seeds
     set_random_seeds(config.system.seed)
 
@@ -1869,7 +2167,7 @@ def main(config):
     log.info(
         f"Loading dataset: {config.dataset.dataset_path} ({config.dataset.dataset_split})"
     )
-    # Special handling for MBPP+ to use EvalPlus API (provides correct prompt format)
+    # Special handling for EvalPlus datasets to use EvalPlus API (provides correct prompt format)
     data_name = config.dataset.get("data_name", "")
     if data_name == "mbpp_plus" or "mbppplus" in config.dataset.dataset_path.lower():
         from llm_tts.datasets.mbpp_plus import load_mbpp_plus
@@ -1889,6 +2187,26 @@ def main(config):
                 "entry_point": item["entry_point"],
                 "test_list": item["test_list"],
                 "assertion": item.get("assertion", ""),
+            }
+            serializable_data.append(serializable_item)
+        dataset = Dataset.from_list(serializable_data)
+    elif (
+        data_name == "human_eval_plus"
+        or "humanevalplus" in config.dataset.dataset_path.lower()
+    ):
+        from llm_tts.datasets.human_eval_plus import load_human_eval_plus
+
+        log.info(
+            "Using EvalPlus API for HumanEval+ (provides correct prompt format with function signature)"
+        )
+        he_data = load_human_eval_plus(subset_size=None)  # Load all, subset later
+        serializable_data = []
+        for item in he_data:
+            serializable_item = {
+                "question": item["question"],
+                "answer": item["answer"],
+                "task_id": item["task_id"],
+                "entry_point": item["entry_point"],
             }
             serializable_data.append(serializable_item)
         dataset = Dataset.from_list(serializable_data)

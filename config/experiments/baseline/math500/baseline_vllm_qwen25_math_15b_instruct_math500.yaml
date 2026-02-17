@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/math500/baseline_qwen25_math_official_dataset
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Baseline using official Qwen2.5-Math evaluation setup with their EXACT dataset
 # Uses the official MATH test.jsonl from Qwen2.5-Math repo (first 500 = all Prealgebra)
 
@@ -8,6 +9,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/baseline
   - /scorer/entropy
   - /evaluation/default
   - _self_
@@ -46,22 +48,9 @@ generation:
 
 # Strategy - Baseline single-shot
 strategy:
-  type: baseline
   # No semantic stop tokens for baseline (full response generation)
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step token limits (required by ThinkingMarkerDetector)
-  min_step_tokens: 0
-  max_step_tokens: 32768
   # Disable all semantic markers for baseline
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
   # Answer patterns for evaluation
   detector_answer_patterns:
     - "\\boxed{"

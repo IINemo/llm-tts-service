@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/math500/offline_bon_vllm_nothink_qwen25_7b_math500_entropy
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Offline Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
 # Uses Entropy scorer for step evaluation (no separate PRM model needed)
 # Generates N trajectories in single call, splits post-hoc, selects best based on min step score
@@ -10,6 +11,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/offline_bon
   - /scorer/entropy
   - /evaluation/default
   - _self_
@@ -51,34 +53,12 @@ generation:
 
 # Strategy - Offline Best-of-N (single-call generation with post-hoc step splitting)
 strategy:
-  type: offline_best_of_n
-  num_trajectories: 8
   max_steps: 100
-  score_aggregation: min  # Conservative: trajectory is only as good as its weakest step
-  batch_generation: true  # Fully batched: M×N trajectories in single vLLM call
   # Stop tokens derived from detector config (use_* flags below)
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step boundary token limits
-  min_step_tokens: 10
   max_step_tokens: 2048
   # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false  # Disabled to avoid splitting on bullet points and paragraph breaks
-  use_reasoning: true
-  use_correction: false
   # Custom words for stop tokens
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
-    - "step"
-    - "therefore"
-    - "thus"
 
 # Entropy scorer configuration (uses same model, no separate GPU needed)
 scorer:
