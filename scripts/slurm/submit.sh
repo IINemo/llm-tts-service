@@ -189,11 +189,11 @@ SCORER_CONFIGS[sequence_prob]="sequence_prob"
 SCORER_CONFIGS[prm]="prm"
 
 declare -A MODEL_CONFIGS
-MODEL_CONFIGS[qwen25_7b]="vllm_qwen25_math_7b_instruct"
+MODEL_CONFIGS[qwen25_7b]="vllm_qwen25_math_7b"
 MODEL_CONFIGS[qwen3_8b_thinking]="vllm_thinking_qwen3_8b"
 MODEL_CONFIGS[qwen3_8b]="vllm_qwen3_8b"
-MODEL_CONFIGS[qwen25_math_7b]="vllm_qwen25_math_7b_instruct"
-MODEL_CONFIGS[qwen25_math_15b]="vllm_qwen25_math_15b_instruct"
+MODEL_CONFIGS[qwen25_math_7b]="vllm_qwen25_math_7b"
+MODEL_CONFIGS[qwen25_math_15b]="vllm_qwen25_math_15b"
 MODEL_CONFIGS[openai]="openai_gpt4o_mini"
 
 # Function to get config path
@@ -229,7 +229,9 @@ get_config_name() {
             echo "Error: Unknown scorer: $scorer"
             exit 1
         fi
-        echo "experiments/${strategy_key}/${dataset_key}/${strategy}_${model_key}_${dataset_key}_${scorer_key}"
+        # offline_best_of_n, beam_search, online_best_of_n, adaptive_scaling use _instruct suffix
+        local model_key_with_instruct="${model_key}_instruct"
+        echo "experiments/${strategy_key}/${dataset_key}/${strategy}_${model_key_with_instruct}_${dataset_key}_${scorer_key}"
     fi
 }
 
@@ -355,6 +357,7 @@ submit_job() {
 #SBATCH -o ${output_file}
 #SBATCH -e ${error_file}
 #SBATCH --cpus-per-task=16
+#SBATCH --mem=60G
 ${gres_line}
 ${exclude_line}
 "
@@ -424,7 +427,7 @@ if [[ -z \"\${SEED+x}\" ]]; then
 fi
 
 python scripts/run_tts_eval.py \\
-    --config-path=../config \\
+    --config-path=${PROJECT_DIR}/config \\
     --config-name=${config_name} \\
     system.seed=\${SEED} \\
     ${SUBSET:+dataset.subset=${SUBSET}}
@@ -502,6 +505,7 @@ submit_sequential_job() {
 #SBATCH -o ${output_file}
 #SBATCH -e ${error_file}
 #SBATCH --cpus-per-task=16
+#SBATCH --mem=60G
 
 set -e
 
