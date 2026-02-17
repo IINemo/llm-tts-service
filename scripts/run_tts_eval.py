@@ -1884,6 +1884,15 @@ def evaluate_results(
                 }
             save_results_json(results, save_path_file)
 
+    # Collect statistics from LLM judge evaluators
+    llm_judge_stats = {}
+    for eval_name, evaluator_fn in batch_evaluators.items():
+        if isinstance(evaluator_fn, EvaluatorLLMAsAJudge):
+            stats = evaluator_fn.get_stats()
+            # Prefix with evaluator name for disambiguation
+            for key, value in stats.items():
+                llm_judge_stats[f"{eval_name}/{key}"] = value
+
     # Combine all evaluator names for summary
     all_evaluator_names = list(evaluators.keys()) + list(batch_evaluators.keys())
 
@@ -1905,14 +1914,24 @@ def evaluate_results(
 
     log.info("Summary:")
     log.info(f"Total samples: {len(results)}")
-    log.info(f"Completed: {completed} ({completed/len(results):.1%})")
-    log.info(f"Errors: {errors} ({errors/len(results):.1%})")
-    for name in sorted(all_evaluator_names):
-        correct = summary_correct[name]
-        incorrect = summary_incorrect[name]
-        log.info(f"[{name}]")
-        log.info(f"Correct: {correct} ({correct/len(results):.1%})")
-        log.info(f"Incorrect: {incorrect} ({incorrect/len(results):.1%})")
+    if results:
+        log.info(f"Completed: {completed} ({completed/len(results):.1%})")
+        log.info(f"Errors: {errors} ({errors/len(results):.1%})")
+        for name in sorted(all_evaluator_names):
+            correct = summary_correct[name]
+            incorrect = summary_incorrect[name]
+            log.info(f"[{name}]")
+            log.info(f"Correct: {correct} ({correct/len(results):.1%})")
+            log.info(f"Incorrect: {incorrect} ({incorrect/len(results):.1%})")
+    else:
+        log.info("Completed: 0 (0.0%)")
+        log.info("Errors: 0 (0.0%)")
+        for name in sorted(all_evaluator_names):
+            correct = summary_correct[name]
+            incorrect = summary_incorrect[name]
+            log.info(f"[{name}]")
+            log.info(f"Correct: {correct} (0.0%)")
+            log.info(f"Incorrect: {incorrect} (0.0%)")
 
     # Average statistics
     all_validities = []
@@ -1947,12 +1966,19 @@ def evaluate_results(
     if total_prm_tokens > 0:
         log.info(f"Total PRM input tokens: {total_prm_tokens:,}")
         log.info(f"Total PRM TFLOPs: {total_prm_tflops:.2f}")
-    log.info(f"Avg tokens per sample: {total_tokens / len(results):,.0f}")
-    log.info(f"Avg output tokens per sample: {total_output_tokens / len(results):,.0f}")
-    log.info(f"Avg TFLOPs per sample: {total_tflops / len(results):.4f}")
+    if results:
+        log.info(f"Avg tokens per sample: {total_tokens / len(results):,.0f}")
+        log.info(
+            f"Avg output tokens per sample: {total_output_tokens / len(results):,.0f}"
+        )
+        log.info(f"Avg TFLOPs per sample: {total_tflops / len(results):.4f}")
     log.info("Step Statistics:")
-    log.info(f"Avg reasoning steps per trajectory: {np.mean(all_reasoning_steps):.1f}")
-    log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
+    if all_reasoning_steps:
+        log.info(
+            f"Avg reasoning steps per trajectory: {np.mean(all_reasoning_steps):.1f}"
+        )
+    if all_validities:
+        log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
 
     # Build final metrics (also saved locally)
     metrics = {
@@ -1999,6 +2025,41 @@ def evaluate_results(
     if total_prm_tokens > 0:
         metrics["compute/prm_input_tokens"] = int(total_prm_tokens)
         metrics["compute/prm_tflops"] = float(total_prm_tflops)
+
+    # Add LLM judge statistics (if available)
+    if llm_judge_stats:
+        metrics.update(llm_judge_stats)
+        # Log LLM judge stats to console
+        log.info("LLM Judge Statistics:")
+        for key, value in llm_judge_stats.items():
+            if isinstance(value, float):
+                log.info(f"  {key}: {value:.4f}")
+            else:
+                log.info(f"  {key}: {value}")
+
+    # Compute additional LLM judge stats from stored results
+    for eval_name in batch_evaluators.keys():
+        if isinstance(batch_evaluators[eval_name], EvaluatorLLMAsAJudge):
+            # Count unclear samples (where all votes failed to parse)
+            unclear_count = 0
+            consensus_scores = []
+            for r in results:
+                if "eval" in r and eval_name in r["eval"]:
+                    eval_data = r["eval"][eval_name]
+                    if eval_data.get("label") is None:  # NaN/None = unclear
+                        unclear_count += 1
+                    if "consensus" in eval_data and eval_data["consensus"] is not None:
+                        consensus_scores.append(eval_data["consensus"])
+
+            if unclear_count > 0:
+                metrics[f"{eval_name}/unclear_count"] = unclear_count
+                metrics[f"{eval_name}/unclear_rate"] = (
+                    unclear_count / len(results) if results else 0.0
+                )
+
+            if consensus_scores:
+                metrics[f"{eval_name}/avg_consensus"] = float(np.mean(consensus_scores))
+                metrics[f"{eval_name}/min_consensus"] = float(np.min(consensus_scores))
 
     # Save metrics locally (so FLOPs metrics aren't only in W&B)
     metrics_path = Path(save_path) / "metrics.json"
