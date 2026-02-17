@@ -125,6 +125,33 @@ class EvaluatorLLMAsAJudge:
         self.budget = budget  # Number of evaluations for majority voting
         self.mode = mode
 
+        # Statistics tracking
+        self.failed_api_requests = 0
+        self.total_api_calls = 0
+        self.vote_correct = 0
+        self.vote_incorrect = 0
+        self.vote_unclear = 0
+
+    def get_stats(self) -> dict:
+        """Return statistics about API calls and vote distribution."""
+        total_votes = self.vote_correct + self.vote_incorrect + self.vote_unclear
+        stats = {
+            "failed_api_requests": self.failed_api_requests,
+            "total_api_calls": self.total_api_calls,
+            "vote_correct": self.vote_correct,
+            "vote_incorrect": self.vote_incorrect,
+            "vote_unclear": self.vote_unclear,
+        }
+        if total_votes > 0:
+            stats.update(
+                {
+                    "vote_correct_rate": self.vote_correct / total_votes,
+                    "vote_incorrect_rate": self.vote_incorrect / total_votes,
+                    "vote_unclear_rate": self.vote_unclear / total_votes,
+                }
+            )
+        return stats
+
     def _parse_reply(self, reply: str) -> tuple[int, str]:
         """Parse a single reply and return (label, result_str)."""
         if "<Grade>: Correct" in reply:
@@ -163,6 +190,7 @@ class EvaluatorLLMAsAJudge:
             else:
                 vote_prompt = prompt
 
+            self.total_api_calls += 1
             try:
                 response = self.client.chat.completions.create(
                     model=self.model,
@@ -178,12 +206,21 @@ class EvaluatorLLMAsAJudge:
                 )
                 reply = response.choices[0].message.content
             except Exception as e:
+                self.failed_api_requests += 1
                 log.warning(f"API call failed for sample {idx + 1}: {e}")
                 reply = f"Error: {e}"
 
             label, _ = self._parse_reply(reply)
             votes.append(label)
             replies.append(reply)
+
+            # Track individual vote statistics
+            if label == 1:
+                self.vote_correct += 1
+            elif label == 0:
+                self.vote_incorrect += 1
+            else:  # label == -1 (Unclear)
+                self.vote_unclear += 1
 
         # Majority voting (exclude unclear votes)
         valid_votes = [v for v in votes if v >= 0]
