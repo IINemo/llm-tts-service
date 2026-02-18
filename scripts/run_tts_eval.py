@@ -1908,29 +1908,83 @@ def main(config):
             ):
                 log.info("[NET DIAG] No proxy env vars set")
 
-            # 2. DNS resolution
+            # 2. DNS resolution - separate IPv4 and IPv6
             log.info(f"[NET DIAG] Resolving DNS for: {hostname}")
+            ipv4_addrs = []
+            ipv6_addrs = []
             try:
                 ips = socket.getaddrinfo(
                     hostname, 443, socket.AF_UNSPEC, socket.SOCK_STREAM
                 )
-                ip_list = list(set(addr[4][0] for addr in ips))
-                log.info(f"[NET DIAG] DNS OK - {hostname} -> {ip_list}")
+                for family, _, _, _, sockaddr in ips:
+                    if family == socket.AF_INET:
+                        ipv4_addrs.append(sockaddr[0])
+                    elif family == socket.AF_INET6:
+                        ipv6_addrs.append(sockaddr[0])
+                ipv4_addrs = list(set(ipv4_addrs))
+                ipv6_addrs = list(set(ipv6_addrs))
+                log.info(f"[NET DIAG] DNS IPv4: {ipv4_addrs}")
+                log.info(f"[NET DIAG] DNS IPv6: {ipv6_addrs}")
             except Exception as e:
                 log.error(f"[NET DIAG] DNS FAILED - {type(e).__name__}: {e}")
 
-            # 3. Raw socket connection test
-            log.info(f"[NET DIAG] Testing TCP connection to {hostname}:443")
-            try:
-                sock = socket.create_connection((hostname, 443), timeout=10)
-                sock.close()
-                log.info(f"[NET DIAG] TCP connection OK")
-            except Exception as e:
-                log.error(f"[NET DIAG] TCP connection FAILED - {type(e).__name__}: {e}")
+            # 3. Test TCP to each resolved IP individually
+            for ip in ipv4_addrs:
+                log.info(f"[NET DIAG] TCP IPv4 {ip}:443 ...")
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(10)
+                    sock.connect((ip, 443))
+                    sock.close()
+                    log.info(f"[NET DIAG] TCP IPv4 {ip}:443 OK")
+                except Exception as e:
+                    log.error(f"[NET DIAG] TCP IPv4 {ip}:443 FAILED - {e}")
+            for ip in ipv6_addrs:
+                log.info(f"[NET DIAG] TCP IPv6 [{ip}]:443 ...")
+                try:
+                    sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                    sock.settimeout(10)
+                    sock.connect((ip, 443))
+                    sock.close()
+                    log.info(f"[NET DIAG] TCP IPv6 [{ip}]:443 OK")
+                except Exception as e:
+                    log.error(f"[NET DIAG] TCP IPv6 [{ip}]:443 FAILED - {e}")
 
-            # 4. HTTP request test
+            # 4. Compare with known-working host (github.com)
+            log.info("[NET DIAG] TCP github.com:443 (control) ...")
+            try:
+                sock = socket.create_connection(("github.com", 443), timeout=10)
+                sock.close()
+                log.info("[NET DIAG] TCP github.com:443 OK")
+            except Exception as e:
+                log.error(f"[NET DIAG] TCP github.com:443 FAILED - {e}")
+
+            # 5. Check default route and general internet
+            try:
+                import subprocess
+
+                route = subprocess.run(
+                    ["ip", "route", "show", "default"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                log.info(f"[NET DIAG] Default route: {route.stdout.strip()}")
+            except Exception as e:
+                log.info(f"[NET DIAG] Route check: {e}")
+            log.info("[NET DIAG] TCP 8.8.8.8:443 (Google) ...")
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                sock.connect(("8.8.8.8", 443))
+                sock.close()
+                log.info("[NET DIAG] TCP 8.8.8.8:443 OK")
+            except Exception as e:
+                log.error(f"[NET DIAG] TCP 8.8.8.8:443 FAILED - {e}")
+
+            # 6. HTTP request test
             test_url = base_url.rstrip("/") + "/models"
-            log.info(f"[NET DIAG] Testing HTTPS request to: {test_url}")
+            log.info(f"[NET DIAG] HTTPS {test_url} ...")
             try:
                 req = urllib.request.Request(test_url, method="GET")
                 api_key = getattr(scorer_model_cfg, "api_key", None)
