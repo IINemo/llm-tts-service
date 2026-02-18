@@ -80,7 +80,8 @@ strategy:
 scorer:
   type: self_verification
   method: value
-  n_evaluate_sample: 1
+  n_evaluate_sample: 3
+  score_aggregation: min
   temperature: 0.1
   max_tokens: 500
   timeout: 120

@@ -89,6 +89,7 @@ class StepScorerSelfVerification(StepScorerBase):
         vote_prompt: str = None,
         vote_prompt_file: str = None,
         use_vllm: bool = False,
+        score_aggregation: str = "sum",
         name: str = "self_verification",
     ):
         super().__init__(name=name)
@@ -101,6 +102,7 @@ class StepScorerSelfVerification(StepScorerBase):
         self.timeout = timeout
         self.use_vllm = use_vllm
         self.use_local = False
+        self.score_aggregation = score_aggregation
 
         # Load prompts: priority is direct string > custom file > default file
         self.value_prompt = self._load_prompt(
@@ -143,8 +145,22 @@ class StepScorerSelfVerification(StepScorerBase):
 
         log.info(
             f"StepScorerSelfVerification initialized: method={method}, "
-            f"n_evaluate_sample={n_evaluate_sample}, use_vllm={use_vllm}"
+            f"n_evaluate_sample={n_evaluate_sample}, use_vllm={use_vllm}, "
+            f"score_aggregation={score_aggregation}"
         )
+
+    def _aggregate_scores(self, scores: List[float]) -> float:
+        """Aggregate multiple evaluation scores using the configured method."""
+        if not scores:
+            return 0.0
+        if self.score_aggregation == "min":
+            return float(min(scores))
+        elif self.score_aggregation == "mean":
+            return float(sum(scores) / len(scores))
+        elif self.score_aggregation == "max":
+            return float(max(scores))
+        else:  # "sum" (default, as in original ToT paper)
+            return float(sum(scores))
 
     def _load_prompt(
         self,
@@ -389,7 +405,7 @@ class StepScorerSelfVerification(StepScorerBase):
 
             for item in pending:
                 key = (item["group_idx"], item["cand_idx"])
-                score = float(sum(eval_scores[key]))
+                score = self._aggregate_scores(eval_scores[key])
                 score_map[key] = score
                 self.cache[item["cache_key"]] = score
             self.total_evaluations += len(pending)
@@ -420,7 +436,7 @@ class StepScorerSelfVerification(StepScorerBase):
 
             for item in pending:
                 key = (item["group_idx"], item["cand_idx"])
-                score = float(sum(eval_scores[key]))
+                score = self._aggregate_scores(eval_scores[key])
                 score_map[key] = score
                 self.cache[item["cache_key"]] = score
             self.total_evaluations += len(pending)
@@ -617,7 +633,7 @@ class StepScorerSelfVerification(StepScorerBase):
                     eval_scores[item["idx"]].append(score)
 
             for item in pending:
-                score = float(sum(eval_scores[item["idx"]]))
+                score = self._aggregate_scores(eval_scores[item["idx"]])
                 scores[item["idx"]] = score
                 self.cache[item["cache_key"]] = score
                 self.total_evaluations += 1
@@ -738,8 +754,7 @@ class StepScorerSelfVerification(StepScorerBase):
                 log.warning(f"Evaluation {i+1} failed: {e}")
                 scores.append(0.0)
 
-        # Aggregate scores using SUM (as in original ToT paper, not mean)
-        return float(sum(scores)) if scores else 0.0
+        return self._aggregate_scores(scores)
 
     def _run_voting(
         self,

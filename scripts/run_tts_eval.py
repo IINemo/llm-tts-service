@@ -277,6 +277,7 @@ def create_scorer(config):
             timeout=config.scorer.timeout,
             value_prompt_file=config.scorer.value_prompt_file,
             vote_prompt_file=config.scorer.vote_prompt_file,
+            score_aggregation=getattr(config.scorer, "score_aggregation", "sum"),
         )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()

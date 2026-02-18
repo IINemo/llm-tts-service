@@ -21,6 +21,11 @@ max_tokens: 100
 # Timeout in seconds for API calls
 timeout: 60
 
+# Score aggregation method when n_evaluate_sample > 1
+# Options: "sum" (original ToT paper), "min" (conservative - any "impossible" vetoes),
+#          "mean" (average), "max" (optimistic)
+score_aggregation: sum
+
 # Prompt files (relative to config/prompts/, or absolute path)
 value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
 vote_prompt_file: "tree-of-thought/self_verification/vote_prompt.txt"
