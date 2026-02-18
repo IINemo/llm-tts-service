@@ -2436,11 +2436,6 @@ def main(config):
     except Exception as e:
         log.exception(f"Evaluation failed: {e}")
         raise
-    evaluate_results(
-        config=config,
-        results=results,
-        save_path=output_dir,
-    )
 
     # Save log files and finish wandb session
     if getattr(config, "report_to", None) == "wandb":
