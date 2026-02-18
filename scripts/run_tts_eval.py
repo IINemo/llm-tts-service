@@ -1950,14 +1950,15 @@ def main(config):
                 except Exception as e:
                     log.error(f"[NET DIAG] TCP IPv6 [{ip}]:443 FAILED - {e}")
 
-            # 4. Compare with known-working host (github.com)
-            log.info("[NET DIAG] TCP github.com:443 (control) ...")
-            try:
-                sock = socket.create_connection(("github.com", 443), timeout=10)
-                sock.close()
-                log.info("[NET DIAG] TCP github.com:443 OK")
-            except Exception as e:
-                log.error(f"[NET DIAG] TCP github.com:443 FAILED - {e}")
+            # 4. Compare with known hosts
+            for test_host in ["google.com", "github.com"]:
+                log.info(f"[NET DIAG] TCP {test_host}:443 ...")
+                try:
+                    sock = socket.create_connection((test_host, 443), timeout=10)
+                    sock.close()
+                    log.info(f"[NET DIAG] TCP {test_host}:443 OK")
+                except Exception as e:
+                    log.error(f"[NET DIAG] TCP {test_host}:443 FAILED - {e}")
 
             # 5. Check default route and general internet
             try:
