@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 
 from clearml import Task
 
@@ -7,7 +8,9 @@ from clearml import Task
 DEFAULT_DOCKER_IMAGE = "vllm/vllm-openai:v0.12.0"
 # Override entrypoint, skip lm_polygraph bootstrap
 # Add OPENROUTER_API_KEY for llm_judge evaluation
-DEFAULT_DOCKER_ARGS = "--entrypoint= --network=host --shm-size=8g -e SKIP_LM_POLYGRAPH=1 -e OPENROUTER_API_KEY"
+DEFAULT_DOCKER_ARGS = (
+    "--entrypoint= --network=host --shm-size=8g -e SKIP_LM_POLYGRAPH=1"
+)
 
 # Check GPU info, fix apt GPG signature issues
 # NOTE: ClearML flattens this to one line with ";", so no curly-brace groups allowed
@@ -42,6 +45,15 @@ def create_task(
     if overrides is None:
         overrides = []
 
+    # Build docker args, injecting API keys from local environment
+    docker_args = DEFAULT_DOCKER_ARGS
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if openrouter_key:
+        docker_args += f" -e OPENROUTER_API_KEY={openrouter_key}"
+        print("OPENROUTER_API_KEY: injected from local environment")
+    else:
+        print("WARNING: OPENROUTER_API_KEY not set in local environment")
+
     if use_docker:
         task = Task.create(
             project_name=project_name,
@@ -49,7 +61,7 @@ def create_task(
             repo="https://github.com/IINemo/llm-tts-service.git",
             branch="fix/clearml-hydra-wrapper",
             script="scripts/run_tts_eval_clearml.py",
-            docker=f"{DEFAULT_DOCKER_IMAGE} {DEFAULT_DOCKER_ARGS}",
+            docker=f"{DEFAULT_DOCKER_IMAGE} {docker_args}",
             docker_bash_setup_script=DOCKER_BASH_SETUP,
             packages=[],
         )

@@ -395,19 +395,36 @@ class StepScorerSelfVerification(StepScorerBase):
                     output = outputs[item_idx] if item_idx < len(outputs) else ""
                     try:
                         score = self._parse_value_output(output)
+                    except ValueError as e:
+                        log.warning(
+                            f"Parse failed for vLLM candidate "
+                            f"{item['group_idx']}/{item['cand_idx']}: {e}"
+                        )
+                        try:
+                            retry_output = self._call_vllm(item["prompt"])
+                            score = self._parse_value_output(retry_output)
+                        except (ValueError, Exception):
+                            log.warning("Retry also failed, skipping evaluation")
+                            continue
                     except Exception as e:
                         log.warning(
                             f"Evaluation {i+1} failed for candidate "
                             f"{item['group_idx']}/{item['cand_idx']}: {e}"
                         )
-                        score = 0.0
+                        continue
                     eval_scores[(item["group_idx"], item["cand_idx"])].append(score)
 
             for item in pending:
                 key = (item["group_idx"], item["cand_idx"])
-                score = self._aggregate_scores(eval_scores[key])
-                score_map[key] = score
-                self.cache[item["cache_key"]] = score
+                if not eval_scores[key]:
+                    log.warning(
+                        f"All evaluations unparseable for vLLM candidate "
+                        f"{key}, using 0.001 (impossible)"
+                    )
+                    score_map[key] = 0.001
+                else:
+                    score_map[key] = self._aggregate_scores(eval_scores[key])
+                self.cache[item["cache_key"]] = score_map[key]
             self.total_evaluations += len(pending)
         elif pending and not self.use_local:
             eval_scores: Dict[tuple, List[float]] = {
@@ -426,19 +443,36 @@ class StepScorerSelfVerification(StepScorerBase):
                     output = outputs[item_idx] if item_idx < len(outputs) else ""
                     try:
                         score = self._parse_value_output(output)
+                    except ValueError as e:
+                        log.warning(
+                            f"Parse failed for API candidate "
+                            f"{item['group_idx']}/{item['cand_idx']}: {e}"
+                        )
+                        try:
+                            retry_output = self._call_api_single(item["prompt"])
+                            score = self._parse_value_output(retry_output)
+                        except (ValueError, Exception):
+                            log.warning("Retry also failed, skipping evaluation")
+                            continue
                     except Exception as e:
                         log.warning(
                             f"Evaluation {i+1} failed for candidate "
                             f"{item['group_idx']}/{item['cand_idx']}: {e}"
                         )
-                        score = 0.0
+                        continue
                     eval_scores[(item["group_idx"], item["cand_idx"])].append(score)
 
             for item in pending:
                 key = (item["group_idx"], item["cand_idx"])
-                score = self._aggregate_scores(eval_scores[key])
-                score_map[key] = score
-                self.cache[item["cache_key"]] = score
+                if not eval_scores[key]:
+                    log.warning(
+                        f"All evaluations unparseable for API candidate "
+                        f"{key}, using 0.001 (impossible)"
+                    )
+                    score_map[key] = 0.001
+                else:
+                    score_map[key] = self._aggregate_scores(eval_scores[key])
+                self.cache[item["cache_key"]] = score_map[key]
             self.total_evaluations += len(pending)
         elif pending:
             for item in pending:
@@ -750,10 +784,20 @@ class StepScorerSelfVerification(StepScorerBase):
                 log.debug(
                     f"Evaluation {i+1}/{self.n_evaluate_sample}: output='{output[:50]}...', score={score:.3f}"
                 )
+            except ValueError as e:
+                log.warning(f"Parse failed on eval {i+1}: {e}")
+                try:
+                    retry_output = self._call_model(prompt)
+                    score = self._parse_value_output(retry_output)
+                    scores.append(score)
+                except (ValueError, Exception):
+                    log.warning("Retry also failed, skipping evaluation")
             except Exception as e:
                 log.warning(f"Evaluation {i+1} failed: {e}")
-                scores.append(0.0)
 
+        if not scores:
+            log.warning("All evaluations unparseable in single step, using 0.001")
+            return 0.001
         return self._aggregate_scores(scores)
 
     def _run_voting(
@@ -1127,10 +1171,9 @@ class StepScorerSelfVerification(StepScorerBase):
             if token in all_keywords:
                 return all_keywords[token]
 
-        # 4. Default to 0.0 — unmatched outputs contribute nothing
-        #    (matches original ToT where unrecognized labels are not counted)
-        log.debug(f"No rating found in output: '{output[:100]}', defaulting to 0.0")
-        return 0.0
+        # No keyword matched — raise so callers can retry or skip
+        log.info(f"No rating found in output: '{output[:200]}'")
+        raise ValueError(f"No rating found in output: '{output[:200]}'")
 
     def _parse_vote_output(self, output: str, n_candidates: int) -> Optional[int]:
         """
