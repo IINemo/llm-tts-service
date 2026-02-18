@@ -13,6 +13,6 @@ wandb_group: null    # Optional: group runs with same group in WandB UI (set in 
 # For other strategies, aggregation is "default" which becomes empty string
 hydra:
   run:
-    dir: outputs/${now:%Y-%m-%d}/${dataset.data_name}/${model.model_short_name}/${strategy.type}/${scorer.type}/${strategy.aggregation}/seed${system.seed}_${now:%H-%M-%S}
+    dir: outputs/${now:%Y-%m-%d}/${dataset.data_name}/${model.model_short_name}/${strategy.type}/${scorer.type}/${oc.select:strategy.aggregation,}/seed${system.seed}_${now:%H-%M-%S}
   job:
     chdir: false  # Don't change working directory
