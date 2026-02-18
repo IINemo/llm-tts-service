@@ -348,8 +348,12 @@ class StrategyOnlineBestOfN(StrategyBase):
                             f"thinking complete, marking for answer generation"
                         )
                 elif forced_complete:
-                    # Boxed answer or garbage: keep the step, just mark done
+                    # Boxed answer or garbage: keep the step, mark done.
+                    # In thinking mode, still need proper answer generation
+                    # after closing </think>.
                     completed[sample_id] = True
+                    if getattr(self.step_generator, "thinking_mode", False):
+                        needs_final_answer[sample_id] = True
                 elif selected.is_trajectory_complete:
                     completion_reason = None
                     if selected.other_data:
@@ -357,22 +361,16 @@ class StrategyOnlineBestOfN(StrategyBase):
 
                     if completion_reason == CompletionReason.EOS_PATTERN:
                         log.info(f"Sample {sample_indices[sample_id]}: Stopped at EOS")
-                        completed[sample_id] = True
-                    elif not self._has_answer_content(selected):
-                        log.info(
-                            f"Sample {sample_indices[sample_id]}: Answer pattern without content, "
-                            f"removing step and marking for final answer"
-                        )
-                        trajectories[sample_id].pop()
-                        selected_steps[sample_id].pop()
-                        validity_scores[sample_id].pop()
-                        completed[sample_id] = True
-                        needs_final_answer[sample_id] = True
                     else:
                         log.info(
-                            f"Sample {sample_indices[sample_id]}: Answer pattern with content, done"
+                            f"Sample {sample_indices[sample_id]}: Answer pattern detected"
                         )
-                        completed[sample_id] = True
+                        # In thinking mode, answer pattern before </think> means
+                        # the model put \boxed{} inside reasoning — still need
+                        # proper answer generation after closing </think>.
+                        if getattr(self.step_generator, "thinking_mode", False):
+                            needs_final_answer[sample_id] = True
+                    completed[sample_id] = True
 
                 # Context limit check after appending
                 if (
@@ -396,10 +394,8 @@ class StrategyOnlineBestOfN(StrategyBase):
             if needs_final_answer[i]:
                 to_finalize.append(i)
 
-        # 10. Batch generate final answers (thinking mode only —
-        #     non-thinking mode produces the answer naturally in reasoning steps)
-        thinking_mode = getattr(self.step_generator, "thinking_mode", False)
-        if to_finalize and thinking_mode:
+        # 10. Batch generate final answers for samples that need them
+        if to_finalize:
             log.info(
                 f"Generating final answers for {len(to_finalize)} samples "
                 f"(samples: {[sample_indices[i] for i in to_finalize]})"
@@ -707,6 +703,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         selected_steps: List[StepCandidate] = []
         validity_scores: List[float] = []
         total_toks = 0
+        needs_thinking_answer = False
 
         for step_num in range(self.max_steps):
             # Context limit pre-check
@@ -828,6 +825,10 @@ class StrategyOnlineBestOfN(StrategyBase):
                 break
 
             if forced_complete:
+                # In thinking mode, still need proper answer generation
+                # after closing </think>.
+                if getattr(self.step_generator, "thinking_mode", False):
+                    needs_thinking_answer = True
                 break
 
             if selected.is_trajectory_complete:
@@ -837,19 +838,14 @@ class StrategyOnlineBestOfN(StrategyBase):
 
                 if completion_reason == CompletionReason.EOS_PATTERN:
                     log.info(f"Sample {sample_idx}: Stopped at EOS")
-                    break
-                elif not self._has_answer_content(selected):
-                    log.info(
-                        f"Sample {sample_idx}: Answer pattern without content, "
-                        f"removing step and generating final answer"
-                    )
-                    trajectory.pop()
-                    selected_steps.pop()
-                    validity_scores.pop()
-                    break
                 else:
-                    log.info(f"Sample {sample_idx}: Answer pattern with content, done")
-                    break
+                    log.info(f"Sample {sample_idx}: Answer pattern detected")
+                    # In thinking mode, answer pattern before </think> means
+                    # the model put \boxed{} inside reasoning — still need
+                    # proper answer generation after closing </think>.
+                    if getattr(self.step_generator, "thinking_mode", False):
+                        needs_thinking_answer = True
+                break
 
             # Context limit after appending
             if total_toks >= max_trajectory_tokens:
@@ -866,11 +862,10 @@ class StrategyOnlineBestOfN(StrategyBase):
             needs_final = True
         elif not selected_steps[-1].is_trajectory_complete:
             needs_final = True
+        elif needs_thinking_answer:
+            needs_final = True
 
-        # Generate final answer only in thinking mode — non-thinking mode
-        # produces the answer naturally in the last reasoning step.
-        thinking_mode = getattr(self.step_generator, "thinking_mode", False)
-        if needs_final and thinking_mode:
+        if needs_final:
             log.info(f"Sample {sample_idx}: Generating final answer")
             semaphore.acquire()
             try:
