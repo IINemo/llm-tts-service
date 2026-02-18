@@ -95,7 +95,7 @@ class StrategyUncertaintyCoT(StrategyBase):
             initial_candidate = None
             if self.uncertainty_sampling_mode == "token":
                 initial_uncertainty = self._probe_token_uncertainty(
-                    request_chat, trajectory_steps
+                    request_chat, trajectory_steps, stats_idx
                 )
             elif self.uncertainty_sampling_mode == "sequence":
                 initial_candidate = self.step_generator(
@@ -105,6 +105,7 @@ class StrategyUncertaintyCoT(StrategyBase):
                 )[0]
                 if not initial_candidate:
                     raise RuntimeError("Initial generation returned no candidates")
+                self.step_generator.record_sample_tokens(stats_idx, [initial_candidate])
                 initial_uncertainty = initial_candidate.other_data["uncertainty_score"]
 
             log.info(
@@ -122,6 +123,7 @@ class StrategyUncertaintyCoT(StrategyBase):
                 )
                 if not cand_list:
                     raise RuntimeError("No candidates returned for CoT branch")
+                self.step_generator.record_sample_tokens(stats_idx, cand_list)
 
                 cand_uncertainties = np.array(
                     [cand.other_data["uncertainty_score"] for cand in cand_list]
@@ -158,6 +160,9 @@ class StrategyUncertaintyCoT(StrategyBase):
                         raise RuntimeError(
                             "No candidate returned for greedy completion"
                         )
+                    self.step_generator.record_sample_tokens(
+                        stats_idx, [initial_candidate]
+                    )
                 chosen = initial_candidate
                 num_greedy_steps += 1
                 extra = {
@@ -200,7 +205,7 @@ class StrategyUncertaintyCoT(StrategyBase):
                 # produces the answer naturally in the last reasoning step.
                 if getattr(self.step_generator, "thinking_mode", False):
                     answer_step_text = self._generate_answer_step(
-                        request_chat, trajectory_steps, trajectory_all
+                        request_chat, trajectory_steps, trajectory_all, stats_idx
                     )
                 break
 
@@ -241,6 +246,7 @@ class StrategyUncertaintyCoT(StrategyBase):
         request_chat: List[Dict[str, str]],
         trajectory_steps: List,
         trajectory_all: List,
+        stats_idx: int = 0,
     ) -> Optional[str]:
         """Generate answer candidates and select the most confident one.
 
@@ -257,6 +263,7 @@ class StrategyUncertaintyCoT(StrategyBase):
         )
         if not answer_cands:
             return None
+        self.step_generator.record_sample_tokens(stats_idx, answer_cands)
 
         log.info(f"Generated {len(answer_cands)} answer candidates")
         answer_uncertainties = [
@@ -292,7 +299,10 @@ class StrategyUncertaintyCoT(StrategyBase):
         return chosen_answer.raw_text if chosen_answer.raw_text else chosen_answer.text
 
     def _probe_token_uncertainty(
-        self, request_chat: List[Dict[str, str]], trajectory_steps: List[Any]
+        self,
+        request_chat: List[Dict[str, str]],
+        trajectory_steps: List[Any],
+        stats_idx: int = 0,
     ) -> Optional[float]:
         saved_limit = self.step_generator.generation_limit
         self.step_generator.generation_limit = 1
@@ -304,4 +314,5 @@ class StrategyUncertaintyCoT(StrategyBase):
             self.step_generator.generation_limit = saved_limit
         if not probe:
             raise RuntimeError("Token-level probe generation returned no candidates")
+        self.step_generator.record_sample_tokens(stats_idx, probe)
         return probe[0].other_data.get("uncertainty_score")
