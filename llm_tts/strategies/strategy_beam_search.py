@@ -464,7 +464,6 @@ class StrategyBeamSearch(StrategyBase):
                 all_scores_parts = []
                 for i, b in enumerate(beams):
                     scores = b["scores"]
-                    steps_str = ", ".join(f"{s:.3f}" for s in scores)
                     agg_score = self._aggregate_scores(scores)
 
                     # Find which step is the aggregated value
