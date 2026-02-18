@@ -1261,10 +1261,11 @@ def _generate_trajectories_batch(
             log.info("-" * 60)
             log.info(f"Num steps: {len(result['steps'])}")
             if "validity_scores" in result and result["validity_scores"]:
-                scores = result["validity_scores"]
-                log.info(
-                    f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
-                )
+                scores = [s for s in result["validity_scores"] if s is not None]
+                if scores:
+                    log.info(
+                        f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
+                    )
             log.info("=" * 60)
 
             # Store result with per-evaluator results
@@ -1366,7 +1367,9 @@ def _generate_trajectories_batch(
                 sample_metrics[f"running_accuracy_{safe_name}"] = stats["accuracy"]
 
             if "validity_scores" in result and result["validity_scores"]:
-                sample_metrics["confidence"] = float(np.mean(result["validity_scores"]))
+                valid_scores = [s for s in result["validity_scores"] if s is not None]
+                if valid_scores:
+                    sample_metrics["confidence"] = float(np.mean(valid_scores))
 
             # Append metrics line
             try:
@@ -1461,6 +1464,10 @@ def generate_trajectories(
 
 def log_evaluation_inconsistencies(results, save_path: str):
     """Log samples where exact_match and llm_judge disagree."""
+    if not results:
+        log.info("No results to check for inconsistencies")
+        return
+
     # Find llm_judge evaluator name
     llm_judge_name = None
     for key in results[0].get("eval", {}):
@@ -1938,8 +1945,10 @@ def evaluate_results(
     all_reasoning_steps = []
     for r in results:
         if "validity_scores" in r and r["validity_scores"]:
-            all_validities.extend(r["validity_scores"])
-            all_reasoning_steps.append(r.get("reasoning_steps", len(r["steps"])))
+            valid = [s for s in r["validity_scores"] if s is not None]
+            if valid:
+                all_validities.extend(valid)
+                all_reasoning_steps.append(r.get("reasoning_steps", len(r["steps"])))
 
     # Token / FLOPs aggregates
     missing_stats_count = sum(1 for r in results if r.get("token_stats") is None)

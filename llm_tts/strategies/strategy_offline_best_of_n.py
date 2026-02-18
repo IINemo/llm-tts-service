@@ -175,7 +175,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         Aggregate step scores into a single trajectory score.
 
         Args:
-            step_scores: List of scores for each step
+            step_scores: List of scores for each step (may contain None for skipped steps)
 
         Returns:
             Aggregated score (higher = better)
@@ -183,21 +183,32 @@ class StrategyOfflineBestOfN(StrategyBase):
         if not step_scores:
             return 0.0
 
+        # Filter out None values (skipped steps from PRM tail truncation)
+        valid_scores = [s for s in step_scores if s is not None]
+        num_none = len(step_scores) - len(valid_scores)
+        if num_none > 0:
+            log.debug(
+                f"Aggregation: filtered {num_none}/{len(step_scores)} None values "
+                f"(from tail truncation), {len(valid_scores)} valid scores remain"
+            )
+        if not valid_scores:
+            return 0.0
+
         if self.score_aggregation == "mean":
-            return float(np.mean(step_scores))
+            return float(np.mean(valid_scores))
         elif self.score_aggregation == "min":
             # Conservative: trajectory is only as good as its weakest step
-            return float(np.min(step_scores))
+            return float(np.min(valid_scores))
         elif self.score_aggregation == "max":
             # Optimistic: best step determines trajectory score
-            return float(np.max(step_scores))
+            return float(np.max(valid_scores))
         elif self.score_aggregation == "product":
-            return float(np.prod(step_scores))
+            return float(np.prod(valid_scores))
         elif self.score_aggregation == "last":
-            return step_scores[-1]
+            return valid_scores[-1]
         else:
             log.warning(f"Unknown aggregation '{self.score_aggregation}', using mean")
-            return float(np.mean(step_scores))
+            return float(np.mean(valid_scores))
 
     def _split_thinking_candidate(
         self,
@@ -533,9 +544,37 @@ class StrategyOfflineBestOfN(StrategyBase):
                 sample_data[sample_data_idx]["trajectories"][traj_idx][
                     "step_scores"
                 ] = step_scores
+                agg = self._aggregate_scores(step_scores)
                 sample_data[sample_data_idx]["trajectories"][traj_idx][
                     "aggregated_score"
-                ] = self._aggregate_scores(step_scores)
+                ] = agg
+
+            # Log PRM scoring summary per sample
+            log.info("--- PRM Score Distribution Summary ---")
+            for data in sample_data:
+                if data["failed"]:
+                    continue
+                sample_idx = data["sample_idx"]
+                trajectories = data["trajectories"]
+                for traj_idx, traj in enumerate(trajectories):
+                    scores = traj["step_scores"]
+                    num_none = sum(1 for s in scores if s is None)
+                    valid = [s for s in scores if s is not None]
+                    score_strs = [
+                        f"{s:.3f}" if s is not None else "null" for s in scores
+                    ]
+                    valid_summary = (
+                        f"min={min(valid):.3f}, max={max(valid):.3f}, mean={sum(valid)/len(valid):.3f}"
+                        if valid
+                        else "no valid scores"
+                    )
+                    log.info(
+                        f"  Sample {sample_idx}, Traj {traj_idx}: "
+                        f"agg({self.score_aggregation})={traj['aggregated_score']:.4f}, "
+                        f"{len(scores)} steps ({num_none} null), "
+                        f"valid: {valid_summary}, "
+                        f"scores=[{', '.join(score_strs)}]"
+                    )
 
         # Progressive save: checkpoint after scoring
         if save_callback is not None:
