@@ -1878,24 +1878,68 @@ def main(config):
     cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
     log.info(f"Command: CUDA_VISIBLE_DEVICES={cuda_devices} {' '.join(sys.argv)}")
 
-    # Connectivity test for API-based scorers
+    # Connectivity diagnostics for API-based scorers
     scorer_model_cfg = getattr(getattr(config, "scorer", None), "model", None)
     if scorer_model_cfg is not None:
         base_url = getattr(scorer_model_cfg, "base_url", None)
         if base_url:
+            import socket
             import urllib.request
+            from urllib.parse import urlparse
 
+            parsed = urlparse(base_url)
+            hostname = parsed.hostname
+
+            # 1. Check proxy env vars
+            for var in [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "no_proxy",
+                "ALL_PROXY",
+            ]:
+                val = os.environ.get(var)
+                if val:
+                    log.info(f"[NET DIAG] {var}={val}")
+            if not any(
+                os.environ.get(v)
+                for v in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]
+            ):
+                log.info("[NET DIAG] No proxy env vars set")
+
+            # 2. DNS resolution
+            log.info(f"[NET DIAG] Resolving DNS for: {hostname}")
+            try:
+                ips = socket.getaddrinfo(
+                    hostname, 443, socket.AF_UNSPEC, socket.SOCK_STREAM
+                )
+                ip_list = list(set(addr[4][0] for addr in ips))
+                log.info(f"[NET DIAG] DNS OK - {hostname} -> {ip_list}")
+            except Exception as e:
+                log.error(f"[NET DIAG] DNS FAILED - {type(e).__name__}: {e}")
+
+            # 3. Raw socket connection test
+            log.info(f"[NET DIAG] Testing TCP connection to {hostname}:443")
+            try:
+                sock = socket.create_connection((hostname, 443), timeout=10)
+                sock.close()
+                log.info(f"[NET DIAG] TCP connection OK")
+            except Exception as e:
+                log.error(f"[NET DIAG] TCP connection FAILED - {type(e).__name__}: {e}")
+
+            # 4. HTTP request test
             test_url = base_url.rstrip("/") + "/models"
-            log.info(f"[CONNECTIVITY TEST] Testing connection to: {test_url}")
+            log.info(f"[NET DIAG] Testing HTTPS request to: {test_url}")
             try:
                 req = urllib.request.Request(test_url, method="GET")
                 api_key = getattr(scorer_model_cfg, "api_key", None)
                 if api_key:
                     req.add_header("Authorization", f"Bearer {api_key}")
                 with urllib.request.urlopen(req, timeout=15) as resp:
-                    log.info(f"[CONNECTIVITY TEST] OK - status {resp.status}")
+                    log.info(f"[NET DIAG] HTTPS request OK - status {resp.status}")
             except Exception as e:
-                log.error(f"[CONNECTIVITY TEST] FAILED - {type(e).__name__}: {e}")
+                log.error(f"[NET DIAG] HTTPS request FAILED - {type(e).__name__}: {e}")
     config_dir = [
         path["path"]
         for path in HydraConfig.get().runtime.config_sources
