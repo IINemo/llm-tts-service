@@ -105,7 +105,12 @@ class StrategyUncertaintyCoT(StrategyBase):
                 )[0]
                 if not initial_candidate:
                     raise RuntimeError("Initial generation returned no candidates")
-                self.step_generator.record_sample_tokens(stats_idx, [initial_candidate])
+                ctx_tokens = self.step_generator.count_context_tokens(
+                    request_chat, trajectory_steps
+                )
+                self.step_generator.record_sample_tokens(
+                    stats_idx, [initial_candidate], context_tokens=ctx_tokens
+                )
                 initial_uncertainty = initial_candidate.other_data["uncertainty_score"]
 
             log.info(
@@ -123,7 +128,12 @@ class StrategyUncertaintyCoT(StrategyBase):
                 )
                 if not cand_list:
                     raise RuntimeError("No candidates returned for CoT branch")
-                self.step_generator.record_sample_tokens(stats_idx, cand_list)
+                ctx_tokens = self.step_generator.count_context_tokens(
+                    request_chat, trajectory_steps
+                )
+                self.step_generator.record_sample_tokens(
+                    stats_idx, cand_list, context_tokens=ctx_tokens
+                )
 
                 cand_uncertainties = np.array(
                     [cand.other_data["uncertainty_score"] for cand in cand_list]
@@ -160,8 +170,11 @@ class StrategyUncertaintyCoT(StrategyBase):
                         raise RuntimeError(
                             "No candidate returned for greedy completion"
                         )
+                    ctx_tokens = self.step_generator.count_context_tokens(
+                        request_chat, trajectory_steps
+                    )
                     self.step_generator.record_sample_tokens(
-                        stats_idx, [initial_candidate]
+                        stats_idx, [initial_candidate], context_tokens=ctx_tokens
                     )
                 chosen = initial_candidate
                 num_greedy_steps += 1
@@ -263,7 +276,12 @@ class StrategyUncertaintyCoT(StrategyBase):
         )
         if not answer_cands:
             return None
-        self.step_generator.record_sample_tokens(stats_idx, answer_cands)
+        ctx_tokens = self.step_generator.count_context_tokens(
+            request_chat, trajectory_steps
+        )
+        self.step_generator.record_sample_tokens(
+            stats_idx, answer_cands, context_tokens=ctx_tokens
+        )
 
         log.info(f"Generated {len(answer_cands)} answer candidates")
         answer_uncertainties = [
@@ -314,5 +332,10 @@ class StrategyUncertaintyCoT(StrategyBase):
             self.step_generator.generation_limit = saved_limit
         if not probe:
             raise RuntimeError("Token-level probe generation returned no candidates")
-        self.step_generator.record_sample_tokens(stats_idx, probe)
+        ctx_tokens = self.step_generator.count_context_tokens(
+            request_chat, trajectory_steps
+        )
+        self.step_generator.record_sample_tokens(
+            stats_idx, probe, context_tokens=ctx_tokens
+        )
         return probe[0].other_data.get("uncertainty_score")
