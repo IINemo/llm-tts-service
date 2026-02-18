@@ -1,8 +1,9 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/aime2025/beam_search_vllm_thinking_qwen3_8b_aime2025_entropy
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/aime2025/beam_search_vllm_thinking_qwen3_8b_aime2025_sequence_prob_min
 # Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
-# Beam Search with Thinking Mode (Qwen3-8B) + Entropy scorer on AIME 2025
+# Beam Search with Thinking Mode (Qwen3-8B) + Sequence Probability scorer on AIME 2025
 # Uses thinking mode with semantic stop tokens for step boundaries
+# Aggregation: min (conservative - maximizes the minimum step score)
 
 defaults:
   - /config
@@ -10,18 +11,18 @@ defaults:
   - /generation/default
   - /system/default
   - /strategy/beam_search
-  - /scorer/entropy
+  - /scorer/sequence_prob
   - /evaluation/default
   - _self_
 
-# Run naming
-run_name: "beam_search_vllm_thinking_qwen3_8b_aime2025_entropy_seed${system.seed}_${now:%H-%M-%S}"
+# Run naming - note: min/mean subfolder is determined by run_name structure
+run_name: "beam_search/vllm_thinking_qwen3_8b/aime2025/sequence_prob/min/seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-aime2025
-wandb_group: "beam_search_qwen3_8b_thinking_aime2025_entropy"
+wandb_group: "beam_search_qwen3_8b_thinking_aime2025_sequence_prob_min"
 
 # Model configuration (vLLM backend)
 model:
@@ -49,18 +50,16 @@ generation:
   batch_size: 1
   max_length: 65536
 
-# Strategy - Beam Search
+# Strategy - Beam Search with min aggregation
 strategy:
   beam_size: 3
   candidates_per_beam: 5
   max_steps: 250
-  # Stop tokens for Qwen3
-  # Step boundary detector settings - used for post-hoc step splitting
-  # These flags control how thinking is SPLIT into steps after generation
+  aggregation: min  # Conservative: maximize the minimum step score
 
-# Entropy scorer configuration
+# Sequence Probability scorer configuration
 scorer:
-  type: entropy
+  type: sequence_prob
   batch_size: 1
 
 # Dataset configuration - AIME 2025
