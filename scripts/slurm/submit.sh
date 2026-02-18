@@ -357,7 +357,7 @@ submit_job() {
 #SBATCH -o ${output_file}
 #SBATCH -e ${error_file}
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=60G
+#SBATCH --mem=120G
 ${gres_line}
 ${exclude_line}
 "
@@ -505,7 +505,7 @@ submit_sequential_job() {
 #SBATCH -o ${output_file}
 #SBATCH -e ${error_file}
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=60G
+#SBATCH --mem=120G
 
 set -e
 

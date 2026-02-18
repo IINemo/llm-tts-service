@@ -612,9 +612,10 @@ class StrategyOfflineBestOfN(StrategyBase):
                     token_stats["tflops"] = gen_tflops + prm_tflops
 
             log.info(
-                f"Sample {sample_idx}: best trajectory {best_idx + 1}/{N}, "
+                f"Sample {sample_idx}: Selected trajectory {best_idx + 1}/{N} "
+                f"(aggregation={self.score_aggregation}, "
                 f"score={best_result.get('aggregated_score', 0.0):.4f}, "
-                f"steps={best_result.get('num_steps', 0)}"
+                f"steps={best_result.get('num_steps', 0)})"
             )
 
             results.append(
