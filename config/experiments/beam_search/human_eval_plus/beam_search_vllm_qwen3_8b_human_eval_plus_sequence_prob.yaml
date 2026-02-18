@@ -32,9 +32,9 @@ model:
 # System configuration
 system:
   device: cuda
-  seed: 0
+  seed: 42
 
-# Generation configuration
+# Generation configuration (thinking mode settings)
 generation:
   max_new_tokens: 32768
   temperature: 0.6
@@ -46,9 +46,9 @@ generation:
 # Strategy - Beam Search with newline-based step boundaries for code
 strategy:
   type: beam_search
-  beam_size: 5
-  candidates_per_beam: 8
-  max_steps: 100
+  beam_size: 3
+  candidates_per_beam: 5
+  max_steps: 250
   aggregation: mean
   batch_generation: true
   prompt_buffer: 500
@@ -57,7 +57,7 @@ strategy:
     - 151645  # <|im_end|>
     - 151643  #
   # Step boundary detector settings - used for post-hoc step splitting
-  min_step_tokens: 1
+  min_step_tokens: 10
   max_step_tokens: 500
   # Disable linguistic markers (not useful for code)
   use_sequence: false

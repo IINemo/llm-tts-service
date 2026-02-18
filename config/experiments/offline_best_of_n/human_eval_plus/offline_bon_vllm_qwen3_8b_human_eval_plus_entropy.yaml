@@ -31,7 +31,7 @@ model:
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 8192
-  disable_thinking_mode: true
+  disable_thinking_mode: false
 
 # System configuration
 system:
