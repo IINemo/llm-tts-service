@@ -5,3 +5,5 @@ batch_size: 1
 # vLLM backend options (default: use vLLM if available)
 use_vllm: true
 gpu_memory_utilization: 0.9
+# Max tokens for PRM prompt (model limit is 4096, leave margin for safety)
+prm_max_tokens: 4000

@@ -896,8 +896,8 @@ class StrategyBeamSearch(StrategyBase):
         """Aggregate scores across steps according to selected strategy."""
         if len(scores) == 0:
             return 0.0
-        # Filter out non-finite values (NaN, inf, -inf)
-        clean = [s for s in scores if np.isfinite(s)]
+        # Filter out None (skipped PRM steps) and non-finite values (NaN, inf, -inf)
+        clean = [s for s in scores if s is not None and np.isfinite(s)]
         if not clean:
             log.warning(f"All {len(scores)} scores are non-finite, returning 0.0")
             return 0.0

@@ -72,12 +72,14 @@ def analyze_uncert_cot_correlation(results, evaluators):
             metadata = r.get("metadata", {})
 
             if validity_scores:
-                if is_correct:
-                    correct_validities.extend(validity_scores)
-                    correct_avg_validities.append(np.mean(validity_scores))
-                else:
-                    incorrect_validities.extend(validity_scores)
-                    incorrect_avg_validities.append(np.mean(validity_scores))
+                valid = [s for s in validity_scores if s is not None]
+                if valid:
+                    if is_correct:
+                        correct_validities.extend(valid)
+                        correct_avg_validities.append(np.mean(valid))
+                    else:
+                        incorrect_validities.extend(valid)
+                        incorrect_avg_validities.append(np.mean(valid))
 
             # Get step counts
             num_steps = metadata.get("num_steps", 0)
@@ -178,8 +180,10 @@ def summarize_and_print(results, evaluators):
     all_steps = []
     for r in results:
         if "validity_scores" in r and r["validity_scores"]:
-            all_validities.extend(r["validity_scores"])
-            all_steps.append(len(r.get("steps", [])))
+            valid = [s for s in r["validity_scores"] if s is not None]
+            if valid:
+                all_validities.extend(valid)
+                all_steps.append(len(r.get("steps", [])))
     if all_steps:
         print(f"Avg steps per trajectory: {np.mean(all_steps):.1f}")
     if all_validities:
