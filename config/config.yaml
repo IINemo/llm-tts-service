@@ -8,9 +8,11 @@ wandb_project: null  # Set via --config or environment variable WANDB_PROJECT
 wandb_group: null    # Optional: group runs with same group in WandB UI (set in experiment configs)
 
 # Hydra output directory configuration
-# Structure: outputs/DATE/DATASET/STRATEGY/MODEL_SHORT_NAME/SCORER/SEED_TIME/
+# Structure: outputs/DATE/DATASET/STRATEGY/MODEL_SHORT_NAME/SCORER/[AGGREGATION/]SEED_TIME/
+# For beam_search, includes aggregation subfolder (min/mean/etc)
+# For other strategies, aggregation is "default" which becomes empty string
 hydra:
   run:
-    dir: outputs/${now:%Y-%m-%d}/${dataset.data_name}/${model.model_short_name}/${strategy.type}/${scorer.type}/seed${system.seed}_${now:%H-%M-%S}
+    dir: outputs/${now:%Y-%m-%d}/${dataset.data_name}/${model.model_short_name}/${strategy.type}/${scorer.type}/${oc.select:strategy.aggregation,}/seed${system.seed}_${now:%H-%M-%S}
   job:
     chdir: false  # Don't change working directory

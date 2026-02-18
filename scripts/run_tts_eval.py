@@ -1884,6 +1884,15 @@ def evaluate_results(
                 }
             save_results_json(results, save_path_file)
 
+    # Collect statistics from LLM judge evaluators
+    llm_judge_stats = {}
+    for eval_name, evaluator_fn in batch_evaluators.items():
+        if isinstance(evaluator_fn, EvaluatorLLMAsAJudge):
+            stats = evaluator_fn.get_stats()
+            # Prefix with evaluator name for disambiguation
+            for key, value in stats.items():
+                llm_judge_stats[f"{eval_name}/{key}"] = value
+
     # Combine all evaluator names for summary
     all_evaluator_names = list(evaluators.keys()) + list(batch_evaluators.keys())
 
@@ -1905,14 +1914,24 @@ def evaluate_results(
 
     log.info("Summary:")
     log.info(f"Total samples: {len(results)}")
-    log.info(f"Completed: {completed} ({completed/len(results):.1%})")
-    log.info(f"Errors: {errors} ({errors/len(results):.1%})")
-    for name in sorted(all_evaluator_names):
-        correct = summary_correct[name]
-        incorrect = summary_incorrect[name]
-        log.info(f"[{name}]")
-        log.info(f"Correct: {correct} ({correct/len(results):.1%})")
-        log.info(f"Incorrect: {incorrect} ({incorrect/len(results):.1%})")
+    if results:
+        log.info(f"Completed: {completed} ({completed/len(results):.1%})")
+        log.info(f"Errors: {errors} ({errors/len(results):.1%})")
+        for name in sorted(all_evaluator_names):
+            correct = summary_correct[name]
+            incorrect = summary_incorrect[name]
+            log.info(f"[{name}]")
+            log.info(f"Correct: {correct} ({correct/len(results):.1%})")
+            log.info(f"Incorrect: {incorrect} ({incorrect/len(results):.1%})")
+    else:
+        log.info("Completed: 0 (0.0%)")
+        log.info("Errors: 0 (0.0%)")
+        for name in sorted(all_evaluator_names):
+            correct = summary_correct[name]
+            incorrect = summary_incorrect[name]
+            log.info(f"[{name}]")
+            log.info(f"Correct: {correct} (0.0%)")
+            log.info(f"Incorrect: {incorrect} (0.0%)")
 
     # Average statistics
     all_validities = []
@@ -1947,12 +1966,19 @@ def evaluate_results(
     if total_prm_tokens > 0:
         log.info(f"Total PRM input tokens: {total_prm_tokens:,}")
         log.info(f"Total PRM TFLOPs: {total_prm_tflops:.2f}")
-    log.info(f"Avg tokens per sample: {total_tokens / len(results):,.0f}")
-    log.info(f"Avg output tokens per sample: {total_output_tokens / len(results):,.0f}")
-    log.info(f"Avg TFLOPs per sample: {total_tflops / len(results):.4f}")
+    if results:
+        log.info(f"Avg tokens per sample: {total_tokens / len(results):,.0f}")
+        log.info(
+            f"Avg output tokens per sample: {total_output_tokens / len(results):,.0f}"
+        )
+        log.info(f"Avg TFLOPs per sample: {total_tflops / len(results):.4f}")
     log.info("Step Statistics:")
-    log.info(f"Avg reasoning steps per trajectory: {np.mean(all_reasoning_steps):.1f}")
-    log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
+    if all_reasoning_steps:
+        log.info(
+            f"Avg reasoning steps per trajectory: {np.mean(all_reasoning_steps):.1f}"
+        )
+    if all_validities:
+        log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
 
     # Build final metrics (also saved locally)
     metrics = {
@@ -1999,6 +2025,41 @@ def evaluate_results(
     if total_prm_tokens > 0:
         metrics["compute/prm_input_tokens"] = int(total_prm_tokens)
         metrics["compute/prm_tflops"] = float(total_prm_tflops)
+
+    # Add LLM judge statistics (if available)
+    if llm_judge_stats:
+        metrics.update(llm_judge_stats)
+        # Log LLM judge stats to console
+        log.info("LLM Judge Statistics:")
+        for key, value in llm_judge_stats.items():
+            if isinstance(value, float):
+                log.info(f"  {key}: {value:.4f}")
+            else:
+                log.info(f"  {key}: {value}")
+
+    # Compute additional LLM judge stats from stored results
+    for eval_name in batch_evaluators.keys():
+        if isinstance(batch_evaluators[eval_name], EvaluatorLLMAsAJudge):
+            # Count unclear samples (where all votes failed to parse)
+            unclear_count = 0
+            consensus_scores = []
+            for r in results:
+                if "eval" in r and eval_name in r["eval"]:
+                    eval_data = r["eval"][eval_name]
+                    if eval_data.get("label") is None:  # NaN/None = unclear
+                        unclear_count += 1
+                    if "consensus" in eval_data and eval_data["consensus"] is not None:
+                        consensus_scores.append(eval_data["consensus"])
+
+            if unclear_count > 0:
+                metrics[f"{eval_name}/unclear_count"] = unclear_count
+                metrics[f"{eval_name}/unclear_rate"] = (
+                    unclear_count / len(results) if results else 0.0
+                )
+
+            if consensus_scores:
+                metrics[f"{eval_name}/avg_consensus"] = float(np.mean(consensus_scores))
+                metrics[f"{eval_name}/min_consensus"] = float(np.min(consensus_scores))
 
     # Save metrics locally (so FLOPs metrics aren't only in W&B)
     metrics_path = Path(save_path) / "metrics.json"
@@ -2252,7 +2313,12 @@ def main(config):
     # Load model
     model_name = config.model.get("model_name") or config.model.get("model_path")
     log.info(f"Loading model: {model_name}")
-    model, step_generator = create_model(config)
+    try:
+        model, step_generator = create_model(config)
+        log.info("Model loaded successfully")
+    except Exception as e:
+        log.exception(f"Model loading failed: {e}")
+        raise
 
     # Create FLOP calculator for compute cost estimation
     flop_calculator = None
@@ -2298,20 +2364,37 @@ def main(config):
     if not data_name:
         raise ValueError("data_name must be set in config.dataset or config.strategy")
 
-    results = generate_trajectories(
-        results=results,
-        save_path=output_dir,
-        strategy=generator,
-        dataset=dataset,
-        processed_indices=processed_indices,
-        prompt_template=prompt_template,
-        system_prompt=system_prompt,
-        question_field=config.dataset.get("question_field", "question"),
-        answer_field=config.dataset.get("answer_field", "answer"),
-        exact_match_dataset_answer_format=config.dataset.answer_format,
-        data_name=data_name,
-        config=config,  # Pass config for multi-evaluator support
-    )
+    # Generate trajectories with error logging
+    log.info("Starting trajectory generation...")
+    try:
+        results = generate_trajectories(
+            results=results,
+            save_path=output_dir,
+            strategy=generator,
+            dataset=dataset,
+            processed_indices=processed_indices,
+            prompt_template=prompt_template,
+            system_prompt=system_prompt,
+            question_field=config.dataset.get("question_field", "question"),
+            answer_field=config.dataset.get("answer_field", "answer"),
+            exact_match_dataset_answer_format=config.dataset.answer_format,
+            data_name=data_name,
+            config=config,  # Pass config for multi-evaluator support
+        )
+        log.info("Trajectory generation completed successfully")
+
+    except Exception as e:
+        log.exception(f"Trajectory generation failed: {e}")
+
+        # Save partial results before crashing
+        try:
+            partial_results_path = Path(output_dir) / "results_partial.json"
+            with open(partial_results_path, "w") as f:
+                json.dump(results, f, indent=2, default=str)
+            log.info(f"Saved partial results to {partial_results_path}")
+        except Exception as save_err:
+            log.error(f"Failed to save partial results: {save_err}")
+        raise
 
     # Free GPU memory before evaluation (model not needed for LLM judge API calls)
     log.info("Freeing GPU memory before evaluation phase...")
@@ -2342,11 +2425,17 @@ def main(config):
         log.warning(f"Failed to free GPU memory: {e}")
 
     # Evaluate results
-    evaluate_results(
-        config=config,
-        results=results,
-        save_path=output_dir,
-    )
+    log.info("Starting evaluation phase...")
+    try:
+        evaluate_results(
+            config=config,
+            results=results,
+            save_path=output_dir,
+        )
+        log.info("Evaluation completed successfully")
+    except Exception as e:
+        log.exception(f"Evaluation failed: {e}")
+        raise
 
     # Save log files and finish wandb session
     if getattr(config, "report_to", None) == "wandb":
@@ -2354,12 +2443,17 @@ def main(config):
             import wandb
 
             if wandb.run is not None:
-                log_file = Path(output_dir) / "run_tts_eval.log"
-                stderr_log = Path(output_dir) / "stderr.log"
-                if log_file.exists():
-                    wandb.save(str(log_file))
-                if stderr_log.exists():
-                    wandb.save(str(stderr_log))
+                log.info("Saving output files to wandb...")
+                # Save all JSON, JSONL, and log files
+                for ext in ["*.json", "*.jsonl", "*.log"]:
+                    for output_file in Path(output_dir).glob(ext):
+                        try:
+                            wandb.save(str(output_file))
+                            log.debug(f"Saved {output_file.name} to wandb")
+                        except Exception as save_err:
+                            log.warning(
+                                f"Failed to save {output_file.name}: {save_err}"
+                            )
             wandb.finish()
             log.info("Finished wandb session")
         except Exception as e:
@@ -2374,4 +2468,67 @@ def main(config):
 if __name__ == "__main__":
     # Parse custom resume arguments before Hydra processes sys.argv
     parse_resume_arguments()
-    main()
+
+    # Store variables for cleanup on error
+    output_dir = None
+    stderr_file = None
+    config = None
+
+    try:
+        main()
+    except (KeyboardInterrupt, MemoryError, Exception) as e:
+        import logging
+
+        error_log = logging.getLogger(__name__)
+
+        # Try to get output_dir from HydraConfig if main() didn't set it
+        if output_dir is None:
+            try:
+                from hydra.core.hydra_config import HydraConfig
+
+                output_dir = HydraConfig.get().runtime.output_dir
+            except Exception:
+                error_log.warning("Could not get output_dir from HydraConfig")
+
+        # Log the error
+        if isinstance(e, KeyboardInterrupt):
+            error_log.info("Job interrupted by user (KeyboardInterrupt)")
+        elif isinstance(e, MemoryError):
+            error_log.error(f"Job failed due to MemoryError (GPU/CPU OOM): {e}")
+        else:
+            error_log.exception(f"Job failed with exception: {e}")
+
+        # Save logs to wandb even on error
+        if output_dir:
+            try:
+                from pathlib import Path
+
+                import wandb
+
+                # Sync all output files to wandb before crashing
+                if wandb.run is not None:
+                    error_log.info("Saving log files to wandb after error...")
+
+                    # Save all JSON, JSONL, and log files
+                    for ext in ["*.json", "*.jsonl", "*.log"]:
+                        for log_file in Path(output_dir).glob(ext):
+                            try:
+                                wandb.save(str(log_file))
+                                error_log.info(f"Saved {log_file.name} to wandb")
+                            except Exception as save_err:
+                                error_log.warning(
+                                    f"Failed to save {log_file.name}: {save_err}"
+                                )
+
+                    # Finish wandb run with error status
+                    wandb.finish(exit_code=1)
+                    error_log.info("Wandb session finished (with error)")
+            except Exception as wandb_err:
+                error_log.warning(f"Failed to save logs to wandb on error: {wandb_err}")
+
+        # Close stderr redirect file
+        if stderr_file:
+            sys.stderr = sys.__stderr__
+            stderr_file.close()
+
+        raise
