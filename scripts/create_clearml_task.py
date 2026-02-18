@@ -7,9 +7,7 @@ from clearml import Task
 DEFAULT_DOCKER_IMAGE = "vllm/vllm-openai:v0.12.0"
 # Override entrypoint, skip lm_polygraph bootstrap
 # Add OPENROUTER_API_KEY for llm_judge evaluation
-DEFAULT_DOCKER_ARGS = (
-    "--entrypoint= --shm-size=8g -e SKIP_LM_POLYGRAPH=1 -e OPENROUTER_API_KEY"
-)
+DEFAULT_DOCKER_ARGS = "--entrypoint= --network=host --shm-size=8g -e SKIP_LM_POLYGRAPH=1 -e OPENROUTER_API_KEY"
 
 # Check GPU info, fix apt GPG signature issues
 # NOTE: ClearML flattens this to one line with ";", so no curly-brace groups allowed
