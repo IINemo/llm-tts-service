@@ -46,3 +46,5 @@ VERIFY each calculation in this step by redoing it yourself. Check every number,
 - sure: Every calculation verified correct, good progress
 - likely: Approach is reasonable but step is incomplete or unverifiable
 - impossible: Found an error in calculation, formula, or reasoning
+
+YOU MUST GIVE sure/likely or impossible in the end
