@@ -576,7 +576,11 @@ class StrategyBeamSearch(StrategyBase):
                 scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
                 beam_uid = best_beam.get("unique_id", "N/A")
                 ancestors = best_beam.get("ancestors", [])
-                lineage_str = str(ancestors) if len(ancestors) <= 4 else f"[{ancestors[0]}, {ancestors[1]}, ..., {ancestors[-1]}]"
+                lineage_str = (
+                    str(ancestors)
+                    if len(ancestors) <= 4
+                    else f"[{ancestors[0]}, {ancestors[1]}, ..., {ancestors[-1]}]"
+                )
                 log.info(
                     f"Sample {sample_indices[sample_id]}: Completed with "
                     f"beam_id={beam_uid}, lineage={lineage_str}, "
@@ -621,7 +625,11 @@ class StrategyBeamSearch(StrategyBase):
             scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
             beam_uid = best_beam.get("unique_id", "N/A")
             ancestors = best_beam.get("ancestors", [])
-            lineage_str = str(ancestors) if len(ancestors) <= 4 else f"[{ancestors[0]}, {ancestors[1]}, ..., {ancestors[-1]}]"
+            lineage_str = (
+                str(ancestors)
+                if len(ancestors) <= 4
+                else f"[{ancestors[0]}, {ancestors[1]}, ..., {ancestors[-1]}]"
+            )
             log.warning(
                 f"Sample {sample_indices[sample_id]}: Reached max_steps with "
                 f"beam_id={beam_uid}, lineage={lineage_str}, "
