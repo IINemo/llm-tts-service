@@ -1877,6 +1877,25 @@ def main(config):
 
     cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
     log.info(f"Command: CUDA_VISIBLE_DEVICES={cuda_devices} {' '.join(sys.argv)}")
+
+    # Connectivity test for API-based scorers
+    scorer_model_cfg = getattr(getattr(config, "scorer", None), "model", None)
+    if scorer_model_cfg is not None:
+        base_url = getattr(scorer_model_cfg, "base_url", None)
+        if base_url:
+            import urllib.request
+
+            test_url = base_url.rstrip("/") + "/models"
+            log.info(f"[CONNECTIVITY TEST] Testing connection to: {test_url}")
+            try:
+                req = urllib.request.Request(test_url, method="GET")
+                api_key = getattr(scorer_model_cfg, "api_key", None)
+                if api_key:
+                    req.add_header("Authorization", f"Bearer {api_key}")
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    log.info(f"[CONNECTIVITY TEST] OK - status {resp.status}")
+            except Exception as e:
+                log.error(f"[CONNECTIVITY TEST] FAILED - {type(e).__name__}: {e}")
     config_dir = [
         path["path"]
         for path in HydraConfig.get().runtime.config_sources
