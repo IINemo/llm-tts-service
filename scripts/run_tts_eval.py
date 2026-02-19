@@ -136,6 +136,7 @@ from llm_tts.strategies import (
     StrategyBaseline,
     StrategyBeamSearch,
     StrategyDeepConf,
+    StrategyExtendedThinking,
     StrategyOfflineBestOfN,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
@@ -461,7 +462,11 @@ def create_model(config):
 
             # Self-consistency and baseline don't need uncertainty wrapper
             # (self-consistency uses majority voting, baseline uses raw vLLM batch generation)
-            if config.strategy.type in ("self_consistency", "baseline"):
+            if config.strategy.type in (
+                "self_consistency",
+                "baseline",
+                "extended_thinking",
+            ):
                 vllm_model = llm
                 log.info(
                     f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
@@ -905,6 +910,22 @@ def create_tts_strategy(
             uncertainty_threshold=config.strategy.uncertainty_threshold,
             uncertainty_sampling=config.strategy.uncertainty_sampling,
         )
+    elif config.strategy.type == "extended_thinking":
+        eos_patterns = getattr(config.strategy, "detector_eos_patterns", None)
+        if eos_patterns:
+            eos_patterns = list(eos_patterns)
+        stop_token_ids = getattr(config.strategy, "stop_token_ids", None)
+        if stop_token_ids:
+            stop_token_ids = list(stop_token_ids)
+        strategy = StrategyExtendedThinking(
+            step_generator=step_generator,
+            max_continuations=config.strategy.get("max_continuations", 3),
+            continuation_token=config.strategy.get("continuation_token", "\nWait, "),
+            max_steps=config.strategy.get("max_steps", 50),
+            output_dir=output_dir,
+            eos_patterns=eos_patterns,
+            stop_token_ids=stop_token_ids,
+        )
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
 
@@ -1261,10 +1282,11 @@ def _generate_trajectories_batch(
             log.info("-" * 60)
             log.info(f"Num steps: {len(result['steps'])}")
             if "validity_scores" in result and result["validity_scores"]:
-                scores = result["validity_scores"]
-                log.info(
-                    f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
-                )
+                scores = [s for s in result["validity_scores"] if s is not None]
+                if scores:
+                    log.info(
+                        f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
+                    )
             log.info("=" * 60)
 
             # Store result with per-evaluator results
@@ -1366,7 +1388,9 @@ def _generate_trajectories_batch(
                 sample_metrics[f"running_accuracy_{safe_name}"] = stats["accuracy"]
 
             if "validity_scores" in result and result["validity_scores"]:
-                sample_metrics["confidence"] = float(np.mean(result["validity_scores"]))
+                valid_scores = [s for s in result["validity_scores"] if s is not None]
+                if valid_scores:
+                    sample_metrics["confidence"] = float(np.mean(valid_scores))
 
             # Append metrics line
             try:
@@ -1461,6 +1485,10 @@ def generate_trajectories(
 
 def log_evaluation_inconsistencies(results, save_path: str):
     """Log samples where exact_match and llm_judge disagree."""
+    if not results:
+        log.info("No results to check for inconsistencies")
+        return
+
     # Find llm_judge evaluator name
     llm_judge_name = None
     for key in results[0].get("eval", {}):
@@ -1938,8 +1966,10 @@ def evaluate_results(
     all_reasoning_steps = []
     for r in results:
         if "validity_scores" in r and r["validity_scores"]:
-            all_validities.extend(r["validity_scores"])
-            all_reasoning_steps.append(r.get("reasoning_steps", len(r["steps"])))
+            valid = [s for s in r["validity_scores"] if s is not None]
+            if valid:
+                all_validities.extend(valid)
+                all_reasoning_steps.append(r.get("reasoning_steps", len(r["steps"])))
 
     # Token / FLOPs aggregates
     missing_stats_count = sum(1 for r in results if r.get("token_stats") is None)

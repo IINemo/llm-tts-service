@@ -5,6 +5,7 @@ Supports both HuggingFace and vLLM backends for the PRM model.
 """
 
 import logging
+import statistics
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -184,6 +185,7 @@ class StepScorerPRM(StepScorerRewardBase):
         torch_dtype: str,
         use_vllm: bool = True,
         gpu_memory_utilization: float = 0.9,
+        prm_max_tokens: int = 4000,
     ):
         self.prm_model_path = prm_model_path
         self.device = device
@@ -191,6 +193,7 @@ class StepScorerPRM(StepScorerRewardBase):
         self.torch_dtype = torch_dtype
         self.gpu_memory_utilization = gpu_memory_utilization
         self.use_vllm = use_vllm and VLLM_AVAILABLE
+        self.prm_max_tokens = prm_max_tokens
         self.prm_model = None
         self.prm_tokenizer = None
         self.steps_extractor = StepsExtractor(progress_bar=False)
@@ -404,36 +407,36 @@ class StepScorerPRM(StepScorerRewardBase):
             ]
 
         # Build prompts: trajectory steps + candidate as single new step
-        all_prompts = []
-        for candidate in candidates:
-            candidate_text = candidate.text if hasattr(candidate, "text") else candidate
-            # Each trajectory step is one PRM step, candidate is one PRM step
-            all_steps = trajectory_steps + [candidate_text]
-            prompt = self._format_prm_prompt(question, all_steps)
-            all_prompts.append(prompt)
-
-        # Truncate prompts that exceed max length
-        max_tokens = 4000
         truncated_prompts = []
         total_prompt_tokens = 0
-        for prompt in all_prompts:
+        num_traj_steps = len(trajectory_steps)
+        any_truncated = False
+        for cand_idx, candidate in enumerate(candidates):
+            candidate_text = candidate.text if hasattr(candidate, "text") else candidate
+            all_steps = trajectory_steps + [candidate_text]
+            prompt, num_skipped = self._truncate_steps_from_tail(
+                question, all_steps, self.prm_max_tokens
+            )
             tokens = self.prm_tokenizer.encode(prompt)
             total_prompt_tokens += len(tokens)
-            if len(tokens) > max_tokens:
-                log.warning(
-                    f"Truncating PRM prompt from {len(tokens)} to {max_tokens} tokens"
-                )
-                tokens = tokens[:max_tokens]
-                prompt = self.prm_tokenizer.decode(tokens)
             truncated_prompts.append(prompt)
+            if num_skipped > 0:
+                any_truncated = True
+                log.info(
+                    f"  Candidate {cand_idx}: {len(all_steps)} total steps -> "
+                    f"skipped {num_skipped}, included {len(all_steps) - num_skipped}, "
+                    f"prompt_tokens={len(tokens)}"
+                )
 
         # Track PRM tokens
         self._record_prm_tokens(total_prompt_tokens)
 
-        # Batch score all prompts
-        num_traj_steps = len(trajectory_steps)
         log.info(
-            f"PRM scoring {len(truncated_prompts)} candidates (trajectory has {num_traj_steps} steps)"
+            f"PRM scoring {len(truncated_prompts)} candidates "
+            f"(trajectory={num_traj_steps} steps, "
+            f"total_prompt_tokens={total_prompt_tokens}, "
+            f"max_tokens={self.prm_max_tokens}"
+            f"{', SOME TRUNCATED' if any_truncated else ''})"
         )
         outputs = self.prm_model.reward(truncated_prompts, use_tqdm=True)
 
@@ -463,17 +466,13 @@ class StepScorerPRM(StepScorerRewardBase):
                     reward = all_step_rewards[-1]
 
             all_rewards.append((reward, all_step_rewards))
-            # Log all step scores: trajectory steps + candidate step
-            traj_scores = (
-                all_step_rewards[:num_traj_steps] if num_traj_steps > 0 else []
+            # Log all step scores: preceding steps + candidate (last)
+            preceding_scores = (
+                all_step_rewards[:-1] if len(all_step_rewards) > 1 else []
             )
-            cand_score = (
-                all_step_rewards[num_traj_steps:]
-                if len(all_step_rewards) > num_traj_steps
-                else all_step_rewards
-            )
+            cand_score = all_step_rewards[-1:] if all_step_rewards else []
             log.info(
-                f"Candidate {cand_idx}: traj_scores={[f'{s:.3f}' for s in traj_scores]}, cand_score={[f'{s:.3f}' for s in cand_score]}"
+                f"Candidate {cand_idx}: preceding_scores={[f'{s:.3f}' for s in preceding_scores]}, cand_score={[f'{s:.3f}' for s in cand_score]}"
             )
 
         # Return only last step scores for backward compatibility
@@ -481,7 +480,7 @@ class StepScorerPRM(StepScorerRewardBase):
 
     def score_trajectory(
         self, chat: List[Dict[str, str]], trajectory: List, **kwargs
-    ) -> List[float]:
+    ) -> List[Optional[float]]:
         """
         Score a complete trajectory and return scores for ALL steps in a single forward pass.
 
@@ -490,7 +489,7 @@ class StepScorerPRM(StepScorerRewardBase):
             trajectory: List of StepCandidate objects representing the full trajectory
 
         Returns:
-            List of scores, one per step in the trajectory
+            List of scores, one per step. None for steps skipped by tail truncation.
         """
         if not trajectory:
             return []
@@ -509,30 +508,35 @@ class StepScorerPRM(StepScorerRewardBase):
             step.text if hasattr(step, "text") else str(step) for step in trajectory
         ]
 
-        # Build single prompt with all steps
-        prompt = self._format_prm_prompt(question, step_texts)
-
-        # Truncate if needed
-        max_tokens = 4000
-        tokens = self.prm_tokenizer.encode(prompt)
-        num_prompt_tokens = len(tokens)
-        if len(tokens) > max_tokens:
-            log.warning(
-                f"Truncating PRM prompt from {len(tokens)} to {max_tokens} tokens"
-            )
-            tokens = tokens[:max_tokens]
-            prompt = self.prm_tokenizer.decode(tokens)
+        # Build prompt with tail truncation
+        prompt, num_skipped = self._truncate_steps_from_tail(
+            question, step_texts, self.prm_max_tokens
+        )
 
         # Track PRM tokens
+        num_prompt_tokens = len(self.prm_tokenizer.encode(prompt))
         self._record_prm_tokens(num_prompt_tokens)
 
-        log.info(f"PRM scoring trajectory with {len(step_texts)} steps")
+        num_included = len(step_texts) - num_skipped
+        log.info(
+            f"PRM scoring trajectory: {len(step_texts)} total steps, "
+            f"{num_skipped} skipped, {num_included} scored, "
+            f"prompt_tokens={num_prompt_tokens}, max_tokens={self.prm_max_tokens}"
+        )
+
+        # Log per-step text lengths for diagnostics
+        step_char_lens = [len(s) for s in step_texts]
+        log.debug(
+            f"Step char lengths: {step_char_lens}, "
+            f"total_chars={sum(step_char_lens)}"
+        )
 
         # Single forward pass
         outputs = self.prm_model.reward([prompt], use_tqdm=True)
 
-        # Extract all step scores
-        all_step_scores = []
+        # Extract step scores for included steps
+        scored_step_scores = []
+        raw_score_count = 0
         if (
             outputs
             and hasattr(outputs[0], "outputs")
@@ -546,18 +550,42 @@ class StepScorerPRM(StepScorerRewardBase):
             else:
                 step_scores = [data]
 
+            raw_score_count = len(step_scores)
             for score in step_scores:
                 if isinstance(score, (list, tuple)) and len(score) == 2:
-                    all_step_scores.append(score[1])
+                    scored_step_scores.append(score[1])
                 else:
-                    all_step_scores.append(float(score))
+                    scored_step_scores.append(float(score))
 
-        log.info(f"PRM trajectory scores: {[f'{s:.3f}' for s in all_step_scores]}")
+        if raw_score_count != num_included:
+            log.warning(
+                f"PRM model returned {raw_score_count} scores but expected {num_included} "
+                f"(for {num_included} included steps)"
+            )
 
-        while len(all_step_scores) < len(step_texts):
-            all_step_scores.append(0.0)
+        log.info(
+            f"PRM trajectory scores (scored only): "
+            f"{[f'{s:.3f}' for s in scored_step_scores]}"
+        )
 
-        return all_step_scores[: len(step_texts)]
+        # Pad scored steps if model returned fewer than expected
+        while len(scored_step_scores) < num_included:
+            scored_step_scores.append(0.0)
+        scored_step_scores = scored_step_scores[:num_included]
+
+        # Prepend None for skipped steps
+        full_scores = [None] * num_skipped + scored_step_scores
+
+        # Log final scores summary
+        score_strs = [
+            f"{s:.3f}" if s is not None else "null"
+            for s in full_scores[: len(step_texts)]
+        ]
+        log.info(
+            f"PRM final scores ({len(step_texts)} steps): [{', '.join(score_strs)}]"
+        )
+
+        return full_scores[: len(step_texts)]
 
     def score_trajectories_batch(
         self,
@@ -566,7 +594,7 @@ class StepScorerPRM(StepScorerRewardBase):
         sample_ids: List[int] = None,
         trajectory_ids: List[int] = None,
         **kwargs,
-    ) -> List[List[float]]:
+    ) -> List[List[Optional[float]]]:
         """
         Score multiple trajectories in a single batched vLLM call.
 
@@ -609,11 +637,11 @@ class StepScorerPRM(StepScorerRewardBase):
         all_prompts = []
         trajectory_metadata = (
             []
-        )  # (traj_idx, num_steps, sample_id, traj_id) for each prompt
+        )  # (traj_idx, num_steps, sample_id, traj_id, num_skipped, num_included) for each prompt
 
         for traj_idx, (chat, trajectory) in enumerate(zip(chats, trajectories)):
             if not trajectory:
-                trajectory_metadata.append((traj_idx, 0))
+                trajectory_metadata.append((traj_idx, 0, None, traj_idx, 0, 0))
                 all_prompts.append("")  # Placeholder
                 continue
 
@@ -631,31 +659,60 @@ class StepScorerPRM(StepScorerRewardBase):
                 step.text if hasattr(step, "text") else str(step) for step in trajectory
             ]
 
-            # Build prompt
-            prompt = self._format_prm_prompt(question, step_texts)
-
-            # Truncate if needed
-            max_tokens = 4000
-            tokens = self.prm_tokenizer.encode(prompt)
-            num_prompt_tokens = len(tokens)
-            if len(tokens) > max_tokens:
-                log.warning(
-                    f"Truncating PRM prompt {traj_idx} from {len(tokens)} to {max_tokens} tokens"
-                )
-                tokens = tokens[:max_tokens]
-                prompt = self.prm_tokenizer.decode(tokens)
+            # Build prompt with tail truncation
+            prompt, num_skipped = self._truncate_steps_from_tail(
+                question, step_texts, self.prm_max_tokens
+            )
 
             # Track PRM tokens per sample
+            num_prompt_tokens = len(self.prm_tokenizer.encode(prompt))
             sample_id = sample_ids[traj_idx] if sample_ids else None
             self._record_prm_tokens(num_prompt_tokens, sample_id=sample_id)
 
             all_prompts.append(prompt)
             traj_id = trajectory_ids[traj_idx] if trajectory_ids else traj_idx
-            trajectory_metadata.append((traj_idx, len(step_texts), sample_id, traj_id))
+            num_included = len(step_texts) - num_skipped
+            trajectory_metadata.append(
+                (
+                    traj_idx,
+                    len(step_texts),
+                    sample_id,
+                    traj_id,
+                    num_skipped,
+                    num_included,
+                )
+            )
 
         # Filter out empty prompts for scoring
         valid_indices = [i for i, p in enumerate(all_prompts) if p]
         valid_prompts = [all_prompts[i] for i in valid_indices]
+
+        # Log truncation summary table
+        num_truncated = sum(1 for _, _, _, _, ns, _ in trajectory_metadata if ns > 0)
+        total_prompt_tokens = sum(
+            len(self.prm_tokenizer.encode(p)) for p in valid_prompts
+        )
+        prompt_token_counts = [len(self.prm_tokenizer.encode(p)) for p in valid_prompts]
+        log.info(
+            f"--- PRM Batch Prompt Summary ---\n"
+            f"  Trajectories: {len(trajectories)} total, {len(valid_prompts)} valid, "
+            f"{len(trajectories) - len(valid_prompts)} empty\n"
+            f"  Truncated: {num_truncated}/{len(valid_prompts)} trajectories had steps skipped\n"
+            f"  Prompt tokens: total={total_prompt_tokens}, "
+            f"min={min(prompt_token_counts) if prompt_token_counts else 0}, "
+            f"max={max(prompt_token_counts) if prompt_token_counts else 0}, "
+            f"mean={total_prompt_tokens / len(prompt_token_counts) if prompt_token_counts else 0:.0f}\n"
+            f"  Token limit: {self.prm_max_tokens}"
+        )
+        # Per-trajectory detail at debug level
+        for vi, pi in enumerate(valid_indices):
+            meta = trajectory_metadata[pi]
+            traj_idx, num_steps, sample_id, traj_id, num_skipped, num_included = meta
+            log.debug(
+                f"  Traj {traj_id} (sample={sample_id}): {num_steps} steps, "
+                f"skipped={num_skipped}, included={num_included}, "
+                f"prompt_tokens={prompt_token_counts[vi]}"
+            )
 
         log.info(f"PRM batch scoring {len(valid_prompts)} trajectories in single call")
 
@@ -670,9 +727,14 @@ class StepScorerPRM(StepScorerRewardBase):
         results = [[] for _ in trajectories]
         output_idx = 0
 
-        for i, (traj_idx, num_steps, sample_id, traj_id) in enumerate(
-            trajectory_metadata
-        ):
+        for i, (
+            traj_idx,
+            num_steps,
+            sample_id,
+            traj_id,
+            num_skipped,
+            num_included,
+        ) in enumerate(trajectory_metadata):
             if i not in valid_indices:
                 results[traj_idx] = []
                 continue
@@ -680,7 +742,8 @@ class StepScorerPRM(StepScorerRewardBase):
             output = outputs[output_idx]
             output_idx += 1
 
-            step_scores = []
+            scored_step_scores = []
+            raw_score_count = 0
             if hasattr(output, "outputs") and hasattr(output.outputs, "data"):
                 data = output.outputs.data
                 if hasattr(data, "tolist"):
@@ -690,27 +753,61 @@ class StepScorerPRM(StepScorerRewardBase):
                 else:
                     raw_scores = [data]
 
+                raw_score_count = len(raw_scores)
                 for score in raw_scores:
                     if isinstance(score, (list, tuple)) and len(score) == 2:
-                        step_scores.append(score[1])  # Positive class probability
+                        scored_step_scores.append(
+                            score[1]
+                        )  # Positive class probability
                     else:
-                        step_scores.append(float(score))
+                        scored_step_scores.append(float(score))
 
-            # Pad if needed
-            while len(step_scores) < num_steps:
-                step_scores.append(0.0)
+            if raw_score_count != num_included:
+                log.warning(
+                    f"Traj {traj_id} (sample={sample_id}): PRM model returned "
+                    f"{raw_score_count} scores but expected {num_included} "
+                    f"(num_steps={num_steps}, skipped={num_skipped})"
+                )
 
-            final_scores = step_scores[:num_steps]
+            # Pad scored steps if model returned fewer than expected
+            while len(scored_step_scores) < num_included:
+                scored_step_scores.append(0.0)
+            scored_step_scores = scored_step_scores[:num_included]
+
+            # Prepend None for skipped steps
+            final_scores = [None] * num_skipped + scored_step_scores
+            final_scores = final_scores[:num_steps]
             results[traj_idx] = final_scores
 
             # Log detailed scores for this trajectory
             sample_str = f"Sample {sample_id}" if sample_id is not None else ""
+            score_strs = [f"{s:.3f}" if s is not None else "null" for s in final_scores]
             log.info(
-                f"{sample_str} Traj {traj_id}: {num_steps} steps, "
-                f"scores={[f'{s:.3f}' for s in final_scores]}"
+                f"{sample_str} Traj {traj_id}: {num_steps} steps "
+                f"({num_skipped} skipped, {num_included} scored, "
+                f"model_returned={raw_score_count}), "
+                f"scores=[{', '.join(score_strs)}]"
             )
 
-        log.info(f"PRM batch scoring complete: {len(results)} trajectories scored")
+        # Batch scoring summary
+        total_steps = sum(len(r) for r in results)
+        total_nulls = sum(1 for r in results for s in r if s is None)
+        total_scored = total_steps - total_nulls
+        all_scored_values = [s for r in results for s in r if s is not None]
+        if all_scored_values:
+            log.info(
+                f"--- PRM Batch Scoring Summary ---\n"
+                f"  Trajectories scored: {len(results)}\n"
+                f"  Total steps: {total_steps} ({total_scored} scored, {total_nulls} skipped/null)\n"
+                f"  Score stats: min={min(all_scored_values):.3f}, "
+                f"max={max(all_scored_values):.3f}, "
+                f"mean={statistics.mean(all_scored_values):.3f}, "
+                f"median={statistics.median(all_scored_values):.3f}"
+            )
+        else:
+            log.info(
+                f"PRM batch scoring complete: {len(results)} trajectories, no scores produced"
+            )
         return results
 
     def _format_prm_prompt(self, question: str, step_texts: List[str]) -> str:
@@ -732,6 +829,101 @@ class StepScorerPRM(StepScorerRewardBase):
         return self.prm_tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=False
         )
+
+    def _truncate_steps_from_tail(
+        self, question: str, step_texts: List[str], max_tokens: int
+    ) -> tuple:
+        """Build PRM prompt keeping as many steps from the tail as fit.
+
+        Walks backward from the last step, accumulating token costs, and
+        includes only the steps that fit within the budget. Earlier steps
+        that don't fit are dropped.
+
+        Args:
+            question: The question text.
+            step_texts: All step texts (trajectory steps + candidate).
+            max_tokens: Maximum token budget for the prompt.
+
+        Returns:
+            (prompt, num_skipped): formatted prompt string and count of
+            dropped leading steps.
+        """
+        # Compute frame overhead (system + user + assistant wrapper without steps)
+        frame_prompt = self._format_prm_prompt(question, [])
+        frame_tokens = (
+            len(self.prm_tokenizer.encode(frame_prompt)) - 1
+        )  # subtract trailing <extra_0>
+
+        # Per-step token costs (step text tokens + 1 for <extra_0> separator)
+        step_costs = []
+        for step_text in step_texts:
+            step_token_count = len(self.prm_tokenizer.encode(step_text))
+            step_costs.append(step_token_count + 1)  # +1 for <extra_0>
+
+        total_step_tokens = sum(step_costs)
+        budget = max_tokens - frame_tokens - 10  # safety margin
+
+        log.debug(
+            f"Tail truncation budget: max_tokens={max_tokens}, "
+            f"frame_tokens={frame_tokens + 1} (adjusted={frame_tokens}), "
+            f"budget={budget}, total_step_tokens={total_step_tokens}, "
+            f"num_steps={len(step_texts)}, "
+            f"fits_without_truncation={total_step_tokens <= budget}"
+        )
+
+        # Walk from last step backward, accumulating costs
+        total_cost = 0
+        first_included_idx = len(step_texts)  # will move backward
+        for i in range(len(step_texts) - 1, -1, -1):
+            if total_cost + step_costs[i] <= budget:
+                total_cost += step_costs[i]
+                first_included_idx = i
+            else:
+                break
+
+        # Edge case: if even the last step alone exceeds budget, force-include it
+        if first_included_idx == len(step_texts) and step_texts:
+            first_included_idx = len(step_texts) - 1
+            log.warning(
+                f"Last step alone ({step_costs[-1]} tokens) exceeds budget "
+                f"({budget} tokens), force-including it"
+            )
+
+        num_skipped = first_included_idx
+        included_steps = step_texts[first_included_idx:]
+
+        if num_skipped > 0:
+            skipped_tokens = sum(step_costs[:num_skipped])
+            included_tokens = sum(step_costs[num_skipped:])
+            log.warning(
+                f"Tail truncation: skipped {num_skipped}/{len(step_texts)} leading steps "
+                f"({skipped_tokens} tokens dropped, {included_tokens} tokens kept) "
+                f"to fit within {max_tokens} token limit (budget={budget})"
+            )
+
+        prompt = self._format_prm_prompt(question, included_steps)
+        prompt_tokens = self.prm_tokenizer.encode(prompt)
+        actual_prompt_tokens = len(prompt_tokens)
+
+        # Hard-truncate safety net: if the final prompt still exceeds the model's
+        # max_position_embeddings (4096), truncate token sequence directly.
+        # This handles BPE boundary effects and the force-include edge case.
+        model_max_len = 4096
+        if actual_prompt_tokens > model_max_len:
+            log.warning(
+                f"Hard-truncating prompt from {actual_prompt_tokens} to {model_max_len} tokens "
+                f"(exceeded model max_position_embeddings)"
+            )
+            prompt_tokens = prompt_tokens[:model_max_len]
+            prompt = self.prm_tokenizer.decode(prompt_tokens)
+            actual_prompt_tokens = model_max_len
+
+        if num_skipped > 0 or actual_prompt_tokens > max_tokens:
+            log.info(
+                f"Tail truncation result: {len(included_steps)} steps included, "
+                f"actual_prompt_tokens={actual_prompt_tokens}, limit={max_tokens}"
+            )
+        return prompt, num_skipped
 
     def _score_single_candidate_hf(
         self, chat: List[Dict[str, str]], candidate: str
@@ -756,7 +948,10 @@ class StepScorerPRM(StepScorerRewardBase):
     def _compute_prm_rewards_hf(
         self, chat: List[Dict[str, str]], claims: List[Any]
     ) -> List[float]:
-        """Compute PRM rewards for claims using HuggingFace backend."""
+        """Compute PRM rewards for claims using HuggingFace backend.
+
+        TODO: Apply tail truncation (_truncate_steps_from_tail) here too.
+        """
         if not claims:
             return []
 

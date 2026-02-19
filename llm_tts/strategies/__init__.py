@@ -5,6 +5,7 @@ from .strategy_base import StrategyBase
 from .strategy_baseline import StrategyBaseline
 from .strategy_beam_search import StrategyBeamSearch
 from .strategy_chain_of_thought import StrategyChainOfThought
+from .strategy_extended_thinking import StrategyExtendedThinking
 from .strategy_online_best_of_n import StrategyOnlineBestOfN
 from .strategy_self_consistency import StrategySelfConsistency
 from .strategy_uncertainty_cot import StrategyUncertaintyCoT
@@ -26,6 +27,7 @@ __all__ = [
     "StrategyChainOfThought",
     "StrategySelfConsistency",
     "StrategyDeepConf",
+    "StrategyExtendedThinking",
     "AdaptiveScalingBestOfN",
     "StrategyUncertaintyCoT",
     "PhiDecoding",
