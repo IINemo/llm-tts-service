@@ -17,7 +17,7 @@ DEFAULT_DOCKER_ARGS = (
 DOCKER_BASH_SETUP = r"""
 echo "=== Disk before cleanup ==="
 df -h /
-rm -rf /root/.clearml/venvs-cache/* /root/.clearml/pip-download-cache/* /var/cache/apt/archives/*.deb
+rm -rf /root/.clearml/venvs-cache/* /root/.clearml/pip-download-cache/* /var/cache/apt/archives/*.deb /tmp/* /var/tmp/* /root/.cache/pip/* /var/log/*.log
 echo "=== Disk after cleanup ==="
 df -h /
 mkdir -p /tmp/apt-archives/partial
