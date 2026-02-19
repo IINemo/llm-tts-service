@@ -154,6 +154,68 @@ logs/<strategy>_<scorer>_<dataset>_<array_id>_<job_id>.out
 logs/<strategy>_<scorer>_<dataset>_<array_id>_<job_id>.err
 ```
 
+---
+
+## Manual Sequential Job Submission
+
+For running multiple seeds sequentially in a single SLURM job, use this template:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=EXPERIMENT_NAME
+#SBATCH --partition=long
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --time=24:00:00
+#SBATCH --output=logs/EXPERIMENT_NAME_%j.log
+#SBATCH --error=logs/EXPERIMENT_NAME_%j.err
+#SBATCH --chdir=/home/artem.shelmanov/vlad/llm-tts-service
+
+set -e
+
+module load rocm 2>/dev/null || true
+source ~/.bashrc
+conda activate lm-polygraph-env
+
+echo "============================================"
+echo "EXPERIMENT_NAME - 3 Seeds Sequential"
+echo "Start: $(date)"
+echo "============================================"
+
+for SEED in 42 43 44; do
+    echo ""
+    echo "============================================"
+    echo "Seed $SEED starting at $(date)"
+    echo "============================================"
+
+    python scripts/run_tts_eval.py \
+        --config-path=/home/artem.shelmanov/vlad/llm-tts-service/config \
+        --config-name=CONFIG_NAME_HERE \
+        system.seed=$SEED
+
+    echo "Seed $SEED completed at $(date)"
+done
+
+echo ""
+echo "============================================"
+echo "All 3 seeds done at $(date)"
+echo "============================================"
+```
+
+**Key parameters to modify:**
+| Parameter | Description | Examples |
+|-----------|-------------|----------|
+| `--job-name` | Short identifier | `aime_entropy_min` |
+| `--time` | Time limit | `24:00:00` (most), `72:00:00` (adaptive_scaling) |
+| `--gpus-per-node` | GPU count | `1` (non-PRM), `2` (PRM) |
+| `CONFIG_NAME_HERE` | Full config path | `experiments/beam_search/aime2024/...entropy_min` |
+| `SEED in 42 43 44` | Seeds to run | Any space-separated list |
+
+**Note:** `--chdir` is critical - it sets the working directory so Hydra finds the config correctly.
+
+---
+
 ## Migration from Old Scripts
 
 See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for a complete mapping of old scripts to new `submit.sh` commands.
