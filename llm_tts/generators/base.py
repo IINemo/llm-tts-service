@@ -96,7 +96,7 @@ class StepCandidateGeneratorBase:
         self._per_sample_stats.clear()
 
     def record_sample_tokens(
-        self, sample_id: Any, candidates: List[StepCandidate], context_tokens: int = 0
+        self, sample_id: Any, candidates: List[StepCandidate], context_tokens: int = 0, candidates_per_step: int = 1
     ) -> None:
         """Record tokens for a specific sample. Accumulates across calls.
 
@@ -104,6 +104,7 @@ class StepCandidateGeneratorBase:
             sample_id: Identifier for the sample (e.g., index in batch).
             candidates: List of generated candidates for this sample.
             context_tokens: Number of context tokens (prompt + trajectory).
+            candidates_per_step: Number of candidates per step.
         """
         if sample_id not in self._per_sample_stats:
             self._per_sample_stats[sample_id] = {
@@ -119,9 +120,9 @@ class StepCandidateGeneratorBase:
             )
             for c in candidates
         )
-        self._per_sample_stats[sample_id]["input_tokens"] += context_tokens
+        self._per_sample_stats[sample_id]["input_tokens"] += context_tokens * candidates_per_step
         self._per_sample_stats[sample_id]["output_tokens"] += out
-        self._per_sample_stats[sample_id]["generation_count"] += 1
+        self._per_sample_stats[sample_id]["generation_count"] += candidates_per_step
 
     def get_sample_stats_for(self, sample_id: Any) -> Dict[str, Any]:
         """Get token_stats dict for a specific sample (same schema as get_sample_stats).
@@ -153,6 +154,7 @@ class StepCandidateGeneratorBase:
         self,
         candidates: List[StepCandidate],
         context_tokens: int = 0,
+        candidates_per_step: int = 1,
     ) -> None:
         """Record token counts from generated candidates.
 
@@ -168,9 +170,9 @@ class StepCandidateGeneratorBase:
             return
 
         output_tokens = sum(len(c.token_ids) for c in candidates)
-        self._sample_input_tokens += context_tokens  # Context processed once per step
+        self._sample_input_tokens += context_tokens * candidates_per_step # multiply by candidates_per_step
         self._sample_output_tokens += output_tokens
-        self._sample_generation_count += 1
+        self._sample_generation_count += candidates_per_step
 
         log.debug(
             f"Recorded generation: context={context_tokens}, output={output_tokens} "

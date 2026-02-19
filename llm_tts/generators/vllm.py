@@ -976,7 +976,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
 
         # Flatten for aggregate token recording
         all_candidates = [c for cands in result for c in cands]
-        self._record_generation(all_candidates, context_tokens=total_context_tokens)
+        self._record_generation(all_candidates, context_tokens=total_context_tokens, candidates_per_step=candidates_per_step)
 
         # Per-sample token recording (when sample_ids provided by strategy)
         if sample_ids is not None:
@@ -984,7 +984,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 sid = sample_ids[traj_idx]
                 ctx = per_prompt_context_tokens[prompt_idx]
                 self.record_sample_tokens(
-                    sid, candidates_by_traj[traj_idx], context_tokens=ctx
+                    sid, candidates_by_traj[traj_idx], context_tokens=ctx, candidates_per_step=candidates_per_step
                 )
 
         return result
@@ -1034,7 +1034,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             candidates.append(candidate)
 
         # Record token usage for FLOP calculation
-        self._record_generation(candidates, context_tokens=context_tokens)
+        self._record_generation(candidates, context_tokens=context_tokens, candidates_per_step=num_candidates)
 
         return candidates
 
