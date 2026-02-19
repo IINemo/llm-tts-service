@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     prm_use_vllm: bool = True
     prm_gpu_memory_utilization: float = 0.3  # Lower default to fit alongside main model
 
+    # Logging
+    log_dir: str = "logs"
+    log_level: str = "INFO"
+
     # Service Limits
     max_concurrent_requests: int = 10
     request_timeout: int = 300  # seconds
