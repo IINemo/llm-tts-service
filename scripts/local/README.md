@@ -101,12 +101,74 @@ tsp -S <n>       # Set max simultaneous jobs
 tsp -K           # Kill tsp server (clears all jobs)
 ```
 
+---
+
+## Advanced: Manual Sequential Chains
+
+For precise control over job ordering (e.g., sequential seeds on specific GPUs), use tsp's dependency flag `-D`:
+
+```bash
+# Set parallel slots (1 per GPU)
+tsp -S 2
+
+# GPU 0: seed 42 -> 43 -> 44 (sequential)
+J0=$(tsp -L label_s42 -g 0 timeout 86400 bash /tmp/wrapper_s42.sh)
+J1=$(tsp -L label_s43 -g 0 -D $J0 timeout 86400 bash /tmp/wrapper_s43.sh)
+J2=$(tsp -L label_s44 -g 0 -D $J1 timeout 86400 bash /tmp/wrapper_s44.sh)
+
+# GPU 1: different experiment, seed 42 -> 43 -> 44 (sequential)
+K0=$(tsp -L label2_s42 -g 1 timeout 86400 bash /tmp/wrapper2_s42.sh)
+K1=$(tsp -L label2_s43 -g 1 -D $K0 timeout 86400 bash /tmp/wrapper2_s43.sh)
+K2=$(tsp -L label2_s44 -g 1 -D $K1 timeout 86400 bash /tmp/wrapper2_s44.sh)
+```
+
+**Key flags:**
+| Flag | Description |
+|------|-------------|
+| `-g <gpu_id>` | Pin to specific GPU |
+| `-D <job_id>` | Wait for that job to finish before starting |
+| `-S <n>` | Max concurrent jobs (set to number of GPUs) |
+| `-L <label>` | Human-readable label for the job |
+
+**Or using submit.sh to generate wrappers, then requeue manually:**
+
+```bash
+# Step 1: dry-run to generate wrapper scripts
+bash scripts/local/submit.sh \
+    --strategy offline_bon \
+    --dataset gaokao2023en \
+    --model qwen25_math_7b \
+    --scorers entropy \
+    --seed 42 \
+    --seeds 3 \
+    --gpu 0 \
+    --dry-run
+
+# Step 2: submit manually with dependency chains
+tsp -S 1
+J0=$(tsp -g 0 CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py \
+    --config-path=../config \
+    --config-name=<config> \
+    system.seed=42)
+J1=$(tsp -g 0 -D $J0 CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py \
+    --config-path=../config \
+    --config-name=<config> \
+    system.seed=43)
+J2=$(tsp -g 0 -D $J1 CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py \
+    --config-path=../config \
+    --config-name=<config> \
+    system.seed=44)
+```
+
+---
+
 ## Key Differences from SLURM
 
 - Jobs queue locally via `tsp` instead of `sbatch`
 - GPU-aware: tsp tracks GPU memory and assigns free GPUs automatically
 - No array jobs — multiple scorers/seeds are queued as separate jobs
 - Timeout via `timeout` command (not SLURM `-t`)
+- Support for job dependency chains via `-D` flag
 
 ## References
 
