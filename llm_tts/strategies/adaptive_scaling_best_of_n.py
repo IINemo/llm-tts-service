@@ -166,10 +166,16 @@ class AdaptiveScalingBestOfN(StrategyBase):
             if not use_prm:
                 all_scores = []
                 for candidates in batch_results:
-                    scores = [
-                        c.other_data.get("validity_score", 0.0) if c.other_data else 0.0
-                        for c in candidates
-                    ]
+                    scores = []
+                    for c in candidates:
+                        vs = (
+                            c.other_data.get("validity_score") if c.other_data else None
+                        )
+                        if vs is None:
+                            log.warning(
+                                "Candidate has None validity_score, defaulting to 0.0"
+                            )
+                        scores.append(vs if vs is not None else 0.0)
                     all_scores.append(scores)
                 return all_scores
             else:
@@ -358,9 +364,16 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 )
                 trajectories[sample_idx].append(chosen)
                 selected_steps[sample_idx].append(chosen)
-                validity_scores[sample_idx].append(
-                    chosen.other_data.get("validity_score", 0.0)
+                vs = (
+                    chosen.other_data.get("validity_score")
+                    if chosen.other_data
+                    else None
                 )
+                if vs is None:
+                    log.warning(
+                        f"Sample {sample_idx}: chosen step has None validity_score, defaulting to 0.0"
+                    )
+                validity_scores[sample_idx].append(vs if vs is not None else 0.0)
                 last_selected[sample_idx] = chosen
 
                 # Check for thinking mode completion
@@ -417,11 +430,11 @@ class AdaptiveScalingBestOfN(StrategyBase):
                         )
                         continue
 
-                    # if not self._has_answer_content(chosen):
-                    #     trajectories[sample_idx].pop()
-                    #     selected_steps[sample_idx].pop()
-                    #     validity_scores[sample_idx].pop()
-                    #     needs_final_answer[sample_idx] = True
+                    # In thinking mode, answer pattern before </think> means
+                    # the model put \boxed{} inside reasoning — still need
+                    # proper answer generation after closing </think>.
+                    if getattr(self.step_generator, "thinking_mode", False):
+                        needs_final_answer[sample_idx] = True
                     completed[sample_idx] = True
                     scores_str = ", ".join(
                         f"{s:.3f}" for s in validity_scores[sample_idx]
@@ -458,9 +471,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
             if needs_final_answer[idx]:
                 to_finalize.append(idx)
 
-        # Generate final answers only in thinking mode — non-thinking mode
-        # produces the answer naturally in the last reasoning step.
-        # thinking_mode = getattr(self.step_generator, "thinking_mode", False)
+        # Generate final answers for samples that need them
         if to_finalize:
             log.info(
                 f"Generating final answers for {len(to_finalize)} samples "
@@ -472,14 +483,15 @@ class AdaptiveScalingBestOfN(StrategyBase):
             answer_cands_batch = _gen_answer_candidates_batch(fin_reqs, fin_trajs)
 
             # Record tokens for final answer generation (not going through batch API)
-            # for pos, sample_idx in enumerate(to_finalize):
-            #     if answer_cands_batch[pos]:
-            #         ctx_tokens = self.step_generator.count_context_tokens(
-            #             fin_reqs[pos], fin_trajs[pos]
-            #         )
-            #         self.step_generator.record_sample_tokens(
-            #             sample_idx, answer_cands_batch[pos], context_tokens=ctx_tokens, candidates_per_step=self.candidates_per_step
-            #         )
+            for pos, sample_idx in enumerate(to_finalize):
+                if answer_cands_batch[pos]:
+                    ctx_tokens = self.step_generator.count_context_tokens(
+                        fin_reqs[pos], fin_trajs[pos]
+                    )
+                    self.step_generator.record_sample_tokens(
+                        sample_idx, answer_cands_batch[pos], context_tokens=ctx_tokens,
+                        candidates_per_step=self.candidates_per_step,
+                    )
 
             answer_scores_batch = _score_candidates_batch(
                 answer_cands_batch,
