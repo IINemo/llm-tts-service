@@ -90,6 +90,7 @@ class StepScorerSelfVerification(StepScorerBase):
         vote_prompt_file: str = None,
         use_vllm: bool = False,
         score_aggregation: str = "sum",
+        trajectory_context_steps: int = 0,
         name: str = "self_verification",
     ):
         super().__init__(name=name)
@@ -103,6 +104,7 @@ class StepScorerSelfVerification(StepScorerBase):
         self.use_vllm = use_vllm
         self.use_local = False
         self.score_aggregation = score_aggregation
+        self.trajectory_context_steps = trajectory_context_steps
 
         # Load prompts: priority is direct string > custom file > default file
         self.value_prompt = self._load_prompt(
@@ -114,20 +116,20 @@ class StepScorerSelfVerification(StepScorerBase):
 
         # Value mapping aligned to ToT labels: sure/likely/impossible.
         self.value_map = {
-            "sure": 20.0,
+            "sure": 3.0,
             "likely": 1.0,
-            "impossible": 0.001,
+            "impossible": 0.1,
         }
 
         # Extended synonyms that map to the base labels above
         # Note: paper says "sure/maybe/impossible", code uses "sure/likely/impossible"
         self.value_synonyms = {
             "maybe": 1.0,  # paper uses "maybe" as equivalent to "likely"
-            "correct": 20.0,
-            "definitely": 20.0,
-            "unlikely": 0.001,
-            "incorrect": 0.001,
-            "wrong": 0.001,
+            "correct": 3.0,
+            "definitely": 3.0,
+            "unlikely": 0.1,
+            "incorrect": 0.1,
+            "wrong": 0.1,
         }
 
         # Statistics
@@ -1208,7 +1210,10 @@ class StepScorerSelfVerification(StepScorerBase):
         return chat[-1].get("content", "") if chat else ""
 
     def _trajectory_to_text(self, trajectory: Optional[List[Any]]) -> str:
-        """Convert trajectory to text representation."""
+        """Convert trajectory to text representation.
+
+        If trajectory_context_steps > 0, only the last N steps are included.
+        """
         if not trajectory:
             return ""
 
@@ -1218,6 +1223,12 @@ class StepScorerSelfVerification(StepScorerBase):
                 steps.append(step.text)
             else:
                 steps.append(str(step))
+
+        if (
+            self.trajectory_context_steps > 0
+            and len(steps) > self.trajectory_context_steps
+        ):
+            steps = steps[-self.trajectory_context_steps :]
 
         return "\n".join(steps)
 
