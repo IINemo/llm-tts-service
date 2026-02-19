@@ -216,10 +216,6 @@ echo "============================================"
 
 ---
 
-## Migration from Old Scripts
-
-See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for a complete mapping of old scripts to new `submit.sh` commands.
-
 ## Help
 
 For complete usage information:
