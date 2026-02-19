@@ -161,7 +161,7 @@ if [[ -z "$STRATEGY" || -z "$DATASET" ]]; then
 fi
 
 # Project directory
-PROJECT_DIR="/home/artem.shelmanov/vlad/llm-tts-service"
+PROJECT_DIR="/home/chieu.nguyen/llm-tts-service"
 cd "$PROJECT_DIR"
 
 # Config mappings
@@ -189,11 +189,11 @@ SCORER_CONFIGS[sequence_prob]="sequence_prob"
 SCORER_CONFIGS[prm]="prm"
 
 declare -A MODEL_CONFIGS
-MODEL_CONFIGS[qwen25_7b]="vllm_qwen25_math_7b"
+MODEL_CONFIGS[qwen25_7b]="vllm_qwen25_math_7b_instruct"
 MODEL_CONFIGS[qwen3_8b_thinking]="vllm_thinking_qwen3_8b"
 MODEL_CONFIGS[qwen3_8b]="vllm_qwen3_8b"
-MODEL_CONFIGS[qwen25_math_7b]="vllm_qwen25_math_7b"
-MODEL_CONFIGS[qwen25_math_15b]="vllm_qwen25_math_15b"
+MODEL_CONFIGS[qwen25_math_7b]="vllm_qwen25_math_7b_instruct"
+MODEL_CONFIGS[qwen25_math_15b]="vllm_qwen25_math_15b_instruct"
 MODEL_CONFIGS[openai]="openai_gpt4o_mini"
 
 # Function to get config path
@@ -229,9 +229,7 @@ get_config_name() {
             echo "Error: Unknown scorer: $scorer"
             exit 1
         fi
-        # offline_best_of_n, beam_search, online_best_of_n, adaptive_scaling use _instruct suffix
-        local model_key_with_instruct="${model_key}_instruct"
-        echo "experiments/${strategy_key}/${dataset_key}/${strategy}_${model_key_with_instruct}_${dataset_key}_${scorer_key}"
+        echo "experiments/${strategy_key}/${dataset_key}/${strategy}_${model_key}_${dataset_key}_${scorer_key}"
     fi
 }
 
@@ -269,7 +267,7 @@ get_time_limit() {
     elif [[ "$STRATEGY" == "offline_bon" || "$STRATEGY" == "online_bon" || "$STRATEGY" == "beam_search" ]]; then
         echo "24:00:00"
     elif [[ "$STRATEGY" == "adaptive_scaling" ]]; then
-        echo "72:00:00"
+        echo "24:00:00"
     else
         echo "24:00:00"
     fi
@@ -351,13 +349,15 @@ submit_job() {
     local sbatch_cmd="#!/bin/bash
 #SBATCH -J ${job_name}
 #SBATCH -N 1
-#SBATCH --ntasks-per-node=1
-#SBATCH -p ${partition}
+#SBATCH -p cscc-gpu-p
 #SBATCH -t ${time_limit}
 #SBATCH -o ${output_file}
 #SBATCH -e ${error_file}
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=120G
+#SBATCH --gres=gpu:${gpus}
+#SBATCH --qos=cscc-gpu-qos 
+#SBATCH --mem=40G
+
 ${gres_line}
 ${exclude_line}
 "
@@ -427,7 +427,7 @@ if [[ -z \"\${SEED+x}\" ]]; then
 fi
 
 python scripts/run_tts_eval.py \\
-    --config-path=${PROJECT_DIR}/config \\
+    --config-path=../config \\
     --config-name=${config_name} \\
     system.seed=\${SEED} \\
     ${SUBSET:+dataset.subset=${SUBSET}}
@@ -498,14 +498,14 @@ submit_sequential_job() {
     local sbatch_cmd="#!/bin/bash
 #SBATCH -J ${job_name}
 #SBATCH -N 1
-#SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:${gpus}
-#SBATCH -p long
-#SBATCH -t ${adjusted_time}
+#SBATCH -p cscc-gpu-p
+#SBATCH -t ${time_limit}
 #SBATCH -o ${output_file}
 #SBATCH -e ${error_file}
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=120G
+#SBATCH --cpus-per-task=16 
+#SBATCH --qos=cscc-gpu-qos
+#SBATCH --gres=gpu:${gpus}
+#SBATCH --mem=40G
 
 set -e
 
