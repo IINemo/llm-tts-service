@@ -84,6 +84,11 @@ export VLLM_MODEL_PATH="Qwen/Qwen2.5-Coder-7B-Instruct"
 export VLLM_MAX_MODEL_LEN=32000
 export VLLM_GPU_MEMORY_UTILIZATION=0.9
 
+# Optional: For PRM scorer
+export PRM_MODEL_PATH="Qwen/Qwen2.5-Math-PRM-7B"
+export PRM_DEVICE="cuda:0"
+export PRM_USE_VLLM=true
+
 # Start the service
 cd llm-tts-service
 python service_app/main.py
@@ -115,6 +120,17 @@ python kernelact/run_inference_test_time_scaling.py \
     --tts_scorer perplexity \
     --experiment_name "kernelact_beam_search_perp" \
     --level 1
+
+# Offline Best-of-N with PRM scoring (requires PRM_MODEL_PATH)
+python kernelact/run_inference_test_time_scaling.py \
+    --model_name "Qwen/Qwen2.5-Coder-7B-Instruct" \
+    --tts_service_url http://localhost:8001/v1 \
+    --tts_strategy offline_bon \
+    --tts_num_trajectories 8 \
+    --tts_scorer prm \
+    --experiment_name "kernelact_offline_bon_prm" \
+    --level 1 \
+    --trial 1
 ```
 
 ### 3. Run KernelAct without TTS (original local mode)
@@ -142,8 +158,11 @@ python kernelact/run_inference_test_time_scaling.py \
 | `entropy` | Mean token entropy — lower entropy = higher confidence |
 | `perplexity` | Token-level perplexity — lower perplexity = higher confidence |
 | `sequence_prob` | Sequence probability — higher probability = higher confidence |
+| `prm` | Process Reward Model (Qwen/Qwen2.5-Math-PRM-7B) — higher PRM score = better step quality |
 
-All scorers are computed via the [lm-polygraph](https://github.com/IINemo/lm-polygraph) library's `VLLMWithUncertainty` wrapper, which extracts logprobs during vLLM generation and computes uncertainty estimates without additional model calls.
+The first three scorers (`entropy`, `perplexity`, `sequence_prob`) are computed via the [lm-polygraph](https://github.com/IINemo/lm-polygraph) library's `VLLMWithUncertainty` wrapper, which extracts logprobs during vLLM generation and computes uncertainty estimates without additional model calls.
+
+The `prm` scorer uses **Qwen/Qwen2.5-Math-PRM-7B**, a Process Reward Model that evaluates each reasoning step and assigns a quality score. PRM scoring requires loading an additional model but provides more accurate step-level quality assessment.
 
 ## API Request Example
 

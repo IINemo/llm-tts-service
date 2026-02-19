@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     default_max_tokens: int = 16000
     default_thinking_mode: bool = False
 
+    # PRM Scorer config (Qwen/Qwen2.5-Math-PRM-7B)
+    prm_model_path: Optional[str] = None  # e.g. "Qwen/Qwen2.5-Math-PRM-7B"
+    prm_device: str = "cuda:0"
+    prm_batch_size: int = 8
+    prm_torch_dtype: str = "bfloat16"
+    prm_use_vllm: bool = True
+    prm_gpu_memory_utilization: float = 0.3  # Lower default to fit alongside main model
+
     # Service Limits
     max_concurrent_requests: int = 10
     request_timeout: int = 300  # seconds

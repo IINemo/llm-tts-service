@@ -97,6 +97,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             "max_tokens": request.max_tokens or 4096,
             "num_paths": request.num_paths or 5,
             # vLLM TTS params
+            "scorer_type": request.tts_scorer or "entropy",
             "num_trajectories": request.tts_num_trajectories,
             "candidates_per_step": request.tts_candidates_per_step,
             "beam_size": request.tts_beam_size,

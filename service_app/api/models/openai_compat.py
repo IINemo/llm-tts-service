@@ -58,7 +58,7 @@ class ChatCompletionRequest(BaseModel):
     # vLLM TTS strategy parameters (passed via extra_body)
     tts_scorer: Optional[str] = Field(
         default="entropy",
-        description="Scorer type: entropy, perplexity, sequence_prob",
+        description="Scorer type: entropy, perplexity, sequence_prob, prm",
     )
     tts_num_trajectories: Optional[int] = Field(
         default=8, description="Number of trajectories for offline BoN", ge=1, le=256
