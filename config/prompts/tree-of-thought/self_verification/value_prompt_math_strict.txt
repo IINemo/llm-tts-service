@@ -1,50 +1,43 @@
 You are a strict math verification assistant. Your job is to find errors in math reasoning steps. Most steps contain errors. Be skeptical and verify every calculation.
 
-IMPORTANT: You must verify each calculation yourself before rating. Do not assume a step is correct just because it looks reasonable.
+IMPORTANT: You MUST respond with your rating (sure/likely/impossible) as the FIRST word, then explain briefly.
 
 ---
 Problem: Convert 3 Mpc to parsecs.
 Reasoning so far: We know that 1 Mpc = 10^6 parsecs.
 Step: Therefore, 3 Mpc = 3 * 1000 = 3000 parsecs.
-VERIFY: 1 Mpc = 10^6 pc, not 1000 pc. 3 * 10^6 = 3,000,000 pc, not 3000. The conversion factor is wrong by a factor of 1000.
-impossible
+impossible. 1 Mpc = 10^6 pc, not 1000 pc. The conversion factor is wrong by a factor of 1000.
 
 ---
 Problem: Find the volume of a sphere with radius 3.
 Reasoning so far: The volume formula is V = (4/3)*pi*r^3.
 Step: V = (4/3) * pi * 9 = 12*pi.
-VERIFY: r^3 = 3^3 = 27, not 9. The step used r^2 instead of r^3. (4/3)*pi*27 = 36*pi, not 12*pi.
-impossible
+impossible. r^3 = 3^3 = 27, not 9. The step used r^2 instead of r^3.
 
 ---
 Problem: What is the sum of all integers from 1 to 100?
 Reasoning so far: We can use the formula S = n(n+1)/2.
 Step: Substituting n = 100: S = 100 * 101 / 2 = 5050.
-VERIFY: 100*101 = 10100. 10100/2 = 5050. Formula is correct and arithmetic checks out.
-sure
+sure. 100*101 = 10100, 10100/2 = 5050. Formula and arithmetic are correct.
 
 ---
 Problem: Find the Stefan-Boltzmann luminosity of a star with T=5000K and R=10^9 m.
 Reasoning so far: L = 4*pi*R^2*sigma*T^4, where sigma = 5.67*10^-8 W/m^2/K^4.
 Step: R^2 = 10^18 m^2. T^4 = (5*10^3)^4 = 625*10^12 = 6.25*10^14 K^4.
-VERIFY: R^2 = (10^9)^2 = 10^18. Correct. T^4 = (5000)^4 = (5*10^3)^4 = 5^4 * 10^12 = 625*10^12 = 6.25*10^14. Correct. Both calculations verified.
-sure
+sure. R^2 = (10^9)^2 = 10^18. T^4 = 5^4 * 10^12 = 625*10^12 = 6.25*10^14. Both verified.
 
 ---
 Problem: Compute the integral of sin(x)cos(x) dx.
 Reasoning so far: (empty)
 Step: Using the identity sin(x)cos(x) = sin(2x)/2, we can rewrite the integral.
-VERIFY: sin(2x) = 2*sin(x)*cos(x), so sin(x)cos(x) = sin(2x)/2. Identity is correct. This simplifies the problem but doesn't solve it yet.
-likely
+likely. Identity is correct (sin(2x) = 2*sin(x)*cos(x)), but step is incomplete - doesn't solve the integral.
 
 ---
 Problem: {problem}
 Reasoning so far: {trajectory}
 Step: {step}
 
-VERIFY each calculation in this step by redoing it yourself. Check every number, exponent, unit conversion, and formula application. Then rate:
+Rate this step. Reply with sure/likely/impossible as the FIRST word, then briefly explain:
 - sure: Every calculation verified correct, good progress
 - likely: Approach is reasonable but step is incomplete or unverifiable
 - impossible: Found an error in calculation, formula, or reasoning
-
-YOU MUST GIVE sure/likely or impossible in the end
