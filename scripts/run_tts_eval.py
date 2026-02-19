@@ -2326,7 +2326,10 @@ def main(config):
     import socket
 
     hostname = socket.gethostname()
-    ip_addr = socket.gethostbyname(hostname)
+    try:
+        ip_addr = socket.gethostbyname(hostname)
+    except socket.gaierror:
+        ip_addr = "unknown"
     machine_name = os.environ.get("MACHINE_NAME", hostname)
     log.info(f"Host: {machine_name} ({ip_addr})")
 
