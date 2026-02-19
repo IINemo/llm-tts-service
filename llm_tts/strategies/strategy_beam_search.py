@@ -294,14 +294,12 @@ class StrategyBeamSearch(StrategyBase):
                 # Pass sample_ids and beam_ids so generator logs them
                 batch_sample_ids = [sample_id for sample_id, _, _ in prompt_metadata]
                 batch_beam_ids = [beam_idx for _, beam_idx, _ in prompt_metadata]
-                batch_beam_ids = [beam_idx for _, beam_idx, _ in prompt_metadata]
                 batch_results = self.step_generator.generate_step_candidates_batch(
                     requests=batch_requests,
                     trajectories=batch_trajectories,
                     candidates_per_step=self.candidates_per_beam,
                     compute_uncertainty=not use_prm_scorer,
                     sample_ids=batch_sample_ids,
-                    beam_ids=batch_beam_ids,
                     beam_ids=batch_beam_ids,
                 )
 
