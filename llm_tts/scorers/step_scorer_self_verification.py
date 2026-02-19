@@ -886,18 +886,15 @@ class StepScorerSelfVerification(StepScorerBase):
             return prompt
 
     def _call_vllm(self, prompt: str) -> str:
-        """Call vLLM model for evaluation with guided decoding for value method."""
+        """Call vLLM model for evaluation."""
         try:
             from vllm import SamplingParams
-            from vllm.sampling_params import GuidedDecodingParams
         except ImportError:
             raise ImportError("vLLM not installed. Run: pip install vllm")
 
-        guided_params = GuidedDecodingParams(choice=list(self.value_map.keys()))
         sampling_params = SamplingParams(
             max_tokens=self.max_tokens,
             temperature=self.temperature,
-            guided_decoding=guided_params,
         )
 
         formatted_prompt = self._format_prompt_for_vllm(prompt)
@@ -917,18 +914,15 @@ class StepScorerSelfVerification(StepScorerBase):
         return ""
 
     def _call_vllm_batch(self, prompts: List[str]) -> List[str]:
-        """Call vLLM model for evaluation with batched prompts and guided decoding."""
+        """Call vLLM model for evaluation with batched prompts."""
         try:
             from vllm import SamplingParams
-            from vllm.sampling_params import GuidedDecodingParams
         except ImportError:
             raise ImportError("vLLM not installed. Run: pip install vllm")
 
-        guided_params = GuidedDecodingParams(choice=list(self.value_map.keys()))
         sampling_params = SamplingParams(
             max_tokens=self.max_tokens,
             temperature=self.temperature,
-            guided_decoding=guided_params,
         )
 
         formatted_prompts = [self._format_prompt_for_vllm(p) for p in prompts]
