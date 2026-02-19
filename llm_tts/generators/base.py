@@ -1,6 +1,7 @@
 import logging
 from abc import abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import torch
@@ -9,6 +10,15 @@ if TYPE_CHECKING:
     from llm_tts.utils.flops import FLOPCalculator
 
 log = logging.getLogger(__name__)
+
+
+class CompletionReason(str, Enum):
+    """Reason why a trajectory was marked as complete."""
+
+    THINKING_COMPLETE = "thinking_complete"  # </think> found in thinking mode
+    EOS_PATTERN = "eos_pattern"  # <end of response> pattern matched
+    ANSWER_PATTERN = "answer_pattern"  # <Answer>: or similar pattern matched
+    CONTEXT_LIMIT = "context_limit"  # Not enough context for next step + answer
 
 
 @dataclass
@@ -23,12 +33,14 @@ class StepCandidate:
         is_trajectory_complete: bool,
         generation_scores: Optional[torch.Tensor] = None,
         raw_text: str = None,
-        other_data: Dict[str, any] = None,
+        other_data: Dict[str, Any] = None,
+        is_thinking_complete: bool = False,
     ):
         self.text = text
         self.token_ids = token_ids
         self.is_complete = is_complete
         self.is_trajectory_complete = is_trajectory_complete
+        self.is_thinking_complete = is_thinking_complete
         self.generation_scores = generation_scores
         self.raw_text = raw_text or text
         self.other_data = other_data
@@ -41,8 +53,9 @@ def convert_trajectory_to_string(trajectory: List[StepCandidate]) -> str:
     """Convert trajectory to string.
 
     Each step.text should already end with newline, so we just concatenate.
+    Uses raw_text if available to preserve original model output.
     """
-    return "".join([step.text for step in trajectory])
+    return "".join([step.raw_text or step.text for step in trajectory])
 
 
 class StepCandidateGeneratorBase:
@@ -171,7 +184,7 @@ class StepCandidateGeneratorBase:
         self._total_output_tokens += self._sample_output_tokens
         self._total_samples += num_samples
 
-    def get_sample_stats(self) -> Dict[str, any]:
+    def get_sample_stats(self) -> Dict[str, Any]:
         """Get statistics for current sample.
 
         Returns:
@@ -197,7 +210,7 @@ class StepCandidateGeneratorBase:
 
         return stats
 
-    def get_total_stats(self) -> Dict[str, any]:
+    def get_total_stats(self) -> Dict[str, Any]:
         """Get cumulative statistics across all samples.
 
         Returns:
@@ -222,18 +235,90 @@ class StepCandidateGeneratorBase:
         return stats
 
     @abstractmethod
-    def generate_step_candidates(
-        self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
-    ) -> List[StepCandidate]:
-        """Generate N candidate next steps for a given trajectory."""
+    def generate_step_candidates_batch(
+        self,
+        requests: List[List[Dict[str, str]]],
+        trajectories: List[List[StepCandidate]],
+        candidates_per_step: int = 1,
+        stop_tokens_override=None,
+        max_tokens=None,
+        compute_uncertainty: bool = True,
+        sample_ids=None,
+        beam_ids=None,
+    ) -> List[List[StepCandidate]]:
+        """Generate N candidate next steps for each trajectory.
+
+        Primary generation method. Each trajectory can have its own request.
+
+        Args:
+            requests: Per-trajectory chat messages.
+            trajectories: List of trajectories (each a list of StepCandidates).
+            candidates_per_step: Number of candidates per trajectory.
+            stop_tokens_override: Override stop tokens (None = use defaults).
+            max_tokens: Override max tokens (None = use defaults).
+            compute_uncertainty: Whether to compute uncertainty scores.
+            sample_ids: Optional per-trajectory sample IDs for token tracking.
+            beam_ids: Optional per-trajectory beam IDs for logging.
+
+        Returns:
+            List of candidate lists, one per trajectory.
+        """
         pass
 
+    def generate_step_candidates(
+        self,
+        request: List[Dict[str, str]],
+        trajectories: List[List[StepCandidate]],
+        candidates_per_step: int = 1,
+        compute_uncertainty: bool = True,
+    ) -> List[List[StepCandidate]]:
+        """Convenience wrapper: same request for all trajectories.
+
+        Delegates to generate_step_candidates_batch with broadcast request.
+        """
+        requests = [request] * len(trajectories)
+        return self.generate_step_candidates_batch(
+            requests,
+            trajectories,
+            candidates_per_step,
+            compute_uncertainty=compute_uncertainty,
+        )
+
     @abstractmethod
-    def generate_answer_candidates(
-        self, request: List[Dict[str, str]], trajectory: List[StepCandidate]
-    ) -> List[StepCandidate]:
-        """Generate answer for a given trajectory"""
+    def generate_answer_candidates_batch(
+        self,
+        requests: List[List[Dict[str, str]]],
+        trajectories: List[List[StepCandidate]],
+        candidates_per_step: int = 1,
+    ) -> List[List[StepCandidate]]:
+        """Generate answer candidates for multiple trajectories.
+
+        Primary answer generation method. Each trajectory can have its own request.
+
+        Args:
+            requests: Per-trajectory chat messages.
+            trajectories: Per-trajectory step lists.
+            candidates_per_step: Number of answer candidates per trajectory.
+
+        Returns:
+            List of candidate lists, one per trajectory.
+        """
         pass
+
+    def generate_answer_candidates(
+        self,
+        request: List[Dict[str, str]],
+        trajectory: List[StepCandidate],
+        candidates_per_step: int = 1,
+    ) -> List[StepCandidate]:
+        """Convenience wrapper: single trajectory answer generation.
+
+        Delegates to generate_answer_candidates_batch with single item.
+        """
+        results = self.generate_answer_candidates_batch(
+            [request], [trajectory], candidates_per_step
+        )
+        return results[0] if results else []
 
     def __call__(
         self,

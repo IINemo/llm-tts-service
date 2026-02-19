@@ -1,8 +1,12 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/deepconf/run_gsm8k_deepconf_online
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 
 # DeepConf Online Mode Configuration
 # This demonstrates adaptive early stopping with streaming + logprobs
+
+# Run naming
+run_name: "seed${system.seed}_${now:%H-%M-%S}"
 
 defaults:
   - /dataset/gsm8k
@@ -19,6 +23,7 @@ verbose: false
 model:
   provider: openrouter
   model_name: "openai/gpt-4o-mini"
+  model_short_name: "openrouter_gpt4o_mini"
   api_key: null  # Set via OPENROUTER_API_KEY env var
   top_logprobs: 20  # Required for DeepConf
 

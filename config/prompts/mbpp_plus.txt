@@ -1,0 +1,3 @@
+{question}
+
+Complete the function implementation. Output only the Python code without any explanation.

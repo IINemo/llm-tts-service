@@ -2,6 +2,7 @@
 
 type: "vllm"
 model_path: "Qwen/Qwen3-8B"
+model_short_name: "qwen3_8b"  # Short name for output directory organization
 device: cuda
 
 # vLLM-specific settings
@@ -9,4 +10,4 @@ gpu_memory_utilization: 0.9
 tensor_parallel_size: 1
 enable_prefix_caching: true
 trust_remote_code: true
-max_model_len: 32768
+max_context_budget: 32768

@@ -1,0 +1,71 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/gaokao2023en/self_consistency_vllm_qwen25_math_7b_gaokao2023en_t05
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
+# Self-consistency evaluation on GaoKao 2023 En (385 Chinese high school math problems)
+# Uses majority voting over N diverse reasoning paths (temperature 0.5)
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "self_consistency_vllm_qwen25_math_7b_gaokao2023en_t05_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-gaokao2023en
+wandb_group: "self_consistency_qwen25_math_7b_gaokao2023en"
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
+  gpu_memory_utilization: 0.95
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_context_budget: 4096
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration - temperature > 0 for diversity
+generation:
+  max_new_tokens: 2048
+  temperature: 0.5
+  top_p: 0.8
+  batch_size: 1
+
+# Strategy - Self-consistency with majority voting
+strategy:
+  type: self_consistency
+  num_paths: 8  # Generate 8 diverse paths per sample
+  batch_generation: true  # Fully batched: 1 vLLM call for all M×N trajectories
+  data_name: gaokao2023en  # For official Qwen2.5-Math answer extraction
+  stop_token_ids:
+    - 151645  # <|im_end|>
+    - 151643  # <|endoftext|>
+
+# Dataset configuration
+dataset:
+  dataset_path: "test-time-compute/test_gaokao2023en"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 385
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: gaokao2023en  # CRITICAL: must match strategy.data_name for consistent evaluation
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null

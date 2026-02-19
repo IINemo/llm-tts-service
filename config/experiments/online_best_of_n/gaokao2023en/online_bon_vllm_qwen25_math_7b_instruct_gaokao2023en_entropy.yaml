@@ -1,0 +1,77 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/gaokao2023en/online_bon_vllm_nothink_qwen25_7b_gaokao2023en_entropy
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
+# Online Best-of-N with vLLM + Non-Thinking Mode (Qwen2.5-7B) on GaoKao 2023 En
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /strategy/online_bon
+  - /scorer/entropy
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "online_bon_vllm_nothink_qwen25_7b_gaokao2023en_entropy_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-gaokao2023en
+wandb_group: "online_bon_qwen25_math_7b_instruct_gaokao2023en_entropy"
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_context_budget: 4096
+  # disable_thinking_mode not set (None) = model doesn't support thinking
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (non-thinking mode settings)
+generation:
+  max_new_tokens: 4096
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  batch_size: 1
+  max_length: 8192
+
+# Strategy - Online Best-of-N (always uses ThinkingMarkerDetector)
+strategy:
+  max_steps: 50
+  # Stop tokens derived from detector config (use_* flags below)
+  # Step boundary token limits
+  # Marker categories (ThinkingMarkerDetector derives stop tokens from these)
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true  # Include thinking markers for step boundaries
+  use_verification: true
+  use_structure: true
+  use_reasoning: true
+  use_correction: false
+  # Custom words for stop tokens
+
+# Dataset configuration - GaoKao 2023 En
+dataset:
+  dataset_path: "test-time-compute/test_gaokao2023en"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 385
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: gaokao2023en
+  prompt_file: null  # Not used - using system_prompt instead
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."

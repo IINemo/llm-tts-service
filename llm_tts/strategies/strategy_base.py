@@ -1,7 +1,6 @@
 import logging
-import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List
 
 from llm_tts.utils.parallel import parallel_execute
 
@@ -11,103 +10,71 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def count_response_steps(text: str) -> int:
-    """Count structured steps in response text.
-
-    Handles multiple formats:
-    - '- Step 1:' (bullet format)
-    - '### Step 1:' (markdown format)
-    - 'Step 1:' (plain format)
-    """
-    # Try multiple patterns
-    patterns = [
-        r"- Step \d+:",  # Bullet format: - Step 1:
-        r"#{1,3} Step \d+:",  # Markdown format: ### Step 1:
-        r"(?:^|\n)Step \d+:",  # Plain format at line start
-    ]
-
-    max_matches = 0
-    for pattern in patterns:
-        matches = re.findall(pattern, text)
-        max_matches = max(max_matches, len(matches))
-
-    return max_matches
-
-
-def is_response_step(text: str) -> bool:
-    """Check if text is a response step (not thinking).
-
-    Response steps typically:
-    - Contain <start of response> or <end of response> tags
-    - Contain <Answer>: tag
-    - Don't start with <think> tag
-    - Contain "Reasoning Steps:" header
-    """
-    # Explicit response markers
-    if "<start of response>" in text or "<end of response>" in text:
-        return True
-    if "<Answer>:" in text:
-        return True
-    if "Reasoning Steps:" in text:
-        return True
-
-    # If it starts with <think>, it's definitely thinking
-    if text.strip().startswith("<think>"):
-        return False
-
-    return False
-
-
-def count_thinking_and_response_steps(steps: list) -> Tuple[int, int]:
-    """
-    Count thinking steps and response steps separately.
+def count_reasoning_steps(steps: list, thinking_mode: bool) -> int:
+    """Count reasoning steps in a trajectory.
 
     Args:
         steps: List of step candidates/dicts from trajectory
+        thinking_mode: Whether the model uses thinking mode
 
     Returns:
-        (thinking_num_steps, response_num_steps)
+        Number of reasoning steps:
+        - Non-thinking mode: total number of generated steps (len(steps))
+        - Thinking mode: number of thinking steps only (len(steps) - 1, excluding the answer step)
     """
-    thinking_steps = 0
-    response_steps = 0
-
-    for step in steps:
-        # Get text from step (could be StepCandidate or dict)
-        if hasattr(step, "text"):
-            text = step.text
-            # Also check other_data for phase hint
-            other_data = getattr(step, "other_data", {}) or {}
-            phase = other_data.get("phase", "")
-        elif isinstance(step, dict):
-            text = step.get("text", "")
-            other_data = step.get("other_data", {}) or {}
-            phase = other_data.get("phase", "")
-        else:
-            text = str(step)
-            phase = ""
-
-        # Check phase hint first (set by offline BON)
-        if phase == "response":
-            step_count = count_response_steps(text)
-            response_steps += step_count if step_count > 0 else 1
-        elif phase == "thinking":
-            thinking_steps += 1
-        # Otherwise use heuristics
-        elif is_response_step(text):
-            step_count = count_response_steps(text)
-            response_steps += step_count if step_count > 0 else 1
-        else:
-            thinking_steps += 1
-
-    return thinking_steps, response_steps
+    if not steps:
+        return 0
+    if thinking_mode:
+        return max(len(steps) - 1, 0)  # exclude answer step
+    return len(steps)
 
 
 class StrategyBase(ABC):
-    """Abstract base class for TTS strategies with parallel generation support"""
+    """Abstract base class for TTS strategies with batch generation support.
+
+    Strategies must implement generate_trajectories_batch() for efficient
+    batch processing. Single-sample calls via generate_trajectory() are
+    automatically wrapped to use the batch method.
+    """
 
     @abstractmethod
-    def generate_trajectory(self, input_chat: List[Dict[str, str]]) -> Dict[str, any]:
+    def generate_trajectories_batch(
+        self,
+        requests: List[List[Dict[str, str]]],
+        sample_indices: List[int],
+        save_callback: Callable = None,
+    ) -> List[Dict[str, Any]]:
+        """Generate trajectories for multiple samples in batch.
+
+        Args:
+            requests: List of input chats (one per sample)
+            sample_indices: List of sample indices (for logging/tracking)
+            save_callback: Optional callback(results, phase=str) for progressive saves
+
+        Returns:
+            List of result dictionaries (one per sample)
+        """
         pass
+
+    def generate_trajectory(
+        self, input_chat: List[Dict[str, str]], sample_idx: int = 0
+    ) -> Dict[str, Any]:
+        """Generate trajectory for a single sample.
+
+        Default implementation wraps generate_trajectories_batch for convenience.
+        Subclasses can override if they need specialized single-sample behavior.
+
+        Args:
+            input_chat: Input chat messages
+            sample_idx: Sample index for logging (default: 0)
+
+        Returns:
+            Result dictionary for the single sample
+        """
+        results = self.generate_trajectories_batch([input_chat], [sample_idx])
+        if not results:
+            raise ValueError("generate_trajectories_batch returned empty results")
+        return results[0]
 
     def _parallel_generate(
         self,

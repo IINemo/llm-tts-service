@@ -23,7 +23,7 @@ class StructuredStepDetector(StepBoundaryDetectorBase):
         step_patterns: Optional[List[str]] = None,
         answer_patterns: Optional[List[str]] = None,
         max_tokens_per_step: int = 512,
-        min_step_tokens: int = 0,
+        min_step_tokens: int = 50,
         max_step_tokens: int = 300,
         eos_patterns: Optional[List[str]] = None,
     ):
@@ -105,19 +105,15 @@ class StructuredStepDetector(StepBoundaryDetectorBase):
         return steps
 
     def is_step_complete(self, generated_text: str, token_count: int = None) -> bool:
-        """Check if current generation represents a complete step."""
+        """Check if current generation represents a complete step.
 
-        # Immediate completion if we hit an answer pattern
-        for pattern in self.answer_patterns:
+        Checks all step_patterns (mirroring vLLM stop tokens) so that the
+        streaming path stops at the same boundaries as the vLLM path.
+        """
+        # Check all step patterns (same set used as vLLM stop tokens)
+        for pattern in self.step_patterns:
             if pattern in generated_text and not generated_text.startswith(pattern):
                 return True
-
-        # Count occurrences of "- Step" pattern
-        step_count = generated_text.count("- Step")
-
-        # Stop when we see 2 or more "- Step" markers
-        if step_count >= 2:
-            return True
 
         # Check token limit
         if token_count and token_count >= self.max_tokens_per_step:

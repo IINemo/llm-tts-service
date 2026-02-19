@@ -1,0 +1,92 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_vllm_qwen3_8b_human_eval_plus_perplexity
+# Offline Best-of-N for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
+# Uses perplexity scorer for step evaluation
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /strategy/offline_bon
+  - /scorer/perplexity
+  - /evaluation/human_eval_plus/default
+  - _self_
+
+# Run naming
+run_name: "offline_bon_vllm_qwen3_8b_human_eval_plus_perplexity_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: null
+wandb_project: llm-tts-human-eval-plus
+wandb_group: "offline_bon_vllm_qwen3_8b_human_eval_plus_perplexity"
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  gpu_memory_utilization: 0.85
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_model_len: 8192
+  disable_thinking_mode: false
+
+# System configuration
+system:
+  device: cuda
+  seed: 0
+
+# Generation configuration
+generation:
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 65536
+
+# Strategy - Offline Best-of-N with newline-based step boundaries for code
+strategy:
+  type: offline_best_of_n
+  min_step_tokens: 10
+  max_step_tokens: 500
+  max_steps: 100
+  # Disable linguistic markers (not useful for code)
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  # Use newlines as step separators for code
+  custom_markers:
+    - "\n"
+    - "\n\n"
+
+# perplexity scorer configuration
+scorer:
+  type: perplexity
+  batch_size: 1
+
+# Dataset configuration - HumanEval+
+dataset:
+  data_name: "human_eval_plus"
+  dataset_path: "evalplus/humanevalplus"
+  dataset_split: "test"  # 164 problems
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "code"
+  prompt_file: null
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - human_eval_plus
+  human_eval_plus:
+    mode: full
+    timeout: 10

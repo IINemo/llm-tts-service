@@ -1,0 +1,68 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/aime2025/baseline_vllm_thinking_qwen3_8b_aime2025
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
+# Baseline evaluation for Qwen3-8B (Thinking Mode) on AIME 2025
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /strategy/baseline
+  - /scorer/entropy
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "baseline_qwen3_8b_thinking_aime2025_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-aime2025
+wandb_group: "baseline_qwen3_8b_thinking_aime2025"
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  model_short_name: "vllm_thinking_qwen3_8b"
+  gpu_memory_utilization: 0.85
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_context_budget: 32768
+  disable_thinking_mode: false  # ENABLE native thinking mode
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration - thinking mode settings
+generation:
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+
+# Strategy - Baseline single-shot
+strategy:
+  # Disable all semantic markers for baseline
+  detector_answer_patterns: []
+
+# Dataset configuration - AIME 2025 (30 problems)
+dataset:
+  dataset_path: "test-time-compute/aime_2025"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 30
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: "aime25"
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null

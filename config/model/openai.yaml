@@ -1,5 +1,6 @@
 type: "openai_api"
 model_path: "gpt-4o-mini"  # Base model for generation
+model_short_name: "gpt4o_mini"  # Short name for output directory organization
 supports_logprobs: true
 api_key: "" # specify
 prefill_mode: false

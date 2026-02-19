@@ -1,0 +1,27 @@
+# @package dataset
+# HumanEval+ dataset configuration
+#
+# HumanEval+ is an enhanced version of HumanEval with 80x more test cases
+# for rigorous evaluation of code generation.
+#
+# Dataset: https://huggingface.co/datasets/evalplus/humanevalplus
+# EvalPlus: https://github.com/evalplus/evalplus
+# - 164 coding problems (test split)
+# - Each problem: prompt -> function implementation
+
+dataset_path: "evalplus/humanevalplus"
+dataset_split: "test"  # 164 problems
+subset: null  # Only process first N samples (null for all)
+prompt_file: null  # No prompt template - EvalPlus API provides correct format
+answer_format: "code"  # Code generation format
+question_field: "question"  # EvalPlus loader uses "question" field
+answer_field: "answer"  # EvalPlus loader uses "answer" field
+data_name: "human_eval_plus"  # Used for evaluation routing and EvalPlus API loading
+
+# Fields from EvalPlus API loader (llm_tts/datasets/human_eval_plus.py):
+# - question: Problem prompt with docstring and example (correct format!)
+# - answer: Canonical solution code
+# - task_id: Unique identifier (e.g., "HumanEval/0")
+# - entry_point: Expected function name
+# - prompt: Original prompt (function signature + docstring)
+# - base_input, plus_input: Test inputs for full evaluation

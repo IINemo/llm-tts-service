@@ -116,6 +116,11 @@ def _extract_single_letter_answer(text: str) -> str | None:
     if boxed_matches:
         return boxed_matches[-1].upper()
 
+    # Try to extract from \text{X} format (last occurrence)
+    text_matches = re.findall(r"\\text\{([A-Za-z])\}", text)
+    if text_matches:
+        return text_matches[-1].upper()
+
     # Single letter at end
     match = re.search(r"\b([A-Z])[.,]?\s*$", text)
     if match:
@@ -142,10 +147,17 @@ class EvaluatorExactMatch:
                 f"dataset_answer_format must be 'numeric', 'boolean', 'char', or 'string', got '{dataset_answer_format}'"
             )
 
-    def _score_single(self, inp: tuple[str, str, str]) -> float:
+    def _score_single(
+        self, inp: tuple[str, str, str], pre_extracted: bool = False
+    ) -> float:
         """
         Score a single sample - used for running accuracy during generation.
         Uses EXACT same logic as batch evaluation but for one sample.
+
+        Args:
+            inp: (problem, solution, gold_answer) tuple
+            pre_extracted: If True, solution is already an extracted answer
+                (e.g. from \\boxed{}), so skip extract_answer and only normalize.
         """
         _, solution, gold_answer = inp
 
@@ -174,7 +186,13 @@ class EvaluatorExactMatch:
 
         # Numeric: call math_equal directly (no ProcessPool for single samples - too slow)
         try:
-            pred = extract_answer(solution, data_name=self.data_name)
+            if pre_extracted:
+                pred = strip_string(
+                    str(solution) if solution else "",
+                    skip_unit=self.data_name in ["carp_en", "minerva_math"],
+                )
+            else:
+                pred = extract_answer(solution, data_name=self.data_name)
             gold = _normalize_gold_answer(gold_answer, self.data_name)
             log.info(
                 f"_score_single BEFORE math_equal: pred={repr(pred)}, gold={repr(gold)}"

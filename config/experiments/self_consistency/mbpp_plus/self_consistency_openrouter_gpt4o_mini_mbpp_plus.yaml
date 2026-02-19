@@ -1,0 +1,92 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=all python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/self_consistency/mbpp_plus/self_consistency_openrouter_gpt4o_mini_mbpp_plus
+# Self-consistency evaluation for MBPP+ using OpenRouter API
+#
+# Environment variable required: OPENROUTER_API_KEY
+
+defaults:
+  - /config
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - /evaluation/mbpp_plus/default
+  - _self_
+
+# Run naming
+run_name: "self_consistency_openrouter_gpt4o_mini_mbpp_plus_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-mbpp-plus
+wandb_group: "self_consistency_openrouter_gpt4o_mini_mbpp_plus"
+
+# Model configuration (OpenRouter API)
+model:
+  type: "openai_api"
+  provider: openrouter
+  model_path: "openai/gpt-4o-mini"  # Fast and cost-effective for code
+  # Alternative models:
+  # - "anthropic/claude-3.5-sonnet" (best quality)
+  # - "deepseek/deepseek-coder" (code-specialized)
+  # - "qwen/qwen-2.5-coder-32b-instruct" (open-source coder)
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  supports_logprobs: true
+  prefill_mode: false
+  max_context_budget: 128000
+
+# System configuration
+system:
+  device: cpu
+  seed: 0
+
+# Generation configuration - higher temperature for diversity
+generation:
+  max_new_tokens: 512
+  temperature: 0.7  # Higher temp for diverse solutions
+  top_p: 0.95
+  top_k: 50
+  batch_size: 1
+
+# Strategy - Self-consistency with multiple paths
+strategy:
+  type: self_consistency
+  num_paths: 5  # Generate 5 candidate solutions
+  batch_generation: true
+  data_name: "mbpp_plus"
+  # Step token limits
+  min_step_tokens: 0
+  max_step_tokens: 512
+  # Disable semantic markers
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+
+# Dataset configuration - MBPP+
+# Uses EvalPlus API loader which provides correct prompt format with function name
+dataset:
+  data_name: "mbpp_plus"
+  dataset_path: "evalplus/mbppplus"
+  dataset_split: "test"  # 378 problems
+  subset: null
+  offset: 0
+  question_field: "question"  # EvalPlus loader field (includes docstring + example assertion)
+  answer_field: "answer"  # EvalPlus loader field (canonical solution)
+  answer_format: "code"
+  prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
+  system_prompt: "You are an expert Python programmer. Write clean, correct, and efficient code."
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - mbpp_plus
+  mbpp_plus:
+    mode: full  # "test" and "syntax" modes are deprecated, use "full" only
+    timeout: 10
+
+# Scorer configuration (not used for self_consistency, but included for compatibility)
+scorer: null

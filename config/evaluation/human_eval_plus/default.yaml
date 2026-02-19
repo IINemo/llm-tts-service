@@ -1,0 +1,14 @@
+# @package evaluation.human_eval_plus
+# HumanEval+ evaluator configuration following EvalPlus methodology
+#
+# Evaluation mode:
+# - "full": Run EvalPlus full test suite (thorough, requires: pip install evalplus)
+#
+# Note: "test" and "syntax" modes are deprecated and will use "full" mode
+
+# Evaluation mode
+# - "full": Run EvalPlus full test suite (thorough, ~1000+ tests per problem)
+mode: full
+
+# Timeout per test case in seconds
+timeout: 10

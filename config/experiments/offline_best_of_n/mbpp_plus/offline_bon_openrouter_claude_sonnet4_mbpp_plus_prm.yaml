@@ -1,0 +1,95 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_openrouter_claude_sonnet4_human_eval_plus_prm
+# Offline Best-of-N for HumanEval+ using OpenRouter API with newline-based step boundaries
+# Uses prm scorer for step evaluation
+#
+# Environment variable required: OPENROUTER_API_KEY
+
+defaults:
+  - /config
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - /strategy/offline_bon
+  - /scorer/prm
+  - /evaluation/human_eval_plus/default
+  - _self_
+
+# Run naming
+run_name: "offline_bon_openrouter_claude_sonnet4_human_eval_plus_prm_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-human-eval-plus
+wandb_group: "offline_bon_openrouter_claude_sonnet4_human_eval_plus_prm"
+
+# Model configuration (OpenRouter API)
+model:
+  type: "openai_api"
+  provider: openrouter
+  model_path: "anthropic/claude-sonnet-4"
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  supports_logprobs: true
+  prefill_mode: false
+  max_context_budget: 128000
+
+# System configuration
+system:
+  device: cpu
+  seed: 0
+
+# Generation configuration
+generation:
+  max_new_tokens: 65536
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 65536
+
+# Strategy - Offline Best-of-N with newline-based step boundaries for code
+strategy:
+  type: offline_best_of_n
+  min_step_tokens: 10
+  max_step_tokens: 500
+  max_steps: 100
+  # Disable linguistic markers (not useful for code)
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  # Use newlines as step separators for code
+  custom_markers:
+    - "\n"
+    - "\n\n"
+
+# prm scorer configuration
+scorer:
+  type: prm
+  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+  device: cuda:0
+  batch_size: 1
+
+# Dataset configuration - HumanEval+
+dataset:
+  data_name: "mbpp_plus"
+  dataset_path: "evalplus/mbppplus"
+  dataset_split: "test"
+  subset: null
+  offset: 0
+  question_field: "question"  # EvalPlus loader field (includes docstring + example assertion)
+  answer_field: "answer"  # EvalPlus loader field (canonical solution)
+  answer_format: "code"
+  prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - mbpp_plus
+  mbpp_plus:
+    mode: full  # "test" and "syntax" modes are deprecated, use "full" only
+    timeout: 10

@@ -1,0 +1,65 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/adaptive_scaling_vllm_qwen25_7.5b_perplexity_math500
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
+
+defaults:
+  - /config
+  - /dataset/aime_2025
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /strategy/adaptive
+  - /scorer/entropy
+  - /evaluation/default
+  - _self_
+
+run_name: "adaptive_scaling_vllm_qwen3_8b_aime2024_entropy_seed${system.seed}_${now:%H-%M-%S}"
+
+# Model configuration
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  model_short_name: "vllm_thinking_qwen3_8b"
+  gpu_memory_utilization: 0.85
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_context_budget: 32768
+  disable_thinking_mode: false
+  device: "cuda"
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 512
+  max_length: 32768
+
+# Strategy - Adaptive Scaling
+strategy:
+  max_steps: 250
+  # Detector settings
+
+
+# Dataset configuration
+dataset:
+  subset: 30
+  offset: 0
+  dataset_path: "test-time-compute/test_aime24"
+  dataset_config: null
+  dataset_split: "test"
+  data_name: aime24
+
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
+report_to: wandb
+wandb_project: llm-tts-eval-aime24
+wandb_group: "adaptive_scaling_qwen3_8b_aime2024_entropy"

@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/gaokao2023en/baseline_vllm_qwen25_math_7b_instruct_gaokao2023en
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Baseline using Qwen2.5-Math-7B-Instruct on GaoKao 2023 En dataset
 
 defaults:
@@ -7,27 +8,30 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/baseline
   - /scorer/entropy
   - /evaluation/default
   - _self_
 
 # Run naming
-run_name: "baseline_qwen25_math_7b_gaokao2023en_${now:%H-%M-%S}"
+run_name: "baseline_qwen25_math_7b_gaokao2023en_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gaokao2023en
+wandb_group: "baseline_qwen25_math_7b_instruct_gaokao2023en"
 
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 4096
+  max_context_budget: 4096
 
 # System configuration
 system:
@@ -43,23 +47,11 @@ generation:
 
 # Strategy - Baseline single-shot
 strategy:
-  type: baseline
   # No semantic stop tokens for baseline (full response generation)
   # Only EOS token IDs stop generation
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   # Step token limits (required by ThinkingMarkerDetector)
-  min_step_tokens: 0
   max_step_tokens: 2048  # Match generation.max_new_tokens
   # Disable all semantic markers for baseline
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
   # No answer pattern stop tokens for baseline - only used for evaluation
   detector_answer_patterns: []
 

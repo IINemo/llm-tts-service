@@ -11,7 +11,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
     convert_trajectory_to_string,
 )
-from llm_tts.generators.vllm import CompletionReason
+from llm_tts.generators.base import CompletionReason
 
 from .strategy_base import StrategyBase
 
@@ -54,7 +54,7 @@ class PhiDecoding(StrategyBase):
         self.scorer = scorer
         self.cluster_num = cluster_num
 
-    def generate_trajectory(self, request: List[Dict[str, str]]) -> Dict[str, any]:
+    def generate_trajectory(self, request: List[Dict[str, str]]) -> Dict[str, Any]:
         """
         Generate a trajectory step-by-step using specified criterion.
 
@@ -92,7 +92,9 @@ class PhiDecoding(StrategyBase):
                 trajectory=trajectory,
                 candidates_per_step=self.candidates_per_step,
             )
-            scores_phi = self.scorer.score_candidates(request, candidates)
+            scores_phi = self.scorer.score_candidates(
+                request, candidates, trajectory=trajectory
+            )
             # Select best candidate
             best_idx, _ = self.foresight_rerank(
                 request, candidates, trajectory, self.cluster_num, step_num
@@ -121,16 +123,6 @@ class PhiDecoding(StrategyBase):
                     break
 
                 log.info("Answer pattern detected in step")
-                if not self._has_answer_content(selected_candidate):
-                    log.info("Answer content missing, generating final answer")
-                    trajectory.pop()
-                    selected_steps.pop()
-                    final_answer, final_validity = self._generate_final_answer(
-                        request, trajectory
-                    )
-                    trajectory.append(final_answer)
-                    selected_steps.append(final_answer)
-                    validity_scores.append(final_validity)
                 break
 
         if not selected_candidate.is_trajectory_complete:
@@ -161,7 +153,9 @@ class PhiDecoding(StrategyBase):
                 candidates_per_step=1,
             )
             foresight_texts.append(candidate[0].text)
-            scores_simulate = self.scorer.score_candidates(request, candidate)
+            scores_simulate = self.scorer.score_candidates(
+                request, candidate, trajectory=new_trajectory
+            )
             foresight_scores.append(scores_simulate[0] - 1.0)
         try:
             X = TfidfVectorizer().fit_transform(foresight_texts)
@@ -201,7 +195,9 @@ class PhiDecoding(StrategyBase):
         )
 
         # Score answer candidates
-        answer_validity_scores = self.scorer.score_candidates(chat, answer_candidates)
+        answer_validity_scores = self.scorer.score_candidates(
+            chat, answer_candidates, trajectory=trajectory
+        )
 
         # Select best answer based on criterion
         best_idx, _ = self._select_best_candidate(

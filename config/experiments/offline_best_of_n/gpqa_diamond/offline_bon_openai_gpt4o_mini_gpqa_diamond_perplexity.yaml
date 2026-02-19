@@ -1,0 +1,72 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gpqa_diamond/offline_bon_openai_gpt4o_mini_gpqa_diamond_perplexity
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
+# Offline Best-of-N with GPT-4o-mini (OpenAI API) + Perplexity scorer on GPQA-Diamond
+# Generates N complete trajectories, splits post-hoc, selects best based on min step perplexity
+
+defaults:
+  - /config
+  - /model/openai
+  - /generation/default
+  - /system/default
+  - /strategy/offline_bon
+  - /scorer/perplexity
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "offline_bon_openai_gpt4o_mini_gpqa_diamond_perplexity_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-gpqa-diamond
+wandb_group: "offline_bon_gpt4o_mini_gpqa_diamond_perplexity"
+
+# Model configuration (OpenAI API)
+model:
+  type: "openai_api"
+  model_path: "gpt-4o-mini"
+  model_short_name: "gpt4o_mini"
+  supports_logprobs: true
+  prefill_mode: false
+  max_context_budget: 128000
+
+# System configuration
+system:
+  device: cpu
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 16384
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+
+# Strategy - Offline Best-of-N
+strategy:
+  max_steps: 100
+  # Step boundary detector settings - used for post-hoc step splitting
+  max_step_tokens: 2048
+
+# Perplexity scorer configuration
+scorer:
+  type: perplexity
+  batch_size: 1
+
+# Dataset configuration - GPQA-Diamond
+dataset:
+  dataset_path: "test-time-compute/test_gpqa_diamond"
+  dataset_config: null
+  dataset_split: "test"
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "char"
+  data_name: gpqa_diamond
+  system_prompt: "You are an expert in graduate-level science. Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null

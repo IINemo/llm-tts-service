@@ -1,0 +1,66 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/math500/adaptive_scaling_vllm_qwen25_7.5b_math500_sequence_prob
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
+
+defaults:
+  - /config
+  - /dataset/math_500
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /strategy/adaptive
+  - /scorer/sequence_prob
+  - /evaluation/default
+  - _self_
+
+run_name: "adaptive_scaling_vllm_qwen25_7.5b_math500_sequence_prob_seed${system.seed}_${now:%H-%M-%S}"
+
+# Model configuration
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_context_budget: 4096
+  disable_thinking_mode: true
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 4096
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  batch_size: 512
+  max_length: 8192
+
+# Strategy - Adaptive Scaling
+strategy:
+  max_steps: 50
+  # Detector settings
+
+
+  batch_generation: true
+
+# Dataset configuration
+dataset:
+  subset: 500
+  offset: 0
+  dataset_path: "test-time-compute/test_MATH"
+  dataset_config: null
+  dataset_split: "test"
+  data_name: math
+
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
+report_to: wandb
+wandb_project: llm-tts-eval-math500
+wandb_group: "adaptive_scaling_qwen25_math_7b_instruct_math500_sequence_prob"

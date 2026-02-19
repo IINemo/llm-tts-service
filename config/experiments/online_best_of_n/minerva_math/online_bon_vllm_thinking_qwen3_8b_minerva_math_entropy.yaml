@@ -1,5 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/minerva_math/online_bon_vllm_thinking_qwen3_8b_minerva_math_entropy
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Online Best-of-N with vLLM + Thinking Mode (Qwen3-8B) on Minerva Math
 
 defaults:
@@ -7,27 +8,29 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/online_bon
   - /scorer/entropy
   - /evaluation/default
   - _self_
 
 # Run naming
-run_name: "online_bon_vllm_thinking_qwen3_8b_minerva_math_entropy_${now:%H-%M-%S}"
+run_name: "online_bon_vllm_thinking_qwen3_8b_minerva_math_entropy_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-minerva_math
-
+wandb_group: "online_bon_qwen3_8b_thinking_minerva_math_entropy"
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
   model_path: "Qwen/Qwen3-8B"
-  gpu_memory_utilization: 0.8
+  model_short_name: "vllm_thinking_qwen3_8b"
+  gpu_memory_utilization: 0.85
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 32768
+  max_context_budget: 32768
   disable_thinking_mode: false  # ENABLE native thinking mode
 
 # System configuration
@@ -46,27 +49,12 @@ generation:
 
 # Strategy - Online Best-of-N with thinking marker detector
 strategy:
-  type: online_best_of_n
-  candidates_per_step: 8
   max_steps: 250
   # Use VLLMStepGenerator in thinking mode
   detector_type: thinking_marker
   # Step boundary token limits
-  min_step_tokens: 50
-  max_step_tokens: 300
   # Marker categories (for vLLM stop token generation)
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false
-  use_reasoning: true
-  use_correction: false
   # Custom words for stop tokens
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
   detector_answer_patterns:
     - "<end of response>"
 

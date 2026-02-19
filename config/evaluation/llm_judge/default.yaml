@@ -3,6 +3,7 @@
 base_url: https://openrouter.ai/api/v1
 model: deepseek/deepseek-r1-0528
 n_threads: 50
+mode: answer_only
 prompt_file: ""
 cache_path: ${oc.env:HOME}/.cache
 provider: openrouter

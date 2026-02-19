@@ -3,7 +3,6 @@ from .step_scorer_confidence import StepScorerConfidence
 from .step_scorer_prm import StepScorerPRM
 from .step_scorer_self_verification import StepScorerSelfVerification
 from .step_scorer_uncertainty import StepScorerUncertainty
-from .tree_of_thoughts import TotStateScorerBase, TotValueScorer, TotVoteScorer
 
 __all__ = [
     "ChainMajorityVotingScorer",
@@ -12,7 +11,4 @@ __all__ = [
     "StepScorerPRM",
     "StepScorerSelfVerification",
     "StepScorerUncertainty",
-    "TotStateScorerBase",
-    "TotValueScorer",
-    "TotVoteScorer",
 ]

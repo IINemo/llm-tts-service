@@ -1,0 +1,10 @@
+# @package evaluation.mbpp_plus
+# MBPP+ evaluator configuration following EvalPlus methodology
+
+# Evaluation mode
+# - "full": Run EvalPlus full test suite (thorough, requires: pip install evalplus)
+# - other modes are depricated and will no work
+mode: full
+
+# Timeout per test case in seconds
+timeout: 10
