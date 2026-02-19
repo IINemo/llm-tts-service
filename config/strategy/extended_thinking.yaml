@@ -1,0 +1,9 @@
+type: extended_thinking
+max_continuations: 3
+continuation_token: "\nWait, "
+max_steps: 50
+min_step_tokens: 0
+max_step_tokens: 32768
+stop_token_ids:
+  - 151645  # <|im_end|>
+  - 151643  # <|endoftext|>

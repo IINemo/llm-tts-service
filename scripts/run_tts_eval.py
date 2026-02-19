@@ -136,6 +136,7 @@ from llm_tts.strategies import (
     StrategyBaseline,
     StrategyBeamSearch,
     StrategyDeepConf,
+    StrategyExtendedThinking,
     StrategyOfflineBestOfN,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
@@ -461,7 +462,11 @@ def create_model(config):
 
             # Self-consistency and baseline don't need uncertainty wrapper
             # (self-consistency uses majority voting, baseline uses raw vLLM batch generation)
-            if config.strategy.type in ("self_consistency", "baseline"):
+            if config.strategy.type in (
+                "self_consistency",
+                "baseline",
+                "extended_thinking",
+            ):
                 vllm_model = llm
                 log.info(
                     f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
@@ -904,6 +909,22 @@ def create_tts_strategy(
             max_empty_steps=config.strategy.max_empty_steps,
             uncertainty_threshold=config.strategy.uncertainty_threshold,
             uncertainty_sampling=config.strategy.uncertainty_sampling,
+        )
+    elif config.strategy.type == "extended_thinking":
+        eos_patterns = getattr(config.strategy, "detector_eos_patterns", None)
+        if eos_patterns:
+            eos_patterns = list(eos_patterns)
+        stop_token_ids = getattr(config.strategy, "stop_token_ids", None)
+        if stop_token_ids:
+            stop_token_ids = list(stop_token_ids)
+        strategy = StrategyExtendedThinking(
+            step_generator=step_generator,
+            max_continuations=config.strategy.get("max_continuations", 3),
+            continuation_token=config.strategy.get("continuation_token", "\nWait, "),
+            max_steps=config.strategy.get("max_steps", 50),
+            output_dir=output_dir,
+            eos_patterns=eos_patterns,
+            stop_token_ids=stop_token_ids,
         )
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
