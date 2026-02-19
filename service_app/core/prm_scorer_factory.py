@@ -43,6 +43,24 @@ class PRMScorerFactory:
                 "Set PRM_MODEL_PATH environment variable or prm_model_path in settings."
             )
 
+        # Warn if PRM + vLLM models share a device and would oversubscribe GPU memory
+        if (
+            settings.prm_use_vllm
+            and settings.vllm_model_path
+            and settings.prm_device.startswith("cuda:0")
+        ):
+            total = (
+                settings.vllm_gpu_memory_utilization
+                + settings.prm_gpu_memory_utilization
+            )
+            if total > 0.95:
+                log.warning(
+                    f"PRM and vLLM models share cuda:0 with combined "
+                    f"gpu_memory_utilization={total:.2f} (>{0.95}). "
+                    f"This will likely OOM. Lower VLLM_GPU_MEMORY_UTILIZATION "
+                    f"or PRM_GPU_MEMORY_UTILIZATION."
+                )
+
         log.info(f"Initializing PRM scorer: {settings.prm_model_path}")
 
         self._scorer = StepScorerPRM(
