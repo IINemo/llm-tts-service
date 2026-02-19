@@ -7,51 +7,53 @@ defaults:
   - /model/openrouter
   - /generation/default
   - /system/default
-  - /scorer/entropy
+  - /scorer/uncertainty_pd
   - /evaluation/human_eval_plus/default
   - _self_
 
 # Run naming
-run_name: "uncert_cot_openrouter_gpt4o_mini_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "uncert_cot_openrouter_gpt4o_mini_human_eval_plus_uncertainty_pd_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "uncert_cot_openrouter_gpt4o_mini_human_eval_plus_entropy"
+wandb_group: "uncert_cot_openrouter_gpt4o_mini_human_eval_plus_uncertainty_uncertainty_pd"
 
 # Model configuration (OpenRouter API)
 model:
-  type: "openai_api"
-  provider: openrouter
-  model_path: "openai/gpt-4o-mini"
-  api_key: null  # Set via OPENROUTER_API_KEY env var
-  supports_logprobs: true
-  prefill_mode: true
-  max_context_budget: 128000
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  gpu_memory_utilization: 0.85
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_context_budget: 32768
+  disable_thinking_mode: false
 
 # System configuration
 system:
-  device: cpu
+  device: cuda
   seed: 0
 
 # Generation configuration
 generation:
-  max_new_tokens: 16384
+  max_new_tokens: 32768
   temperature: 0.6
   top_p: 0.95
   top_k: 20
   batch_size: 1
+  max_length: 65536
 
 strategy:
   type: "uncertainty_cot"
-  uncertainty_sampling: "token"
+  uncertainty_sampling: "sequence"
   candidates_per_step: 8
   max_steps: 20
   max_empty_steps: 5
   uncertainty_threshold: 0.3
-  min_step_tokens: 50
-  max_step_tokens: 300
+  min_step_tokens: 10
+  max_step_tokens: 500
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
@@ -76,6 +78,7 @@ dataset:
   answer_field: "answer"
   answer_format: "code"
   prompt_file: null
+  system_prompt: "Do not output any other code except for asked self-contained Python script. Do not provide any guides on how to run it. Code will be parsed from codeblock to check it's correct."
 
 # Evaluation configuration
 evaluation:
