@@ -44,6 +44,7 @@ generation:
 # Strategy - Adaptive Scaling
 strategy:
   max_steps: 50
+  use_structure: true
   # Detector settings
 
 
