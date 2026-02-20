@@ -258,29 +258,40 @@ def _save_csv(
 ):
     """Save results as CSV in long format.
 
-    Format: scorer, window, aggregation, exact_match
-    Oracle row at the top with empty window/aggregation fields.
+    Format: scorer, aggregation, window, exact_match
+    Sorted by scorer, then aggregation, then window (1, 2, ..., all).
+    Oracle row at the top with empty aggregation/window fields.
     """
     if not all_results:
         return
 
+    # Collect all scorers and aggregation methods
+    first_window_results = next(iter(all_results.values()))
+    scorer_types = sorted(first_window_results.keys())
+    first_scorer = next(iter(first_window_results.values()))
+    agg_methods = list(first_scorer.keys())
+
+    # Build ordered window list: numeric sorted, then "all" at the end
+    window_order = []
+    for wl in all_results:
+        val = wl.split("=", 1)[1]
+        window_order.append(val)
+    window_order.sort(key=lambda w: (0, int(w)) if w != "all" else (1, 0))
+
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["scorer", "window", "aggregation", "exact_match"])
+        writer.writerow(["scorer", "aggregation", "window", "exact_match"])
 
         # Oracle row at the top
         writer.writerow(["oracle", "", "", f"{oracle_acc:.4f}"])
 
-        for window_label, results in all_results.items():
-            window_val = window_label.split("=", 1)[1]
-
-            first_scorer = next(iter(results.values()))
-            agg_methods = list(first_scorer.keys())
-
-            for scorer_type in results:
-                for agg in agg_methods:
-                    acc = results[scorer_type].get(agg, 0.0)
-                    writer.writerow([scorer_type, window_val, agg, f"{acc:.4f}"])
+        for scorer_type in scorer_types:
+            for agg in agg_methods:
+                for window_val in window_order:
+                    window_label = f"window={window_val}"
+                    results = all_results.get(window_label, {})
+                    acc = results.get(scorer_type, {}).get(agg, 0.0)
+                    writer.writerow([scorer_type, agg, window_val, f"{acc:.4f}"])
 
 
 def main():
