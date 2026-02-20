@@ -55,6 +55,7 @@ strategy:
   candidates_per_beam: 8
   max_steps: 30
   scoring_window: 3         # Only use last 3 step scores for aggregation
+  scoring_window_label: "window_3"
 
 # Perplexity scorer configuration (uses same model, no separate GPU needed)
 scorer:

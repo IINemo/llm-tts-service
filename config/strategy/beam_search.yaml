@@ -1,6 +1,7 @@
 type: beam_search
 aggregation: mean
 scoring_window: null
+scoring_window_label: ""  # e.g. "window_3", "window_5", "window_all" — used in output path
 batch_generation: true
 prompt_buffer: 500
 min_step_tokens: 50

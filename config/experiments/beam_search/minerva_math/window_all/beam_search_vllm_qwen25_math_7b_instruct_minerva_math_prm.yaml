@@ -54,6 +54,7 @@ strategy:
   candidates_per_beam: 8    # Number of candidates to generate per beam
   max_steps: 30             # Maximum reasoning steps
   scoring_window: null      # Use all step scores for aggregation (baseline)
+  scoring_window_label: "window_all"
 
 # PRM scorer configuration
 scorer:
