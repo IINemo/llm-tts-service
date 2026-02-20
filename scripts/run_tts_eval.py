@@ -917,6 +917,7 @@ def create_tts_strategy(
             max_steps=config.strategy.max_steps,
             aggregation=getattr(config.strategy, "aggregation", "mean"),
             batch_generation=config.strategy.get("batch_generation", True),
+            scoring_window=config.strategy.get("scoring_window", None),
         )
     elif config.strategy.type == "phi_decoding":
         strategy = PhiDecoding(

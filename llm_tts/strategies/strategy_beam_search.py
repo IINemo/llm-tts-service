@@ -78,6 +78,8 @@ class StrategyBeamSearch(StrategyBase):
         max_steps: Maximum reasoning steps.
         aggregation: How to aggregate scores across steps ("mean", "sum", "min", "max", "product").
         batch_generation: If True, use batched mode in generate_trajectories_batch.
+        scoring_window: If set, only use the last N step scores for aggregation.
+            None means use all steps (default).
     """
 
     def __init__(
@@ -92,6 +94,7 @@ class StrategyBeamSearch(StrategyBase):
         aggregation: str = "mean",
         batch_generation: bool = True,
         prompt_buffer: int = 500,
+        scoring_window: Optional[int] = None,
     ):
         self.step_generator = step_generator
         self.scorer = scorer
@@ -101,6 +104,7 @@ class StrategyBeamSearch(StrategyBase):
         self.aggregation = aggregation
         self.batch_generation = batch_generation
         self.prompt_buffer = prompt_buffer
+        self.scoring_window = scoring_window
 
         if beam_size <= 0:
             raise ValueError(f"beam_size must be > 0, got {beam_size}")
@@ -120,6 +124,7 @@ class StrategyBeamSearch(StrategyBase):
             f"StrategyBeamSearch initialized: beam_size={beam_size}, "
             f"candidates_per_beam={candidates_per_beam}, max_steps={max_steps}, "
             f"aggregation={aggregation}, batch_generation={batch_generation}, "
+            f"scoring_window={scoring_window}, "
             f"stop_tokens={len(stop_tokens)}, min_step_tokens={min_step_tokens}, "
             f"eos_token_ids={eos_token_ids}"
         )
@@ -905,6 +910,9 @@ class StrategyBeamSearch(StrategyBase):
             log.warning(
                 f"Dropped {len(scores) - len(clean)} non-finite scores out of {len(scores)}"
             )
+        # Apply sliding window: only use the last N valid scores
+        if self.scoring_window is not None and len(clean) > self.scoring_window:
+            clean = clean[-self.scoring_window:]
         if self.aggregation == "sum":
             return sum(clean)
         elif self.aggregation == "mean":
