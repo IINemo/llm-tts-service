@@ -210,7 +210,9 @@ def analyze(
                     continue
 
                 best_idx = select_best_candidate(
-                    candidates, scorer_type, agg_method,
+                    candidates,
+                    scorer_type,
+                    agg_method,
                     scoring_window=scoring_window,
                 )
 
@@ -371,7 +373,9 @@ def main():
     )
     em_correct = sum(1 for labels in em_labels if any(labels))
     oracle_acc = em_correct / len(em_labels) if em_labels else 0.0
-    log.info(f"Exact match: {em_correct}/{len(em_labels)} samples have at least one correct candidate (oracle={oracle_acc:.4f})")
+    log.info(
+        f"Exact match: {em_correct}/{len(em_labels)} samples have at least one correct candidate (oracle={oracle_acc:.4f})"
+    )
 
     # Build list of windows to evaluate
     windows = [None]  # always include "all steps"

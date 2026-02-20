@@ -38,6 +38,7 @@ def _get_basic_calculator():
     global _calc_basic
     if _calc_basic is None:
         from lm_polygraph.stat_calculators import VLLMLogprobsCalculator
+
         _calc_basic = VLLMLogprobsCalculator(output_matrix=False)
     return _calc_basic
 
@@ -46,6 +47,7 @@ def _get_matrix_calculator():
     global _calc_matrix
     if _calc_matrix is None:
         from lm_polygraph.stat_calculators import VLLMLogprobsCalculator
+
         _calc_matrix = VLLMLogprobsCalculator(output_matrix=True)
     return _calc_matrix
 
@@ -54,6 +56,7 @@ def _get_entropy_calculator():
     global _calc_entropy
     if _calc_entropy is None:
         from lm_polygraph.stat_calculators import EntropyCalculator
+
         _calc_entropy = EntropyCalculator()
     return _calc_entropy
 
@@ -62,6 +65,7 @@ def _get_pd_gap_estimator():
     global _estimator_pd_gap
     if _estimator_pd_gap is None:
         from llm_tts.scorers.estimator_uncertainty_pd import PDGap
+
         _estimator_pd_gap = PDGap()
     return _estimator_pd_gap
 
@@ -85,9 +89,15 @@ def compute_logprob_scores(
         return {m: float("nan") for m in metrics}
 
     results = {}
-    needs_basic = any(not _METRIC_REQUIREMENTS[m][0] for m in metrics if m in _METRIC_REQUIREMENTS)
-    needs_matrix = any(_METRIC_REQUIREMENTS[m][0] for m in metrics if m in _METRIC_REQUIREMENTS)
-    needs_entropy = any(_METRIC_REQUIREMENTS[m][1] for m in metrics if m in _METRIC_REQUIREMENTS)
+    needs_basic = any(
+        not _METRIC_REQUIREMENTS[m][0] for m in metrics if m in _METRIC_REQUIREMENTS
+    )
+    needs_matrix = any(
+        _METRIC_REQUIREMENTS[m][0] for m in metrics if m in _METRIC_REQUIREMENTS
+    )
+    needs_entropy = any(
+        _METRIC_REQUIREMENTS[m][1] for m in metrics if m in _METRIC_REQUIREMENTS
+    )
 
     deps = {"token_ids": token_ids, "logprobs": raw_logprobs}
 
@@ -104,7 +114,9 @@ def compute_logprob_scores(
     # Compute entropy if needed
     entropy_stats = None
     if needs_entropy and basic_stats:
-        entropy_stats = _get_entropy_calculator()({"greedy_log_probs": basic_stats["greedy_log_probs"]})
+        entropy_stats = _get_entropy_calculator()(
+            {"greedy_log_probs": basic_stats["greedy_log_probs"]}
+        )
 
     # Compute each requested metric
     for metric in metrics:
@@ -127,7 +139,9 @@ def compute_logprob_scores(
                 results[metric] = float(np.mean(ent)) if ent else float("nan")
 
             elif metric == "pd_gap":
-                unc = _get_pd_gap_estimator()({"greedy_log_probs": matrix_stats["greedy_log_probs"]})
+                unc = _get_pd_gap_estimator()(
+                    {"greedy_log_probs": matrix_stats["greedy_log_probs"]}
+                )
                 results[metric] = float(unc[0]) if len(unc) > 0 else float("nan")
 
         except Exception as e:

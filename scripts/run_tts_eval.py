@@ -845,9 +845,7 @@ def create_tts_strategy(
                 hasattr(scorer, "prm_model") and scorer.prm_model is not None
             )
             if not primary_is_prm:
-                prm_model_path = getattr(
-                    config.strategy, "prm_model_path", None
-                )
+                prm_model_path = getattr(config.strategy, "prm_model_path", None)
                 if prm_model_path:
                     log.info(
                         f"Creating extra PRM scorer for multi-scoring: {prm_model_path}"
@@ -856,7 +854,9 @@ def create_tts_strategy(
                         prm_model_path=prm_model_path,
                         device=getattr(config.strategy, "prm_device", "cuda:1"),
                         batch_size=getattr(config.strategy, "prm_batch_size", 4),
-                        torch_dtype=getattr(config.strategy, "prm_torch_dtype", "bfloat16"),
+                        torch_dtype=getattr(
+                            config.strategy, "prm_torch_dtype", "bfloat16"
+                        ),
                         use_vllm=getattr(config.strategy, "prm_use_vllm", True),
                     )
                 else:
@@ -1372,13 +1372,15 @@ def _generate_trajectories_batch(
 
             # Collect candidates_data for multi-scoring analysis
             if "candidates_data" in result:
-                all_candidates_data.append({
-                    "index": i,
-                    "question": question,
-                    "gold_answer": gold_answer_num,
-                    "num_candidates": len(result["candidates_data"]),
-                    "candidates": result["candidates_data"],
-                })
+                all_candidates_data.append(
+                    {
+                        "index": i,
+                        "question": question,
+                        "gold_answer": gold_answer_num,
+                        "num_candidates": len(result["candidates_data"]),
+                        "candidates": result["candidates_data"],
+                    }
+                )
 
             # Compute running metrics
             token_stats = result.get("token_stats")

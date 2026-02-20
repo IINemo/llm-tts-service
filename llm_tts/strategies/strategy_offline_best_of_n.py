@@ -678,7 +678,9 @@ class StrategyOfflineBestOfN(StrategyBase):
                 continue
             for traj_data in data["trajectories"]:
                 candidate = traj_data["candidate"]
-                if not candidate.other_data or not candidate.other_data.get("raw_logprobs"):
+                if not candidate.other_data or not candidate.other_data.get(
+                    "raw_logprobs"
+                ):
                     continue
 
                 token_ids = list(candidate.token_ids)
@@ -734,7 +736,11 @@ class StrategyOfflineBestOfN(StrategyBase):
                     valid_scores = [s for s in step_scores if s is not None]
                     extra_scores["prm"] = {
                         "per_step": step_scores,
-                        "trajectory": float(np.mean(valid_scores)) if valid_scores else float("nan"),
+                        "trajectory": (
+                            float(np.mean(valid_scores))
+                            if valid_scores
+                            else float("nan")
+                        ),
                     }
                     traj_data["extra_scores"] = extra_scores
             log.info("Reused primary PRM scores for multi-scoring candidates_data")
