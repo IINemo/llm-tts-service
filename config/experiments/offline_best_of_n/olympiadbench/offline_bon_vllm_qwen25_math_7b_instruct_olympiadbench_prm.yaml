@@ -52,6 +52,7 @@ generation:
 # Strategy - Offline Best-of-N (single-call generation with post-hoc step splitting)
 strategy:
   max_steps: 100
+  checkpoint_batch_size: 400
   # Stop tokens derived from detector config (use_* flags below)
   # Step boundary token limits
   max_step_tokens: 2048

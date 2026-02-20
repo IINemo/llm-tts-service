@@ -53,6 +53,7 @@ generation:
 strategy:
   max_steps: 100
   max_step_tokens: 2048
+  checkpoint_batch_size: 400
   # Multi-scoring: compute all logprob-based metrics + PRM
   calculate_entropy_score: true
   calculate_perplexity_score: true
