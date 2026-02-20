@@ -27,22 +27,43 @@ _METRIC_REQUIREMENTS = {
     "pd_gap": (True, False),
 }
 
-
-def _run_logprobs_calculator(token_ids, raw_logprobs, output_matrix=False):
-    """Run VLLMLogprobsCalculator on token_ids and logprobs."""
-    from lm_polygraph.stat_calculators import VLLMLogprobsCalculator
-
-    calc = VLLMLogprobsCalculator(output_matrix=output_matrix)
-    deps = {"token_ids": token_ids, "logprobs": raw_logprobs}
-    return calc(deps)
+# Cached calculator/estimator instances (created once, reused across calls)
+_calc_basic = None
+_calc_matrix = None
+_calc_entropy = None
+_estimator_pd_gap = None
 
 
-def _compute_entropy(greedy_log_probs):
-    """Compute per-token entropy from greedy_log_probs (list of 1D arrays)."""
-    from lm_polygraph.stat_calculators import EntropyCalculator
+def _get_basic_calculator():
+    global _calc_basic
+    if _calc_basic is None:
+        from lm_polygraph.stat_calculators import VLLMLogprobsCalculator
+        _calc_basic = VLLMLogprobsCalculator(output_matrix=False)
+    return _calc_basic
 
-    calc = EntropyCalculator()
-    return calc({"greedy_log_probs": greedy_log_probs})
+
+def _get_matrix_calculator():
+    global _calc_matrix
+    if _calc_matrix is None:
+        from lm_polygraph.stat_calculators import VLLMLogprobsCalculator
+        _calc_matrix = VLLMLogprobsCalculator(output_matrix=True)
+    return _calc_matrix
+
+
+def _get_entropy_calculator():
+    global _calc_entropy
+    if _calc_entropy is None:
+        from lm_polygraph.stat_calculators import EntropyCalculator
+        _calc_entropy = EntropyCalculator()
+    return _calc_entropy
+
+
+def _get_pd_gap_estimator():
+    global _estimator_pd_gap
+    if _estimator_pd_gap is None:
+        from llm_tts.scorers.estimator_uncertainty_pd import PDGap
+        _estimator_pd_gap = PDGap()
+    return _estimator_pd_gap
 
 
 def compute_logprob_scores(
@@ -68,20 +89,22 @@ def compute_logprob_scores(
     needs_matrix = any(_METRIC_REQUIREMENTS[m][0] for m in metrics if m in _METRIC_REQUIREMENTS)
     needs_entropy = any(_METRIC_REQUIREMENTS[m][1] for m in metrics if m in _METRIC_REQUIREMENTS)
 
+    deps = {"token_ids": token_ids, "logprobs": raw_logprobs}
+
     # Run basic calculator (for perplexity, sequence_prob, entropy)
     basic_stats = None
     if needs_basic or needs_entropy:
-        basic_stats = _run_logprobs_calculator(token_ids, raw_logprobs, output_matrix=False)
+        basic_stats = _get_basic_calculator()(deps)
 
     # Run matrix calculator (for pd_gap)
     matrix_stats = None
     if needs_matrix:
-        matrix_stats = _run_logprobs_calculator(token_ids, raw_logprobs, output_matrix=True)
+        matrix_stats = _get_matrix_calculator()(deps)
 
     # Compute entropy if needed
     entropy_stats = None
     if needs_entropy and basic_stats:
-        entropy_stats = _compute_entropy(basic_stats["greedy_log_probs"])
+        entropy_stats = _get_entropy_calculator()({"greedy_log_probs": basic_stats["greedy_log_probs"]})
 
     # Compute each requested metric
     for metric in metrics:
@@ -104,10 +127,7 @@ def compute_logprob_scores(
                 results[metric] = float(np.mean(ent)) if ent else float("nan")
 
             elif metric == "pd_gap":
-                from llm_tts.scorers.estimator_uncertainty_pd import PDGap
-
-                estimator = PDGap()
-                unc = estimator({"greedy_log_probs": matrix_stats["greedy_log_probs"]})
+                unc = _get_pd_gap_estimator()({"greedy_log_probs": matrix_stats["greedy_log_probs"]})
                 results[metric] = float(unc[0]) if len(unc) > 0 else float("nan")
 
         except Exception as e:
@@ -126,7 +146,7 @@ def compute_logprob_scores_per_step(
 ) -> Dict[str, List[float]]:
     """Compute requested metrics per-step by splitting token_ids at step boundaries.
 
-    Uses text→token boundary mapping: decodes tokens incrementally to find where
+    Uses text->token boundary mapping: decodes tokens incrementally to find where
     each step's text ends in the token sequence.
 
     Args:
