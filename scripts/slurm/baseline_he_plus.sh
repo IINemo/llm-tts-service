@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=bl_he_plus
+#SBATCH --job-name=[MARS-3554]bl_he_plus
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=20
-#SBATCH --mem=64gb
+#SBATCH --mem=32gb
 #SBATCH --gres=gpu:1
+#SBATCH --partition=1gpu
 
 srun --container-image=artifactory.mts.ai/ml-docker/gpt_transformers_pytorch_24_12 \
      --container-name=bl_he_plus \
