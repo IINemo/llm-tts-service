@@ -2,6 +2,7 @@ type: offline_best_of_n
 num_trajectories: 8
 score_aggregation: min
 batch_generation: true
+# scoring_window: null  # Use last N steps for aggregation (null = all steps)
 min_step_tokens: 50
 stop_token_ids:
   - 151645  # <|im_end|>

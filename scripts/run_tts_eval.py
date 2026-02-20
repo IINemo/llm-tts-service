@@ -872,6 +872,7 @@ def create_tts_strategy(
             score_aggregation=config.strategy.get("score_aggregation", "mean"),
             output_dir=output_dir,
             batch_generation=batch_generation,
+            scoring_window=config.strategy.get("scoring_window", None),
             prm_scorer=extra_prm_scorer,
             **multi_score_flags,
         )

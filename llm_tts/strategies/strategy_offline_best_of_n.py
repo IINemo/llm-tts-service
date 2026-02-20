@@ -61,6 +61,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         calculate_pd_gap_score: bool = False,
         calculate_prm_score: bool = False,
         prm_scorer=None,
+        scoring_window: Optional[int] = None,
     ):
         """
         Initialize offline best-of-n strategy.
@@ -79,6 +80,8 @@ class StrategyOfflineBestOfN(StrategyBase):
             calculate_pd_gap_score: Compute PD-gap scores for all candidates
             calculate_prm_score: Compute PRM scores for all candidates (requires prm_scorer)
             prm_scorer: StepScorerPRM instance for PRM scoring (only if calculate_prm_score=True)
+            scoring_window: If set, only use the last N steps for score aggregation.
+                None means use all steps (default).
         """
         self.scorer = scorer
         self.num_trajectories = num_trajectories
@@ -87,6 +90,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         self.score_aggregation = score_aggregation
         self.output_dir = output_dir
         self.batch_generation = batch_generation
+        self.scoring_window = scoring_window
         self._current_sample_idx = 0
 
         # Per-scorer flags for multi-scoring
@@ -110,10 +114,12 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         self._multi_scoring_enabled = bool(self._extra_metrics) or calculate_prm_score
 
+        window_str = f", scoring_window={scoring_window}" if scoring_window else ""
         log.info(
             f"StrategyOfflineBestOfN initialized: "
             f"{num_trajectories} trajectories, max_steps={max_steps}, "
             f"aggregation={score_aggregation}, batch_generation={batch_generation}"
+            f"{window_str}"
         )
         if self._multi_scoring_enabled:
             extra_info = []
@@ -237,6 +243,10 @@ class StrategyOfflineBestOfN(StrategyBase):
             )
         if not valid_scores:
             return 0.0
+
+        # Apply sliding window: only use the last N valid scores
+        if self.scoring_window is not None and len(valid_scores) > self.scoring_window:
+            valid_scores = valid_scores[-self.scoring_window :]
 
         if self.score_aggregation == "mean":
             return float(np.mean(valid_scores))
