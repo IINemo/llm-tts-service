@@ -846,6 +846,24 @@ def _create_api_model_for_scorer(model_cfg):
     else:
         api_key = model_cfg.get("api_key") or os.getenv("OPENAI_API_KEY")
 
+    # Validate scorer API connection before proceeding
+    log.info(f"Validating scorer API connection: {model_path} at {base_url}...")
+    try:
+        test_client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        response = test_client.chat.completions.create(
+            model=model_path,
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_tokens=16,
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        log.info(f"Scorer API connection validated: response='{text}'")
+    except Exception as e:
+        raise ConnectionError(
+            f"Scorer API connection failed: {e}. "
+            f"Check that the API is accessible at {base_url} "
+            f"with model {model_path}"
+        ) from e
+
     return BlackboxModelWithStreaming(
         openai_api_key=api_key,
         model_path=model_path,

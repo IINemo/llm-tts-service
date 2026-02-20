@@ -1051,8 +1051,8 @@ class StepScorerSelfVerification(StepScorerBase):
         import openai
 
         messages = [{"role": "user", "content": prompt}]
-        max_retries = 3
-        base_delay = 2.0
+        max_retries = 5
+        base_delay = 3.0
 
         # Use model's openai client directly for thread-safe concurrent calls
         client = getattr(self.model, "client", None) or getattr(
@@ -1120,7 +1120,7 @@ class StepScorerSelfVerification(StepScorerBase):
         """Call API for multiple prompts in parallel using ThreadPoolExecutor."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        max_workers = min(len(prompts), 50)
+        max_workers = min(len(prompts), 10)
         log.info(f"Parallel API batch: {len(prompts)} prompts, {max_workers} workers")
 
         results = [""] * len(prompts)
