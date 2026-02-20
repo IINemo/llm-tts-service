@@ -90,7 +90,7 @@ class StepScorerSelfVerification(StepScorerBase):
         vote_prompt_file: str = None,
         use_vllm: bool = False,
         score_aggregation: str = "sum",
-        trajectory_context_steps: int = 0,
+        trajectory_context_steps: float = 0,
         name: str = "self_verification",
     ):
         super().__init__(name=name)
@@ -1227,7 +1227,9 @@ class StepScorerSelfVerification(StepScorerBase):
     def _trajectory_to_text(self, trajectory: Optional[List[Any]]) -> str:
         """Convert trajectory to text representation.
 
-        If trajectory_context_steps > 0, only the last N steps are included.
+        If trajectory_context_steps is an int > 0, only the last N steps are included.
+        If trajectory_context_steps is a float between 0 and 1, it's treated as a
+        fraction of total steps (e.g., 0.2 = last 20%), with a minimum of 1 step.
         """
         if not trajectory:
             return ""
@@ -1239,11 +1241,16 @@ class StepScorerSelfVerification(StepScorerBase):
             else:
                 steps.append(str(step))
 
-        if (
-            self.trajectory_context_steps > 0
-            and len(steps) > self.trajectory_context_steps
-        ):
-            steps = steps[-self.trajectory_context_steps :]
+        if self.trajectory_context_steps > 0:
+            if 0 < self.trajectory_context_steps < 1:
+                # Fraction: take last X% of steps
+                import math
+
+                n_keep = max(1, math.ceil(len(steps) * self.trajectory_context_steps))
+            else:
+                n_keep = int(self.trajectory_context_steps)
+            if len(steps) > n_keep:
+                steps = steps[-n_keep:]
 
         return "\n".join(steps)
 

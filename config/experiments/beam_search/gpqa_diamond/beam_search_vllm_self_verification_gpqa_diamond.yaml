@@ -64,7 +64,7 @@ scorer:
   temperature: 0.1
   max_tokens: 1024
   timeout: 120
-  trajectory_context_steps: 5
+  trajectory_context_steps: 0.2
   value_prompt_file: "tree-of-thought/self_verification/value_prompt_science_strict.txt"
   model:
     type: openai_api
