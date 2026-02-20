@@ -1075,6 +1075,7 @@ class StepScorerSelfVerification(StepScorerBase):
                     temperature=self.temperature,
                     n=1,
                     timeout=self.timeout,
+                    extra_body={"reasoning_effort": "low"},
                 )
 
                 if response.choices:

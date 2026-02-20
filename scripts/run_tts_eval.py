@@ -854,6 +854,7 @@ def _create_api_model_for_scorer(model_cfg):
             model=model_path,
             messages=[{"role": "user", "content": "Say OK"}],
             max_tokens=256,
+            extra_body={"reasoning_effort": "low"},
         )
         msg = response.choices[0].message if response.choices else None
         text = (
