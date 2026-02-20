@@ -91,7 +91,6 @@ class StepScorerSelfVerification(StepScorerBase):
         use_vllm: bool = False,
         score_aggregation: str = "sum",
         trajectory_context_steps: int = 0,
-        disable_reasoning: bool = False,
         name: str = "self_verification",
     ):
         super().__init__(name=name)
@@ -106,7 +105,6 @@ class StepScorerSelfVerification(StepScorerBase):
         self.use_local = False
         self.score_aggregation = score_aggregation
         self.trajectory_context_steps = trajectory_context_steps
-        self.disable_reasoning = disable_reasoning
 
         # Load prompts: priority is direct string > custom file > default file
         self.value_prompt = self._load_prompt(
@@ -1070,7 +1068,7 @@ class StepScorerSelfVerification(StepScorerBase):
 
         for attempt in range(max_retries):
             try:
-                api_kwargs = dict(
+                response = client.chat.completions.create(
                     model=model_name,
                     messages=messages,
                     max_tokens=self.max_tokens,
@@ -1078,11 +1076,6 @@ class StepScorerSelfVerification(StepScorerBase):
                     n=1,
                     timeout=self.timeout,
                 )
-                if self.disable_reasoning:
-                    api_kwargs["extra_body"] = {
-                        "reasoning_effort": "none",
-                    }
-                response = client.chat.completions.create(**api_kwargs)
 
                 if response.choices:
                     msg = response.choices[0].message
