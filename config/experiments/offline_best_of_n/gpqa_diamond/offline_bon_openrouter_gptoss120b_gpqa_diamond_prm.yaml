@@ -1,0 +1,87 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/gpqa_diamond/offline_bon_openrouter_gptoss120b_gpqa_diamond_prm
+# Offline Best-of-N for GPQA-Diamond using OpenRouter API + PRM scorer
+#
+# Environment variable required: OPENROUTER_API_KEY
+
+defaults:
+  - /config
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - /scorer/prm
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "offline_bon_openrouter_gptoss120b_gpqa_diamond_prm_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-gpqa-diamond
+wandb_group: "offline_bon_openrouter_gptoss120b_gpqa_diamond_prm"
+
+# Model configuration (OpenRouter API)
+model:
+  type: "openai_api"
+  provider: openrouter
+  model_path: "openai/gpt-oss-120b"
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  supports_logprobs: true
+  prefill_mode: false
+  max_context_budget: 128000
+  disable_thinking_mode: false
+
+# System configuration
+system:
+  device: cpu
+  seed: 0
+
+# Generation configuration
+generation:
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+
+# Strategy - Offline Best-of-N
+strategy:
+  type: offline_best_of_n
+  num_trajectories: 8
+  max_steps: 100
+  score_aggregation: min
+  batch_generation: true
+  # Step boundary detector settings - used for post-hoc step splitting
+  min_step_tokens: 10
+  max_step_tokens: 2048
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: false
+  use_reasoning: true
+  use_correction: false
+
+# PRM scorer configuration
+scorer:
+  type: prm
+  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+  device: cuda:0
+  batch_size: 1
+
+# Dataset configuration - GPQA-Diamond
+dataset:
+  dataset_path: "test-time-compute/test_gpqa_diamond"
+  dataset_config: null
+  dataset_split: "test"
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "char"
+  data_name: "gpqa_diamond"
+  system_prompt: "You are an expert in graduate-level science. Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
