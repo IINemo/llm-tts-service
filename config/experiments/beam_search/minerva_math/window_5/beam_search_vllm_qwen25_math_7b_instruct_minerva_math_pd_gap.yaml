@@ -1,9 +1,9 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/beam_search_vllm_nothink_qwen25_7b_minerva_math_sequence_prob
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/window_5/beam_search_vllm_nothink_qwen25_7b_minerva_math_pd_gap
 # Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Beam Search with vLLM + Non-Thinking Mode (Qwen2.5-7B) on Minerva Math
-# Uses Sequence Probability scorer for step evaluation (sum of log-probs, not normalized)
-# Maintains B beams, expands each with N candidates, prunes to top-B at each step
+# Uses PD-Gap (Probability Difference Gap) scorer for step evaluation (no separate PRM model needed)
+# scoring_window=5: only last 5 step scores used for beam ranking
 
 defaults:
   - /config
@@ -11,20 +11,20 @@ defaults:
   - /generation/default
   - /system/default
   - /strategy/beam_search
-  - /scorer/sequence_prob
+  - /scorer/uncertainty_pd
   - /evaluation/default
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_nothink_qwen25_7b_minerva_math_sequence_prob_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_nothink_qwen25_7b_minerva_math_pd_gap_window_5_mean_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-minerva-math
-wandb_group: "beam_search_qwen25_math_7b_instruct_minerva_math_sequence_prob"
+wandb_group: "beam_search_qwen25_math_7b_instruct_minerva_math_pd_gap_window_5_mean"
 # Model configuration (vLLM backend)
-# Single GPU since sequence_prob scorer uses the same model (no separate PRM)
+# Single GPU since pd_gap scorer uses the same model (no separate PRM)
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
@@ -54,10 +54,12 @@ strategy:
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30
+  scoring_window: 5         # Only use last 5 step scores for aggregation
+  scoring_window_label: "window_5"
 
-# Sequence probability scorer configuration (uses same model, no separate GPU needed)
+# PD-Gap scorer configuration (uses same model, no separate GPU needed)
 scorer:
-  type: sequence_prob
+  type: uncertainty_pd
   batch_size: 1
 
 # Dataset configuration - Minerva Math
