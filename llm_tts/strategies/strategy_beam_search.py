@@ -912,7 +912,7 @@ class StrategyBeamSearch(StrategyBase):
             )
         # Apply sliding window: only use the last N valid scores
         if self.scoring_window is not None and len(clean) > self.scoring_window:
-            clean = clean[-self.scoring_window:]
+            clean = clean[-self.scoring_window :]
         if self.aggregation == "sum":
             return sum(clean)
         elif self.aggregation == "mean":
