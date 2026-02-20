@@ -11,19 +11,20 @@ Usage:
         --candidates-path outputs/.../candidates.json \
         --data-name math500
 
-    # With custom last-k value:
+    # With all scoring windows:
     python scripts/analyze_candidates.py \
         --candidates-path outputs/.../candidates.json \
         --data-name math500 \
-        --last-k 5
+        --scoring-windows all
 """
 
 import argparse
+import csv
 import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -46,15 +47,13 @@ def load_candidates(path: str) -> List[Dict]:
 def aggregate_scores(
     per_step_scores: List[float],
     method: str,
-    last_k: int = 3,
     scoring_window: Optional[int] = None,
 ) -> float:
     """Aggregate per-step scores into a single trajectory score.
 
     Args:
         per_step_scores: List of per-step scores
-        method: Aggregation method (mean, min, max, last, last_k, product)
-        last_k: Number of last steps for 'last_k' method
+        method: Aggregation method (mean, min, max, product)
         scoring_window: If set, only use the last N steps before aggregation
 
     Returns:
@@ -74,10 +73,6 @@ def aggregate_scores(
         return float(np.min(valid))
     elif method == "max":
         return float(np.max(valid))
-    elif method == "last":
-        return valid[-1]
-    elif method == "last_k":
-        return float(np.mean(valid[-last_k:])) if valid else float("nan")
     elif method == "product":
         return float(np.prod(valid))
     else:
@@ -88,7 +83,6 @@ def select_best_candidate(
     candidates: List[Dict],
     scorer_type: str,
     aggregation: str,
-    last_k: int = 3,
     scoring_window: Optional[int] = None,
 ) -> Optional[int]:
     """Select the best candidate index using the given scorer and aggregation.
@@ -101,7 +95,6 @@ def select_best_candidate(
         candidates: List of candidate dicts with 'scores' field
         scorer_type: Score type to use (e.g. "perplexity", "prm")
         aggregation: Aggregation method
-        last_k: K for last_k aggregation
         scoring_window: If set, only use the last N steps before aggregation
 
     Returns:
@@ -125,7 +118,7 @@ def select_best_candidate(
             # Fall back to trajectory-level score
             agg_score = scorer_data.get("trajectory", float("nan"))
         else:
-            agg_score = aggregate_scores(per_step, aggregation, last_k, scoring_window)
+            agg_score = aggregate_scores(per_step, aggregation, scoring_window)
 
         if np.isnan(agg_score):
             continue
@@ -143,29 +136,53 @@ def select_best_candidate(
     return best_idx
 
 
-def analyze(
+def precompute_correctness(
     candidates_data: List[Dict],
     data_name: str,
     answer_format: str = "numeric",
-    last_k: int = 3,
-    scoring_window: Optional[int] = None,
-) -> Dict[str, Dict[str, float]]:
-    """Run post-hoc analysis on candidates data.
-
-    Args:
-        candidates_data: List of sample dicts from candidates.json
-        data_name: Dataset name for answer comparison
-        answer_format: Answer format for exact match evaluation
-        last_k: K for last_k aggregation
-        scoring_window: If set, only use the last N steps before aggregation
+) -> List[List[bool]]:
+    """Pre-compute exact-match correctness of each candidate answer once.
 
     Returns:
-        Nested dict: {scorer_type: {aggregation: accuracy}}
+        List of lists: correctness_labels[sample_idx][candidate_idx] = True/False
     """
     evaluator = EvaluatorExactMatch(
         dataset_answer_format=answer_format, data_name=data_name
     )
 
+    correctness_labels = []
+    for sample in candidates_data:
+        gold_answer = str(sample.get("gold_answer", ""))
+        candidates = sample.get("candidates", [])
+        question = sample.get("question", "")
+        sample_labels = []
+        for candidate in candidates:
+            extracted = candidate.get("extracted_answer", "")
+            score = evaluator._score_single(
+                (question, str(extracted), gold_answer),
+                pre_extracted=True,
+            )
+            sample_labels.append(score > 0)
+        correctness_labels.append(sample_labels)
+
+    return correctness_labels
+
+
+def analyze(
+    candidates_data: List[Dict],
+    correctness_labels: List[List[bool]],
+    scoring_window: Optional[int] = None,
+) -> Dict[str, Dict[str, float]]:
+    """Run post-hoc analysis using pre-computed correctness labels.
+
+    Args:
+        candidates_data: List of sample dicts from candidates.json
+        correctness_labels: Pre-computed correctness per candidate
+        scoring_window: If set, only use the last N steps before aggregation
+
+    Returns:
+        Nested dict: {scorer_type: {aggregation: accuracy}}
+    """
     # Discover available scorer types from data
     scorer_types = set()
     for sample in candidates_data:
@@ -177,9 +194,8 @@ def analyze(
         log.error("No scorer types found in candidates data")
         return {}
 
-    aggregation_methods = ["mean", "min", "max", "last", "last_k", "product"]
+    aggregation_methods = ["mean", "min", "max", "product"]
 
-    # Also add oracle (best possible) and random baselines
     results = {}
 
     for scorer_type in scorer_types:
@@ -188,140 +204,83 @@ def analyze(
             correct = 0
             total = 0
 
-            for sample in candidates_data:
-                gold_answer = str(sample.get("gold_answer", ""))
+            for sample_idx, sample in enumerate(candidates_data):
                 candidates = sample.get("candidates", [])
-
                 if not candidates:
                     continue
 
                 best_idx = select_best_candidate(
-                    candidates, scorer_type, agg_method, last_k,
+                    candidates, scorer_type, agg_method,
                     scoring_window=scoring_window,
                 )
 
                 if best_idx is None:
-                    # No valid scores — fall back to first candidate
                     best_idx = 0
 
-                extracted = candidates[best_idx].get("extracted_answer", "")
-                question = sample.get("question", "")
-
-                score = evaluator._score_single(
-                    (question, str(extracted), gold_answer),
-                    pre_extracted=True,
-                )
-                if score > 0:
+                if correctness_labels[sample_idx][best_idx]:
                     correct += 1
                 total += 1
 
             accuracy = correct / total if total > 0 else 0.0
             results[scorer_type][agg_method] = accuracy
 
-    # Compute oracle accuracy (any correct candidate exists)
-    oracle_correct = 0
-    oracle_total = 0
-    for sample in candidates_data:
-        gold_answer = str(sample.get("gold_answer", ""))
-        candidates = sample.get("candidates", [])
-        if not candidates:
-            continue
-        any_correct = False
-        for candidate in candidates:
-            extracted = candidate.get("extracted_answer", "")
-            question = sample.get("question", "")
-            score = evaluator._score_single(
-                (question, str(extracted), gold_answer),
-                pre_extracted=True,
-            )
-            if score > 0:
-                any_correct = True
-                break
-        if any_correct:
-            oracle_correct += 1
-        oracle_total += 1
-
-    results["_oracle"] = {
-        agg: oracle_correct / oracle_total if oracle_total > 0 else 0.0
-        for agg in aggregation_methods
-    }
-
-    # Compute random baseline (first candidate)
-    random_correct = 0
-    random_total = 0
-    for sample in candidates_data:
-        gold_answer = str(sample.get("gold_answer", ""))
-        candidates = sample.get("candidates", [])
-        if not candidates:
-            continue
-        extracted = candidates[0].get("extracted_answer", "")
-        question = sample.get("question", "")
-        score = evaluator._score_single(
-            (question, str(extracted), gold_answer),
-            pre_extracted=True,
-        )
-        if score > 0:
-            random_correct += 1
-        random_total += 1
-
-    results["_first"] = {
-        agg: random_correct / random_total if random_total > 0 else 0.0
-        for agg in aggregation_methods
-    }
-
     return results
 
 
-def print_results_table(
-    results: Dict[str, Dict[str, float]],
-    last_k: int = 3,
-):
+def print_results_table(results: Dict[str, Dict[str, float]]):
     """Print results as a formatted table."""
     if not results:
         print("No results to display")
         return
 
-    # Get aggregation methods from first scorer
     first_scorer = next(iter(results.values()))
     agg_methods = list(first_scorer.keys())
 
-    # Format header
-    agg_labels = []
-    for agg in agg_methods:
-        if agg == "last_k":
-            agg_labels.append(f"last_{last_k}")
-        else:
-            agg_labels.append(agg)
+    header = f"{'scorer':<18}" + "".join(f"{label:>10}" for label in agg_methods)
 
-    header = f"{'scorer':<18}" + "".join(f"{label:>10}" for label in agg_labels)
     print("\n" + "=" * len(header))
     print(header)
     print("-" * len(header))
 
-    # Sort scorers: regular first, then baselines
-    regular_scorers = [s for s in results if not s.startswith("_")]
-    baseline_scorers = [s for s in results if s.startswith("_")]
-
-    for scorer_type in regular_scorers:
-        scores = results[scorer_type]
+    for scorer_type in results:
         row = f"{scorer_type:<18}"
         for agg in agg_methods:
-            acc = scores.get(agg, 0.0)
-            row += f"{acc:>10.4f}"
+            row += f"{results[scorer_type].get(agg, 0.0):>10.4f}"
         print(row)
 
-    if baseline_scorers:
-        print("-" * len(header))
-        for scorer_type in baseline_scorers:
-            scores = results[scorer_type]
-            label = scorer_type.lstrip("_")
-            row = f"{label:<18}"
-            for agg in agg_methods:
-                acc = scores.get(agg, 0.0)
-                row += f"{acc:>10.4f}"
-            print(row)
-
     print("=" * len(header))
+
+
+def _save_csv(
+    all_results: Dict[str, Dict[str, Dict[str, float]]],
+    csv_path: Path,
+    oracle_acc: float = 0.0,
+):
+    """Save results as CSV in long format.
+
+    Format: scorer, window, aggregation, exact_match
+    Oracle row at the top with empty window/aggregation fields.
+    """
+    if not all_results:
+        return
+
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["scorer", "window", "aggregation", "exact_match"])
+
+        # Oracle row at the top
+        writer.writerow(["oracle", "", "", f"{oracle_acc:.4f}"])
+
+        for window_label, results in all_results.items():
+            window_val = window_label.split("=", 1)[1]
+
+            first_scorer = next(iter(results.values()))
+            agg_methods = list(first_scorer.keys())
+
+            for scorer_type in results:
+                for agg in agg_methods:
+                    acc = results[scorer_type].get(agg, 0.0)
+                    writer.writerow([scorer_type, window_val, agg, f"{acc:.4f}"])
 
 
 def main():
@@ -348,18 +307,11 @@ def main():
         help="Answer format for exact match evaluation (default: numeric)",
     )
     parser.add_argument(
-        "--last-k",
-        type=int,
-        default=3,
-        help="K for last_k aggregation method (default: 3)",
-    )
-    parser.add_argument(
         "--scoring-windows",
-        type=int,
         nargs="*",
         default=None,
-        help="Scoring windows to compare (e.g., --scoring-windows 2 3 5). "
-        "Each window uses only the last N steps before aggregation. "
+        help="Scoring windows to compare. Use 'all' to auto-iterate 1..max_steps, "
+        "or specify integers (e.g., --scoring-windows 2 3 5). "
         "If not set, uses all steps (no window).",
     )
     parser.add_argument(
@@ -391,10 +343,32 @@ def main():
         f"scorer types: {sorted(scorer_types)}"
     )
 
+    # Find max step count across all candidates
+    max_steps = 0
+    for sample in candidates_data:
+        for candidate in sample.get("candidates", []):
+            num_steps = len(candidate.get("steps", []))
+            max_steps = max(max_steps, num_steps)
+    log.info(f"Max steps across all candidates: {max_steps}")
+
+    # Pre-compute exact-match correctness labels
+    log.info("Pre-computing exact-match correctness labels...")
+    em_labels = precompute_correctness(
+        candidates_data,
+        data_name=args.data_name,
+        answer_format=args.answer_format,
+    )
+    em_correct = sum(1 for labels in em_labels if any(labels))
+    oracle_acc = em_correct / len(em_labels) if em_labels else 0.0
+    log.info(f"Exact match: {em_correct}/{len(em_labels)} samples have at least one correct candidate (oracle={oracle_acc:.4f})")
+
     # Build list of windows to evaluate
     windows = [None]  # always include "all steps"
     if args.scoring_windows:
-        windows.extend(args.scoring_windows)
+        if "all" in args.scoring_windows:
+            windows.extend(range(1, max_steps + 1))
+        else:
+            windows.extend(int(w) for w in args.scoring_windows)
 
     all_results = {}
     for window in windows:
@@ -403,16 +377,19 @@ def main():
 
         results = analyze(
             candidates_data,
-            data_name=args.data_name,
-            answer_format=args.answer_format,
-            last_k=args.last_k,
+            correctness_labels=em_labels,
             scoring_window=window,
         )
-
         all_results[window_label] = results
 
         print(f"\n>>> {window_label}")
-        print_results_table(results, last_k=args.last_k)
+        print_results_table(results)
+
+    # Save CSV to same directory as candidates.json
+    candidates_dir = Path(args.candidates_path).parent
+    csv_path = candidates_dir / "scoring_analysis.csv"
+    _save_csv(all_results, csv_path, oracle_acc=oracle_acc)
+    log.info(f"CSV saved to {csv_path}")
 
     # Save to JSON if requested
     if args.output:
