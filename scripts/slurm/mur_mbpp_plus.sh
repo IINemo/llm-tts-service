@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=mur_mbpp_plus
+#SBATCH --job-name=[MARS-3554]mur_mbpp_plus
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=20
 #SBATCH --mem=64gb
 #SBATCH --gres=gpu:1
+#SBATCH --partition=1gpu
 
 srun --container-image=artifactory.mts.ai/ml-docker/gpt_transformers_pytorch_24_12 \
      --container-name=mur_mbpp_plus \
@@ -18,6 +19,7 @@ srun --container-image=artifactory.mts.ai/ml-docker/gpt_transformers_pytorch_24_
        pip install numpy==1.26.4 &&
        pip install transformers==4.57.3 &&
        pip install flash_attn -U --force-reinstall &&
+       pip uninstall -y torchvision || true &&
 
        echo '=== Running MUR (adaptive scaling): entropy ===' &&
        python scripts/run_tts_eval.py \

@@ -19,6 +19,7 @@ srun --container-image=artifactory.mts.ai/ml-docker/gpt_transformers_pytorch_24_
        pip install numpy==1.26.4 &&
        pip install transformers==4.57.3 &&
        pip install flash_attn -U --force-reinstall &&
+       pip uninstall -y torchvision || true &&
 
        python scripts/run_tts_eval.py \
          --config-path=../config \
