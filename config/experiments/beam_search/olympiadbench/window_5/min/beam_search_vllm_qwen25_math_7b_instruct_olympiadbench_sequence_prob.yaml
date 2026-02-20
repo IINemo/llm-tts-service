@@ -1,9 +1,9 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/olympiadbench/beam_search_vllm_nothink_qwen25_7b_olympiadbench_perplexity
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/olympiadbench/window_5/min/beam_search_vllm_nothink_qwen25_7b_olympiadbench_sequence_prob
 # Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Beam Search with vLLM + Non-Thinking Mode (Qwen2.5-7B) on OlympiadBench
-# Uses Perplexity scorer for step evaluation (normalized by length)
-# Maintains B beams, expands each with N candidates, prunes to top-B at each step
+# Uses Sequence Probability scorer for step evaluation (sum of log-probs, not normalized)
+# scoring_window=5: only last 5 step scores used for beam ranking
 
 defaults:
   - /config
@@ -11,20 +11,19 @@ defaults:
   - /generation/default
   - /system/default
   - /strategy/beam_search
-  - /scorer/perplexity
+  - /scorer/sequence_prob
   - /evaluation/default
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_nothink_qwen25_7b_olympiadbench_perplexity_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_nothink_qwen25_7b_olympiadbench_sequence_prob_window_5_min_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-olympiadbench
-wandb_group: "beam_search_qwen25_math_7b_instruct_olympiadbench_perplexity"
-# Model configuration (vLLM backend)
-# Single GPU since perplexity scorer uses the same model (no separate PRM)
+wandb_group: "beam_search_qwen25_math_7b_instruct_olympiadbench_sequence_prob_window_5_min"
+# Single GPU since sequence_prob scorer uses the same model (no separate PRM)
 model:
   type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
@@ -54,10 +53,13 @@ strategy:
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30
+  aggregation: min  # min (conservative - maximizes the minimum step score)
+  scoring_window: 5         # Only use last 5 step scores for aggregation
+  scoring_window_label: "window_5"
 
-# Perplexity scorer configuration (uses same model, no separate GPU needed)
+# Sequence probability scorer configuration (uses same model, no separate GPU needed)
 scorer:
-  type: perplexity
+  type: sequence_prob
   batch_size: 1
 
 # Dataset configuration - OlympiadBench
