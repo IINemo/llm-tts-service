@@ -1,9 +1,9 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/gaokao2023en/beam_search_vllm_nothink_qwen25_7b_gaokao2023en_sequence_prob
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/gaokao2023en/window_all/beam_search_vllm_nothink_qwen25_7b_gaokao2023en_sequence_prob
 # Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Beam Search with vLLM + Non-Thinking Mode (Qwen2.5-7B) on GaoKao 2023 En
 # Uses Sequence Probability scorer for step evaluation (sum of log-probs, not normalized)
-# Maintains B beams, expands each with N candidates, prunes to top-B at each step
+# scoring_window=null: all step scores used for beam ranking (baseline)
 
 defaults:
   - /config
@@ -16,14 +16,13 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_nothink_qwen25_7b_gaokao2023en_sequence_prob_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_nothink_qwen25_7b_gaokao2023en_sequence_prob_window_all_mean_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gaokao2023en
-wandb_group: "beam_search_qwen25_math_7b_instruct_gaokao2023en_sequence_prob"
-# Model configuration (vLLM backend)
+wandb_group: "beam_search_qwen25_math_7b_instruct_gaokao2023en_sequence_prob_window_all_mean"
 # Single GPU since sequence_prob scorer uses the same model (no separate PRM)
 model:
   type: "vllm"
@@ -54,6 +53,8 @@ strategy:
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30
+  scoring_window: null      # Use all step scores for aggregation (baseline)
+  scoring_window_label: "window_all"
 
 # Sequence probability scorer configuration (uses same model, no separate GPU needed)
 scorer:
