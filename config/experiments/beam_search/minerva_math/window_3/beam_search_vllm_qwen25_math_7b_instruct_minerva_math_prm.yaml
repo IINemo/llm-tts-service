@@ -16,13 +16,13 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_nothink_qwen25_7b_minerva_math_prm_w3_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_nothink_qwen25_7b_minerva_math_prm_window_3_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-minerva-math
-wandb_group: "beam_search_qwen25_math_7b_instruct_minerva_math_prm_w3"
+wandb_group: "beam_search_qwen25_math_7b_instruct_minerva_math_prm_window_3"
 # Model configuration (vLLM backend)
 model:
   type: "vllm"
