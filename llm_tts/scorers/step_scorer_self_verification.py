@@ -395,6 +395,10 @@ class StepScorerSelfVerification(StepScorerBase):
 
                 for item_idx, item in enumerate(pending):
                     output = outputs[item_idx] if item_idx < len(outputs) else ""
+                    log.info(
+                        f"Scorer output [vLLM] eval={i+1} "
+                        f"group={item['group_idx']} cand={item['cand_idx']}: '{output[:200]}'"
+                    )
                     try:
                         score = self._parse_value_output(output)
                     except ValueError as e:
@@ -443,6 +447,10 @@ class StepScorerSelfVerification(StepScorerBase):
 
                 for item_idx, item in enumerate(pending):
                     output = outputs[item_idx] if item_idx < len(outputs) else ""
+                    log.info(
+                        f"Scorer output [API] eval={i+1} "
+                        f"group={item['group_idx']} cand={item['cand_idx']}: '{output[:200]}'"
+                    )
                     try:
                         score = self._parse_value_output(output)
                     except ValueError as e:
@@ -659,6 +667,9 @@ class StepScorerSelfVerification(StepScorerBase):
 
                 for item_idx, item in enumerate(pending):
                     output = outputs[item_idx] if item_idx < len(outputs) else ""
+                    log.info(
+                        f"Scorer output [vLLM] eval={i+1} cand={item['idx']}: '{output[:200]}'"
+                    )
                     try:
                         score = self._parse_value_output(output)
                     except Exception as e:
@@ -783,8 +794,8 @@ class StepScorerSelfVerification(StepScorerBase):
                 output = self._call_model(prompt)
                 score = self._parse_value_output(output)
                 scores.append(score)
-                log.debug(
-                    f"Evaluation {i+1}/{self.n_evaluate_sample}: output='{output[:50]}...', score={score:.3f}"
+                log.info(
+                    f"Evaluation {i+1}/{self.n_evaluate_sample}: score={score:.3f}, output='{output[:200]}'"
                 )
             except ValueError as e:
                 log.warning(f"Parse failed on eval {i+1}: {e}")
