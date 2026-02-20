@@ -47,6 +47,7 @@ def aggregate_scores(
     per_step_scores: List[float],
     method: str,
     last_k: int = 3,
+    scoring_window: Optional[int] = None,
 ) -> float:
     """Aggregate per-step scores into a single trajectory score.
 
@@ -54,6 +55,7 @@ def aggregate_scores(
         per_step_scores: List of per-step scores
         method: Aggregation method (mean, min, max, last, last_k, product)
         last_k: Number of last steps for 'last_k' method
+        scoring_window: If set, only use the last N steps before aggregation
 
     Returns:
         Aggregated score (higher = better for PRM; lower = better for uncertainty metrics)
@@ -61,6 +63,10 @@ def aggregate_scores(
     valid = [s for s in per_step_scores if s is not None and not np.isnan(s)]
     if not valid:
         return float("nan")
+
+    # Apply scoring window: keep only last N valid scores
+    if scoring_window is not None and len(valid) > scoring_window:
+        valid = valid[-scoring_window:]
 
     if method == "mean":
         return float(np.mean(valid))
@@ -83,6 +89,7 @@ def select_best_candidate(
     scorer_type: str,
     aggregation: str,
     last_k: int = 3,
+    scoring_window: Optional[int] = None,
 ) -> Optional[int]:
     """Select the best candidate index using the given scorer and aggregation.
 
@@ -95,6 +102,7 @@ def select_best_candidate(
         scorer_type: Score type to use (e.g. "perplexity", "prm")
         aggregation: Aggregation method
         last_k: K for last_k aggregation
+        scoring_window: If set, only use the last N steps before aggregation
 
     Returns:
         Index of best candidate, or None if no valid scores
@@ -117,7 +125,7 @@ def select_best_candidate(
             # Fall back to trajectory-level score
             agg_score = scorer_data.get("trajectory", float("nan"))
         else:
-            agg_score = aggregate_scores(per_step, aggregation, last_k)
+            agg_score = aggregate_scores(per_step, aggregation, last_k, scoring_window)
 
         if np.isnan(agg_score):
             continue
@@ -140,6 +148,7 @@ def analyze(
     data_name: str,
     answer_format: str = "numeric",
     last_k: int = 3,
+    scoring_window: Optional[int] = None,
 ) -> Dict[str, Dict[str, float]]:
     """Run post-hoc analysis on candidates data.
 
@@ -148,6 +157,7 @@ def analyze(
         data_name: Dataset name for answer comparison
         answer_format: Answer format for exact match evaluation
         last_k: K for last_k aggregation
+        scoring_window: If set, only use the last N steps before aggregation
 
     Returns:
         Nested dict: {scorer_type: {aggregation: accuracy}}
@@ -186,7 +196,8 @@ def analyze(
                     continue
 
                 best_idx = select_best_candidate(
-                    candidates, scorer_type, agg_method, last_k
+                    candidates, scorer_type, agg_method, last_k,
+                    scoring_window=scoring_window,
                 )
 
                 if best_idx is None:
@@ -343,6 +354,15 @@ def main():
         help="K for last_k aggregation method (default: 3)",
     )
     parser.add_argument(
+        "--scoring-windows",
+        type=int,
+        nargs="*",
+        default=None,
+        help="Scoring windows to compare (e.g., --scoring-windows 2 3 5). "
+        "Each window uses only the last N steps before aggregation. "
+        "If not set, uses all steps (no window).",
+    )
+    parser.add_argument(
         "--output",
         type=str,
         default=None,
@@ -371,21 +391,33 @@ def main():
         f"scorer types: {sorted(scorer_types)}"
     )
 
-    # Run analysis
-    results = analyze(
-        candidates_data,
-        data_name=args.data_name,
-        answer_format=args.answer_format,
-        last_k=args.last_k,
-    )
+    # Build list of windows to evaluate
+    windows = [None]  # always include "all steps"
+    if args.scoring_windows:
+        windows.extend(args.scoring_windows)
 
-    # Print table
-    print_results_table(results, last_k=args.last_k)
+    all_results = {}
+    for window in windows:
+        window_label = f"window={window}" if window is not None else "window=all"
+        log.info(f"Analyzing with {window_label}...")
+
+        results = analyze(
+            candidates_data,
+            data_name=args.data_name,
+            answer_format=args.answer_format,
+            last_k=args.last_k,
+            scoring_window=window,
+        )
+
+        all_results[window_label] = results
+
+        print(f"\n>>> {window_label}")
+        print_results_table(results, last_k=args.last_k)
 
     # Save to JSON if requested
     if args.output:
         with open(args.output, "w") as f:
-            json.dump(results, f, indent=2)
+            json.dump(all_results, f, indent=2)
         log.info(f"Results saved to {args.output}")
 
 
