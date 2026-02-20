@@ -13,3 +13,15 @@ use_verification: true
 use_structure: false
 use_reasoning: true
 use_correction: false
+# Per-scorer flags for multi-scoring (all default false)
+calculate_entropy_score: false
+calculate_perplexity_score: false
+calculate_sequence_prob_score: false
+calculate_pd_gap_score: false
+calculate_prm_score: false
+# PRM config (only when calculate_prm_score=true)
+# prm_model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+# prm_device: "cuda:1"
+# prm_batch_size: 4
+# prm_torch_dtype: "bfloat16"
+# prm_use_vllm: true

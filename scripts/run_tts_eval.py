@@ -825,6 +825,45 @@ def create_tts_strategy(
         # Offline Best-of-N generates N trajectories, scores with PRM, selects best
         # With batch_generation=True, all M×N trajectories generated in single vLLM call
         batch_generation = config.strategy.get("batch_generation", True)
+
+        # Multi-scoring: per-scorer flags for computing extra metrics
+        multi_score_flags = {}
+        for flag in [
+            "calculate_entropy_score",
+            "calculate_perplexity_score",
+            "calculate_sequence_prob_score",
+            "calculate_pd_gap_score",
+            "calculate_prm_score",
+        ]:
+            multi_score_flags[flag] = getattr(config.strategy, flag, False)
+
+        # Create separate PRM scorer if calculate_prm_score=True
+        # and primary scorer is not already PRM
+        extra_prm_scorer = None
+        if multi_score_flags.get("calculate_prm_score"):
+            primary_is_prm = (
+                hasattr(scorer, "prm_model") and scorer.prm_model is not None
+            )
+            if not primary_is_prm:
+                prm_model_path = getattr(
+                    config.strategy, "prm_model_path", None
+                )
+                if prm_model_path:
+                    log.info(
+                        f"Creating extra PRM scorer for multi-scoring: {prm_model_path}"
+                    )
+                    extra_prm_scorer = StepScorerPRM(
+                        prm_model_path=prm_model_path,
+                        device=getattr(config.strategy, "prm_device", "cuda:1"),
+                        batch_size=getattr(config.strategy, "prm_batch_size", 4),
+                        torch_dtype=getattr(config.strategy, "prm_torch_dtype", "bfloat16"),
+                        use_vllm=getattr(config.strategy, "prm_use_vllm", True),
+                    )
+                else:
+                    log.warning(
+                        "calculate_prm_score=True but no prm_model_path specified"
+                    )
+
         strategy = StrategyOfflineBestOfN(
             scorer=scorer,
             num_trajectories=config.strategy.get("num_trajectories", 4),
@@ -833,6 +872,8 @@ def create_tts_strategy(
             score_aggregation=config.strategy.get("score_aggregation", "mean"),
             output_dir=output_dir,
             batch_generation=batch_generation,
+            prm_scorer=extra_prm_scorer,
+            **multi_score_flags,
         )
     elif config.strategy.type == "adaptive":
         strategy = AdaptiveScalingBestOfN(
@@ -1016,6 +1057,9 @@ def _generate_trajectories_batch(
 
     # Split into chunks for intermediate checkpointing
     num_chunks = (total_to_process + checkpoint_batch_size - 1) // checkpoint_batch_size
+
+    # Collect candidates data for multi-scoring analysis (saved to candidates.json)
+    all_candidates_data = []
 
     for chunk_idx in range(num_chunks):
         batch_start = chunk_idx * checkpoint_batch_size
@@ -1325,6 +1369,16 @@ def _generate_trajectories_batch(
 
             results.append(result_dict)
 
+            # Collect candidates_data for multi-scoring analysis
+            if "candidates_data" in result:
+                all_candidates_data.append({
+                    "index": i,
+                    "question": question,
+                    "gold_answer": gold_answer_num,
+                    "num_candidates": len(result["candidates_data"]),
+                    "candidates": result["candidates_data"],
+                })
+
             # Compute running metrics
             token_stats = result.get("token_stats")
             if token_stats is None:
@@ -1418,6 +1472,15 @@ def _generate_trajectories_batch(
     # Final save after all chunks complete
     save_results_json(results, save_path_file)
     log.info(f"Final save: {len(results)} results to {save_path_file}")
+
+    # Save candidates.json for multi-scoring post-hoc analysis
+    if all_candidates_data:
+        candidates_path = save_path_file.parent / "candidates.json"
+        save_results_json(all_candidates_data, candidates_path)
+        log.info(
+            f"Saved {len(all_candidates_data)} samples with candidates data "
+            f"to {candidates_path}"
+        )
 
     return results
 

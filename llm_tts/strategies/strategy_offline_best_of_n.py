@@ -26,6 +26,10 @@ from llm_tts.generators.base import (
     StepCandidateGeneratorBase,
     convert_trajectory_to_string,
 )
+from llm_tts.scorers.multi_scorer import (
+    compute_logprob_scores,
+    compute_logprob_scores_per_step,
+)
 from llm_tts.utils.answer_extraction import extract_answer
 
 from .strategy_base import StrategyBase
@@ -51,6 +55,12 @@ class StrategyOfflineBestOfN(StrategyBase):
         score_aggregation: str = "mean",
         output_dir: Optional[str] = None,
         batch_generation: bool = True,
+        calculate_entropy_score: bool = False,
+        calculate_perplexity_score: bool = False,
+        calculate_sequence_prob_score: bool = False,
+        calculate_pd_gap_score: bool = False,
+        calculate_prm_score: bool = False,
+        prm_scorer=None,
     ):
         """
         Initialize offline best-of-n strategy.
@@ -63,6 +73,12 @@ class StrategyOfflineBestOfN(StrategyBase):
             score_aggregation: How to aggregate step scores ('mean', 'min', 'max', 'product', 'last')
             output_dir: Directory for saving logs
             batch_generation: If True, use fully batched M×N generation in single vLLM call
+            calculate_entropy_score: Compute entropy scores for all candidates
+            calculate_perplexity_score: Compute perplexity scores for all candidates
+            calculate_sequence_prob_score: Compute sequence probability scores for all candidates
+            calculate_pd_gap_score: Compute PD-gap scores for all candidates
+            calculate_prm_score: Compute PRM scores for all candidates (requires prm_scorer)
+            prm_scorer: StepScorerPRM instance for PRM scoring (only if calculate_prm_score=True)
         """
         self.scorer = scorer
         self.num_trajectories = num_trajectories
@@ -73,11 +89,39 @@ class StrategyOfflineBestOfN(StrategyBase):
         self.batch_generation = batch_generation
         self._current_sample_idx = 0
 
+        # Per-scorer flags for multi-scoring
+        self.calculate_entropy_score = calculate_entropy_score
+        self.calculate_perplexity_score = calculate_perplexity_score
+        self.calculate_sequence_prob_score = calculate_sequence_prob_score
+        self.calculate_pd_gap_score = calculate_pd_gap_score
+        self.calculate_prm_score = calculate_prm_score
+        self.prm_scorer = prm_scorer
+
+        # Build list of enabled extra logprob metrics
+        self._extra_metrics = []
+        if calculate_entropy_score:
+            self._extra_metrics.append("entropy")
+        if calculate_perplexity_score:
+            self._extra_metrics.append("perplexity")
+        if calculate_sequence_prob_score:
+            self._extra_metrics.append("sequence_prob")
+        if calculate_pd_gap_score:
+            self._extra_metrics.append("pd_gap")
+
+        self._multi_scoring_enabled = bool(self._extra_metrics) or calculate_prm_score
+
         log.info(
             f"StrategyOfflineBestOfN initialized: "
             f"{num_trajectories} trajectories, max_steps={max_steps}, "
             f"aggregation={score_aggregation}, batch_generation={batch_generation}"
         )
+        if self._multi_scoring_enabled:
+            extra_info = []
+            if self._extra_metrics:
+                extra_info.append(f"logprob_metrics={self._extra_metrics}")
+            if calculate_prm_score:
+                extra_info.append("prm_scoring=True")
+            log.info(f"Multi-scoring enabled: {', '.join(extra_info)}")
 
     def _get_uncertainty_score(self, candidate: StepCandidate) -> float:
         """Get uncertainty score from candidate's other_data."""
@@ -501,6 +545,10 @@ class StrategyOfflineBestOfN(StrategyBase):
                     all_trajectory_ids_for_scoring.append(traj_idx)
                     trajectory_to_sample_map.append((sample_data_idx, traj_idx))
 
+        # Phase 1d: Compute extra logprob-based metrics if multi-scoring enabled
+        if self._extra_metrics:
+            self._compute_extra_logprob_scores(sample_data)
+
         # Phase 2: Batch score ALL trajectories in single call
         # Skip if using uncertainty wrapper (scores already computed during generation)
         if use_uncertainty_wrapper:
@@ -576,6 +624,10 @@ class StrategyOfflineBestOfN(StrategyBase):
                         f"scores=[{', '.join(score_strs)}]"
                     )
 
+        # Phase 2b: Compute extra PRM scores if enabled
+        if self.calculate_prm_score:
+            self._compute_extra_prm_scores(sample_data, use_prm_scorer)
+
         # Progressive save: checkpoint after scoring
         if save_callback is not None:
             scored_results = self._build_results_from_sample_data(sample_data, N)
@@ -589,6 +641,136 @@ class StrategyOfflineBestOfN(StrategyBase):
             f"total {M * N} trajectories generated and scored"
         )
         return results
+
+    def _get_tokenizer(self):
+        """Get tokenizer from step generator for token boundary mapping."""
+        if hasattr(self.step_generator, "model") and hasattr(
+            self.step_generator.model, "get_tokenizer"
+        ):
+            return self.step_generator.model.get_tokenizer()
+        if hasattr(self.step_generator, "tokenizer"):
+            return self.step_generator.tokenizer
+        return None
+
+    def _compute_extra_logprob_scores(self, sample_data: List[Dict]) -> None:
+        """Compute extra logprob-based metrics for all candidates.
+
+        Stores results in traj_data["extra_scores"] for each trajectory.
+        """
+        tokenizer = self._get_tokenizer()
+        if tokenizer is None:
+            log.warning("Cannot compute extra logprob scores: no tokenizer available")
+            return
+
+        total_computed = 0
+        for data in sample_data:
+            if data["failed"]:
+                continue
+            for traj_data in data["trajectories"]:
+                candidate = traj_data["candidate"]
+                if not candidate.other_data or not candidate.other_data.get("raw_logprobs"):
+                    continue
+
+                token_ids = list(candidate.token_ids)
+                raw_logprobs = candidate.other_data["raw_logprobs"]
+
+                # Compute per-step scores
+                per_step = compute_logprob_scores_per_step(
+                    steps=traj_data["steps"],
+                    token_ids=token_ids,
+                    raw_logprobs=raw_logprobs,
+                    tokenizer=tokenizer,
+                    metrics=self._extra_metrics,
+                )
+
+                # Compute trajectory-level scores
+                trajectory_scores = compute_logprob_scores(
+                    token_ids=token_ids,
+                    raw_logprobs=raw_logprobs,
+                    metrics=self._extra_metrics,
+                )
+
+                # Store in extra_scores
+                extra_scores = traj_data.get("extra_scores", {})
+                for metric in self._extra_metrics:
+                    extra_scores[metric] = {
+                        "per_step": per_step.get(metric, []),
+                        "trajectory": trajectory_scores.get(metric, float("nan")),
+                    }
+                traj_data["extra_scores"] = extra_scores
+                total_computed += 1
+
+        log.info(
+            f"Computed extra logprob scores ({self._extra_metrics}) "
+            f"for {total_computed} trajectories"
+        )
+
+    def _compute_extra_prm_scores(
+        self, sample_data: List[Dict], primary_is_prm: bool
+    ) -> None:
+        """Compute PRM scores for all candidates if calculate_prm_score is enabled.
+
+        If the primary scorer is already PRM, reuses those scores.
+        Otherwise uses self.prm_scorer for a separate PRM pass.
+        """
+        if primary_is_prm:
+            # Primary scorer is PRM — reuse step_scores as PRM scores
+            for data in sample_data:
+                if data["failed"]:
+                    continue
+                for traj_data in data["trajectories"]:
+                    extra_scores = traj_data.get("extra_scores", {})
+                    step_scores = traj_data.get("step_scores", [])
+                    valid_scores = [s for s in step_scores if s is not None]
+                    extra_scores["prm"] = {
+                        "per_step": step_scores,
+                        "trajectory": float(np.mean(valid_scores)) if valid_scores else float("nan"),
+                    }
+                    traj_data["extra_scores"] = extra_scores
+            log.info("Reused primary PRM scores for multi-scoring candidates_data")
+            return
+
+        if self.prm_scorer is None:
+            log.warning("calculate_prm_score=True but no prm_scorer provided, skipping")
+            return
+
+        # Batch all trajectories for PRM scoring
+        all_chats = []
+        all_trajectories = []
+        all_indices = []  # (sample_data_idx, traj_idx)
+        for sample_data_idx, data in enumerate(sample_data):
+            if data["failed"]:
+                continue
+            for traj_idx, traj_data in enumerate(data["trajectories"]):
+                if traj_data["steps"]:
+                    all_chats.append(data["request"])
+                    all_trajectories.append(traj_data["steps"])
+                    all_indices.append((sample_data_idx, traj_idx))
+
+        if not all_trajectories:
+            return
+
+        log.info(f"Computing extra PRM scores for {len(all_trajectories)} trajectories")
+        all_prm_scores = self.prm_scorer.score_trajectories_batch(
+            all_chats,
+            all_trajectories,
+            sample_ids=[i for i, _ in all_indices],
+            trajectory_ids=[j for _, j in all_indices],
+        )
+
+        # Distribute PRM scores back
+        for flat_idx, (sample_data_idx, traj_idx) in enumerate(all_indices):
+            traj_data = sample_data[sample_data_idx]["trajectories"][traj_idx]
+            prm_step_scores = all_prm_scores[flat_idx]
+            valid = [s for s in prm_step_scores if s is not None]
+            extra_scores = traj_data.get("extra_scores", {})
+            extra_scores["prm"] = {
+                "per_step": prm_step_scores,
+                "trajectory": float(np.mean(valid)) if valid else float("nan"),
+            }
+            traj_data["extra_scores"] = extra_scores
+
+        log.info(f"Extra PRM scoring complete for {len(all_trajectories)} trajectories")
 
     def _build_results_from_sample_data(
         self, sample_data: List[Dict], N: int
@@ -657,23 +839,38 @@ class StrategyOfflineBestOfN(StrategyBase):
                 f"steps={best_result.get('num_steps', 0)})"
             )
 
-            results.append(
-                {
-                    "trajectory": best_result.get("full_text", ""),
-                    "extracted_answer": extracted,
-                    "steps": best_result.get("steps", []),
-                    "answer_step": best_result.get("answer_step", None),
-                    "reasoning_steps": best_result.get("reasoning_steps", 0),
-                    "validity_scores": best_result.get("step_scores", []),
-                    "aggregated_score": best_result.get("aggregated_score", 0.0),
-                    "all_trajectories": [t["full_text"] for t in trajectories],
-                    "all_scores": aggregated_scores,
-                    "all_step_scores": [t["step_scores"] for t in trajectories],
-                    "best_idx": best_idx,
-                    "completed": best_result.get("is_complete", False),
-                    "token_stats": token_stats,
-                }
-            )
+            result_dict = {
+                "trajectory": best_result.get("full_text", ""),
+                "extracted_answer": extracted,
+                "steps": best_result.get("steps", []),
+                "answer_step": best_result.get("answer_step", None),
+                "reasoning_steps": best_result.get("reasoning_steps", 0),
+                "validity_scores": best_result.get("step_scores", []),
+                "aggregated_score": best_result.get("aggregated_score", 0.0),
+                "all_trajectories": [t["full_text"] for t in trajectories],
+                "all_scores": aggregated_scores,
+                "all_step_scores": [t["step_scores"] for t in trajectories],
+                "best_idx": best_idx,
+                "completed": best_result.get("is_complete", False),
+                "token_stats": token_stats,
+            }
+
+            # Add candidates_data for multi-scoring analysis
+            if self._multi_scoring_enabled:
+                result_dict["candidates_data"] = [
+                    {
+                        "trajectory": traj["full_text"],
+                        "extracted_answer": extract_answer(
+                            traj.get("answer_step") or traj["full_text"]
+                        ),
+                        "steps": traj["steps"],
+                        "num_tokens": traj["num_tokens"],
+                        "scores": traj.get("extra_scores", {}),
+                    }
+                    for traj in trajectories
+                ]
+
+            results.append(result_dict)
 
         return results
 
