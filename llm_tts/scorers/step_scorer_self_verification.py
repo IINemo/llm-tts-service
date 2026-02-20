@@ -91,6 +91,7 @@ class StepScorerSelfVerification(StepScorerBase):
         use_vllm: bool = False,
         score_aggregation: str = "sum",
         trajectory_context_steps: int = 0,
+        disable_reasoning: bool = False,
         name: str = "self_verification",
     ):
         super().__init__(name=name)
@@ -105,6 +106,7 @@ class StepScorerSelfVerification(StepScorerBase):
         self.use_local = False
         self.score_aggregation = score_aggregation
         self.trajectory_context_steps = trajectory_context_steps
+        self.disable_reasoning = disable_reasoning
 
         # Load prompts: priority is direct string > custom file > default file
         self.value_prompt = self._load_prompt(
@@ -1068,7 +1070,7 @@ class StepScorerSelfVerification(StepScorerBase):
 
         for attempt in range(max_retries):
             try:
-                response = client.chat.completions.create(
+                api_kwargs = dict(
                     model=model_name,
                     messages=messages,
                     max_tokens=self.max_tokens,
@@ -1076,12 +1078,20 @@ class StepScorerSelfVerification(StepScorerBase):
                     n=1,
                     timeout=self.timeout,
                 )
+                if self.disable_reasoning:
+                    api_kwargs["extra_body"] = {
+                        "reasoning_effort": "none",
+                    }
+                response = client.chat.completions.create(**api_kwargs)
 
-                text = (
-                    response.choices[0].message.content or ""
-                    if response.choices
-                    else ""
-                )
+                if response.choices:
+                    msg = response.choices[0].message
+                    # Reasoning models (e.g. gpt-oss-120b) put CoT in
+                    # reasoning_content and the final answer in content.
+                    # Fall back to reasoning_content if content is empty.
+                    text = msg.content or getattr(msg, "reasoning_content", None) or ""
+                else:
+                    text = ""
                 input_tokens = response.usage.prompt_tokens if response.usage else 0
                 output_tokens = (
                     response.usage.completion_tokens if response.usage else 0

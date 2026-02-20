@@ -423,6 +423,7 @@ def create_scorer(config):
             trajectory_context_steps=getattr(
                 config.scorer, "trajectory_context_steps", 0
             ),
+            disable_reasoning=getattr(config.scorer, "disable_reasoning", False),
         )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
@@ -827,7 +828,7 @@ def create_model(config):
     return model, step_generator
 
 
-def _create_api_model_for_scorer(model_cfg):
+def _create_api_model_for_scorer(model_cfg, disable_reasoning=False):
     """Create an API-backed model instance for scoring only."""
     # Use model_name if available, otherwise fall back to model_path
     model_path = model_cfg.get("model_name") or model_cfg.get("model_path")
@@ -850,12 +851,20 @@ def _create_api_model_for_scorer(model_cfg):
     log.info(f"Validating scorer API connection: {model_path} at {base_url}...")
     try:
         test_client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        response = test_client.chat.completions.create(
+        test_kwargs = dict(
             model=model_path,
             messages=[{"role": "user", "content": "Say OK"}],
-            max_tokens=16,
+            max_tokens=64,
         )
-        text = response.choices[0].message.content if response.choices else ""
+        if disable_reasoning:
+            test_kwargs["extra_body"] = {"reasoning_effort": "none"}
+        response = test_client.chat.completions.create(**test_kwargs)
+        msg = response.choices[0].message if response.choices else None
+        text = (
+            (msg.content or getattr(msg, "reasoning_content", None) or "")
+            if msg
+            else ""
+        )
         log.info(f"Scorer API connection validated: response='{text}'")
     except Exception as e:
         raise ConnectionError(
@@ -880,7 +889,10 @@ def create_tts_strategy(
         if scorer_model_cfg is not None:
             if scorer_model_cfg.get("type") != "openai_api":
                 raise ValueError("Scorer model override only supports type=openai_api")
-            scorer_model = _create_api_model_for_scorer(scorer_model_cfg)
+            disable_reasoning = getattr(config.scorer, "disable_reasoning", False)
+            scorer_model = _create_api_model_for_scorer(
+                scorer_model_cfg, disable_reasoning
+            )
             scorer.set_model(scorer_model, use_vllm=False)
             log.info("Scorer: using API override model")
         else:
