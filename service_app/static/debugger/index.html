@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Visual Debugger for Reasoning</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      id="debuggerStylesheet"
+      rel="stylesheet"
+      href="/static/debugger/styles.css"
+    />
+    <script>
+      const stylesheet = document.getElementById("debuggerStylesheet");
+      if (stylesheet) {
+        const cacheToken = `v=${Date.now()}`;
+        const primaryHref =
+          window.location.protocol === "file:"
+            ? "./styles.css"
+            : "/static/debugger/styles.css";
+
+        stylesheet.href = `${primaryHref}?${cacheToken}`;
+        stylesheet.addEventListener("error", () => {
+          if (stylesheet.dataset.fallbackApplied === "1") {
+            return;
+          }
+          stylesheet.dataset.fallbackApplied = "1";
+          stylesheet.href = `./styles.css?${cacheToken}`;
+        });
+      }
+    </script>
+  </head>
+  <body>
+    <div class="bg-shape shape-a"></div>
+    <div class="bg-shape shape-b"></div>
+    <main class="page-shell">
+      <section class="hero">
+        <p class="eyebrow">Demo Interface</p>
+        <h1>Visual Debugger for Reasoning</h1>
+        <p class="hero-copy">
+          Inspect sampled trajectories, tree expansions, verifier reranking, and the confidence signals behind every escalation decision.
+        </p>
+        <div class="controls">
+          <label class="control">
+            <span>Scenario</span>
+            <select id="scenarioSelect"></select>
+          </label>
+          <label class="control">
+            <span>Budget</span>
+            <input id="budgetRange" type="range" min="0" max="0" step="1" value="0" />
+            <strong id="budgetValue" class="budget-value">-</strong>
+          </label>
+          <button id="refreshButton" type="button">Replay Trace</button>
+        </div>
+      </section>
+
+      <section class="panel custom-input-panel">
+        <div class="section-head compact">
+          <h2>Custom Input Runner</h2>
+          <p>Run all strategy and scorer combinations on one question.</p>
+        </div>
+        <div class="custom-controls">
+          <label class="control grow">
+            <span>Shared prompt / instruction (optional)</span>
+            <textarea
+              id="globalPromptInput"
+              rows="2"
+              placeholder="Example: Reason step-by-step and put the final answer in \\boxed{}."
+            ></textarea>
+          </label>
+        </div>
+        <div class="custom-controls">
+          <label class="control">
+            <span>Provider</span>
+            <select id="providerSelect">
+              <option value="openai">OpenAI</option>
+              <option value="openrouter">OpenRouter</option>
+            </select>
+          </label>
+          <label class="control grow">
+            <span>Model ID</span>
+            <input
+              id="modelIdInput"
+              type="text"
+              value="openai/gpt-4o-mini"
+              placeholder="e.g. gpt-4o-mini or openai/gpt-4o-mini"
+            />
+          </label>
+          <label class="control grow">
+            <span>API Key</span>
+            <input
+              id="modelApiKeyInput"
+              type="password"
+              placeholder="sk-... or sk-or-v1-..."
+              autocomplete="off"
+            />
+          </label>
+        </div>
+        <p id="modelConfigNote" class="custom-note">
+          Note: provider/model/API key capture is ready in the UI. Backend strategy execution still reads API keys from `.env` and is not wired to use these values yet.
+        </p>
+
+        <div class="custom-mode-section">
+          <label class="control grow">
+            <span>Question</span>
+            <textarea
+              id="singleQuestionInput"
+              rows="3"
+              placeholder="Enter one question to evaluate"
+            ></textarea>
+          </label>
+          <label class="control">
+            <span>Gold answer</span>
+            <input id="singleGoldInput" type="text" placeholder="e.g. 19" />
+          </label>
+        </div>
+
+        <div class="custom-actions">
+          <button id="runCustomButton" type="button">Run Strategy x Scorer Matrix</button>
+          <button id="resetDemoButton" type="button" class="ghost">
+            Back To Demo Data
+          </button>
+        </div>
+
+        <p id="customStatus" class="custom-status">
+          Enter one question and gold answer, then run the full strategy x scorer matrix.
+        </p>
+      </section>
+
+      <section class="prompt-strip">
+        <div>
+          <p class="prompt-label">Prompt</p>
+          <p id="promptText" class="prompt-text"></p>
+          <p id="promptMeta" class="prompt-meta"></p>
+        </div>
+        <div class="ground-truth-box">
+          <p>Ground truth</p>
+          <strong id="groundTruth">-</strong>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Strategy Comparison</h2>
+          <p>Same prompt and budget, compared across strategy-scorer runs.</p>
+        </div>
+        <div id="strategyGrid" class="strategy-grid"></div>
+      </section>
+
+      <section class="workspace">
+        <div class="panel timeline-panel">
+          <div class="section-head compact">
+            <h2>Reasoning Timeline</h2>
+            <p id="timelineHint">Select a strategy to inspect each decision point.</p>
+          </div>
+          <div id="timeline" class="timeline"></div>
+        </div>
+
+        <div class="panel details-panel">
+          <div class="section-head compact">
+            <h2>Step Inspector</h2>
+            <p id="stepTitle">Pick a timeline event.</p>
+          </div>
+
+          <div id="decisionBox" class="decision-box"></div>
+          <div id="signals" class="signals"></div>
+
+          <div class="subsection-head">
+            <h3>Candidates</h3>
+          </div>
+          <div id="candidates" class="candidate-grid"></div>
+
+          <div class="subsection-head">
+            <h3>Candidate Detail</h3>
+          </div>
+          <div id="candidateDetail" class="candidate-detail"></div>
+
+          <div class="subsection-head">
+            <h3>Tree View</h3>
+          </div>
+          <div id="treeContainer" class="tree-container"></div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      (() => {
+        const assetBase =
+          window.location.protocol === "file:" ? "." : "/static/debugger";
+
+        const appendScript = (src, onDone) => {
+          const script = document.createElement("script");
+          script.src = src;
+          script.onload = () => {
+            if (onDone) {
+              onDone();
+            }
+          };
+          script.onerror = () => {
+            if (onDone) {
+              onDone();
+            }
+          };
+          document.body.appendChild(script);
+        };
+
+        appendScript(`${assetBase}/prototype_data.js`, () => {
+          appendScript(`${assetBase}/app.js`);
+        });
+      })();
+    </script>
+  </body>
+</html>
