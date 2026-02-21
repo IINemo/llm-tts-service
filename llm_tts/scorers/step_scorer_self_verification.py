@@ -982,65 +982,12 @@ class StepScorerSelfVerification(StepScorerBase):
         return ""
 
     def _call_api(self, prompt: str) -> str:
-        """Call API-based model for evaluation with retry logic."""
-        import openai
+        """Call API-based model for evaluation with retry logic.
 
-        messages = [{"role": "user", "content": prompt}]
-
-        max_retries = 3
-        base_delay = 2.0
-
-        for attempt in range(max_retries):
-            try:
-                results = self.model.generate_texts(
-                    chats=[messages],
-                    n=1,
-                    max_new_tokens=self.max_tokens,
-                    temperature=self.temperature,
-                    timeout=self.timeout,
-                )
-
-                if results and results[0]:
-                    result = results[0]
-                    text = result.get("text", "")
-
-                    # Track tokens from API response if available
-                    input_tokens = result.get("prompt_tokens", 0)
-                    output_tokens = result.get("completion_tokens", 0)
-
-                    # Fallback: estimate tokens if not provided by API
-                    if input_tokens == 0 and output_tokens == 0:
-                        # Rough estimate: ~4 chars per token
-                        input_tokens = len(prompt) // 4
-                        output_tokens = len(text) // 4
-
-                    self._record_tokens(input_tokens, output_tokens)
-                    return text
-                return ""
-
-            except (openai.APITimeoutError, openai.APIConnectionError) as e:
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2**attempt)
-                    log.warning(
-                        f"API error on attempt {attempt + 1}: {e}. Retrying in {delay:.1f}s..."
-                    )
-                    time.sleep(delay)
-                else:
-                    log.error(f"API call failed after {max_retries} attempts: {e}")
-                    raise
-
-            except openai.RateLimitError as e:
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2**attempt) * 3
-                    log.warning(
-                        f"Rate limit on attempt {attempt + 1}: {e}. Retrying in {delay:.1f}s..."
-                    )
-                    time.sleep(delay)
-                else:
-                    log.error(f"Rate limit persists after {max_retries} attempts: {e}")
-                    raise
-
-        return ""
+        Uses the model's OpenAI client directly with reasoning_effort=low
+        for reasoning models.
+        """
+        return self._call_api_single(prompt)
 
     def _call_api_single(self, prompt: str) -> str:
         """Call API for a single prompt with retry logic. Thread-safe.
