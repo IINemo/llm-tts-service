@@ -49,6 +49,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
         supports_logprobs: bool = False,
         base_url: Optional[str] = None,
         early_stopping: Optional[EarlyStopping] = None,
+        ssl_verify: bool = True,
     ):
         super().__init__(
             openai_api_key=openai_api_key,
@@ -61,24 +62,38 @@ class BlackboxModelWithStreaming(BlackboxModel):
         # Store client parameters for recreation
         self._api_key = openai_api_key
         self._base_url = base_url
+        self._ssl_verify = ssl_verify
 
         # Create persistent client with optional custom base_url (e.g., OpenRouter)
         # Configure timeouts for connection, read, write, and pool
         # Read timeout handles both streaming chunks and non-streaming responses
         from httpx import Timeout
 
+        timeout = Timeout(
+            connect=10.0,  # 10s to establish connection
+            read=300.0,  # 60s to receive response/next chunk
+            write=10.0,  # 10s to send request
+            pool=30.0,  # 30s to get connection from pool
+        )
         client_kwargs = {
             "api_key": openai_api_key,
-            "timeout": Timeout(
-                connect=10.0,  # 10s to establish connection
-                read=300.0,  # 60s to receive response/next chunk
-                write=10.0,  # 10s to send request
-                pool=30.0,  # 30s to get connection from pool
-            ),
+            "timeout": timeout,
             "max_retries": 0,  # Disable built-in retries (handled at strategy level)
         }
         if base_url:
             client_kwargs["base_url"] = base_url
+        if not ssl_verify:
+            import httpx as _httpx
+
+            client_kwargs["http_client"] = _httpx.Client(
+                verify=False,
+                timeout=timeout,
+            )
+            # Some API proxies block the default "OpenAI/Python" user-agent;
+            # override it so requests are not rejected.
+            client_kwargs["default_headers"] = {
+                "User-Agent": "python-httpx/0.28.1",
+            }
         self.client = openai.OpenAI(**client_kwargs)
 
         # Override parent's openai_api for non-streaming calls
@@ -116,13 +131,24 @@ class BlackboxModelWithStreaming(BlackboxModel):
         old_client = self.client
 
         # Create new client with same parameters
+        timeout = Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
         client_kwargs = {
             "api_key": self._api_key,
-            "timeout": Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0),
+            "timeout": timeout,
             "max_retries": 0,
         }
         if self._base_url:
             client_kwargs["base_url"] = self._base_url
+        if not self._ssl_verify:
+            import httpx as _httpx
+
+            client_kwargs["http_client"] = _httpx.Client(
+                verify=False,
+                timeout=timeout,
+            )
+            client_kwargs["default_headers"] = {
+                "User-Agent": "python-httpx/0.28.1",
+            }
 
         self.client = openai.OpenAI(**client_kwargs)
         self.openai_api = self.client

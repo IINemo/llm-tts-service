@@ -846,9 +846,18 @@ def _create_api_model_for_scorer(model_cfg):
     else:
         api_key = model_cfg.get("api_key") or os.getenv("OPENAI_API_KEY")
 
+    # Disable SSL verification for non-standard endpoints (e.g., university APIs)
+    ssl_verify = model_cfg.get("ssl_verify", True)
+
     # Validate scorer API connection before proceeding (with retries)
     log.info(f"Validating scorer API connection: {model_path} at {base_url}...")
-    test_client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    test_kwargs = {"api_key": api_key, "base_url": base_url}
+    if not ssl_verify:
+        import httpx
+
+        test_kwargs["http_client"] = httpx.Client(verify=False)
+        test_kwargs["default_headers"] = {"User-Agent": "python-httpx/0.28.1"}
+    test_client = openai.OpenAI(**test_kwargs)
     max_retries = 5
     for attempt in range(max_retries):
         try:
@@ -888,6 +897,7 @@ def _create_api_model_for_scorer(model_cfg):
         model_path=model_path,
         supports_logprobs=model_cfg.get("supports_logprobs", False),
         base_url=base_url,
+        ssl_verify=ssl_verify,
     )
 
 

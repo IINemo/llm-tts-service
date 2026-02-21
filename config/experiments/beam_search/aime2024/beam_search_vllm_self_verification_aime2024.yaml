@@ -71,6 +71,7 @@ scorer:
     model_name: "openai/gpt-oss-120b"
     base_url: "https://openai.global.ai.innopolis.university/v1"
     api_key: "any"
+    ssl_verify: false
 
 # Dataset configuration - AIME 2024
 dataset:
