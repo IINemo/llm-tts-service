@@ -34,17 +34,18 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 2048
+  max_new_tokens: 4096
   temperature: 0.7
   top_p: 0.8
   top_k: 20
   batch_size: 4
-  max_length: 4096
+  max_length: 8192
 
 # Strategy - Adaptive Scaling
 strategy:
-  adaptive_scaling_method: average
+  adaptive_scaling_method: momentum
   max_steps: 50
+  use_structure: true
   # Detector settings
   # Step boundary token limits
 
@@ -53,7 +54,6 @@ scorer:
   type: prm
   model_path: "Qwen/Qwen2.5-Math-PRM-7B"
   device: "cuda:1"
-  gpu_memory_utilization: 0.45
   batch_size: 1
   use_vllm: true
 

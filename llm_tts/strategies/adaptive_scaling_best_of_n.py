@@ -2,6 +2,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import numpy as np
+import re
 
 from llm_tts.generators import (
     StepCandidate,
@@ -21,6 +22,21 @@ from .strategy_base import StrategyBase
 
 log = logging.getLogger(__name__)
 
+# Pattern to detect garbage/degenerate output
+# Matches: emojis, CJK characters, unusual unicode, repeated nonsense patterns
+_GARBAGE_PATTERN = re.compile(
+    r"[\U0001F300-\U0001F9FF]"  # Emojis
+    r"|[\u4E00-\u9FFF]"  # CJK Unified Ideographs (Chinese)
+    r"|[\u3040-\u309F\u30A0-\u30FF]"  # Japanese Hiragana/Katakana
+    r"|[\uFF01-\uFF60]"  # Fullwidth punctuation
+    r"|[\u0100-\u024F]{2,}"  # Extended Latin with diacritics - 2+ consecutive
+)
+
+
+def _detect_garbage(text: str, threshold: int = 2) -> bool:
+    """Detect garbage/degenerate output (emojis, CJK chars, unusual unicode)."""
+    matches = _GARBAGE_PATTERN.findall(text)
+    return len(matches) >= threshold
 
 def calculate_perplexity_score(candidate: StepCandidate) -> float:
     """Calculate perplexity score from candidate's other_data."""
@@ -49,6 +65,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
         momentum_rate: float = 0.9,
         adaptive_scaling_method: str = "momentum",
         batch_size: int = 1000,
+        prompt_buffer: int = 500,
     ):
         self.candidates_per_step = candidates_per_step
         self.max_steps = max_steps
@@ -64,6 +81,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
             criterion=adaptive_scaling_method, **kwargs
         )
         self.batch_size = batch_size
+        self.prompt_buffer = prompt_buffer
 
     def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
         """Select the best candidate based on scores"""
@@ -111,6 +129,19 @@ class AdaptiveScalingBestOfN(StrategyBase):
         # Reset batch-wide and per-sample token tracking
         self.step_generator.reset_sample_stats()
         self.step_generator.reset_per_sample_stats()
+
+        # Context limit for trajectories
+        max_context_budget = getattr(self.step_generator, "context_budget", 4096)
+        max_step_tokens = getattr(self.step_generator, "step_token_limit", 256)
+        max_trajectory_tokens = min(
+            max_context_budget - self.prompt_buffer,
+            self.max_steps * max_step_tokens,
+        )
+        log.info(
+            f"Max trajectory tokens: {max_trajectory_tokens} "
+            f"(max_context_budget={max_context_budget}, prompt_buffer={self.prompt_buffer}, "
+            f"max_steps={self.max_steps}, max_step_tokens={max_step_tokens})"
+        )
 
         # ---- Batched helpers (duck-typing) ----
         def _gen_step_candidates_batch(
@@ -266,10 +297,26 @@ class AdaptiveScalingBestOfN(StrategyBase):
         if hasattr(self.scorer, "reset_prm_stats"):
             self.scorer.reset_prm_stats()
         needs_final_answer: List[bool] = [False for _ in range(num_samples)]
+        total_tokens: List[int] = [0 for _ in range(num_samples)]
 
         for step_num in range(self.max_steps):
             # Which samples are still active?
-            active_indices = [idx for idx in range(num_samples) if not completed[idx]]
+            active_sample_ids = [idx for idx in range(num_samples) if not completed[idx]]
+            active_indices = active_sample_ids
+            # active_indices = []
+            
+            # for i in active_sample_ids:
+            #     if total_tokens[i] >= max_trajectory_tokens - 200:
+            #         log.info(
+            #             f"Sample {sample_idxs[i]}: Context limit reached "
+            #             f"(tokens: {total_tokens[i]} >= {max_trajectory_tokens - 200}), "
+            #             f"marking for final answer"
+            #         )
+            #         completed[i] = True
+            #         needs_final_answer[i] = True
+            #     else:
+            #         active_indices.append(i)
+
             if not active_indices:
                 log.info(f"All {num_samples} samples completed at step {step_num}")
                 break
@@ -364,6 +411,7 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 )
                 trajectories[sample_idx].append(chosen)
                 selected_steps[sample_idx].append(chosen)
+
                 vs = (
                     chosen.other_data.get("validity_score")
                     if chosen.other_data
@@ -375,6 +423,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
                     )
                 validity_scores[sample_idx].append(vs if vs is not None else 0.0)
                 last_selected[sample_idx] = chosen
+
+                # Track token count
+                new_tokens = len(chosen.token_ids) if chosen.token_ids else 0
+                total_tokens[sample_idx] += new_tokens
 
                 # Check for thinking mode completion
                 if (
@@ -411,6 +463,37 @@ class AdaptiveScalingBestOfN(StrategyBase):
                         f"scores=[{scores_str}]"
                     )
                     continue
+                
+                # Check if full trajectory contains a boxed answer
+                # (skip for thinking-mode steps — boxed inside <think> is not final)
+                if (
+                    not chosen.is_trajectory_complete
+                    and not chosen.is_thinking_complete
+                ):
+                    full_traj_text = (
+                        convert_trajectory_to_string(trajectories[sample_idx])
+                        + chosen.text
+                    )
+                    has_boxed = bool(extract_answer(full_traj_text, "boxed"))
+                    if has_boxed:
+                        chosen.is_trajectory_complete = True
+                        log.info(
+                            f"Sample {sample_idxs[sample_idx]}: Boxed answer detected"
+                        )
+
+                # Detect garbage/degenerate output
+                # (skip for thinking-mode steps — answer phase still needed)
+                if (
+                    not chosen.is_trajectory_complete
+                    and not chosen.is_thinking_complete
+                    and _detect_garbage(chosen.text)
+                ):
+                    chosen.is_trajectory_complete = True
+                    log.info(
+                        f"Sample {sample_idxs[sample_idx]}: Garbage output detected, "
+                        f"marking complete"
+                    )
+
 
                 # Completion checks (mirror single-sample behavior)
                 if chosen.is_trajectory_complete:
@@ -445,6 +528,18 @@ class AdaptiveScalingBestOfN(StrategyBase):
                         f"needs_final_answer={needs_final_answer[sample_idx]}, "
                         f"scores=[{scores_str}]"
                     )
+                
+                # Context limit check after appending
+                # if (
+                #     not completed[sample_idx]
+                #     and total_tokens[sample_idx] >= max_trajectory_tokens
+                # ):
+                #     log.info(
+                #         f"Sample {sample_idxs[sample_idx]}: Context limit reached after step "
+                #         f"(tokens: {total_tokens[sample_idx]})"
+                #     )
+                #     completed[sample_idx] = True
+                #     needs_final_answer[sample_idx] = True
 
         # Log samples that hit max_steps without completing
         for idx in range(num_samples):
@@ -489,7 +584,8 @@ class AdaptiveScalingBestOfN(StrategyBase):
                         fin_reqs[pos], fin_trajs[pos]
                     )
                     self.step_generator.record_sample_tokens(
-                        sample_idx, answer_cands_batch[pos], context_tokens=ctx_tokens
+                        sample_idx, answer_cands_batch[pos], context_tokens=ctx_tokens,
+                        candidates_per_step=self.candidates_per_step,
                     )
 
             answer_scores_batch = _score_candidates_batch(
