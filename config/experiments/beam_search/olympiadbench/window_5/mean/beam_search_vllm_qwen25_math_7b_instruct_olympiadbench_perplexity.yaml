@@ -3,6 +3,9 @@
 # Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
 # Beam Search with vLLM + Non-Thinking Mode (Qwen2.5-7B) on OlympiadBench
 # Uses Perplexity scorer for step evaluation (normalized by length)
+#
+# SLURM: This config is designed for SLURM execution. The scripts/slurm/submit.sh wrapper will forward
+# SLURM errors (OOM kills, etc.) to the experiment's stderr.log for complete error tracking.
 # scoring_window=5: only last 5 step scores used for beam ranking
 
 defaults:
@@ -55,7 +58,7 @@ strategy:
   max_steps: 30
   scoring_window: 5         # Only use last 5 step scores for aggregation
   scoring_window_label: "window_5"
-  checkpoint_batch_size: 400
+  # checkpoint_batch_size: 200   # TODO: Tune for optimal performance - saves checkpoint every N steps
 
 # Perplexity scorer configuration (uses same model, no separate GPU needed)
 scorer:
