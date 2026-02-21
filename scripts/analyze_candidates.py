@@ -229,6 +229,54 @@ def analyze(
     return results
 
 
+def analyze_all_windows(
+    candidates_data: List[Dict],
+    data_name: str,
+    answer_format: str = "numeric",
+    correctness_labels: Optional[List[List[bool]]] = None,
+) -> tuple:
+    """Run analysis across all scoring windows for one candidates.json.
+
+    Pre-computes correctness labels (or reuses provided ones), finds max steps,
+    and evaluates every (scorer × aggregation × window) combination.
+
+    Args:
+        candidates_data: List of sample dicts from candidates.json
+        data_name: Dataset name for exact-match evaluation
+        answer_format: Answer format for exact-match evaluation
+        correctness_labels: Pre-computed labels; computed if None
+
+    Returns:
+        (all_results, correctness_labels, oracle_acc, max_steps) where
+        all_results maps "window=<N>"|"window=all" → {scorer: {agg: accuracy}}
+    """
+    if correctness_labels is None:
+        correctness_labels = precompute_correctness(
+            candidates_data, data_name, answer_format
+        )
+
+    oracle_correct = sum(1 for labels in correctness_labels if any(labels))
+    oracle_acc = oracle_correct / len(correctness_labels) if correctness_labels else 0.0
+
+    # Find max step count
+    max_steps = 0
+    for sample in candidates_data:
+        for candidate in sample.get("candidates", []):
+            for scorer_data in candidate.get("scores", {}).values():
+                max_steps = max(max_steps, len(scorer_data.get("per_step", [])))
+            max_steps = max(max_steps, len(candidate.get("steps", [])))
+
+    windows = [None] + list(range(1, max_steps + 1))
+    all_results = {}
+    for window in windows:
+        window_label = f"window={window}" if window is not None else "window=all"
+        all_results[window_label] = analyze(
+            candidates_data, correctness_labels, scoring_window=window
+        )
+
+    return all_results, correctness_labels, oracle_acc, max_steps
+
+
 def print_results_table(results: Dict[str, Dict[str, float]]):
     """Print results as a formatted table."""
     if not results:
@@ -356,47 +404,24 @@ def main():
         f"scorer types: {sorted(scorer_types)}"
     )
 
-    # Find max step count across all candidates
-    max_steps = 0
-    for sample in candidates_data:
-        for candidate in sample.get("candidates", []):
-            num_steps = len(candidate.get("steps", []))
-            max_steps = max(max_steps, num_steps)
-    log.info(f"Max steps across all candidates: {max_steps}")
-
-    # Pre-compute exact-match correctness labels
-    log.info("Pre-computing exact-match correctness labels...")
-    em_labels = precompute_correctness(
+    # Run analysis across all windows
+    log.info("Pre-computing correctness and analyzing all windows...")
+    all_results, em_labels, oracle_acc, max_steps = analyze_all_windows(
         candidates_data,
         data_name=args.data_name,
         answer_format=args.answer_format,
     )
-    em_correct = sum(1 for labels in em_labels if any(labels))
-    oracle_acc = em_correct / len(em_labels) if em_labels else 0.0
     log.info(
-        f"Exact match: {em_correct}/{len(em_labels)} samples have at least one correct candidate (oracle={oracle_acc:.4f})"
+        f"Oracle accuracy: {oracle_acc:.4f}, max steps: {max_steps}, "
+        f"windows evaluated: {len(all_results)}"
     )
 
-    # Build list of windows to evaluate
-    windows = [None]  # always include "all steps"
-    if args.scoring_windows:
-        if "all" in args.scoring_windows:
-            windows.extend(range(1, max_steps + 1))
-        else:
-            windows.extend(int(w) for w in args.scoring_windows)
+    # If user only wanted specific windows, filter
+    if args.scoring_windows and "all" not in args.scoring_windows:
+        keep = {"window=all"} | {f"window={int(w)}" for w in args.scoring_windows}
+        all_results = {k: v for k, v in all_results.items() if k in keep}
 
-    all_results = {}
-    for window in windows:
-        window_label = f"window={window}" if window is not None else "window=all"
-        log.info(f"Analyzing with {window_label}...")
-
-        results = analyze(
-            candidates_data,
-            correctness_labels=em_labels,
-            scoring_window=window,
-        )
-        all_results[window_label] = results
-
+    for window_label, results in all_results.items():
         print(f"\n>>> {window_label}")
         print_results_table(results)
 
