@@ -55,7 +55,7 @@ strategy:
   max_steps: 250
   aggregation: mean
 
-# Self-Verification Scorer using GPT-OSS-120B via OpenRouter API
+# Self-Verification Scorer using GPT-OSS-120B via Innopolis API
 scorer:
   type: self_verification
   method: value
@@ -69,9 +69,8 @@ scorer:
   model:
     type: openai_api
     model_name: "openai/gpt-oss-120b"
-    base_url: "https://openrouter.ai/api/v1"
-    provider: openrouter
-    api_key: null
+    base_url: "https://openai.global.ai.innopolis.university/v1"
+    api_key: "any"
 
 # Dataset configuration - GPQA Diamond
 dataset:
