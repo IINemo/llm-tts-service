@@ -3,13 +3,23 @@ LLM Test-Time Scaling Service - OpenAI-compatible API
 """
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from service_app.api.routes import chat, models
+from service_app.api.routes import chat, debugger, models
 from service_app.core.config import settings
+
+# Allow running this file directly from inside the `service_app` directory:
+# `python main.py`
+# current_dir = Path(__file__).resolve().parent
+# parent_dir = current_dir.parent
+# if str(parent_dir) not in sys.path:
+#     sys.path.insert(0, str(parent_dir))
+
 
 # Configure logging
 logging.basicConfig(
@@ -80,6 +90,12 @@ app.add_middleware(
 # Include routers
 app.include_router(chat.router, tags=["Chat Completions"])
 app.include_router(models.router, tags=["Models"])
+app.include_router(debugger.router, tags=["Visual Debugger"])
+
+# Serve static assets for the visual debugger demo.
+static_dir = Path(__file__).resolve().parent / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
 @app.get("/", tags=["Health"])
