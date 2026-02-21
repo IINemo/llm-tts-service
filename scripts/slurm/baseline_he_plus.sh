@@ -15,13 +15,11 @@ srun --container-image=artifactory.mts.ai/ml-docker/gpt_transformers_pytorch_24_
      bash -c "
        cd /home/s.senichev/llm-tts-service &&
        ./setup.sh &&
+       pip install latex2sympy2 --no-deps
        pip install -e '.[dev,vllm]' &&
-       pip install numpy==1.26.4 &&
-       pip install transformers==4.57.3 &&
-       pip install flash_attn -U --force-reinstall &&
-       pip uninstall -y torchvision || true &&
 
-       python scripts/run_tts_eval.py \
+       python3 scripts/run_tts_eval.py \
          --config-path=../config \
-         --config-name=experiments/baseline/human_eval_plus/baseline_vllm_qwen3_8b_human_eval_plus
+         --config-name=experiments/baseline/human_eval_plus/baseline_vllm_qwen3_8b_human_eval_plus \
+         report_to=null
      "
