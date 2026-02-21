@@ -50,6 +50,7 @@ generation:
   top_k: 20
   batch_size: 1
   max_length: 8192
+  # checkpoint_batch_size: 200   # TODO: Enable when running on limited compute (e.g., CIAI cluster) - saves checkpoint every N samples to prevent data loss on preemption/OOM
 
 # Strategy - Beam Search
 strategy:
@@ -58,8 +59,6 @@ strategy:
   max_steps: 30
   scoring_window: 5         # Only use last 5 step scores for aggregation
   scoring_window_label: "window_5"
-  # checkpoint_batch_size: 200   # TODO: Tune for optimal performance - saves checkpoint every N steps
-
 # Sequence probability scorer configuration (uses same model, no separate GPU needed)
 scorer:
   type: sequence_prob

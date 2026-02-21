@@ -51,10 +51,10 @@ generation:
   top_k: 20
   batch_size: 1
   max_length: 8192
+  # checkpoint_batch_size: 200   # TODO: Enable when running on limited compute (e.g., CIAI cluster) - saves checkpoint every N samples to prevent data loss on preemption/OOM
 
 # Strategy - Beam Search
 strategy:
-  # checkpoint_batch_size: 200   # TODO: Tune for optimal performance - saves checkpoint every N steps
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30
