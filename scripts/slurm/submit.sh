@@ -426,11 +426,131 @@ if [[ -z \"\${SEED+x}\" ]]; then
     SEED=${seed}
 fi
 
+# Monitor function to catch and log SLURM errors (OOM, etc.)
+monitor_job() {
+    local python_pid=\$1
+    local slurm_err=\$2
+
+    # Wait for output directory to be created
+    local output_dir=\"\"
+    local count=0
+    while [[ -z \"\$output_dir\" ]] && [[ \$count -lt 120 ]]; do
+        # Find most recently modified output directory
+        output_dir=\$(find outputs -name \"stderr.log\" -newer /tmp/slate_marker_\$\$ 2>/dev/null | head -1 | xargs dirname 2>/dev/null || true)
+        if [[ -n \"\$output_dir\" ]]; then
+            break
+        fi
+        sleep 2
+        count=\$((count + 1))
+    done
+
+    if [[ -n \"\$output_dir\" ]] && [[ -f \"\$output_dir/stderr.log\" ]]; then
+        # Monitor main process
+        while kill -0 \$python_pid 2>/dev/null; do
+            sleep 10
+
+            # Check for OOM messages in SLURM err log
+            if [[ -f \"\$slurm_err\" ]]; then
+                if grep -q \"oom_kill\|Out of memory.*Kill\" \"\$slurm_err\" 2>/dev/null; then
+                    # OOM detected - append to experiment log
+                    {
+                        echo \"\"
+                        echo \"============================================\"
+                        echo \"SLURM SYSTEM ERROR (DETECTED DURING EXECUTION)\"
+                        echo \"Time: \$(date)\"
+                        echo \"Node: \$(hostname)\"
+                        tail -3 \"\$slurm_err\"
+                        echo \"============================================\"
+                    } >> \"\$output_dir/stderr.log\"
+                    break
+                fi
+            fi
+        done
+
+        # Process exited - get final status
+        wait \$python_pid
+        local exit_code=\$?
+
+        # Read exact error from SLURM log
+        local exact_error=\"\"
+        if [[ -f \"\$slurm_err\" ]]; then
+            exact_error=\$(grep -i \"oom_kill.*batch\|detected.*oom\|kill.*process\" \"\$slurm_err\" 2>/dev/null | tail -1)
+        fi
+
+        # Also check dmesg
+        if [[ -z \"\$exact_error\" ]]; then
+            exact_error=\$(dmesg 2>/dev/null | grep -i \"oom.*kill.*process.*python\" | tail -1)
+        fi
+
+        # Append completion status with exact error
+        {
+            echo \"\"
+            echo \"============================================\"
+            echo \"SLURM JOB COMPLETION\"
+            echo \"Exit code: \$exit_code\"
+            echo \"Time: \$(date)\"
+            echo \"Job ID: \$SLURM_JOB_ID\"
+            echo \"Node: \$SLURM_NODELIST\"
+
+            case \$exit_code in
+                137|9)
+                    echo \"Signal: SIGKILL (9) - Process terminated\"
+                    if [[ -n \"\$exact_error\" ]]; then
+                        echo \"\"
+                        echo \"EXACT ERROR:\"
+                        echo \"\$exact_error\"
+                    else
+                        echo \"\"
+                        echo \"Root Cause: Check SLURM logs or dmesg for OOM\"
+                    fi
+                    ;;
+                139)
+                    echo \"Signal: SIGSEGV (11) - Segmentation fault\"
+                    ;;
+                134)
+                    echo \"Signal: SIGABRT (6) - Aborted\"
+                    ;;
+                124)
+                    echo \"Signal: SIGXCPU - CPU time limit exceeded\"
+                    ;;
+                *)
+                    if [[ \$exit_code -ne 0 ]]; then
+                        if [[ -n \"\$exact_error\" ]]; then
+                            echo \"\"
+                            echo \"ERROR FROM SLURM:\"
+                            echo \"\$exact_error\"
+                        fi
+                    fi
+                    ;;
+            esac
+            echo \"============================================\"
+        } >> \"\$output_dir/stderr.log\"
+    fi
+}
+
+# Create marker for finding newest output directory
+touch /tmp/slate_marker_\$\$
+
+# Run Python in background and monitor
 python scripts/run_tts_eval.py \\
     --config-path=${PROJECT_DIR}/config \\
     --config-name=${config_name} \\
     system.seed=\${SEED} \\
-    ${SUBSET:+dataset.subset=${SUBSET}}
+    ${SUBSET:+dataset.subset=${SUBSET}} &
+PYTHON_PID=\$!
+
+# Start monitor (passes SLURM err file path)
+monitor_job \$PYTHON_PID \"\${SLURM_JOB_ID}.err\" &
+
+# Wait for Python to complete
+wait \$PYTHON_PID
+EXIT_CODE=\$?
+
+# Cleanup marker
+rm -f /tmp/slate_marker_\$\$
+
+# Exit with same code as Python
+exit \$EXIT_CODE
 "
 
     # Write to temp file and submit
@@ -559,7 +679,62 @@ fi
 # Array of config names
 declare -a CONFIG_ARRAY=(${configs[*]})
 
-# Run experiments sequentially
+# Helper function to find and append error to stderr.log
+append_error_to_log() {
+    local config=\"$1\"
+    local exit_code=\"$2\"
+    local slurm_err=\"logs/${job_name}_\${SLURM_JOB_ID}.err\"
+
+    # Find the stderr.log for this config
+    local pattern=\"outputs/\$(date +%Y-%m-%d)/*/*/beam_search/*/seed${seed}_*/stderr.log\"
+
+    # Try multiple times to find the log as directory may not exist yet
+    for attempt in {1..10}; do
+        local log_file=\$(eval \"ls -t \$pattern 2>/dev/null | head -1\")
+        if [[ -f \"\$log_file\" ]]; then
+            # Get exact error from SLURM
+            local exact_error=\"\"
+            if [[ -f \"\$slurm_err\" ]]; then
+                exact_error=\$(grep -i \"oom_kill.*batch\|detected.*oom\|kill.*process\" \"\$slurm_err\" 2>/dev/null | tail -1)
+            fi
+
+            # Check dmesg too
+            if [[ -z \"\$exact_error\" ]]; then
+                exact_error=\$(dmesg 2>/dev/null | grep -i \"oom.*kill.*process.*python\" | tail -1)
+            fi
+
+            {
+                echo \"\"
+                echo \"============================================\"
+                echo \"SLURM SEQUENTIAL JOB - EXPERIMENT FAILED\"
+                echo \"Config: \$config\"
+                echo \"Exit code: \$exit_code\"
+                echo \"Time: \$(date)\"
+                echo \"Job ID: \$SLURM_JOB_ID\"
+
+                case \$exit_code in
+                    137|9)
+                        echo \"Signal: SIGKILL (9) - OOM Kill likely\"
+                        ;;
+                    139)
+                        echo \"Signal: SIGSEGV (11) - Segmentation fault\"
+                        ;;
+                esac
+
+                if [[ -n \"\$exact_error\" ]]; then
+                    echo \"\"
+                    echo \"EXACT ERROR FROM SLURM:\"
+                    echo \"\$exact_error\"
+                fi
+                echo \"============================================\"
+            } >> \"\$log_file\"
+            break
+        fi
+        sleep 1
+    done
+}
+
+# Run experiments sequentially with error tracking
 for i in \"\${!CONFIG_ARRAY[@]}\"; do
     echo \"\"
     echo \"============================================\"
@@ -567,10 +742,26 @@ for i in \"\${!CONFIG_ARRAY[@]}\"; do
     echo \"Time: \$(date)\"
     echo \"============================================\"
 
+    # Create marker for finding newest output
+    touch /tmp/seq_marker_\$\$
+
     python scripts/run_tts_eval.py \\
         --config-path=../config \\
         --config-name=\$i \\
-        system.seed=${seed}
+        system.seed=${seed} 2>&1 | tee -a /tmp/seq_output_\$\$.log
+
+    local exit_code=\${PIPESTATUS[0]}
+
+    # Cleanup marker
+    rm -f /tmp/seq_marker_\$\$
+
+    if [[ \$exit_code -ne 0 ]]; then
+        echo \"ERROR: Experiment \$i failed with exit code \$exit_code\"
+        append_error_to_log \"\$i\" \$exit_code
+
+        # Stop on first error
+        break
+    fi
 
     echo \"\"
     echo \"============================================\"

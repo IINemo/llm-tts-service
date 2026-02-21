@@ -4,6 +4,9 @@
 # Beam Search with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
 # Uses Entropy scorer for step evaluation (no separate PRM model needed)
 # scoring_window=5: only last 5 step scores used for beam ranking
+#
+# SLURM: This config is designed for SLURM execution. The scripts/slurm/submit.sh wrapper will forward
+# SLURM errors (OOM kills, etc.) to the experiment's stderr.log for complete error tracking.
 
 defaults:
   - /config
@@ -52,6 +55,7 @@ generation:
 
 # Strategy - Beam Search
 strategy:
+  # checkpoint_batch_size: 200   # TODO: Tune for optimal performance - saves checkpoint every N steps
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30

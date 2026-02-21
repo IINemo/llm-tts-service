@@ -54,8 +54,10 @@ strategy:
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30
+  aggregation: mean
   scoring_window: 5         # Only use last 5 step scores for aggregation
   scoring_window_label: "window_5"
+  checkpoint_batch_size: 200
 
 # PRM scorer configuration
 scorer:
