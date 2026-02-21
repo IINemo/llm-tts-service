@@ -846,29 +846,42 @@ def _create_api_model_for_scorer(model_cfg):
     else:
         api_key = model_cfg.get("api_key") or os.getenv("OPENAI_API_KEY")
 
-    # Validate scorer API connection before proceeding
+    # Validate scorer API connection before proceeding (with retries)
     log.info(f"Validating scorer API connection: {model_path} at {base_url}...")
-    try:
-        test_client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        response = test_client.chat.completions.create(
-            model=model_path,
-            messages=[{"role": "user", "content": "Say OK"}],
-            max_tokens=256,
-            extra_body={"reasoning_effort": "low"},
-        )
-        msg = response.choices[0].message if response.choices else None
-        text = (
-            (msg.content or getattr(msg, "reasoning_content", None) or "")
-            if msg
-            else ""
-        )
-        log.info(f"Scorer API connection validated: response='{text}'")
-    except Exception as e:
-        raise ConnectionError(
-            f"Scorer API connection failed: {e}. "
-            f"Check that the API is accessible at {base_url} "
-            f"with model {model_path}"
-        ) from e
+    test_client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            response = test_client.chat.completions.create(
+                model=model_path,
+                messages=[{"role": "user", "content": "Say OK"}],
+                max_tokens=256,
+                extra_body={"reasoning_effort": "low"},
+            )
+            msg = response.choices[0].message if response.choices else None
+            text = (
+                (msg.content or getattr(msg, "reasoning_content", None) or "")
+                if msg
+                else ""
+            )
+            log.info(f"Scorer API connection validated: response='{text}'")
+            break
+        except Exception as e:
+            if attempt < max_retries - 1:
+                delay = 10 * (attempt + 1)
+                log.warning(
+                    f"Scorer API validation attempt {attempt + 1}/{max_retries} failed: {e}. "
+                    f"Retrying in {delay}s..."
+                )
+                import time
+
+                time.sleep(delay)
+            else:
+                raise ConnectionError(
+                    f"Scorer API connection failed after {max_retries} attempts: {e}. "
+                    f"Check that the API is accessible at {base_url} "
+                    f"with model {model_path}"
+                ) from e
 
     return BlackboxModelWithStreaming(
         openai_api_key=api_key,
