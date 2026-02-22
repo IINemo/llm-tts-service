@@ -137,6 +137,7 @@ SCORER_CONFIGS[perplexity]="perplexity"
 SCORER_CONFIGS[sequence_prob]="sequence_prob"
 SCORER_CONFIGS[prm]="prm"
 SCORER_CONFIGS[multi_scorer]="multi_scorer"
+SCORER_CONFIGS[llm_critic]="llm_critic"
 
 declare -A MODEL_CONFIGS
 MODEL_CONFIGS[qwen25_7b]="vllm_nothink_qwen25_7b"

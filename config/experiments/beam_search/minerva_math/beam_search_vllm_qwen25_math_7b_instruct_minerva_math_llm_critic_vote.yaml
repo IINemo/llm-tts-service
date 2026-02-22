@@ -1,9 +1,10 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/beam_search_vllm_self_verification_minerva_math_k2
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/beam_search_vllm_qwen25_math_7b_instruct_minerva_math_llm_critic_vote
 #
-# Beam Search with Self-Verification Scorer (Tree of Thoughts paper)
+# Beam Search with LLM Critic Scorer - VOTE method (Tree of Thoughts paper)
 # Uses vLLM for local GPU inference on Minerva Math dataset
-# Model: LLM360/K2-Think (33B)
+# Vote method: presents all candidates together, model picks the best one
+# (as used for GSM8K in the ToT paper appendix)
 #
 # Based on: "Tree of Thoughts: Deliberate Problem Solving with Large Language Models"
 # Paper: https://arxiv.org/abs/2305.10601
@@ -13,22 +14,22 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/self_verification
+  - /scorer/llm_critic
   - /evaluation/default
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_self_verification_minerva_math_k2_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_qwen25_math_7b_instruct_minerva_math_llm_critic_vote_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: none
 wandb_project: llm-tts-eval-minerva-math
 
-# Model configuration (vLLM backend) - K2-Think-V2 (70B)
+# Model configuration (vLLM backend)
 model:
   type: vllm
-  model_path: "LLM360/K2-Think"
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
@@ -56,7 +57,7 @@ strategy:
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30
-  aggregation: mean  # Original ToT: select by current step score only
+  aggregation: last  # Original ToT: select by current step score only
   batch_generation: true
   prompt_buffer: 500
   stop_token_ids:
@@ -79,16 +80,17 @@ strategy:
     - "therefore"
     - "thus"
 
-# Self-Verification Scorer (Tree of Thoughts)
-# Note: For vLLM, the same model is used for both generation and evaluation
+# LLM Critic Scorer - VOTE method (Tree of Thoughts)
+# Vote: model sees all candidates at once and picks the best
+# More suitable for math than value method (paper used vote for GSM8K)
 scorer:
-  type: self_verification
-  method: value  # "value" or "vote"
-  n_evaluate_sample: 3  # Paper uses 3 samples
+  type: llm_critic
+  method: vote  # "vote" = compare candidates, "value" = rate independently
+  n_evaluate_sample: 3  # Paper uses 3 votes
   temperature: 0.7
-  max_tokens: 100
+  max_tokens: 200  # Vote needs more tokens for analysis
   timeout: 120
-  value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
+  vote_prompt_file: "tree-of-thought/llm_critic/vote_prompt_math.txt"
 
 # Dataset configuration - Minerva Math
 dataset:

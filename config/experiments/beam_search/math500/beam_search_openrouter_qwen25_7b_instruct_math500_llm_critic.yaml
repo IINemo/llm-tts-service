@@ -1,7 +1,7 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/math500/beam_search_openrouter_self_verification_math500
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/math500/beam_search_openrouter_qwen25_7b_instruct_math500_llm_critic
 #
-# Beam Search with Self-Verification Scorer (Tree of Thoughts paper)
+# Beam Search with LLM Critic Scorer (Tree of Thoughts paper)
 # Uses OpenRouter API - no GPU required!
 #
 # Based on: "Tree of Thoughts: Deliberate Problem Solving with Large Language Models"
@@ -13,12 +13,12 @@ defaults:
   - /model/openrouter
   - /generation/default
   - /system/default
-  - /scorer/self_verification
+  - /scorer/llm_critic
   - /evaluation/default
   - _self_
 
 # Run naming
-run_name: "beam_search_openrouter_self_verification_math500_${now:%H-%M-%S}"
+run_name: "beam_search_openrouter_qwen25_7b_instruct_math500_llm_critic_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
@@ -67,15 +67,15 @@ strategy:
   use_reasoning: true
   use_correction: false
 
-# Self-Verification Scorer (Tree of Thoughts)
+# LLM Critic Scorer (Tree of Thoughts)
 scorer:
-  type: self_verification
+  type: llm_critic
   method: value  # "value" or "vote"
   n_evaluate_sample: 3  # Paper uses 3 samples
   temperature: 0.7
   max_tokens: 100
   timeout: 60
-  value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
+  value_prompt_file: "tree-of-thought/llm_critic/value_prompt_math.txt"
 
 # Dataset configuration
 dataset:

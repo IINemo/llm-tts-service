@@ -123,7 +123,7 @@ from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreami
 from llm_tts.scorers import (
     StepScorerConfidence,
     StepScorerPRM,
-    StepScorerSelfVerification,
+    StepScorerLLMCritic,
     StepScorerUncertainty,
 )
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
@@ -397,10 +397,10 @@ def create_scorer(config):
             scorer.init_flop_calculator(config.scorer.model_path)
         except Exception as e:
             log.warning(f"Could not init PRM FLOP calculator: {e}")
-    elif config.scorer.type == "self_verification":
-        # Self-Verification Scorer (Tree of Thoughts paper)
+    elif config.scorer.type == "llm_critic":
+        # LLM Critic Scorer (Tree of Thoughts paper)
         # Model will be set later in create_tts_strategy() after model is initialized
-        scorer = StepScorerSelfVerification(
+        scorer = StepScorerLLMCritic(
             method=config.scorer.method,
             n_evaluate_sample=config.scorer.n_evaluate_sample,
             temperature=config.scorer.temperature,
@@ -477,11 +477,11 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            # Self-consistency, baseline, extended_thinking, and self_verification don't need uncertainty wrapper
+            # Self-consistency, baseline, extended_thinking, and llm_critic don't need uncertainty wrapper
             scorer_type = config.scorer.type if config.scorer else "entropy"
             if (
                 config.strategy.type in ("self_consistency", "baseline", "extended_thinking")
-                or scorer_type == "self_verification"
+                or scorer_type == "llm_critic"
             ):
                 vllm_model = llm
                 log.info(
@@ -809,7 +809,7 @@ def create_model(config):
 def _create_api_model_for_scorer(model_cfg):
     """Create an API-backed model instance for scoring only."""
     model_path = model_cfg.get("model_name") or model_cfg.get("model_path")
-    log.info(f"Self-verification scorer API model: {model_path}")
+    log.info(f"LLM critic scorer API model: {model_path}")
 
     provider = model_cfg.get("provider")
     base_url = model_cfg.get("base_url")
@@ -835,7 +835,7 @@ def _create_api_model_for_scorer(model_cfg):
 def create_tts_strategy(
     config, model, step_generator, scorer, output_dir=None, flop_calculator=None
 ):
-    # Set model on scorer if it supports it (e.g., StepScorerSelfVerification)
+    # Set model on scorer if it supports it (e.g., StepScorerLLMCritic)
     if scorer is not None and hasattr(scorer, "set_model"):
         scorer_model_cfg = getattr(config.scorer, "model", None)
         if scorer_model_cfg is not None:
@@ -858,7 +858,7 @@ def create_tts_strategy(
                 log.warning("Scorer: unknown model type, may not work correctly")
                 scorer.set_model(model, use_vllm=False)
 
-        # Initialize FLOP calculator for self-verification token/compute tracking
+        # Initialize FLOP calculator for LLM critic token/compute tracking
         if hasattr(scorer, "init_flop_calculator"):
             try:
                 flop_model_name = getattr(config.model, "model_path", None) or getattr(
@@ -867,7 +867,7 @@ def create_tts_strategy(
                 if flop_model_name:
                     scorer.init_flop_calculator(flop_model_name)
             except Exception as e:
-                log.warning(f"Could not init self-verification FLOP calculator: {e}")
+                log.warning(f"Could not init LLM critic FLOP calculator: {e}")
 
     if config.strategy.type == "baseline":
         # Get eos_patterns from config, default to ["<end of response>"]

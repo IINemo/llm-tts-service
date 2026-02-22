@@ -1,29 +1,28 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/math500/beam_search_vllm_self_verification_math500
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/beam_search_vllm_qwen25_math_7b_instruct_minerva_math_llm_critic
 #
-# Beam Search with Self-Verification Scorer (Tree of Thoughts paper)
-# Uses vLLM for local GPU inference
+# Beam Search with LLM Critic Scorer (Tree of Thoughts paper)
+# Uses vLLM for local GPU inference on Minerva Math dataset
 #
 # Based on: "Tree of Thoughts: Deliberate Problem Solving with Large Language Models"
 # Paper: https://arxiv.org/abs/2305.10601
 
 defaults:
   - /config
-  - /dataset/math_500
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/self_verification
+  - /scorer/llm_critic
   - /evaluation/default
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_self_verification_math500_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_qwen25_math_7b_instruct_minerva_math_llm_critic_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: wandb
-wandb_project: llm-tts-eval-math500
+report_to: none
+wandb_project: llm-tts-eval-minerva-math
 
 # Model configuration (vLLM backend)
 model:
@@ -56,7 +55,7 @@ strategy:
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30
-  aggregation: mean
+  aggregation: mean  # Original ToT: select by current step score only
   batch_generation: true
   prompt_buffer: 500
   stop_token_ids:
@@ -71,7 +70,6 @@ strategy:
   use_structure: false
   use_reasoning: true
   use_correction: false
-  # Custom words for stop tokens
   custom_words:
     - "for example"
     - "given that"
@@ -80,20 +78,36 @@ strategy:
     - "therefore"
     - "thus"
 
-# Self-Verification Scorer (Tree of Thoughts)
+# LLM Critic Scorer (Tree of Thoughts)
 # Note: For vLLM, the same model is used for both generation and evaluation
 scorer:
-  type: self_verification
+  type: llm_critic
   method: value  # "value" or "vote"
   n_evaluate_sample: 3  # Paper uses 3 samples
   temperature: 0.7
-  max_tokens: 100
+  max_tokens: 256
   timeout: 120
-  value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
+  value_prompt_file: "tree-of-thought/llm_critic/value_prompt_math.txt"
 
-# Dataset configuration
+# Dataset configuration - Minerva Math
 dataset:
-  subset: 500
+  dataset_path: "test-time-compute/test_minerva_math"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 272
   offset: 0
-  data_name: math
-  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: minerva_math
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
+
+# Evaluation - use OpenRouter instead of OpenAI (403 in this region)
+evaluation:
+  llm_judge:
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: openai/gpt-4o-mini
+    n_threads: 1

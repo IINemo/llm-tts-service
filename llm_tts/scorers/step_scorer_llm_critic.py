@@ -1,5 +1,5 @@
 """
-Self-Verification Scorer based on Tree of Thoughts paper.
+LLM Critic Scorer based on Tree of Thoughts paper.
 
 Implements the State Evaluator from "Tree of Thoughts: Deliberate Problem Solving
 with Large Language Models" (Yao et al., 2023).
@@ -29,8 +29,8 @@ from .step_scorer_base import CandidateScore, StepScorerBase
 log = logging.getLogger(__name__)
 
 # Default prompt file paths (relative to project root config/prompts/)
-DEFAULT_VALUE_PROMPT_FILE = "tree-of-thought/self_verification/value_prompt_math.txt"
-DEFAULT_VOTE_PROMPT_FILE = "tree-of-thought/self_verification/vote_prompt.txt"
+DEFAULT_VALUE_PROMPT_FILE = "tree-of-thought/llm_critic/value_prompt_math.txt"
+DEFAULT_VOTE_PROMPT_FILE = "tree-of-thought/llm_critic/vote_prompt.txt"
 
 
 def _load_prompt_from_file(prompt_path: str) -> Optional[str]:
@@ -53,9 +53,9 @@ def _load_prompt_from_file(prompt_path: str) -> Optional[str]:
     return None
 
 
-class StepScorerSelfVerification(StepScorerBase):
+class StepScorerLLMCritic(StepScorerBase):
     """
-    Self-Verification Scorer from Tree of Thoughts paper.
+    LLM Critic Scorer from Tree of Thoughts paper.
 
     Uses the LLM itself to evaluate reasoning steps, implementing
     the "State Evaluator V(pθ, S)" from the ToT framework.
@@ -88,7 +88,7 @@ class StepScorerSelfVerification(StepScorerBase):
         vote_prompt: str = None,
         vote_prompt_file: str = None,
         use_vllm: bool = False,
-        name: str = "self_verification",
+        name: str = "llm_critic",
     ):
         super().__init__(name=name)
 
@@ -131,7 +131,7 @@ class StepScorerSelfVerification(StepScorerBase):
         self.total_evaluations = 0
         self.cache: Dict[str, float] = {}
 
-        # FLOP/token tracking for self-verification evaluations
+        # FLOP/token tracking for LLM critic evaluations
         self.flop_calculator: Optional[FLOPCalculator] = None
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
@@ -140,7 +140,7 @@ class StepScorerSelfVerification(StepScorerBase):
         self._current_sample_id: Any = None
 
         log.info(
-            f"StepScorerSelfVerification initialized: method={method}, "
+            f"StepScorerLLMCritic initialized: method={method}, "
             f"n_evaluate_sample={n_evaluate_sample}, use_vllm={use_vllm}"
         )
 
@@ -187,10 +187,10 @@ class StepScorerSelfVerification(StepScorerBase):
     # -------------------------------------------------------------------------
 
     def init_flop_calculator(self, model_name: str):
-        """Initialize FLOP calculator for self-verification token/compute tracking."""
+        """Initialize FLOP calculator for LLM critic token/compute tracking."""
         self.flop_calculator = FLOPCalculator(model_name, method="simple")
         log.info(
-            f"Self-verification FLOP calculator initialized: "
+            f"LLM critic FLOP calculator initialized: "
             f"{self.flop_calculator.tflops_per_1k_tokens:.3f} TFLOPs/1k tokens"
         )
 
@@ -224,7 +224,7 @@ class StepScorerSelfVerification(StepScorerBase):
         self.cache.clear()
 
     def get_stats_for(self, sample_id: Any) -> Dict[str, Any]:
-        """Get self-verification stats for a specific sample."""
+        """Get LLM critic stats for a specific sample."""
         input_tokens = self._per_sample_input_tokens.get(sample_id, 0)
         output_tokens = self._per_sample_output_tokens.get(sample_id, 0)
         total_tokens = input_tokens + output_tokens
@@ -235,14 +235,14 @@ class StepScorerSelfVerification(StepScorerBase):
             else None
         )
         return {
-            "self_verification_input_tokens": input_tokens,
-            "self_verification_output_tokens": output_tokens,
-            "self_verification_total_tokens": total_tokens,
-            "self_verification_tflops": tflops,
+            "llm_critic_input_tokens": input_tokens,
+            "llm_critic_output_tokens": output_tokens,
+            "llm_critic_total_tokens": total_tokens,
+            "llm_critic_tflops": tflops,
         }
 
     def get_total_stats(self) -> Dict[str, Any]:
-        """Get aggregate self-verification stats across all samples."""
+        """Get aggregate LLM critic stats across all samples."""
         total_tokens = self._total_input_tokens + self._total_output_tokens
         tflops = (
             self.flop_calculator.compute_tflops(total_tokens)
@@ -250,10 +250,10 @@ class StepScorerSelfVerification(StepScorerBase):
             else None
         )
         return {
-            "self_verification_input_tokens": self._total_input_tokens,
-            "self_verification_output_tokens": self._total_output_tokens,
-            "self_verification_total_tokens": total_tokens,
-            "self_verification_tflops": tflops,
+            "llm_critic_input_tokens": self._total_input_tokens,
+            "llm_critic_output_tokens": self._total_output_tokens,
+            "llm_critic_total_tokens": total_tokens,
+            "llm_critic_tflops": tflops,
         }
 
     def score_candidates_detailed(
@@ -683,7 +683,7 @@ class StepScorerSelfVerification(StepScorerBase):
                     claim_scores=[score],
                     aggregate_scores={"value": score},
                     metadata={
-                        "scorer_type": "self_verification",
+                        "scorer_type": "llm_critic",
                         "method": "value",
                     },
                 )
@@ -714,7 +714,7 @@ class StepScorerSelfVerification(StepScorerBase):
                     claim_scores=[1.0],
                     aggregate_scores={"votes": 1.0},
                     metadata={
-                        "scorer_type": "self_verification",
+                        "scorer_type": "llm_critic",
                         "method": "vote",
                     },
                 )
@@ -736,7 +736,7 @@ class StepScorerSelfVerification(StepScorerBase):
                     claim_scores=[vote_count],
                     aggregate_scores={"votes": vote_count},
                     metadata={
-                        "scorer_type": "self_verification",
+                        "scorer_type": "llm_critic",
                         "method": "vote",
                         "total_votes": sum(votes),
                     },
@@ -1182,15 +1182,15 @@ class StepScorerSelfVerification(StepScorerBase):
         # Log final stats before cleanup
         total_stats = self.get_total_stats()
         log.info(
-            f"SelfVerification scorer cleanup: "
-            f"total_tokens={total_stats['self_verification_total_tokens']}, "
-            f"tflops={total_stats['self_verification_tflops']}"
+            f"LLMCritic scorer cleanup: "
+            f"total_tokens={total_stats['llm_critic_total_tokens']}, "
+            f"tflops={total_stats['llm_critic_tflops']}"
         )
 
         cache_size = len(self.cache)
         self.cache.clear()
         self.reset_stats()
-        log.info(f"SelfVerification scorer: cleared {cache_size} cached entries")
+        log.info(f"LLMCritic scorer: cleared {cache_size} cached entries")
 
     def __str__(self):
-        return f"StepScorerSelfVerification(method={self.method}, n_samples={self.n_evaluate_sample})"
+        return f"StepScorerLLMCritic(method={self.method}, n_samples={self.n_evaluate_sample})"

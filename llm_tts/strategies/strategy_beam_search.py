@@ -233,12 +233,12 @@ class StrategyBeamSearch(StrategyBase):
                 prm_stats["prm_tflops"] or 0
             )
 
-        # Merge self-verification scorer stats if available
+        # Merge LLM critic scorer stats if available
         if hasattr(self.scorer, "get_total_stats"):
             sv_stats = self.scorer.get_total_stats()
             token_stats.update(sv_stats)
             token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                sv_stats.get("self_verification_tflops") or 0
+                sv_stats.get("llm_critic_tflops") or 0
             )
 
         return {
@@ -286,9 +286,9 @@ class StrategyBeamSearch(StrategyBase):
         use_prm_scorer = (
             hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
         )
-        # Self-verification scorer does its own LLM calls, doesn't need uncertainty logprobs
-        use_self_verification = hasattr(self.scorer, "score_candidates_batch")
-        log.info(f"Using PRM scorer: {use_prm_scorer}, self-verification: {use_self_verification}")
+        # LLM critic scorer does its own LLM calls, doesn't need uncertainty logprobs
+        use_llm_critic = hasattr(self.scorer, "score_candidates_batch")
+        log.info(f"Using PRM scorer: {use_prm_scorer}, LLM critic: {use_llm_critic}")
 
         # Reset per-sample token tracking in generator
         self.step_generator.reset_per_sample_stats()
@@ -428,7 +428,7 @@ class StrategyBeamSearch(StrategyBase):
                     requests=batch_requests,
                     trajectories=batch_trajectories,
                     candidates_per_step=self.candidates_per_beam,
-                    compute_uncertainty=not use_prm_scorer and not use_self_verification,
+                    compute_uncertainty=not use_prm_scorer and not use_llm_critic,
                     sample_ids=batch_sample_ids,
                     beam_ids=batch_beam_ids,
                 )
@@ -489,7 +489,7 @@ class StrategyBeamSearch(StrategyBase):
                         requests, all_candidates_data, prompt_metadata
                     )
                 elif hasattr(self.scorer, "score_candidates_batch"):
-                    # Use scorer-provided batch scoring (e.g., self-verification)
+                    # Use scorer-provided batch scoring (e.g., LLM critic)
                     all_candidates_data = self._batch_score_with_scorer(
                         requests, all_candidates_data, prompt_metadata
                     )
@@ -916,7 +916,7 @@ class StrategyBeamSearch(StrategyBase):
         Batch score all candidates using a scorer that supports score_candidates_batch.
 
         Works with any scorer that implements score_candidates_batch (e.g.,
-        StepScorerSelfVerification, StepScorerConfidence).
+        StepScorerLLMCritic, StepScorerConfidence).
 
         Args:
             requests: Original requests for each sample
@@ -1037,7 +1037,7 @@ class StrategyBeamSearch(StrategyBase):
             prm_tflops = prm_stats["prm_tflops"] or 0
             token_stats["tflops"] = gen_tflops + prm_tflops
 
-        # Merge self-verification scorer stats if available
+        # Merge LLM critic scorer stats if available
         if (
             token_stats is not None
             and hasattr(self.scorer, "get_stats_for")
@@ -1046,7 +1046,7 @@ class StrategyBeamSearch(StrategyBase):
             sv_stats = self.scorer.get_stats_for(sample_id)
             token_stats.update(sv_stats)
             gen_tflops = token_stats.get("tflops") or 0
-            sv_tflops = sv_stats.get("self_verification_tflops") or 0
+            sv_tflops = sv_stats.get("llm_critic_tflops") or 0
             token_stats["tflops"] = gen_tflops + sv_tflops
 
         is_completed = bool(steps and steps[-1].is_trajectory_complete)
