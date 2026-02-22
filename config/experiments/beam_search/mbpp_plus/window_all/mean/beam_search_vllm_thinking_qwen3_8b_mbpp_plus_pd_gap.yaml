@@ -56,7 +56,7 @@ strategy:
   candidates_per_beam: 5
   max_steps: 250
   aggregation: mean  # balances all step scores
-  scoring_window: all      # all step scores used for beam ranking
+  scoring_window: null      # all step scores used for beam ranking
   scoring_window_label: "window_all"
   max_step_tokens: 500
 
