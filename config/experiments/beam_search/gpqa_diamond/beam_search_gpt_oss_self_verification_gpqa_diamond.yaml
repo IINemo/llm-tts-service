@@ -35,7 +35,7 @@ model:
 
 # System configuration
 system:
-  device: cuda
+  device: cpu
   seed: 42
 
 # Generation configuration
