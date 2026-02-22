@@ -64,11 +64,10 @@ class StrategyBeamSearch(StrategyBase):
     This balances exploration (multiple reasoning branches) and exploitation
     (keeping only the highest-scoring paths).
 
-    Supports two modes:
-    - Sequential: Process samples one at a time (generate_trajectory)
-    - Batched: Process ALL samples in parallel (generate_trajectories_batch)
-      - One vLLM call per step for all samples × beams
-      - Reduces calls from O(samples × steps × beams) to O(steps)
+    Uses batched generation (generate_trajectories_batch):
+    - Processes ALL samples in parallel
+    - One vLLM call per step for all samples × beams
+    - Reduces calls from O(samples × steps × beams) to O(steps)
 
     Args:
         step_generator: Generator for candidate steps (vLLM, API, or HuggingFace).
@@ -128,127 +127,6 @@ class StrategyBeamSearch(StrategyBase):
             f"stop_tokens={len(stop_tokens)}, min_step_tokens={min_step_tokens}, "
             f"eos_token_ids={eos_token_ids}"
         )
-
-    def generate_trajectory(
-        self, request: List[Dict[str, str]], sample_idx: int = 0
-    ) -> Dict[str, Any]:
-        """
-        Generate a reasoning trajectory using beam search.
-
-        Args:
-            request: Input chat or prompt context.
-            sample_idx: Index of current sample (for logging).
-
-        Returns:
-            Dictionary with trajectory, steps, score, and metadata.
-        """
-
-        # Reset token tracking for this sample
-        self.step_generator.reset_sample_stats()
-        if hasattr(self.scorer, "reset_prm_stats"):
-            self.scorer.reset_prm_stats()
-        if hasattr(self.scorer, "reset_stats"):
-            self.scorer.reset_stats()
-
-        # Initialize beams with empty trajectory
-        beams = [{"steps": [], "scores": []}]
-        completed_beams = []
-
-        for step in range(self.max_steps):
-            log.info(f"\n=== Beam Search Step {step} ===")
-            new_beams = []
-
-            # Expand each current beam
-            for beam_idx, beam in enumerate(beams):
-                log.info(
-                    f"Expanding beam {beam_idx} with score "
-                    f"{self._aggregate_scores(beam['scores']):.3f}"
-                )
-
-                candidates = self.step_generator(
-                    request,
-                    trajectory=beam["steps"],
-                    candidates_per_step=self.candidates_per_beam,
-                )
-
-                if not candidates:
-                    log.info(f"  No candidates for beam {beam_idx}, skipping")
-                    continue
-
-                # Pass trajectory context so PRM can score candidate in context of previous steps
-                scorer_scores = self.scorer.score_candidates(
-                    request, candidates, trajectory=beam["steps"]
-                )
-
-                # Expand with new candidates
-                for cand, score in zip(candidates, scorer_scores):
-                    beam_scores = beam["scores"] + [score]
-                    new_beams.append(
-                        {"steps": beam["steps"] + [cand], "scores": beam_scores}
-                    )
-
-                    log.info(
-                        f"    Candidate: score={score:.3f}, aggregated score={self._aggregate_scores(beam_scores):.3f}, text='{cand.text[:80]}'"
-                    )
-
-            if not new_beams:
-                log.info("No new beams generated, stopping early.")
-                break
-
-            # Sort and prune to top-k beams
-            new_beams.sort(
-                key=lambda b: self._aggregate_scores(b["scores"]),
-                reverse=True,
-            )
-            beams = new_beams[: self.beam_size]
-            log.info(f"Kept top {len(beams)} beams for next step")
-
-            # Separate completed beams
-            done, active = self._split_completed(beams)
-            completed_beams.extend(done)
-            beams = active
-
-            # Stop if all beams are completed
-            if not beams:
-                log.info("All beams completed early.")
-                break
-
-        # Choose best final beam
-        best_beam = self._select_best_beam(completed_beams or beams)
-        trajectory_text = convert_trajectory_to_string(best_beam["steps"])
-
-        # Extract answer from trajectory (e.g., from \boxed{})
-        extracted = extract_answer(trajectory_text)
-
-        # Get token stats from generator
-        self.step_generator.finalize_sample_stats()
-        token_stats = self.step_generator.get_sample_stats()
-
-        # Merge PRM scorer stats if available
-        if hasattr(self.scorer, "get_prm_total_stats"):
-            prm_stats = self.scorer.get_prm_total_stats()
-            token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
-            token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                prm_stats["prm_tflops"] or 0
-            )
-
-        # Merge LLM critic scorer stats if available
-        if hasattr(self.scorer, "get_total_stats"):
-            sv_stats = self.scorer.get_total_stats()
-            token_stats.update(sv_stats)
-            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
-                sv_stats.get("llm_critic_tflops") or 0
-            )
-
-        return {
-            "trajectory": trajectory_text,
-            "steps": best_beam["steps"],
-            "validity_scores": best_beam["scores"],
-            "completed": len(completed_beams) > 0,
-            "extracted_answer": extracted,
-            "token_stats": token_stats,
-        }
 
     def generate_trajectories_batch(
         self,
