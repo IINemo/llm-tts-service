@@ -294,10 +294,17 @@ class StepScorerSelfVerification(StepScorerBase):
         chats: List[List[Dict[str, str]]],
         candidates_list: List[List[Any]],
         trajectories: Optional[List[List[Any]]] = None,
+        sample_ids: Optional[List[Any]] = None,
         **kwargs,
     ) -> List[List[float]]:
         """
         Batch score candidates across multiple prompts (vLLM only).
+
+        Args:
+            chats: List of chat histories (one per prompt group)
+            candidates_list: List of candidate lists (one per prompt group)
+            trajectories: Optional trajectory context for each group
+            sample_ids: Optional sample IDs for per-sample token tracking
 
         Returns aggregated scores aligned with candidates_list.
         """
@@ -308,16 +315,21 @@ class StepScorerSelfVerification(StepScorerBase):
             raise ValueError("chats and candidates_list must have same length")
 
         if self.method == "vote":
-            return self._score_vote_method_batch(chats, candidates_list, trajectories)
+            return self._score_vote_method_batch(
+                chats, candidates_list, trajectories, sample_ids=sample_ids
+            )
 
         # Value method (default)
-        return self._score_value_method_batch(chats, candidates_list, trajectories)
+        return self._score_value_method_batch(
+            chats, candidates_list, trajectories, sample_ids=sample_ids
+        )
 
     def _score_value_method_batch(
         self,
         chats: List[List[Dict[str, str]]],
         candidates_list: List[List[Any]],
         trajectories: List[List[Any]],
+        sample_ids: Optional[List[Any]] = None,
     ) -> List[List[float]]:
         """Batch score value method across multiple prompt groups."""
         results: List[List[float]] = [[] for _ in candidates_list]
@@ -359,6 +371,13 @@ class StepScorerSelfVerification(StepScorerBase):
 
                 local_seen_texts[step_text] = True
 
+        # Build per-pending-item sample_ids for token attribution
+        pending_sample_ids = (
+            [sample_ids[item["group_idx"]] for item in pending]
+            if sample_ids
+            else None
+        )
+
         if pending and self.use_vllm:
             eval_scores: Dict[tuple, List[float]] = {
                 (p["group_idx"], p["cand_idx"]): [] for p in pending
@@ -368,7 +387,7 @@ class StepScorerSelfVerification(StepScorerBase):
                 prompts = [item["prompt"] for item in pending]
                 outputs: List[str] = []
                 try:
-                    outputs = self._call_vllm_batch(prompts)
+                    outputs = self._call_vllm_batch(prompts, sample_ids=pending_sample_ids)
                 except Exception as e:
                     log.warning(f"Batch evaluation {i+1} failed: {e}")
 
@@ -399,7 +418,7 @@ class StepScorerSelfVerification(StepScorerBase):
                 prompts = [item["prompt"] for item in pending]
                 outputs: List[str] = []
                 try:
-                    outputs = self._call_api_batch(prompts)
+                    outputs = self._call_api_batch(prompts, sample_ids=pending_sample_ids)
                 except Exception as e:
                     log.warning(f"Batch evaluation {i+1} failed: {e}")
 
@@ -423,6 +442,9 @@ class StepScorerSelfVerification(StepScorerBase):
             self.total_evaluations += len(pending)
         elif pending:
             for item in pending:
+                # Set current sample_id for per-sample token tracking in local path
+                if sample_ids:
+                    self._current_sample_id = sample_ids[item["group_idx"]]
                 score = self._evaluate_single_step(
                     self._extract_problem(chats[item["group_idx"]]),
                     self._trajectory_to_text(trajectories[item["group_idx"]]),
@@ -447,6 +469,7 @@ class StepScorerSelfVerification(StepScorerBase):
         chats: List[List[Dict[str, str]]],
         candidates_list: List[List[Any]],
         trajectories: List[List[Any]],
+        sample_ids: Optional[List[Any]] = None,
     ) -> List[List[float]]:
         """Batch score vote method across multiple prompt groups."""
         results: List[List[float]] = [[] for _ in candidates_list]
@@ -475,12 +498,19 @@ class StepScorerSelfVerification(StepScorerBase):
 
         votes_by_group = [[0.0] * n for n in group_sizes]
 
+        # Build sample_ids for non-empty prompts (matching batch_prompts filtering)
+        batch_sample_ids = None
+        if sample_ids:
+            batch_sample_ids = [
+                sample_ids[gidx] for gidx, p in enumerate(prompts) if p
+            ]
+
         if self.use_vllm:
             for i in range(self.n_evaluate_sample):
                 batch_prompts = [p for p in prompts if p]
                 outputs: List[str] = []
                 try:
-                    outputs = self._call_vllm_batch(batch_prompts)
+                    outputs = self._call_vllm_batch(batch_prompts, sample_ids=batch_sample_ids)
                 except Exception as e:
                     log.warning(f"Vote batch {i+1} failed: {e}")
                     outputs = []
@@ -499,6 +529,9 @@ class StepScorerSelfVerification(StepScorerBase):
                 for group_idx, prompt in enumerate(prompts):
                     if not prompt:
                         continue
+                    # Set current sample_id for per-sample token tracking
+                    if sample_ids:
+                        self._current_sample_id = sample_ids[group_idx]
                     for i in range(self.n_evaluate_sample):
                         try:
                             output = self._call_model(prompt)
@@ -514,7 +547,7 @@ class StepScorerSelfVerification(StepScorerBase):
                     batch_prompts = [p for p in prompts if p]
                     outputs: List[str] = []
                     try:
-                        outputs = self._call_api_batch(batch_prompts)
+                        outputs = self._call_api_batch(batch_prompts, sample_ids=batch_sample_ids)
                     except Exception as e:
                         log.warning(f"Vote batch {i+1} failed: {e}")
                         outputs = []
@@ -851,7 +884,9 @@ class StepScorerSelfVerification(StepScorerBase):
             return output.outputs[0].text
         return ""
 
-    def _call_vllm_batch(self, prompts: List[str]) -> List[str]:
+    def _call_vllm_batch(
+        self, prompts: List[str], sample_ids: Optional[List[Any]] = None
+    ) -> List[str]:
         """Call vLLM model for evaluation with batched prompts."""
         try:
             from vllm import SamplingParams
@@ -867,7 +902,7 @@ class StepScorerSelfVerification(StepScorerBase):
         outputs = self.model.generate(formatted_prompts, sampling_params)
         texts: List[str] = []
 
-        for output in outputs or []:
+        for idx, output in enumerate(outputs or []):
             if output and output.outputs:
                 input_tokens = (
                     len(output.prompt_token_ids) if output.prompt_token_ids else 0
@@ -877,7 +912,8 @@ class StepScorerSelfVerification(StepScorerBase):
                     if output.outputs[0].token_ids
                     else 0
                 )
-                self._record_tokens(input_tokens, output_tokens)
+                sid = sample_ids[idx] if sample_ids and idx < len(sample_ids) else None
+                self._record_tokens(input_tokens, output_tokens, sample_id=sid)
                 texts.append(output.outputs[0].text)
             else:
                 texts.append("")
@@ -967,7 +1003,9 @@ class StepScorerSelfVerification(StepScorerBase):
 
         return ""
 
-    def _call_api_batch(self, prompts: List[str]) -> List[str]:
+    def _call_api_batch(
+        self, prompts: List[str], sample_ids: Optional[List[Any]] = None
+    ) -> List[str]:
         """Call API-based model for evaluation with batched prompts and retry logic."""
         import openai
 
@@ -987,7 +1025,7 @@ class StepScorerSelfVerification(StepScorerBase):
                 )
 
                 texts: List[str] = []
-                for prompt, result in zip(prompts, results or []):
+                for idx, (prompt, result) in enumerate(zip(prompts, results or [])):
                     if result:
                         text = result.get("text", "")
                         input_tokens = result.get("prompt_tokens", 0)
@@ -995,7 +1033,8 @@ class StepScorerSelfVerification(StepScorerBase):
                         if input_tokens == 0 and output_tokens == 0:
                             input_tokens = len(prompt) // 4
                             output_tokens = len(text) // 4
-                        self._record_tokens(input_tokens, output_tokens)
+                        sid = sample_ids[idx] if sample_ids and idx < len(sample_ids) else None
+                        self._record_tokens(input_tokens, output_tokens, sample_id=sid)
                         texts.append(text)
                     else:
                         texts.append("")

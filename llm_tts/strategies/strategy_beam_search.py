@@ -929,12 +929,14 @@ class StrategyBeamSearch(StrategyBase):
         chats = []
         candidates_list = []
         trajectories = []
+        scorer_sample_ids = []
 
         for prompt_idx, candidates in enumerate(all_candidates_data):
             sample_id, _, parent_beam = prompt_metadata[prompt_idx]
             chats.append(requests[sample_id])
             candidates_list.append([c["text"] for c in candidates])
             trajectories.append(parent_beam["steps"])
+            scorer_sample_ids.append(sample_id)
 
         if not candidates_list:
             return all_candidates_data
@@ -942,7 +944,8 @@ class StrategyBeamSearch(StrategyBase):
         log.info(f"Batch scorer evaluation for {len(candidates_list)} prompt groups")
 
         all_scores = self.scorer.score_candidates_batch(
-            chats, candidates_list, trajectories=trajectories
+            chats, candidates_list, trajectories=trajectories,
+            sample_ids=scorer_sample_ids,
         )
 
         for prompt_idx, scores in enumerate(all_scores):
