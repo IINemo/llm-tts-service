@@ -31,7 +31,7 @@ model:
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 8192
-  disable_thinking_mode: true
+  disable_thinking_mode: false
 
 # System configuration
 system:
@@ -40,19 +40,20 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 512
-  temperature: 0.7
+  max_new_tokens: 32768
+  temperature: 0.6
   top_p: 0.95
-  top_k: 50
+  top_k: 20
   batch_size: 1
+  max_length: 65536
 
 # Strategy - Offline Best-of-N with newline-based step boundaries for code
 strategy:
-  max_steps: 20
   score_aggregation: mean
   # Stop tokens for Qwen models
-  min_step_tokens: 5
-  max_step_tokens: 128
+  min_step_tokens: 10
+  max_step_tokens: 500
+  max_steps: 100
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false

@@ -1,0 +1,97 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_k2think_human_eval_plus_entropy
+# MUR (Adaptive Scaling) for HumanEval+ using K2-Think custom endpoint
+# Uses Entropy scorer for step evaluation
+#
+# Environment variable required: OPENAI_API_KEY (set to K2-Think API key)
+
+defaults:
+  - /config
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - /scorer/entropy
+  - /evaluation/human_eval_plus/default
+  - _self_
+
+# Run naming
+run_name: "adaptive_scaling_k2think_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-human-eval-plus
+wandb_group: "adaptive_scaling_k2think_human_eval_plus_entropy"
+
+# Model configuration (K2-Think custom endpoint)
+model:
+  type: "openai_api"
+  provider: null
+  base_url: "https://api.k2think.ai/v1"
+  model_path: "MBZUAI-IFM/K2-Think-v2"
+  api_key: null  # Set via OPENAI_API_KEY env var
+  supports_logprobs: true
+  prefill_mode: true
+  max_context_budget: 200000
+
+# System configuration
+system:
+  device: cpu
+  seed: 0
+
+# Generation configuration
+generation:
+  max_new_tokens: 65536
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 65536
+
+# Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
+strategy:
+  type: adaptive
+  candidates_per_step: 8
+  max_steps: 250
+  scaling_rate: 0.9
+  momentum_rate: 0.9
+  adaptive_scaling_method: momentum
+  detector_type: structured
+  min_step_tokens: 10
+  max_step_tokens: 1024
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  custom_markers:
+    - "\n"
+    - "\n\n"
+
+# Entropy scorer configuration
+scorer:
+  type: entropy
+  batch_size: 1
+
+# Dataset configuration - HumanEval+
+dataset:
+  data_name: "human_eval_plus"
+  dataset_path: "evalplus/humanevalplus"
+  dataset_split: "test"  # 164 problems
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "code"
+  prompt_file: null
+  system_prompt: "Do not output any other code except for asked self-contained Python script. Do not provide any guides on how to run it. Code will be parsed from codeblock to check it's correct."
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - human_eval_plus
+  human_eval_plus:
+    mode: full
+    timeout: 10

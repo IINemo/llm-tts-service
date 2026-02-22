@@ -58,7 +58,9 @@ def compute_metrics(results):
         if "reasoning_steps" in result:
             all_steps.append(result["reasoning_steps"])
         if "validity_scores" in result and result["validity_scores"]:
-            all_validities.append(float(np.mean(result["validity_scores"])))
+            valid = [s for s in result["validity_scores"] if s is not None]
+            if valid:
+                all_validities.append(float(np.mean(valid)))
 
     # Build metrics dict
     metrics = {

@@ -128,12 +128,15 @@ DATASET_CONFIGS[olympiadbench]="olympiadbench"
 DATASET_CONFIGS[gaokao2023en]="gaokao2023en"
 DATASET_CONFIGS[minerva_math]="minerva_math"
 DATASET_CONFIGS[gpqa_diamond]="gpqa_diamond"
+DATASET_CONFIGS[mbpp_plus]="mbpp_plus"
+DATASET_CONFIGS[human_eval_plus]="human_eval_plus"
 
 declare -A SCORER_CONFIGS
 SCORER_CONFIGS[entropy]="entropy"
 SCORER_CONFIGS[perplexity]="perplexity"
 SCORER_CONFIGS[sequence_prob]="sequence_prob"
 SCORER_CONFIGS[prm]="prm"
+SCORER_CONFIGS[multi_scorer]="multi_scorer"
 
 declare -A MODEL_CONFIGS
 MODEL_CONFIGS[qwen25_7b]="vllm_nothink_qwen25_7b"
@@ -178,7 +181,7 @@ get_num_gpus_for_job() {
     if [[ -n "$GPU" ]]; then
         # Count commas + 1
         echo $(( $(echo "$GPU" | tr -cd ',' | wc -c) + 1 ))
-    elif [[ "$scorer" == "prm" ]]; then
+    elif [[ "$scorer" == "prm" || "$scorer" == "multi_scorer" ]]; then
         echo "2"
     else
         echo "1"
@@ -231,6 +234,8 @@ submit_tsp_job() {
         cat > "$wrapper" << WRAPPER_EOF
 #!/bin/bash
 eval "\$(grep '^export ' ~/.bashrc 2>/dev/null)"
+eval "\$(conda shell.bash hook 2>/dev/null)"
+conda activate lm-polygraph-env 2>/dev/null || true
 export CUDA_VISIBLE_DEVICES=\${CUDA_VISIBLE_DEVICES:-\$TS_VISIBLE_DEVICES}
 cd "${PROJECT_DIR}" || exit 1
 

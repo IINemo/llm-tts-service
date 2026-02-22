@@ -430,10 +430,10 @@ class AdaptiveScalingBestOfN(StrategyBase):
                         )
                         continue
 
-                    if not self._has_answer_content(chosen):
-                        trajectories[sample_idx].pop()
-                        selected_steps[sample_idx].pop()
-                        validity_scores[sample_idx].pop()
+                    # In thinking mode, answer pattern before </think> means
+                    # the model put \boxed{} inside reasoning — still need
+                    # proper answer generation after closing </think>.
+                    if getattr(self.step_generator, "thinking_mode", False):
                         needs_final_answer[sample_idx] = True
                     completed[sample_idx] = True
                     scores_str = ", ".join(
@@ -471,10 +471,8 @@ class AdaptiveScalingBestOfN(StrategyBase):
             if needs_final_answer[idx]:
                 to_finalize.append(idx)
 
-        # Generate final answers only in thinking mode — non-thinking mode
-        # produces the answer naturally in the last reasoning step.
-        thinking_mode = getattr(self.step_generator, "thinking_mode", False)
-        if to_finalize and thinking_mode:
+        # Generate final answers for samples that need them
+        if to_finalize:
             log.info(
                 f"Generating final answers for {len(to_finalize)} samples "
                 f"(samples: {[sample_idxs[i] for i in to_finalize]})"

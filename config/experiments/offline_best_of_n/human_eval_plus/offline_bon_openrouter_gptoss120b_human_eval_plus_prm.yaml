@@ -10,6 +10,7 @@ defaults:
   - /model/openrouter
   - /generation/default
   - /system/default
+  - /strategy/offline_bon
   - /scorer/prm
   - /evaluation/human_eval_plus/default
   - _self_
@@ -28,10 +29,6 @@ model:
   type: "openai_api"
   provider: openrouter
   model_path: "openai/gpt-oss-120b"  # Fast and cost-effective for code
-  # Alternative models:
-  # - "anthropic/claude-3.5-sonnet" (best quality)
-  # - "deepseek/deepseek-coder" (code-specialized)
-  # - "qwen/qwen-2.5-coder-32b-instruct" (open-source coder)
   api_key: null  # Set via OPENROUTER_API_KEY env var
   supports_logprobs: true
   prefill_mode: false
@@ -45,7 +42,7 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 32768
+  max_new_tokens: 65536
   temperature: 0.6
   top_p: 0.95
   top_k: 20
@@ -54,12 +51,9 @@ generation:
 # Strategy - Offline Best-of-N with newline-based step boundaries for code
 strategy:
   type: offline_best_of_n
-  num_trajectories: 8
-  max_steps: 100
-  score_aggregation: mean
-  batch_generation: true
   min_step_tokens: 10
-  max_step_tokens: 2048
+  max_step_tokens: 1024
+  max_steps: 100
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false
@@ -91,6 +85,7 @@ dataset:
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
+  system_prompt: "Do not output any other code except for asked self-contained Python script. Do not provide any guides on how to run it. Code will be parsed from codeblock to check it's correct."
 
 # Evaluation configuration
 evaluation:

@@ -1,0 +1,72 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/math500/window_all/mean/beam_search_vllm_nothink_qwen25_7b_math500_pd_gap
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
+# Beam Search with vLLM + Non-Thinking Mode (Qwen2.5-7B) on MATH-500
+# Uses PD-Gap (Probability Difference Gap) scorer for step evaluation (no separate PRM model needed)
+# scoring_window=null: all step scores used for beam ranking (baseline)
+
+defaults:
+  - /config
+  - /dataset/math_500
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /strategy/beam_search
+  - /scorer/uncertainty_pd
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "beam_search_vllm_nothink_qwen25_7b_math500_pd_gap_window_all_mean_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-math500
+wandb_group: "beam_search_qwen25_math_7b_instruct_math500_pd_gap_window_all_mean"
+# Model configuration (vLLM backend)
+# Single GPU since pd_gap scorer uses the same model (no separate PRM)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_context_budget: 4096
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (non-thinking mode settings)
+generation:
+  max_new_tokens: 4096
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  batch_size: 1
+  max_length: 8192
+  # checkpoint_batch_size: 200   # TODO: Enable when running on limited compute (e.g., CIAI cluster) - saves checkpoint every N samples to prevent data loss on preemption/OOM
+
+# Strategy - Beam Search
+strategy:
+  beam_size: 5
+  candidates_per_beam: 8
+  max_steps: 30
+  scoring_window: null      # Use all step scores for aggregation (baseline)
+  scoring_window_label: "window_all"
+
+# PD-Gap scorer configuration (uses same model, no separate GPU needed)
+scorer:
+  type: uncertainty_pd
+  batch_size: 1
+
+# Dataset configuration
+dataset:
+  subset: 500
+  offset: 0
+  data_name: math
+  prompt_file: "${hydra:runtime.cwd}/config/prompts/qwen25_math_official.txt"

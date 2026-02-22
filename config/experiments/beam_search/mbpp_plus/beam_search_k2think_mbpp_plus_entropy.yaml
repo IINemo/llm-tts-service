@@ -1,0 +1,94 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/mbpp_plus/beam_search_k2think_mbpp_plus_entropy
+# Beam Search for MBPP+ using K2-Think custom endpoint
+# Uses Entropy scorer for step evaluation
+#
+# Environment variable required: OPENAI_API_KEY (set to K2-Think API key)
+
+defaults:
+  - /config
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - /strategy/beam_search
+  - /scorer/entropy
+  - /evaluation/mbpp_plus/default
+  - _self_
+
+# Run naming
+run_name: "beam_search_k2think_mbpp_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-mbpp-plus
+wandb_group: "beam_search_k2think_mbpp_plus_entropy"
+
+# Model configuration (K2-Think custom endpoint)
+model:
+  type: "openai_api"
+  provider: null
+  base_url: "https://api.k2think.ai/v1"
+  model_path: "MBZUAI-IFM/K2-Think-v2"
+  api_key: null  # Set via OPENAI_API_KEY env var
+  supports_logprobs: true
+  prefill_mode: true
+  max_context_budget: 200000
+
+# System configuration
+system:
+  device: cpu
+  seed: 0
+
+# Generation configuration
+generation:
+  max_new_tokens: 65536
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 65536
+
+# Strategy - Beam Search with newline-based step boundaries for code
+strategy:
+  beam_size: 3
+  candidates_per_beam: 5
+  max_steps: 20
+  min_step_tokens: 10
+  max_step_tokens: 1024
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  custom_markers:
+    - "\n"
+    - "\n\n"
+
+# Entropy scorer configuration
+scorer:
+  type: entropy
+  batch_size: 1
+
+# Dataset configuration - MBPP+
+dataset:
+  data_name: "mbpp_plus"
+  dataset_path: "evalplus/mbppplus"
+  dataset_split: "test"  # 378 problems
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "code"
+  prompt_file: null
+  system_prompt: "Do not output any other code except for asked self-contained Python script. Do not provide any guides on how to run it. Code will be parsed from codeblock to check it's correct."
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - mbpp_plus
+  mbpp_plus:
+    mode: full
+    timeout: 10

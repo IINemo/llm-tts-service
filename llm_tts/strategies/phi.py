@@ -123,16 +123,6 @@ class PhiDecoding(StrategyBase):
                     break
 
                 log.info("Answer pattern detected in step")
-                if not self._has_answer_content(selected_candidate):
-                    log.info("Answer content missing, generating final answer")
-                    trajectory.pop()
-                    selected_steps.pop()
-                    final_answer, final_validity = self._generate_final_answer(
-                        request, trajectory
-                    )
-                    trajectory.append(final_answer)
-                    selected_steps.append(final_answer)
-                    validity_scores.append(final_validity)
                 break
 
         if not selected_candidate.is_trajectory_complete:

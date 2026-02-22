@@ -11,6 +11,7 @@ defaults:
   - /generation/default
   - /system/default
   - /scorer/prm
+  - /strategy/offline_bon
   - /evaluation/mbpp_plus/default
   - _self_
 
@@ -28,10 +29,6 @@ model:
   type: "openai_api"
   provider: openrouter
   model_path: "openai/gpt-4o-mini"  # Fast and cost-effective for code
-  # Alternative models:
-  # - "anthropic/claude-3.5-sonnet" (best quality)
-  # - "deepseek/deepseek-coder" (code-specialized)
-  # - "qwen/qwen-2.5-coder-32b-instruct" (open-source coder)
   api_key: null  # Set via OPENROUTER_API_KEY env var
   supports_logprobs: true
   prefill_mode: false
@@ -54,11 +51,11 @@ generation:
 strategy:
   type: offline_best_of_n
   num_trajectories: 8
-  max_steps: 100
   score_aggregation: mean
   batch_generation: true
   min_step_tokens: 10
-  max_step_tokens: 2048
+  max_step_tokens: 500
+  max_steps: 100
   # Disable linguistic markers (not useful for code)
   use_sequence: false
   use_conclusion: false

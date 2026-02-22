@@ -27,10 +27,6 @@ model:
   type: "openai_api"
   provider: openrouter
   model_path: "openai/gpt-oss-120b"  # Fast and cost-effective for code
-  # Alternative models:
-  # - "anthropic/claude-3.5-sonnet" (best quality)
-  # - "deepseek/deepseek-coder" (code-specialized)
-  # - "qwen/qwen-2.5-coder-32b-instruct" (open-source coder)
   api_key: null  # Set via OPENROUTER_API_KEY env var
   supports_logprobs: true
   prefill_mode: false
@@ -78,6 +74,7 @@ dataset:
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
+  system_prompt: "Do not output any other code except for asked self-contained Python script. Do not provide any guides on how to run it. Code will be parsed from codeblock to check it's correct."
 
 # Evaluation configuration
 evaluation:
