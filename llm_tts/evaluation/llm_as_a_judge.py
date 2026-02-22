@@ -95,13 +95,11 @@ class EvaluatorLLMAsAJudge:
         n_threads: int,
         budget: int = 3,
         mode: str = "answer_only",
-        api_key: str | None = None,
     ):
         """
         Args:
             mode: "full_solution" - pass entire reasoning to judge
                   "answer_only" - compare just extracted answer vs gold (default)
-            api_key: OpenAI-compatible API key. Falls back to OPENAI_API_KEY env var.
         """
         # Get API key based on provider
         if base_url and "openrouter" in base_url:

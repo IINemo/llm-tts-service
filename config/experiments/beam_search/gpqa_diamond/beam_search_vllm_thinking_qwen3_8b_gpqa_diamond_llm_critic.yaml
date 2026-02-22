@@ -1,44 +1,47 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/gpqa_diamond/beam_search_gpt_oss_self_verification_gpqa_diamond
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/gpqa_diamond/beam_search_vllm_thinking_qwen3_8b_gpqa_diamond_llm_critic
 #
-# Beam Search with Self-Verification scorer on GPQA Diamond
-# Generation: GPT-OSS-120B (API via Innopolis), Scoring: GPT-OSS-120B (API via Innopolis)
+# Beam Search with LLM Critic scorer on GPQA Diamond
+# Generation: vLLM (Qwen3-8B, thinking mode), Scoring: GPT-OSS-120B (API via Innopolis)
+# Aggregation: mean
 
 defaults:
   - /config
-  - /model/openai
+  - /model/vllm_qwen3
   - /generation/default
   - /system/default
   - /strategy/beam_search
-  - /scorer/self_verification
+  - /scorer/llm_critic
   - /evaluation/default
   - _self_
 
 # Run naming
-run_name: "beam_search_gpt_oss_self_verification_gpqa_diamond_${now:%H-%M-%S}"
+run_name: "beam_search/vllm_thinking_qwen3_8b/gpqa_diamond/llm_critic/mean/seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: none
+report_to: wandb
 wandb_project: llm-tts-eval-gpqa-diamond
+wandb_group: "beam_search_qwen3_8b_thinking_gpqa_diamond_llm_critic_mean"
 
-# Model configuration (GPT-OSS-120B via Innopolis API)
+# Model configuration (vLLM backend)
 model:
-  type: "openai_api"
-  model_path: "openai/gpt-oss-120b"
-  model_short_name: "gpt_oss_120b"
-  base_url: "https://openai.global.ai.innopolis.university/v1"
-  api_key: "any"
-  ssl_verify: false
-  supports_logprobs: false
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  model_short_name: "vllm_thinking_qwen3_8b"
+  gpu_memory_utilization: 0.85
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_context_budget: 32768
   disable_thinking_mode: false
 
 # System configuration
 system:
-  device: cpu
+  device: cuda
   seed: 42
 
-# Generation configuration
+# Generation configuration (thinking mode settings)
 generation:
   max_new_tokens: 32768
   temperature: 0.6
@@ -54,9 +57,9 @@ strategy:
   max_steps: 250
   aggregation: mean
 
-# Self-Verification Scorer using GPT-OSS-120B via Innopolis API
+# LLM Critic Scorer using GPT-OSS-120B via Innopolis API
 scorer:
-  type: self_verification
+  type: llm_critic
   method: value
   n_evaluate_sample: 3
   score_aggregation: min
@@ -64,7 +67,7 @@ scorer:
   max_tokens: 1024
   timeout: 120
   trajectory_context_steps: 5
-  value_prompt_file: "tree-of-thought/self_verification/value_prompt_science_strict.txt"
+  value_prompt_file: "tree-of-thought/llm_critic/value_prompt.txt"
   model:
     type: openai_api
     model_name: "openai/gpt-oss-120b"

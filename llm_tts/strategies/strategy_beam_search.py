@@ -1,11 +1,10 @@
 """
-Beam Search strategy for LLM reasoning with optional batched generation.
+Beam Search strategy for LLM reasoning with batched generation.
 
-Two modes:
-- Sequential (default): Process one sample at a time, good for debugging
-- Batched: Process ALL samples in parallel with synchronized beam search steps
-  - One vLLM call per step (not per sample×beam)
-  - Reduces calls from O(samples × steps × beams) to O(steps)
+Uses batched generation (generate_trajectories_batch):
+- Processes ALL samples in parallel
+- One vLLM call per step for all samples x beams
+- Reduces calls from O(samples x steps x beams) to O(steps)
 """
 
 import logging
@@ -64,11 +63,10 @@ class StrategyBeamSearch(StrategyBase):
     This balances exploration (multiple reasoning branches) and exploitation
     (keeping only the highest-scoring paths).
 
-    Supports two modes:
-    - Sequential: Process samples one at a time (generate_trajectory)
-    - Batched: Process ALL samples in parallel (generate_trajectories_batch)
-      - One vLLM call per step for all samples × beams
-      - Reduces calls from O(samples × steps × beams) to O(steps)
+    Uses batched generation (generate_trajectories_batch):
+    - Processes ALL samples in parallel
+    - One vLLM call per step for all samples × beams
+    - Reduces calls from O(samples × steps × beams) to O(steps)
 
     Args:
         step_generator: Generator for candidate steps (vLLM, API, or HuggingFace).
@@ -78,6 +76,8 @@ class StrategyBeamSearch(StrategyBase):
         max_steps: Maximum reasoning steps.
         aggregation: How to aggregate scores across steps ("last", "mean", "sum", "min", "max", "product").
         batch_generation: If True, use batched mode in generate_trajectories_batch.
+        scoring_window: If set, only use the last N step scores for aggregation.
+            None means use all steps (default).
     """
 
     def __init__(
@@ -92,6 +92,7 @@ class StrategyBeamSearch(StrategyBase):
         aggregation: str = "mean",
         batch_generation: bool = True,
         prompt_buffer: int = 500,
+        scoring_window: Optional[int] = None,
     ):
         self.step_generator = step_generator
         self.scorer = scorer
@@ -101,6 +102,7 @@ class StrategyBeamSearch(StrategyBase):
         self.aggregation = aggregation
         self.batch_generation = batch_generation
         self.prompt_buffer = prompt_buffer
+        self.scoring_window = scoring_window
 
         if beam_size <= 0:
             raise ValueError(f"beam_size must be > 0, got {beam_size}")
@@ -120,6 +122,7 @@ class StrategyBeamSearch(StrategyBase):
             f"StrategyBeamSearch initialized: beam_size={beam_size}, "
             f"candidates_per_beam={candidates_per_beam}, max_steps={max_steps}, "
             f"aggregation={aggregation}, batch_generation={batch_generation}, "
+            f"scoring_window={scoring_window}, "
             f"stop_tokens={len(stop_tokens)}, min_step_tokens={min_step_tokens}, "
             f"eos_token_ids={eos_token_ids}"
         )
@@ -160,12 +163,16 @@ class StrategyBeamSearch(StrategyBase):
         use_prm_scorer = (
             hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
         )
-        log.info(f"Using PRM scorer: {use_prm_scorer}")
+        # LLM critic scorer does its own LLM calls, doesn't need uncertainty logprobs
+        use_llm_critic = hasattr(self.scorer, "score_candidates_batch")
+        log.info(f"Using PRM scorer: {use_prm_scorer}, LLM critic: {use_llm_critic}")
 
         # Reset per-sample token tracking in generator
         self.step_generator.reset_per_sample_stats()
         if hasattr(self.scorer, "reset_prm_stats"):
             self.scorer.reset_prm_stats()
+        if hasattr(self.scorer, "reset_stats"):
+            self.scorer.reset_stats()
 
         # sample_beams[sample_id] = list of ACTIVE beams only
         # Each beam has: steps, scores, total_tokens, beam_idx, unique_id, ancestors
@@ -291,14 +298,13 @@ class StrategyBeamSearch(StrategyBase):
 
                 # 3. Single call via generate_step_candidates_batch (handles FLOP tracking)
                 # Pass sample_ids and beam_ids so generator logs them
-                # Pass sample_ids and beam_ids so generator logs them
                 batch_sample_ids = [sample_id for sample_id, _, _ in prompt_metadata]
                 batch_beam_ids = [beam_idx for _, beam_idx, _ in prompt_metadata]
                 batch_results = self.step_generator.generate_step_candidates_batch(
                     requests=batch_requests,
                     trajectories=batch_trajectories,
                     candidates_per_step=self.candidates_per_beam,
-                    compute_uncertainty=not use_prm_scorer,
+                    compute_uncertainty=not use_prm_scorer and not use_llm_critic,
                     sample_ids=batch_sample_ids,
                     beam_ids=batch_beam_ids,
                 )
@@ -333,18 +339,8 @@ class StrategyBeamSearch(StrategyBase):
                                 is_trajectory_complete = True
 
                         data = candidate.other_data if candidate.other_data else {}
-                        uncertainty = data.get("uncertainty_score")
-                        if uncertainty is None:
-                            log.warning(
-                                f"Sample {sample_id}, beam {beam_idx}: missing 'uncertainty_score' in candidate other_data"
-                            )
-                            uncertainty = 0.0
-                        validity = data.get("validity_score")
-                        if validity is None:
-                            log.warning(
-                                f"Sample {sample_id}, beam {beam_idx}: missing 'validity_score' in candidate other_data"
-                            )
-                            validity = 0.0
+                        uncertainty = data.get("uncertainty_score", 0.0)
+                        validity = data.get("validity_score", 0.0)
 
                         candidates_for_beam.append(
                             {
@@ -369,7 +365,7 @@ class StrategyBeamSearch(StrategyBase):
                         requests, all_candidates_data, prompt_metadata
                     )
                 elif hasattr(self.scorer, "score_candidates_batch"):
-                    # Use scorer-provided batch scoring (e.g., self-verification)
+                    # Use scorer-provided batch scoring (e.g., LLM critic)
                     all_candidates_data = self._batch_score_with_scorer(
                         requests, all_candidates_data, prompt_metadata
                     )
@@ -854,6 +850,9 @@ class StrategyBeamSearch(StrategyBase):
         """
         Batch score all candidates using a scorer that supports score_candidates_batch.
 
+        Works with any scorer that implements score_candidates_batch (e.g.,
+        StepScorerLLMCritic, StepScorerConfidence).
+
         Args:
             requests: Original requests for each sample
             all_candidates_data: List of candidate lists (one per prompt)
@@ -865,12 +864,14 @@ class StrategyBeamSearch(StrategyBase):
         chats = []
         candidates_list = []
         trajectories = []
+        scorer_sample_ids = []
 
         for prompt_idx, candidates in enumerate(all_candidates_data):
             sample_id, _, parent_beam = prompt_metadata[prompt_idx]
             chats.append(requests[sample_id])
             candidates_list.append([c["text"] for c in candidates])
             trajectories.append(parent_beam["steps"])
+            scorer_sample_ids.append(sample_id)
 
         if not candidates_list:
             return all_candidates_data
@@ -878,7 +879,10 @@ class StrategyBeamSearch(StrategyBase):
         log.info(f"Batch scorer evaluation for {len(candidates_list)} prompt groups")
 
         all_scores = self.scorer.score_candidates_batch(
-            chats, candidates_list, trajectories=trajectories
+            chats,
+            candidates_list,
+            trajectories=trajectories,
+            sample_ids=scorer_sample_ids,
         )
 
         for prompt_idx, scores in enumerate(all_scores):
@@ -907,19 +911,23 @@ class StrategyBeamSearch(StrategyBase):
             prm_stats = self.scorer.get_prm_stats_for(sample_id)
             token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
             token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            gen_tflops = token_stats.get("tflops")
-            if gen_tflops is None:
-                log.warning(
-                    f"Sample {sample_id}: missing 'tflops' in token_stats when merging PRM stats"
-                )
-                gen_tflops = 0
-            prm_tflops = prm_stats["prm_tflops"]
-            if prm_tflops is None:
-                log.warning(f"Sample {sample_id}: missing 'prm_tflops' in PRM stats")
-                prm_tflops = 0
+            gen_tflops = token_stats.get("tflops") or 0
+            prm_tflops = prm_stats["prm_tflops"] or 0
             token_stats["tflops"] = gen_tflops + prm_tflops
 
-        # Determine actual completion status from beam steps
+        # Merge LLM critic scorer stats if available
+        if (
+            token_stats is not None
+            and hasattr(self.scorer, "get_stats_for")
+            and sample_id is not None
+        ):
+            sv_stats = self.scorer.get_stats_for(sample_id)
+            token_stats.update(sv_stats)
+            gen_tflops = token_stats.get("tflops") or 0
+            sv_tflops = sv_stats.get("llm_critic_tflops") or 0
+            token_stats["tflops"] = gen_tflops + sv_tflops
+
+        is_completed = bool(steps and steps[-1].is_trajectory_complete)
         is_completed = bool(steps and steps[-1].is_trajectory_complete)
 
         result = {
@@ -944,20 +952,6 @@ class StrategyBeamSearch(StrategyBase):
         """Aggregate scores across steps according to selected strategy."""
         if len(scores) == 0:
             return 0.0
-        # Filter out non-finite values (NaN, inf, -inf)
-        clean = [s for s in scores if np.isfinite(s)]
-        if not clean:
-            log.warning(f"All {len(scores)} scores are non-finite, returning 0.0")
-            return 0.0
-        if len(clean) < len(scores):
-            log.warning(
-                f"Dropped {len(scores) - len(clean)} non-finite scores out of {len(scores)}"
-            )
-        if self.aggregation == "last":
-            return scores[-1]
-        elif self.aggregation == "sum":
-            return sum(clean)
-            return 0.0
         # Filter out None (skipped PRM steps) and non-finite values (NaN, inf, -inf)
         clean = [s for s in scores if s is not None and np.isfinite(s)]
         if not clean:
@@ -967,19 +961,20 @@ class StrategyBeamSearch(StrategyBase):
             log.warning(
                 f"Dropped {len(scores) - len(clean)} non-finite scores out of {len(scores)}"
             )
-        if self.aggregation == "sum":
+        # Apply sliding window: only use the last N valid scores
+        if self.scoring_window is not None and len(clean) > self.scoring_window:
+            clean = clean[-self.scoring_window :]
+        if self.aggregation == "last":
+            return clean[-1]
+        elif self.aggregation == "sum":
             return sum(clean)
         elif self.aggregation == "mean":
             return np.mean(clean).item()
-            return np.mean(clean).item()
         elif self.aggregation == "product":
-            return np.prod(clean).item()
             return np.prod(clean).item()
         elif self.aggregation == "max":
             return np.max(clean).item()
-            return np.max(clean).item()
         elif self.aggregation == "min":
-            return np.min(clean).item()
             return np.min(clean).item()
         else:
             raise Exception(f"Unknown aggregation {self.aggregation}")
@@ -1001,7 +996,6 @@ class StrategyBeamSearch(StrategyBase):
     def _select_best_beam(self, beams: List[Dict]) -> Dict:
         """Select the highest scoring beam."""
         if not beams:
-            return {"steps": [], "scores": []}
             return {"steps": [], "scores": []}
         return max(beams, key=lambda b: self._aggregate_scores(b["scores"]))
 

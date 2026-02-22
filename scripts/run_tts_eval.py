@@ -132,8 +132,8 @@ from llm_tts.generators import (
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import (
     StepScorerConfidence,
+    StepScorerLLMCritic,
     StepScorerPRM,
-    StepScorerSelfVerification,
     StepScorerUncertainty,
 )
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
@@ -293,23 +293,22 @@ def build_evaluators(config):
             if "{question}" in prompt_template:
                 prompt_template = prompt_template.replace("{question}", "{q}")
 
-            # Resolve API key: config value > env var (provider-specific) > env var (generic)
+            # Set API key in environment based on provider
             provider = llm_cfg.get("provider")
-            api_key = llm_cfg.get("api_key")
-            if not api_key:
-                if provider == "openrouter":
-                    api_key = os.getenv("OPENROUTER_API_KEY")
-                elif provider == "deepseek":
-                    api_key = os.getenv("DEEPSEEK_API_KEY")
-                else:
-                    api_key = os.getenv("OPENAI_API_KEY")
+            if provider == "openrouter":
+                api_key = os.getenv("OPENROUTER_API_KEY")
+            elif provider == "deepseek":
+                api_key = os.getenv("DEEPSEEK_API_KEY")
+            else:
+                api_key = os.getenv("OPENAI_API_KEY")
+
+            if api_key:
+                os.environ["OPENAI_API_KEY"] = api_key
 
             # Remove config-only params not needed by evaluator
             llm_cfg.pop("prompt_file", None)
             llm_cfg.pop("provider", None)
-            llm_cfg.pop("api_key", None)
             llm_cfg["prompt"] = prompt_template
-            llm_cfg["api_key"] = api_key
 
             # Include model name in evaluator key to support multiple LLM judge models
             model_name = llm_cfg.get("model", "unknown")
@@ -408,10 +407,10 @@ def create_scorer(config):
             scorer.init_flop_calculator(config.scorer.model_path)
         except Exception as e:
             log.warning(f"Could not init PRM FLOP calculator: {e}")
-    elif config.scorer.type == "self_verification":
-        # Self-Verification Scorer (Tree of Thoughts paper)
+    elif config.scorer.type == "llm_critic":
+        # LLM Critic Scorer (Tree of Thoughts paper)
         # Model will be set later in create_tts_strategy() after model is initialized
-        scorer = StepScorerSelfVerification(
+        scorer = StepScorerLLMCritic(
             method=config.scorer.method,
             n_evaluate_sample=config.scorer.n_evaluate_sample,
             temperature=config.scorer.temperature,
@@ -419,7 +418,7 @@ def create_scorer(config):
             timeout=config.scorer.timeout,
             value_prompt_file=config.scorer.value_prompt_file,
             vote_prompt_file=config.scorer.vote_prompt_file,
-            score_aggregation=getattr(config.scorer, "score_aggregation", "sum"),
+            score_aggregation=getattr(config.scorer, "score_aggregation", "min"),
             trajectory_context_steps=getattr(
                 config.scorer, "trajectory_context_steps", 0
             ),
@@ -493,16 +492,12 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            # Self-consistency, baseline, and self_verification don't need uncertainty wrapper
+            # Self-consistency, baseline, extended_thinking, and llm_critic don't need uncertainty wrapper
             scorer_type = config.scorer.type if config.scorer else "entropy"
             if (
                 config.strategy.type
-                in (
-                    "self_consistency",
-                    "baseline",
-                    "extended_thinking",
-                )
-                or scorer_type == "self_verification"
+                in ("self_consistency", "baseline", "extended_thinking")
+                or scorer_type == "llm_critic"
             ):
                 vllm_model = llm
                 log.info(
@@ -833,7 +828,7 @@ def _create_api_model_for_scorer(model_cfg):
     """Create an API-backed model instance for scoring only."""
     # Use model_name if available, otherwise fall back to model_path
     model_path = model_cfg.get("model_name") or model_cfg.get("model_path")
-    log.info(f"Self-verification scorer API model: {model_path}")
+    log.info(f"LLM critic scorer API model: {model_path}")
 
     provider = model_cfg.get("provider")
     base_url = model_cfg.get("base_url")
@@ -928,6 +923,17 @@ def create_tts_strategy(
                 log.warning("Scorer: unknown model type, may not work correctly")
                 scorer.set_model(model, use_vllm=False)
 
+        # Initialize FLOP calculator for LLM critic token/compute tracking
+        if hasattr(scorer, "init_flop_calculator"):
+            try:
+                flop_model_name = getattr(config.model, "model_path", None) or getattr(
+                    config.model, "model_name", None
+                )
+                if flop_model_name:
+                    scorer.init_flop_calculator(flop_model_name)
+            except Exception as e:
+                log.warning(f"Could not init LLM critic FLOP calculator: {e}")
+
     if config.strategy.type == "baseline":
         # Get eos_patterns from config, default to ["<end of response>"]
         eos_patterns = getattr(config.strategy, "detector_eos_patterns", None)
@@ -961,6 +967,45 @@ def create_tts_strategy(
         # Offline Best-of-N generates N trajectories, scores with PRM, selects best
         # With batch_generation=True, all M×N trajectories generated in single vLLM call
         batch_generation = config.strategy.get("batch_generation", True)
+
+        # Multi-scoring: per-scorer flags for computing extra metrics
+        multi_score_flags = {}
+        for flag in [
+            "calculate_entropy_score",
+            "calculate_perplexity_score",
+            "calculate_sequence_prob_score",
+            "calculate_pd_gap_score",
+            "calculate_prm_score",
+        ]:
+            multi_score_flags[flag] = getattr(config.strategy, flag, False)
+
+        # Create separate PRM scorer if calculate_prm_score=True
+        # and primary scorer is not already PRM
+        extra_prm_scorer = None
+        if multi_score_flags.get("calculate_prm_score"):
+            primary_is_prm = (
+                hasattr(scorer, "prm_model") and scorer.prm_model is not None
+            )
+            if not primary_is_prm:
+                prm_model_path = getattr(config.strategy, "prm_model_path", None)
+                if prm_model_path:
+                    log.info(
+                        f"Creating extra PRM scorer for multi-scoring: {prm_model_path}"
+                    )
+                    extra_prm_scorer = StepScorerPRM(
+                        prm_model_path=prm_model_path,
+                        device=getattr(config.strategy, "prm_device", "cuda:1"),
+                        batch_size=getattr(config.strategy, "prm_batch_size", 4),
+                        torch_dtype=getattr(
+                            config.strategy, "prm_torch_dtype", "bfloat16"
+                        ),
+                        use_vllm=getattr(config.strategy, "prm_use_vllm", True),
+                    )
+                else:
+                    log.warning(
+                        "calculate_prm_score=True but no prm_model_path specified"
+                    )
+
         strategy = StrategyOfflineBestOfN(
             scorer=scorer,
             num_trajectories=config.strategy.get("num_trajectories", 4),
@@ -969,6 +1014,9 @@ def create_tts_strategy(
             score_aggregation=config.strategy.get("score_aggregation", "mean"),
             output_dir=output_dir,
             batch_generation=batch_generation,
+            scoring_window=config.strategy.get("scoring_window", None),
+            prm_scorer=extra_prm_scorer,
+            **multi_score_flags,
         )
     elif config.strategy.type == "adaptive":
         strategy = AdaptiveScalingBestOfN(
@@ -1011,6 +1059,7 @@ def create_tts_strategy(
             max_steps=config.strategy.max_steps,
             aggregation=getattr(config.strategy, "aggregation", "mean"),
             batch_generation=config.strategy.get("batch_generation", True),
+            scoring_window=config.strategy.get("scoring_window", None),
         )
     elif config.strategy.type == "phi_decoding":
         strategy = PhiDecoding(
@@ -1037,62 +1086,6 @@ def create_tts_strategy(
             batch_generation=batch_generation,
             data_name=data_name,
         )
-    elif config.strategy.type == "tree_of_thoughts":
-        from llm_tts.scorers import TotValueScorer, TotVoteScorer
-        from llm_tts.strategies import StrategyTreeOfThoughts
-
-        # Tree-of-Thoughts requires API-based model for state evaluation
-        if not isinstance(model, BlackboxModelWithStreaming):
-            raise ValueError(
-                f"Tree-of-Thoughts requires BlackboxModelWithStreaming, got {type(model).__name__}"
-            )
-
-        # Create ToT scorer based on method_evaluate config
-        method_evaluate = config.strategy.get("method_evaluate", "value")
-        n_evaluate_sample = config.strategy.get("n_evaluate_sample", 3)
-
-        if method_evaluate == "value":
-            tot_scorer = TotValueScorer(
-                model=model,
-                n_evaluate_sample=n_evaluate_sample,
-                temperature=0.0,
-                max_tokens=50,
-                timeout=config.strategy.get("scorer_timeout", 120),
-                value_prompt_path=config.strategy.get("value_prompt_path"),
-                value_last_step_prompt_path=config.strategy.get(
-                    "value_last_step_prompt_path"
-                ),
-            )
-        elif method_evaluate == "vote":
-            tot_scorer = TotVoteScorer(
-                model=model,
-                n_evaluate_sample=n_evaluate_sample,
-                temperature=0.5,
-                max_tokens=100,
-            )
-        else:
-            raise ValueError(f"Unknown method_evaluate: {method_evaluate}")
-
-        strategy = StrategyTreeOfThoughts(
-            model=model,
-            scorer=tot_scorer,
-            mode=config.strategy.get("mode", "generic"),
-            method_generate=config.strategy.get("method_generate", "propose"),
-            beam_width=config.strategy.get("beam_width", 5),
-            n_generate_sample=config.strategy.get("n_generate_sample", 5),
-            steps=config.strategy.get("steps", 4),
-            temperature=config.strategy.get("temperature", 0.7),
-            max_tokens_per_step=config.strategy.get("max_tokens_per_step", 100),
-            n_threads=config.strategy.get("n_threads", 8),
-            scorer_timeout=config.strategy.get("scorer_timeout", 120),
-            propose_prompt_path=config.strategy.get("propose_prompt_path"),
-            cot_prompt_path=config.strategy.get("cot_prompt_path"),
-            value_prompt_path=config.strategy.get("value_prompt_path"),
-            value_last_step_prompt_path=config.strategy.get(
-                "value_last_step_prompt_path"
-            ),
-        )
-
     elif config.strategy.type == "uncertainty_cot":
         strategy = StrategyUncertaintyCoT(
             step_generator=step_generator,
@@ -1208,6 +1201,9 @@ def _generate_trajectories_batch(
 
     # Split into chunks for intermediate checkpointing
     num_chunks = (total_to_process + checkpoint_batch_size - 1) // checkpoint_batch_size
+
+    # Collect candidates data for multi-scoring analysis (saved to candidates.json)
+    all_candidates_data = []
 
     for chunk_idx in range(num_chunks):
         batch_start = chunk_idx * checkpoint_batch_size
@@ -1517,6 +1513,18 @@ def _generate_trajectories_batch(
 
             results.append(result_dict)
 
+            # Collect candidates_data for multi-scoring analysis
+            if "candidates_data" in result:
+                all_candidates_data.append(
+                    {
+                        "index": i,
+                        "question": question,
+                        "gold_answer": gold_answer_num,
+                        "num_candidates": len(result["candidates_data"]),
+                        "candidates": result["candidates_data"],
+                    }
+                )
+
             # Compute running metrics
             token_stats = result.get("token_stats")
             if token_stats is None:
@@ -1610,6 +1618,15 @@ def _generate_trajectories_batch(
     # Final save after all chunks complete
     save_results_json(results, save_path_file)
     log.info(f"Final save: {len(results)} results to {save_path_file}")
+
+    # Save candidates.json for multi-scoring post-hoc analysis
+    if all_candidates_data:
+        candidates_path = save_path_file.parent / "candidates.json"
+        save_results_json(all_candidates_data, candidates_path)
+        log.info(
+            f"Saved {len(all_candidates_data)} samples with candidates data "
+            f"to {candidates_path}"
+        )
 
     return results
 
@@ -1778,23 +1795,22 @@ def evaluate_results(
             if "{question}" in prompt_template:
                 prompt_template = prompt_template.replace("{question}", "{q}")
 
-            # Resolve API key: config value > env var (provider-specific) > env var (generic)
+            # Set API key in environment based on provider
             provider = llm_cfg.get("provider")
-            api_key = llm_cfg.get("api_key")
-            if not api_key:
-                if provider == "openrouter":
-                    api_key = os.getenv("OPENROUTER_API_KEY")
-                elif provider == "deepseek":
-                    api_key = os.getenv("DEEPSEEK_API_KEY")
-                else:
-                    api_key = os.getenv("OPENAI_API_KEY")
+            if provider == "openrouter":
+                api_key = os.getenv("OPENROUTER_API_KEY")
+            elif provider == "deepseek":
+                api_key = os.getenv("DEEPSEEK_API_KEY")
+            else:
+                api_key = os.getenv("OPENAI_API_KEY")
+
+            if api_key:
+                os.environ["OPENAI_API_KEY"] = api_key
 
             # Remove config-only params not needed by evaluator
             llm_cfg.pop("prompt_file", None)
             llm_cfg.pop("provider", None)
-            llm_cfg.pop("api_key", None)
             llm_cfg["prompt"] = prompt_template
-            llm_cfg["api_key"] = api_key
 
             # Include model name in evaluator key
             model_name = llm_cfg.get("model", "unknown")

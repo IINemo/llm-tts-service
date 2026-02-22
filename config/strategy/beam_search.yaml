@@ -1,5 +1,7 @@
 type: beam_search
 aggregation: mean
+scoring_window: null
+scoring_window_label: ""
 batch_generation: true
 prompt_buffer: 500
 min_step_tokens: 50

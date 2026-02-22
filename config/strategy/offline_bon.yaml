@@ -1,7 +1,14 @@
 type: offline_best_of_n
 num_trajectories: 8
 score_aggregation: min
+scoring_window: null
 batch_generation: true
+# Multi-scoring flags (compute extra metrics for all candidates)
+calculate_entropy_score: false
+calculate_perplexity_score: false
+calculate_sequence_prob_score: false
+calculate_pd_gap_score: false
+calculate_prm_score: false
 min_step_tokens: 50
 stop_token_ids:
   - 151645  # <|im_end|>

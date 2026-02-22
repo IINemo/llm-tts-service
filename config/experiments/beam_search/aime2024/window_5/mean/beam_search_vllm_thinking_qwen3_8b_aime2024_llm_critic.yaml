@@ -1,0 +1,94 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/aime2024/window_5/mean/beam_search_vllm_thinking_qwen3_8b_aime2024_llm_critic
+#
+# Beam Search with LLM Critic scorer on AIME 2024
+# Generation: vLLM (Qwen3-8B, thinking mode), Scoring: GPT-OSS-120B (API via Innopolis)
+# scoring_window=5: only last 5 step scores used for beam ranking
+# Aggregation: mean
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /strategy/beam_search
+  - /scorer/llm_critic
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "beam_search/vllm_thinking_qwen3_8b/aime24/llm_critic/window_5/mean/seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-aime2024
+wandb_group: "beam_search_qwen3_8b_thinking_aime2024_llm_critic_window_5_mean"
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  model_short_name: "vllm_thinking_qwen3_8b"
+  gpu_memory_utilization: 0.85
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_context_budget: 32768
+  disable_thinking_mode: false
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (thinking mode settings)
+generation:
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 65536
+
+# Strategy - Beam Search
+strategy:
+  beam_size: 3
+  candidates_per_beam: 5
+  max_steps: 250
+  aggregation: mean
+  scoring_window: 5
+  scoring_window_label: "window_5"
+
+# LLM Critic Scorer using GPT-OSS-120B via Innopolis API
+scorer:
+  type: llm_critic
+  method: value
+  n_evaluate_sample: 3
+  score_aggregation: min
+  temperature: 0.1
+  max_tokens: 1024
+  timeout: 120
+  trajectory_context_steps: 5
+  value_prompt_file: "tree-of-thought/llm_critic/value_prompt_math_strict.txt"
+  model:
+    type: openai_api
+    model_name: "openai/gpt-oss-120b"
+    base_url: "https://openai.global.ai.innopolis.university/v1"
+    api_key: "any"
+    ssl_verify: false
+
+# Dataset configuration - AIME 2024
+dataset:
+  dataset_path: "test-time-compute/test_aime24"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 30
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: aime24
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null

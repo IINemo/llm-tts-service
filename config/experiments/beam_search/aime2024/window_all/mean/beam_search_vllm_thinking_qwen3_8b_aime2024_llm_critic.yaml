@@ -1,8 +1,10 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/gpqa_diamond/beam_search_vllm_self_verification_gpqa_diamond
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/aime2024/window_all/mean/beam_search_vllm_thinking_qwen3_8b_aime2024_llm_critic
 #
-# Beam Search with Self-Verification scorer on GPQA Diamond
-# Generation: vLLM (Qwen3-8B, thinking mode), Scoring: GPT-OSS-120B (API via OpenRouter)
+# Beam Search with LLM Critic scorer on AIME 2024
+# Generation: vLLM (Qwen3-8B, thinking mode), Scoring: GPT-OSS-120B (API via Innopolis)
+# scoring_window=null: all step scores used for beam ranking
+# Aggregation: mean
 
 defaults:
   - /config
@@ -10,17 +12,18 @@ defaults:
   - /generation/default
   - /system/default
   - /strategy/beam_search
-  - /scorer/self_verification
+  - /scorer/llm_critic
   - /evaluation/default
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_self_verification_gpqa_diamond_${now:%H-%M-%S}"
+run_name: "beam_search/vllm_thinking_qwen3_8b/aime24/llm_critic/window_all/mean/seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: none
-wandb_project: llm-tts-eval-gpqa-diamond
+report_to: wandb
+wandb_project: llm-tts-eval-aime2024
+wandb_group: "beam_search_qwen3_8b_thinking_aime2024_llm_critic_window_all_mean"
 
 # Model configuration (vLLM backend)
 model:
@@ -54,10 +57,12 @@ strategy:
   candidates_per_beam: 5
   max_steps: 250
   aggregation: mean
+  scoring_window: null
+  scoring_window_label: "window_all"
 
-# Self-Verification Scorer using GPT-OSS-120B via Innopolis API
+# LLM Critic Scorer using GPT-OSS-120B via Innopolis API
 scorer:
-  type: self_verification
+  type: llm_critic
   method: value
   n_evaluate_sample: 3
   score_aggregation: min
@@ -65,7 +70,7 @@ scorer:
   max_tokens: 1024
   timeout: 120
   trajectory_context_steps: 5
-  value_prompt_file: "tree-of-thought/self_verification/value_prompt_science_strict.txt"
+  value_prompt_file: "tree-of-thought/llm_critic/value_prompt_math_strict.txt"
   model:
     type: openai_api
     model_name: "openai/gpt-oss-120b"
@@ -73,17 +78,17 @@ scorer:
     api_key: "any"
     ssl_verify: false
 
-# Dataset configuration - GPQA Diamond
+# Dataset configuration - AIME 2024
 dataset:
-  dataset_path: "test-time-compute/test_gpqa_diamond"
+  dataset_path: "test-time-compute/test_aime24"
   dataset_config: null
   dataset_split: "test"
-  subset: null
+  subset: 30
   offset: 0
   question_field: "question"
   answer_field: "answer"
-  answer_format: "char"
-  data_name: gpqa_diamond
-  system_prompt: "You are an expert in graduate-level science. Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
+  answer_format: "numeric"
+  data_name: aime24
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null

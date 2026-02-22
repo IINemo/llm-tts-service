@@ -73,7 +73,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
             connect=10.0,  # 10s to establish connection
             read=300.0,  # 60s to receive response/next chunk
             write=10.0,  # 10s to send request
-            pool=30.0,  # 30s to get connection from pool
+            pool=10.0,  # 10s to get connection from pool
         )
         client_kwargs = {
             "api_key": openai_api_key,
