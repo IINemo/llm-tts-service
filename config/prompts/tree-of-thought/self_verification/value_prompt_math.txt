@@ -1,0 +1,39 @@
+Evaluate if the given math reasoning step is correct and leads toward the solution (sure/likely/impossible).
+
+---
+Problem: What is the sum of all integers from 1 to 100?
+Reasoning so far: We can use the formula for the sum of an arithmetic series: S = n(n+1)/2.
+Step: Substituting n = 100: S = 100 * 101 / 2 = 5050.
+The formula is applied correctly and arithmetic checks out: 100*101=10100, 10100/2=5050.
+sure
+
+---
+Problem: Compute the integral of sin(x)cos(x) dx.
+Reasoning so far: (empty)
+Step: Using the identity sin(x)cos(x) = sin(2x)/2, we can rewrite the integral.
+The double angle identity is correct. This simplifies the integral but doesn't complete it yet.
+likely
+
+---
+Problem: Find the volume of a sphere with radius 3.
+Reasoning so far: The volume formula is V = (4/3)*pi*r^3.
+Step: V = (4/3) * pi * 9 = 12*pi.
+r^3 = 27, not 9. The step confused r^2 with r^3. This gives the wrong answer.
+impossible
+
+---
+Problem: {problem}
+Reasoning so far: {trajectory}
+Step: {step}
+
+Analyze this step carefully:
+1. Is the reasoning logically correct?
+2. Does it make progress toward the solution?
+3. Are there any errors or issues?
+
+Rate this step as one of:
+- sure: This step is definitely correct and makes good progress
+- likely: This step appears correct and reasonable
+- impossible: This step is wrong or leads to a dead end
+
+Your rating (sure/likely/impossible):

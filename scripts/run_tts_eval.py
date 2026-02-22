@@ -120,7 +120,12 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import StepScorerConfidence, StepScorerPRM, StepScorerUncertainty
+from llm_tts.scorers import (
+    StepScorerConfidence,
+    StepScorerPRM,
+    StepScorerSelfVerification,
+    StepScorerUncertainty,
+)
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 
 # vLLM step generator (optional)
@@ -392,6 +397,18 @@ def create_scorer(config):
             scorer.init_flop_calculator(config.scorer.model_path)
         except Exception as e:
             log.warning(f"Could not init PRM FLOP calculator: {e}")
+    elif config.scorer.type == "self_verification":
+        # Self-Verification Scorer (Tree of Thoughts paper)
+        # Model will be set later in create_tts_strategy() after model is initialized
+        scorer = StepScorerSelfVerification(
+            method=config.scorer.method,
+            n_evaluate_sample=config.scorer.n_evaluate_sample,
+            temperature=config.scorer.temperature,
+            max_tokens=config.scorer.max_tokens,
+            timeout=config.scorer.timeout,
+            value_prompt_file=config.scorer.value_prompt_file,
+            vote_prompt_file=config.scorer.vote_prompt_file,
+        )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
     elif config.scorer.type in (
@@ -460,16 +477,16 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            # Self-consistency and baseline don't need uncertainty wrapper
-            # (self-consistency uses majority voting, baseline uses raw vLLM batch generation)
-            if config.strategy.type in (
-                "self_consistency",
-                "baseline",
-                "extended_thinking",
+            # Self-consistency, baseline, extended_thinking, and self_verification don't need uncertainty wrapper
+            scorer_type = config.scorer.type if config.scorer else "entropy"
+            if (
+                config.strategy.type in ("self_consistency", "baseline", "extended_thinking")
+                or scorer_type == "self_verification"
             ):
                 vllm_model = llm
                 log.info(
-                    f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
+                    f"Strategy={config.strategy.type}, scorer={scorer_type}: "
+                    f"using raw vLLM (no uncertainty wrapper)"
                 )
             else:
                 if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
@@ -789,9 +806,58 @@ def create_model(config):
     return model, step_generator
 
 
+def _create_api_model_for_scorer(model_cfg):
+    """Create an API-backed model instance for scoring only."""
+    model_path = model_cfg.get("model_name") or model_cfg.get("model_path")
+    log.info(f"Self-verification scorer API model: {model_path}")
+
+    provider = model_cfg.get("provider")
+    base_url = model_cfg.get("base_url")
+    api_key_env = model_cfg.get("api_key_env")
+
+    if api_key_env:
+        api_key = model_cfg.get("api_key") or os.getenv(api_key_env)
+    elif provider == "openrouter":
+        api_key = model_cfg.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+        if base_url is None:
+            base_url = "https://openrouter.ai/api/v1"
+    else:
+        api_key = model_cfg.get("api_key") or os.getenv("OPENAI_API_KEY")
+
+    return BlackboxModelWithStreaming(
+        openai_api_key=api_key,
+        model_path=model_path,
+        supports_logprobs=model_cfg.get("supports_logprobs", False),
+        base_url=base_url,
+    )
+
+
 def create_tts_strategy(
     config, model, step_generator, scorer, output_dir=None, flop_calculator=None
 ):
+    # Set model on scorer if it supports it (e.g., StepScorerSelfVerification)
+    if scorer is not None and hasattr(scorer, "set_model"):
+        scorer_model_cfg = getattr(config.scorer, "model", None)
+        if scorer_model_cfg is not None:
+            if scorer_model_cfg.get("type") != "openai_api":
+                raise ValueError("Scorer model override only supports type=openai_api")
+            scorer_model = _create_api_model_for_scorer(scorer_model_cfg)
+            scorer.set_model(scorer_model, use_vllm=False)
+            log.info("Scorer: using API override model")
+        else:
+            if isinstance(model, BlackboxModelWithStreaming):
+                scorer.set_model(model, use_vllm=False)
+                log.info("Scorer: using API backend")
+            elif hasattr(model, "vllm_engine"):
+                scorer.set_model(model.vllm_engine, use_vllm=True)
+                log.info("Scorer: using vLLM backend")
+            elif isinstance(model, WhiteboxModel):
+                scorer.set_model(model, use_local=True)
+                log.info("Scorer: using local WhiteboxModel backend")
+            else:
+                log.warning("Scorer: unknown model type, may not work correctly")
+                scorer.set_model(model, use_vllm=False)
+
     if config.strategy.type == "baseline":
         # Get eos_patterns from config, default to ["<end of response>"]
         eos_patterns = getattr(config.strategy, "detector_eos_patterns", None)
