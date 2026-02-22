@@ -29,7 +29,10 @@ class DebuggerSingleSampleRequest(BaseModel):
     budget: Optional[int] = Field(default=None, ge=1)
     provider: str = Field(default="openrouter")
     model_id: str = Field(default="openai/gpt-4o-mini")
-    api_key: str = Field(default="")
+    api_key: str = Field(
+        default="",
+        pattern=r"^(|sk-[A-Za-z0-9]+|sk-or-v1-[A-Za-z0-9]+)$",
+    )
 
 
 @router.get("/debugger", include_in_schema=False)

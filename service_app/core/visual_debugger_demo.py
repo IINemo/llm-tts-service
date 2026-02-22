@@ -1,19 +1,24 @@
-"""Synthetic payload generation for the Visual Debugger demo.
+"""Visual debugger payload helpers.
 
-The debugger compares multiple strategy/scorer combinations for one prompt and
-budget. Payloads are deterministic per (question, answer, budget, model config)
-so the UI remains stable across refreshes.
+- Demo scenario data is loaded from ``service_app/static/debugger/cached_examples.json``.
+- Custom single-sample runs are synthesized server-side for prototype use.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 DEFAULT_BUDGET = 8
 DEBUGGER_BUDGETS = [4, 8, 12]
+
+_CACHED_EXAMPLES_PATH = (
+    Path(__file__).resolve().parents[1] / "static" / "debugger" / "cached_examples.json"
+)
 
 SUPPORTED_STRATEGIES: List[Dict[str, str]] = [
     {
@@ -79,72 +84,40 @@ SUPPORTED_SCORERS: List[Dict[str, Any]] = [
     },
 ]
 
-_DEMO_SCENARIOS: List[Dict[str, Any]] = [
-    {
-        "id": "prototype_local_demo",
-        "title": "Prototype: Single-Sample Matrix",
-        "description": (
-            "Each strategy is evaluated with every supported scorer under the "
-            "same question and compute budget."
-        ),
-        "question": (
-            "A student buys 5 notebooks at $3 each and 2 pens at $2 each. "
-            "What is the total cost?"
-        ),
-        "gold_answer": "19",
-        "shared_prompt": "Reason step-by-step and place the final answer in \\boxed{}.",
-        "model_config": {
-            "provider": "openrouter",
-            "model_id": "openai/gpt-4o-mini",
-            "api_key_masked": "sk-or...demo",
-        },
-        "input_source": "prototype_dataset",
-    }
-]
-
 
 def list_demo_scenarios() -> List[Dict[str, Any]]:
-    """Return lightweight scenario summaries for the debugger selector."""
-    return [
-        {
-            "id": item["id"],
-            "title": item["title"],
-            "description": item.get("description", ""),
-            "available_budgets": DEBUGGER_BUDGETS,
-            "default_budget": _pick_budget(DEFAULT_BUDGET, DEBUGGER_BUDGETS),
-            "strategy_count": len(SUPPORTED_STRATEGIES),
-            "scorer_count": len(SUPPORTED_SCORERS),
-            "run_count": len(SUPPORTED_STRATEGIES) * len(SUPPORTED_SCORERS),
-        }
-        for item in _DEMO_SCENARIOS
-    ]
+    """Return cached demo scenarios from JSON for the selector."""
+    bundle = _load_cached_examples_bundle()
+    return deepcopy(bundle["scenarios"])
 
 
 def get_demo_scenario(
     scenario_id: str,
     budget: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Return one scenario payload resolved for a target budget."""
-    scenario = _find_demo_scenario(scenario_id)
-    if scenario is None:
+    """Return one cached demo payload resolved for a target budget."""
+    bundle = _load_cached_examples_bundle()
+    scenario_payloads = bundle["payloads"].get(scenario_id)
+    if not isinstance(scenario_payloads, dict):
         raise KeyError(f"Unknown scenario_id: {scenario_id}")
 
-    return build_single_sample_payload(
-        question=str(scenario["question"]),
-        gold_answer=str(scenario["gold_answer"]),
-        shared_prompt=str(scenario.get("shared_prompt", "")),
-        budget=budget,
-        provider=str(scenario.get("model_config", {}).get("provider", "openrouter")),
-        model_id=str(
-            scenario.get("model_config", {}).get("model_id", "openai/gpt-4o-mini")
-        ),
-        api_key="",
-        scenario_id=str(scenario["id"]),
-        scenario_title=str(scenario.get("title", scenario["id"])),
-        scenario_description=str(scenario.get("description", "")),
-        input_source=str(scenario.get("input_source", "demo")),
-        api_key_masked_override=scenario.get("model_config", {}).get("api_key_masked"),
+    available_budgets = _collect_available_budgets(scenario_payloads)
+    if not available_budgets:
+        raise KeyError(f"Scenario has no budgets: {scenario_id}")
+
+    selected_budget = _pick_budget(budget, available_budgets)
+    payload = scenario_payloads.get(str(selected_budget))
+    if not isinstance(payload, dict):
+        raise KeyError(
+            f"Scenario payload missing for budget {selected_budget}: {scenario_id}"
+        )
+
+    payload_copy = deepcopy(payload)
+    payload_copy["available_budgets"] = payload_copy.get(
+        "available_budgets", available_budgets
     )
+    payload_copy["selected_budget"] = selected_budget
+    return payload_copy
 
 
 def build_single_sample_payload(
@@ -212,11 +185,61 @@ def build_single_sample_payload(
     }
 
 
-def _find_demo_scenario(scenario_id: str) -> Optional[Dict[str, Any]]:
-    for scenario in _DEMO_SCENARIOS:
-        if scenario.get("id") == scenario_id:
-            return scenario
-    return None
+def _load_cached_examples_bundle() -> Dict[str, Any]:
+    if not _CACHED_EXAMPLES_PATH.exists():
+        raise FileNotFoundError(
+            f"Cached debugger examples missing: {_CACHED_EXAMPLES_PATH}"
+        )
+
+    data = json.loads(_CACHED_EXAMPLES_PATH.read_text(encoding="utf-8"))
+    scenarios = data.get("scenarios")
+    payloads = data.get("payloads")
+    if not isinstance(scenarios, list) or not isinstance(payloads, dict):
+        raise ValueError(
+            "cached_examples.json must contain top-level 'scenarios' and 'payloads'."
+        )
+
+    normalized_scenarios: List[Dict[str, Any]] = []
+    for item in scenarios:
+        if not isinstance(item, dict):
+            continue
+
+        scenario_id = str(item.get("id", "")).strip()
+        if not scenario_id:
+            continue
+
+        scenario_payloads = payloads.get(scenario_id)
+        if not isinstance(scenario_payloads, dict):
+            continue
+
+        available_budgets = _collect_available_budgets(scenario_payloads)
+        if not available_budgets:
+            continue
+
+        normalized_scenarios.append(
+            {
+                "id": scenario_id,
+                "title": str(item.get("title") or scenario_id),
+                "description": str(item.get("description") or ""),
+                "available_budgets": available_budgets,
+                "default_budget": _pick_budget(
+                    item.get("default_budget"), available_budgets
+                ),
+            }
+        )
+
+    return {"scenarios": normalized_scenarios, "payloads": payloads}
+
+
+def _collect_available_budgets(scenario_payloads: Dict[str, Any]) -> List[int]:
+    budgets: List[int] = []
+    for key in scenario_payloads.keys():
+        try:
+            value = int(key)
+        except (TypeError, ValueError):
+            continue
+        budgets.append(value)
+    return sorted(set(budgets))
 
 
 def _build_matrix_runs(
@@ -287,7 +310,7 @@ def _build_strategy_scorer_run(
         base_quality + scorer_shift + budget_factor * 0.14 - difficulty
     )
     is_correct = rng.random() < success_prob
-    final_answer = gold_answer if is_correct else _perturb_answer(gold_answer, rng)
+    answer = gold_answer if is_correct else _perturb_answer(gold_answer, rng)
 
     quality_score = _clamp(
         base_quality
@@ -323,7 +346,7 @@ def _build_strategy_scorer_run(
             "summary": scorer.get("summary", ""),
         },
         "final": {
-            "answer": final_answer,
+            "answer": answer,
             "is_correct": is_correct,
             "selected_trajectory": f"{strategy['id']}_{scorer['id']}_selected",
             "confidence": confidence,
@@ -336,70 +359,153 @@ def _build_strategy_scorer_run(
         },
     }
 
-    if family == "single_pass":
-        run["events"] = _build_single_pass_events(
-            strategy=strategy,
-            scorer=scorer,
-            question=question,
-            answer=final_answer,
+    run["events"] = _build_generic_events(
+        strategy=strategy,
+        scorer=scorer,
+        answer=answer,
+        confidence=confidence,
+        budget=budget,
+        rng=rng,
+        gold_answer=gold_answer,
+    )
+
+    if family == "tree_search":
+        run["tree"] = _build_tree_layout(
+            run_key=f"{strategy['id']}_{scorer['id']}",
             confidence=confidence,
-        )
-    elif family == "sample_and_vote":
-        run["events"] = _build_sample_vote_events(
-            strategy=strategy,
-            scorer=scorer,
-            answer=final_answer,
-            confidence=confidence,
-            budget=budget,
             rng=rng,
-            gold_answer=gold_answer,
         )
-    elif family == "reranking":
-        run["events"] = _build_rerank_events(
-            strategy=strategy,
-            scorer=scorer,
-            answer=final_answer,
-            confidence=confidence,
-            budget=budget,
-            rng=rng,
-            gold_answer=gold_answer,
-        )
-    else:
-        tree_payload = _build_tree_events(
-            strategy=strategy,
-            scorer=scorer,
-            answer=final_answer,
-            confidence=confidence,
-            budget=budget,
-            rng=rng,
-            gold_answer=gold_answer,
-        )
-        run["events"] = tree_payload["events"]
-        run["tree"] = tree_payload["tree"]
 
     return run
 
 
-def _build_single_pass_events(
+def _build_generic_events(
     strategy: Dict[str, Any],
     scorer: Dict[str, Any],
-    question: str,
     answer: str,
     confidence: float,
+    budget: int,
+    rng: random.Random,
+    gold_answer: str,
 ) -> List[Dict[str, Any]]:
-    scorer_value = _scorer_value_from_confidence(scorer, confidence)
-    scorer_signal = _scorer_signal(scorer, scorer_value)
+    family = strategy.get("family", "single_pass")
+    scorer_signal = _scorer_signal(
+        scorer, _scorer_value_from_confidence(scorer, confidence)
+    )
+
+    if family == "single_pass":
+        return [
+            {
+                "step": 1,
+                "title": "Single-pass reasoning generation",
+                "stage": "generation",
+                "decision": {
+                    "action": "stop",
+                    "reason": "Single-pass baseline emits one chain.",
+                },
+                "signals": [
+                    {
+                        "name": "confidence",
+                        "value": confidence,
+                        "direction": "higher_better",
+                        "threshold": 0.70,
+                    },
+                    scorer_signal,
+                ],
+                "candidates": [
+                    {
+                        "id": f"{strategy['id']}_{scorer['id']}_c1",
+                        "label": "Generated chain",
+                        "text": f"Predicted answer {answer}.",
+                        "answer": answer,
+                        "status": "selected",
+                        "selected": True,
+                        "signals": {
+                            scorer["id"]: _scorer_value_from_confidence(
+                                scorer, confidence
+                            ),
+                            "trajectory_confidence": confidence,
+                        },
+                    }
+                ],
+            }
+        ]
+
+    wrong_answer = _perturb_answer(gold_answer, rng)
+    warmup_signal = _scorer_signal(
+        scorer,
+        _scorer_value_from_confidence(
+            scorer, _clamp(confidence - 0.10 + rng.random() * 0.04)
+        ),
+    )
+
+    first = {
+        "step": 1,
+        "title": "Warmup candidate generation",
+        "stage": "sampling" if family == "sample_and_vote" else "candidate_generation",
+        "decision": {
+            "action": "escalate" if budget > 4 else "stop",
+            "reason": "Need additional budget." if budget > 4 else "Budget exhausted.",
+        },
+        "signals": [
+            {
+                "name": "confidence",
+                "value": _clamp(confidence - 0.12),
+                "direction": "higher_better",
+                "threshold": 0.70,
+            },
+            warmup_signal,
+        ],
+        "candidates": [
+            {
+                "id": f"{strategy['id']}_{scorer['id']}_p1",
+                "label": "Candidate 1",
+                "text": f"Candidate predicts {answer}.",
+                "answer": answer,
+                "status": "kept" if budget > 4 else "selected",
+                "selected": budget <= 4,
+                "signals": {
+                    scorer["id"]: _scorer_value_from_confidence(
+                        scorer, _clamp(confidence - 0.04)
+                    ),
+                    "score": _clamp(confidence - 0.05),
+                },
+            },
+            {
+                "id": f"{strategy['id']}_{scorer['id']}_p2",
+                "label": "Candidate 2",
+                "text": f"Competing candidate predicts {wrong_answer}.",
+                "answer": wrong_answer,
+                "status": "pruned",
+                "selected": False,
+                "signals": {
+                    scorer["id"]: _scorer_value_from_confidence(
+                        scorer, _clamp(confidence - 0.20)
+                    ),
+                    "score": _clamp(confidence - 0.18),
+                },
+            },
+        ],
+    }
+
+    if budget <= 4:
+        return [first]
+
+    second_stage = "selection"
+    if family == "reranking":
+        second_stage = "reranking"
+    elif family == "tree_search":
+        second_stage = "tree_select"
+
     return [
+        first,
         {
-            "step": 1,
-            "title": "Single-pass reasoning generation",
-            "stage": "generation",
+            "step": 2,
+            "title": "Escalated selection",
+            "stage": second_stage,
             "decision": {
                 "action": "stop",
-                "reason": (
-                    "Single-pass baseline emits one chain; scorer evaluates "
-                    "the completed trajectory."
-                ),
+                "reason": "Confidence stabilized after escalation.",
             },
             "signals": [
                 {
@@ -412,239 +518,15 @@ def _build_single_pass_events(
             ],
             "candidates": [
                 {
-                    "id": f"{strategy['id']}_{scorer['id']}_c1",
-                    "label": "Generated chain",
-                    "text": f"{question} -> predicted answer {answer}.",
-                    "answer": answer,
-                    "status": "selected",
-                    "selected": True,
-                    "signals": {
-                        scorer["id"]: scorer_value,
-                        "trajectory_confidence": confidence,
-                    },
-                }
-            ],
-        }
-    ]
-
-
-def _build_sample_vote_events(
-    strategy: Dict[str, Any],
-    scorer: Dict[str, Any],
-    answer: str,
-    confidence: float,
-    budget: int,
-    rng: random.Random,
-    gold_answer: str,
-) -> List[Dict[str, Any]]:
-    wrong_answer = _perturb_answer(gold_answer, rng)
-    warmup_consensus = _clamp(0.40 + rng.random() * 0.20)
-    scorer_value = _scorer_value_from_confidence(scorer, confidence)
-    scorer_warmup = _scorer_signal(
-        scorer,
-        _scorer_value_from_confidence(
-            scorer, _clamp(confidence - 0.12 + rng.random() * 0.06)
-        ),
-    )
-
-    first = {
-        "step": 1,
-        "title": "Warmup trajectory sampling",
-        "stage": "sampling",
-        "decision": {
-            "action": "escalate" if budget > 4 else "stop",
-            "reason": (
-                "Consensus below threshold after warmup."
-                if budget > 4
-                else "Sampling budget exhausted."
-            ),
-        },
-        "signals": [
-            {
-                "name": "consensus",
-                "value": warmup_consensus,
-                "direction": "higher_better",
-                "threshold": 0.65,
-            },
-            scorer_warmup,
-        ],
-        "candidates": [
-            {
-                "id": f"{strategy['id']}_{scorer['id']}_p1",
-                "label": "Path 1",
-                "text": f"Candidate path predicts {answer}.",
-                "answer": answer,
-                "status": "kept" if budget > 4 else "selected",
-                "selected": budget <= 4,
-                "signals": {
-                    scorer["id"]: _scorer_value_from_confidence(
-                        scorer, _clamp(confidence - 0.04)
-                    ),
-                    "path_score": _clamp(confidence - 0.05),
-                },
-            },
-            {
-                "id": f"{strategy['id']}_{scorer['id']}_p2",
-                "label": "Path 2",
-                "text": f"Competing path predicts {wrong_answer}.",
-                "answer": wrong_answer,
-                "status": "pruned",
-                "selected": False,
-                "signals": {
-                    scorer["id"]: _scorer_value_from_confidence(
-                        scorer, _clamp(confidence - 0.20)
-                    ),
-                    "path_score": _clamp(confidence - 0.18),
-                },
-            },
-        ],
-    }
-
-    if budget <= 4:
-        return [first]
-
-    return [
-        first,
-        {
-            "step": 2,
-            "title": "Escalated sampling and final vote",
-            "stage": "selection",
-            "decision": {
-                "action": "stop",
-                "reason": "Consensus crossed threshold after additional samples.",
-            },
-            "signals": [
-                {
-                    "name": "consensus",
-                    "value": _clamp(confidence - 0.03),
-                    "direction": "higher_better",
-                    "threshold": 0.65,
-                },
-                _scorer_signal(scorer, scorer_value),
-            ],
-            "candidates": [
-                {
                     "id": f"{strategy['id']}_{scorer['id']}_p3",
-                    "label": "Path 3",
-                    "text": f"Escalated path verifies answer {answer}.",
-                    "answer": answer,
-                    "status": "selected",
-                    "selected": True,
-                    "signals": {
-                        scorer["id"]: scorer_value,
-                        "path_score": confidence,
-                    },
-                }
-            ],
-        },
-    ]
-
-
-def _build_rerank_events(
-    strategy: Dict[str, Any],
-    scorer: Dict[str, Any],
-    answer: str,
-    confidence: float,
-    budget: int,
-    rng: random.Random,
-    gold_answer: str,
-) -> List[Dict[str, Any]]:
-    wrong_answer = _perturb_answer(gold_answer, rng)
-    top_gap = _clamp(0.03 + rng.random() * 0.10, 0.0, 0.3)
-
-    first = {
-        "step": 1,
-        "title": "Candidate generation and scoring",
-        "stage": "candidate_generation",
-        "decision": {
-            "action": "escalate" if budget > 4 else "rerank",
-            "reason": (
-                "Top-2 score gap is narrow, request more candidates."
-                if budget > 4
-                else "Select best candidate from current pool."
-            ),
-        },
-        "signals": [
-            {
-                "name": "top2_gap",
-                "value": top_gap,
-                "direction": "higher_better",
-                "threshold": 0.08,
-            },
-            _scorer_signal(
-                scorer,
-                _scorer_value_from_confidence(
-                    scorer, _clamp(confidence - 0.10 + rng.random() * 0.05)
-                ),
-            ),
-        ],
-        "candidates": [
-            {
-                "id": f"{strategy['id']}_{scorer['id']}_r1",
-                "label": "Candidate 1",
-                "text": f"High-scoring candidate predicts {answer}.",
-                "answer": answer,
-                "status": "kept" if budget > 4 else "selected",
-                "selected": budget <= 4,
-                "signals": {
-                    scorer["id"]: _scorer_value_from_confidence(
-                        scorer, _clamp(confidence - 0.05)
-                    ),
-                    "rerank_score": _clamp(confidence - 0.04),
-                },
-            },
-            {
-                "id": f"{strategy['id']}_{scorer['id']}_r2",
-                "label": "Candidate 2",
-                "text": f"Lower-scoring candidate predicts {wrong_answer}.",
-                "answer": wrong_answer,
-                "status": "pruned",
-                "selected": False,
-                "signals": {
-                    scorer["id"]: _scorer_value_from_confidence(
-                        scorer, _clamp(confidence - 0.22)
-                    ),
-                    "rerank_score": _clamp(confidence - 0.21),
-                },
-            },
-        ],
-    }
-
-    if budget <= 4:
-        return [first]
-
-    return [
-        first,
-        {
-            "step": 2,
-            "title": "Escalated reranking",
-            "stage": "reranking",
-            "decision": {
-                "action": "stop",
-                "reason": "Rerank confidence stabilized after escalation.",
-            },
-            "signals": [
-                {
-                    "name": "top2_gap",
-                    "value": _clamp(top_gap + 0.08),
-                    "direction": "higher_better",
-                    "threshold": 0.08,
-                },
-                _scorer_signal(
-                    scorer, _scorer_value_from_confidence(scorer, confidence)
-                ),
-            ],
-            "candidates": [
-                {
-                    "id": f"{strategy['id']}_{scorer['id']}_r3",
-                    "label": "Candidate 3",
-                    "text": f"Escalated candidate selected with answer {answer}.",
+                    "label": "Selected candidate",
+                    "text": f"Selected answer {answer}.",
                     "answer": answer,
                     "status": "selected",
                     "selected": True,
                     "signals": {
                         scorer["id"]: _scorer_value_from_confidence(scorer, confidence),
-                        "rerank_score": confidence,
+                        "score": confidence,
                     },
                 }
             ],
@@ -652,136 +534,16 @@ def _build_rerank_events(
     ]
 
 
-def _build_tree_events(
-    strategy: Dict[str, Any],
-    scorer: Dict[str, Any],
-    answer: str,
-    confidence: float,
-    budget: int,
-    rng: random.Random,
-    gold_answer: str,
-) -> Dict[str, Any]:
-    wrong_answer = _perturb_answer(gold_answer, rng)
-    frontier = _clamp(0.58 + rng.random() * 0.12)
-
-    events: List[Dict[str, Any]] = [
-        {
-            "step": 1,
-            "title": "Depth-1 tree expansion",
-            "stage": "tree_expand",
-            "decision": {
-                "action": "continue" if budget > 4 else "stop",
-                "reason": (
-                    "Need deeper expansion to disambiguate branches."
-                    if budget > 4
-                    else "Expansion budget exhausted."
-                ),
-            },
-            "signals": [
-                {
-                    "name": "best_value",
-                    "value": frontier,
-                    "direction": "higher_better",
-                    "threshold": 0.75,
-                },
-                _scorer_signal(
-                    scorer,
-                    _scorer_value_from_confidence(
-                        scorer, _clamp(confidence - 0.12 + rng.random() * 0.06)
-                    ),
-                ),
-            ],
-            "candidates": [
-                {
-                    "id": f"{strategy['id']}_{scorer['id']}_t1",
-                    "label": "Node A",
-                    "text": f"Promising branch trending toward {answer}.",
-                    "answer": "",
-                    "status": "kept",
-                    "selected": True,
-                    "signals": {
-                        scorer["id"]: _scorer_value_from_confidence(
-                            scorer, _clamp(confidence - 0.10)
-                        ),
-                        "value": frontier,
-                        "depth": 1,
-                    },
-                },
-                {
-                    "id": f"{strategy['id']}_{scorer['id']}_t2",
-                    "label": "Node B",
-                    "text": f"Weak branch drifting toward {wrong_answer}.",
-                    "answer": "",
-                    "status": "pruned",
-                    "selected": False,
-                    "signals": {
-                        scorer["id"]: _scorer_value_from_confidence(
-                            scorer, _clamp(confidence - 0.22)
-                        ),
-                        "value": _clamp(frontier - 0.18),
-                        "depth": 1,
-                    },
-                },
-            ],
-        }
-    ]
-
-    if budget > 4:
-        events.append(
-            {
-                "step": 2,
-                "title": "Depth-2 selection",
-                "stage": "selection",
-                "decision": {
-                    "action": "stop",
-                    "reason": "Best branch reached the solve threshold.",
-                },
-                "signals": [
-                    {
-                        "name": "best_value",
-                        "value": confidence,
-                        "direction": "higher_better",
-                        "threshold": 0.75,
-                    },
-                    _scorer_signal(
-                        scorer, _scorer_value_from_confidence(scorer, confidence)
-                    ),
-                ],
-                "candidates": [
-                    {
-                        "id": f"{strategy['id']}_{scorer['id']}_t3",
-                        "label": "Node A2",
-                        "text": f"Selected branch outputs answer {answer}.",
-                        "answer": answer,
-                        "status": "selected",
-                        "selected": True,
-                        "signals": {
-                            scorer["id"]: _scorer_value_from_confidence(
-                                scorer, confidence
-                            ),
-                            "value": confidence,
-                            "depth": 2,
-                        },
-                    }
-                ],
-            }
-        )
-
-    tree = _build_tree_layout(
-        strategy_id=f"{strategy['id']}_{scorer['id']}", confidence=confidence, rng=rng
-    )
-
-    return {"events": events, "tree": tree}
-
-
 def _build_tree_layout(
-    strategy_id: str, confidence: float, rng: random.Random
+    run_key: str,
+    confidence: float,
+    rng: random.Random,
 ) -> Dict[str, Any]:
     root = _clamp(0.50 + (rng.random() - 0.5) * 0.06)
     return {
         "nodes": [
             {
-                "id": f"{strategy_id}_n1",
+                "id": f"{run_key}_n1",
                 "label": "Root",
                 "value": root,
                 "depth": 0,
@@ -789,7 +551,7 @@ def _build_tree_layout(
                 "y": 0.14,
             },
             {
-                "id": f"{strategy_id}_n2",
+                "id": f"{run_key}_n2",
                 "label": "A",
                 "value": _clamp(confidence - 0.17),
                 "depth": 1,
@@ -797,7 +559,7 @@ def _build_tree_layout(
                 "y": 0.47,
             },
             {
-                "id": f"{strategy_id}_n3",
+                "id": f"{run_key}_n3",
                 "label": "B",
                 "value": _clamp(confidence - 0.08),
                 "depth": 1,
@@ -805,7 +567,7 @@ def _build_tree_layout(
                 "y": 0.47,
             },
             {
-                "id": f"{strategy_id}_n4",
+                "id": f"{run_key}_n4",
                 "label": "C",
                 "value": _clamp(confidence - 0.24),
                 "depth": 1,
@@ -813,7 +575,7 @@ def _build_tree_layout(
                 "y": 0.47,
             },
             {
-                "id": f"{strategy_id}_n5",
+                "id": f"{run_key}_n5",
                 "label": "B2",
                 "value": confidence,
                 "depth": 2,
@@ -822,16 +584,12 @@ def _build_tree_layout(
             },
         ],
         "edges": [
-            {"source": f"{strategy_id}_n1", "target": f"{strategy_id}_n2"},
-            {"source": f"{strategy_id}_n1", "target": f"{strategy_id}_n3"},
-            {"source": f"{strategy_id}_n1", "target": f"{strategy_id}_n4"},
-            {"source": f"{strategy_id}_n3", "target": f"{strategy_id}_n5"},
+            {"source": f"{run_key}_n1", "target": f"{run_key}_n2"},
+            {"source": f"{run_key}_n1", "target": f"{run_key}_n3"},
+            {"source": f"{run_key}_n1", "target": f"{run_key}_n4"},
+            {"source": f"{run_key}_n3", "target": f"{run_key}_n5"},
         ],
-        "selected_path": [
-            f"{strategy_id}_n1",
-            f"{strategy_id}_n3",
-            f"{strategy_id}_n5",
-        ],
+        "selected_path": [f"{run_key}_n1", f"{run_key}_n3", f"{run_key}_n5"],
     }
 
 
@@ -851,7 +609,6 @@ def _scorer_value_from_confidence(scorer: Dict[str, Any], confidence: float) -> 
 
 
 def _difficulty_from_question(question: str) -> float:
-    # Stable pseudo-difficulty in [0.10, 0.36]
     seed = _hash_seed(question)
     return 0.10 + (seed % 27) / 100.0
 
@@ -870,17 +627,16 @@ def _strategy_quality_base(strategy_id: str, family: str) -> float:
         "reranking": 0.64,
         "sample_and_vote": 0.65,
     }
-    return by_strategy.get(strategy_id, by_family.get(family, 0.6))
+    return by_strategy.get(strategy_id, by_family.get(family, 0.60))
 
 
 def _scorer_quality_shift(scorer_id: str) -> float:
-    shifts = {
+    return {
         "prm": 0.05,
         "sequence_prob": 0.03,
         "perplexity": 0.01,
-        "entropy": 0.0,
-    }
-    return shifts.get(scorer_id, 0.0)
+        "entropy": 0.00,
+    }.get(scorer_id, 0.00)
 
 
 def _budget_unit_for_family(family: str) -> str:
@@ -914,11 +670,9 @@ def _perturb_answer(gold_answer: str, rng: random.Random) -> str:
         delta = (rng.random() - 0.5) * 0.8
         return f"{value + delta:.2f}"
     except ValueError:
-        pass
-
-    if not text:
-        return "unknown"
-    return f"{text}_alt"
+        if not text:
+            return "unknown"
+        return f"{text}_alt"
 
 
 def _mask_api_key(api_key: str) -> str:
@@ -933,7 +687,11 @@ def _pick_budget(requested: Optional[int], available: List[int]) -> int:
     if not available:
         return DEFAULT_BUDGET
 
-    target = DEFAULT_BUDGET if requested is None else requested
+    try:
+        target = DEFAULT_BUDGET if requested is None else int(requested)
+    except (TypeError, ValueError):
+        target = DEFAULT_BUDGET
+
     return min(available, key=lambda value: (abs(value - target), value))
 
 

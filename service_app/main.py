@@ -13,14 +13,6 @@ from fastapi.staticfiles import StaticFiles
 from service_app.api.routes import chat, debugger, models
 from service_app.core.config import settings
 
-# Allow running this file directly from inside the `service_app` directory:
-# `python main.py`
-# current_dir = Path(__file__).resolve().parent
-# parent_dir = current_dir.parent
-# if str(parent_dir) not in sys.path:
-#     sys.path.insert(0, str(parent_dir))
-
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"

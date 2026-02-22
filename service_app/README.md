@@ -134,6 +134,12 @@ Prototype-only usage (no running backend):
 service_app/static/debugger/index.html
 ```
 
+Cached prototype scenarios are stored in:
+
+```bash
+service_app/static/debugger/cached_examples.json
+```
+
 ### POST /v1/chat/completions
 
 Create a chat completion with TTS strategy.

@@ -1,64 +1,8 @@
 const CUSTOM_BUDGETS = [4, 8, 12];
-
-const STRATEGY_LIBRARY = [
-  {
-    id: "baseline",
-    name: "Baseline (Raw CoT)",
-    family: "single_pass",
-    summary: "Single-pass raw chain-of-thought without search or reranking.",
-  },
-  {
-    id: "beam_search",
-    name: "Beam Search (ToT)",
-    family: "tree_search",
-    summary: "Tree-of-thought expansion with beam pruning.",
-  },
-  {
-    id: "online_best_of_n",
-    name: "Online Best-of-N",
-    family: "reranking",
-    summary: "Iterative candidate generation with stepwise reranking.",
-  },
-  {
-    id: "offline_best_of_n",
-    name: "Offline Best-of-N",
-    family: "reranking",
-    summary: "Generate full trajectories first, then rerank at the end.",
-  },
-  {
-    id: "self_consistency",
-    name: "Self-Consistency",
-    family: "sample_and_vote",
-    summary: "Sample diverse trajectories and select by answer consensus.",
-  },
-];
-
-const SCORER_LIBRARY = [
-  {
-    id: "prm",
-    name: "PRM",
-    direction: "higher_better",
-    threshold: 0.72,
-  },
-  {
-    id: "sequence_prob",
-    name: "Sequence Prob",
-    direction: "higher_better",
-    threshold: 0.65,
-  },
-  {
-    id: "perplexity",
-    name: "Perplexity",
-    direction: "lower_better",
-    threshold: 0.36,
-  },
-  {
-    id: "entropy",
-    name: "Entropy",
-    direction: "lower_better",
-    threshold: 0.34,
-  },
-];
+const CACHED_EXAMPLES_PATHS =
+  window.location.protocol === "file:"
+    ? ["./cached_examples.json", "/static/debugger/cached_examples.json"]
+    : ["/static/debugger/cached_examples.json", "./cached_examples.json"];
 
 const state = {
   catalog: [],
@@ -70,6 +14,9 @@ const state = {
   selectedEventIndex: 0,
   selectedCandidateId: null,
   customPayloads: {},
+  prototypeCatalog: [],
+  prototypePayloads: {},
+  prototypeLoaded: false,
 };
 
 const elements = {
@@ -133,29 +80,6 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function clamp(value, min = 0, max = 1) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function hashString(text) {
-  let hash = 2166136261;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function createRng(seed) {
-  let value = seed >>> 0;
-  return () => {
-    value = Math.imul(value + 0x6d2b79f5, 1);
-    let result = Math.imul(value ^ (value >>> 15), 1 | value);
-    result ^= result + Math.imul(result ^ (result >>> 7), 61 | result);
-    return ((result ^ (result >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 function metricToPercent(signal) {
   const numericValue = Number(signal?.value ?? 0);
   if (Number.isNaN(numericValue)) {
@@ -195,13 +119,95 @@ function getCurrentBudget() {
   return state.budgetOptions[index] ?? state.budgetOptions[0];
 }
 
-function getPrototypeScenarios() {
-  return window.VISUAL_DEBUGGER_PROTOTYPE?.scenarios || [];
+function pickNearestBudget(target, availableBudgets) {
+  if (!availableBudgets?.length) {
+    return null;
+  }
+  const expected = target ?? availableBudgets[0];
+  return availableBudgets.reduce((best, current) => {
+    const bestGap = Math.abs(best - expected);
+    const currentGap = Math.abs(current - expected);
+    return currentGap < bestGap ? current : best;
+  }, availableBudgets[0]);
+}
+
+function normalizePrototypeBundle(rawBundle) {
+  const payloads = rawBundle?.payloads || {};
+  const scenarios = Array.isArray(rawBundle?.scenarios) ? rawBundle.scenarios : [];
+
+  const normalizedScenarios = scenarios
+    .map((scenario) => {
+      const scenarioId = scenario?.id;
+      if (!scenarioId || !payloads[scenarioId]) {
+        return null;
+      }
+
+      const availableBudgets = Array.from(
+        new Set(
+          (Array.isArray(scenario.available_budgets)
+            ? scenario.available_budgets
+            : Object.keys(payloads[scenarioId])
+          )
+            .map((value) => Number(value))
+            .filter((value) => Number.isFinite(value) && value > 0),
+        ),
+      ).sort((left, right) => left - right);
+
+      if (!availableBudgets.length) {
+        return null;
+      }
+
+      const defaultBudget = pickNearestBudget(
+        scenario.default_budget,
+        availableBudgets,
+      );
+
+      return {
+        id: String(scenarioId),
+        title: String(scenario.title || scenarioId),
+        description: String(scenario.description || ""),
+        available_budgets: availableBudgets,
+        default_budget: defaultBudget,
+      };
+    })
+    .filter((item) => item != null);
+
+  return {
+    scenarios: normalizedScenarios,
+    payloads,
+  };
+}
+
+async function fetchCachedExamplesJson() {
+  let lastError = null;
+  for (const path of CACHED_EXAMPLES_PATHS) {
+    try {
+      return await fetchJson(path);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw (
+    lastError ||
+    new Error("Unable to load cached_examples.json for prototype mode.")
+  );
+}
+
+async function ensurePrototypeDataLoaded() {
+  if (state.prototypeLoaded) {
+    return;
+  }
+
+  const rawBundle = await fetchCachedExamplesJson();
+  const normalized = normalizePrototypeBundle(rawBundle);
+  state.prototypeCatalog = normalized.scenarios;
+  state.prototypePayloads = normalized.payloads;
+  state.prototypeLoaded = true;
 }
 
 function getPrototypeScenarioPayload(scenarioId, budget) {
-  const prototypePayloads = window.VISUAL_DEBUGGER_PROTOTYPE?.payloads || {};
-  const scenarioPayloads = prototypePayloads[scenarioId];
+  const scenarioPayloads = state.prototypePayloads[scenarioId];
   if (!scenarioPayloads) {
     return null;
   }
@@ -215,13 +221,7 @@ function getPrototypeScenarioPayload(scenarioId, budget) {
     return null;
   }
 
-  const targetBudget = budget ?? availableBudgets[0];
-  const selectedBudget = availableBudgets.reduce((best, current) => {
-    const bestGap = Math.abs(best - targetBudget);
-    const currentGap = Math.abs(current - targetBudget);
-    return currentGap < bestGap ? current : best;
-  }, availableBudgets[0]);
-
+  const selectedBudget = pickNearestBudget(budget, availableBudgets);
   const payload = scenarioPayloads[String(selectedBudget)];
   if (!payload) {
     return null;
@@ -241,10 +241,10 @@ async function loadCatalog() {
     state.dataMode = "backend";
     return catalogResponse.scenarios || [];
   } catch (error) {
-    const scenarios = getPrototypeScenarios();
-    if (scenarios.length) {
+    await ensurePrototypeDataLoaded();
+    if (state.prototypeCatalog.length) {
       state.dataMode = "prototype";
-      return deepClone(scenarios);
+      return deepClone(state.prototypeCatalog);
     }
     throw error;
   }
@@ -262,6 +262,7 @@ async function loadPayloadForScenario(scenarioId, budget) {
   }
 
   if (state.dataMode === "prototype") {
+    await ensurePrototypeDataLoaded();
     const localPayload = getPrototypeScenarioPayload(scenarioId, budget);
     if (localPayload) {
       return localPayload;
@@ -275,6 +276,7 @@ async function loadPayloadForScenario(scenarioId, budget) {
     state.dataMode = "backend";
     return payload;
   } catch (error) {
+    await ensurePrototypeDataLoaded();
     const localPayload = getPrototypeScenarioPayload(scenarioId, budget);
     if (localPayload) {
       state.dataMode = "prototype";
@@ -302,9 +304,9 @@ function configureBudgetSlider(defaultBudget) {
 
   const target = defaultBudget ?? options[0];
   const nearestIndex = options.reduce(
-    (best, budget, index) => {
+    (best, optionBudget, index) => {
       const bestGap = Math.abs(options[best] - target);
-      const currentGap = Math.abs(budget - target);
+      const currentGap = Math.abs(optionBudget - target);
       return currentGap < bestGap ? index : best;
     },
     0,
@@ -332,22 +334,6 @@ function setStatus(message, isError = false) {
   elements.customStatus.style.color = isError ? "var(--bad)" : "var(--muted)";
 }
 
-function perturbAnswer(goldAnswer, rng) {
-  const text = String(goldAnswer || "").trim();
-  const numericValue = Number(text);
-  if (text && !Number.isNaN(numericValue)) {
-    const delta = Math.max(1, Math.floor(rng() * 5));
-    const sign = rng() > 0.5 ? 1 : -1;
-    return String(numericValue + sign * delta);
-  }
-
-  if (!text) {
-    return "unknown";
-  }
-
-  return `${text}_alt`;
-}
-
 function maskApiKey(apiKey) {
   if (!apiKey) {
     return "";
@@ -356,758 +342,6 @@ function maskApiKey(apiKey) {
     return `${apiKey.slice(0, 2)}***`;
   }
   return `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}`;
-}
-
-function getBudgetUnit(family) {
-  if (family === "tree_search") {
-    return "node_expansions";
-  }
-  if (family === "sample_and_vote") {
-    return "paths";
-  }
-  if (family === "reranking") {
-    return "candidate_rollouts";
-  }
-  return "steps";
-}
-
-function familyBaseQuality(family) {
-  if (family === "tree_search") {
-    return 0.67;
-  }
-  if (family === "sample_and_vote") {
-    return 0.65;
-  }
-  if (family === "reranking") {
-    return 0.64;
-  }
-  return 0.56;
-}
-
-function scorerQualityShift(scorerId) {
-  if (scorerId === "prm") {
-    return 0.05;
-  }
-  if (scorerId === "sequence_prob") {
-    return 0.03;
-  }
-  if (scorerId === "perplexity") {
-    return 0.01;
-  }
-  return 0;
-}
-
-function scorerValueFromConfidence(scorer, confidence) {
-  if (scorer.direction === "higher_better") {
-    return clamp(confidence);
-  }
-  return clamp(1 - confidence);
-}
-
-function scorerSignal(scorer, value) {
-  return {
-    name: scorer.id,
-    value,
-    direction: scorer.direction,
-    threshold: scorer.threshold,
-  };
-}
-
-function buildSinglePassEvents(
-  strategy,
-  scorer,
-  context,
-  finalAnswer,
-  confidence,
-  rng,
-) {
-  const scorerValue = scorerValueFromConfidence(scorer, confidence);
-  return [
-    {
-      step: 1,
-      title: "Single-pass reasoning generation",
-      stage: "generation",
-      decision: {
-        action: "stop",
-        reason:
-          "Single-pass baseline emits one chain; scorer evaluates the complete trajectory.",
-      },
-      signals: [
-        {
-          name: "confidence",
-          value: confidence,
-          direction: "higher_better",
-          threshold: 0.7,
-        },
-        scorerSignal(scorer, scorerValue),
-      ],
-      candidates: [
-        {
-          id: `${strategy.id}_${scorer.id}_c1`,
-          label: "Generated chain",
-          text: `${context.question} -> proposed answer ${finalAnswer}.`,
-          answer: finalAnswer,
-          status: "selected",
-          selected: true,
-          signals: {
-            [scorer.id]: scorerValue,
-            chain_score: clamp(confidence + (rng() - 0.5) * 0.05),
-          },
-        },
-      ],
-    },
-  ];
-}
-
-function buildSampleVoteEvents(
-  strategy,
-  scorer,
-  context,
-  finalAnswer,
-  confidence,
-  rng,
-  budget,
-) {
-  const warmupConsensus = clamp(0.42 + rng() * 0.2);
-  const finalConsensus = clamp(confidence - 0.02);
-  const wrongAnswer = perturbAnswer(context.goldAnswer, rng);
-
-  const firstEvent = {
-    step: 1,
-    title: "Warmup trajectory sampling",
-    stage: "sampling",
-    decision: {
-      action: budget > 4 ? "escalate" : "stop",
-      reason:
-        budget > 4
-          ? "Consensus below threshold after initial samples."
-          : "Sampling budget exhausted.",
-    },
-    signals: [
-      {
-        name: "consensus",
-        value: warmupConsensus,
-        direction: "higher_better",
-        threshold: 0.65,
-      },
-      scorerSignal(
-        scorer,
-        scorerValueFromConfidence(
-          scorer,
-          clamp(confidence - 0.11 + (rng() - 0.5) * 0.05),
-        ),
-      ),
-    ],
-    candidates: [
-      {
-        id: `${strategy.id}_${scorer.id}_p1`,
-        label: "Path 1",
-        text: `Candidate reasoning path ends with ${finalAnswer}.`,
-        answer: finalAnswer,
-        status: "kept",
-        selected: false,
-        signals: {
-          [scorer.id]: scorerValueFromConfidence(
-            scorer,
-            clamp(confidence - 0.08 + rng() * 0.08),
-          ),
-          path_score: clamp(confidence - 0.08 + rng() * 0.08),
-          tokens: 170 + Math.floor(rng() * 80),
-        },
-      },
-      {
-        id: `${strategy.id}_${scorer.id}_p2`,
-        label: "Path 2",
-        text: `Alternative chain predicts ${wrongAnswer}.`,
-        answer: wrongAnswer,
-        status: "pruned",
-        selected: false,
-        signals: {
-          [scorer.id]: scorerValueFromConfidence(
-            scorer,
-            clamp(confidence - 0.22 + rng() * 0.06),
-          ),
-          path_score: clamp(confidence - 0.22 + rng() * 0.06),
-          tokens: 160 + Math.floor(rng() * 90),
-        },
-      },
-    ],
-  };
-
-  if (budget <= 4) {
-    firstEvent.candidates[0].status = "selected";
-    firstEvent.candidates[0].selected = true;
-    return [firstEvent];
-  }
-
-  return [
-    firstEvent,
-    {
-      step: 2,
-      title: "Escalated sampling and final vote",
-      stage: "selection",
-      decision: {
-        action: "stop",
-        reason: "Consensus crossed threshold after additional trajectories.",
-      },
-      signals: [
-        {
-          name: "consensus",
-          value: finalConsensus,
-          direction: "higher_better",
-          threshold: 0.65,
-        },
-        scorerSignal(scorer, scorerValueFromConfidence(scorer, confidence)),
-      ],
-      candidates: [
-        {
-          id: `${strategy.id}_${scorer.id}_p3`,
-          label: "Path 3",
-          text: `Escalated path verifies answer ${finalAnswer}.`,
-          answer: finalAnswer,
-          status: "selected",
-          selected: true,
-          signals: {
-            [scorer.id]: scorerValueFromConfidence(scorer, confidence),
-            path_score: clamp(confidence + rng() * 0.06),
-            tokens: 170 + Math.floor(rng() * 80),
-          },
-        },
-      ],
-    },
-  ];
-}
-
-function buildRerankEvents(
-  strategy,
-  scorer,
-  context,
-  finalAnswer,
-  confidence,
-  rng,
-  budget,
-) {
-  const wrongAnswer = perturbAnswer(context.goldAnswer, rng);
-  const topGap = clamp(0.03 + rng() * 0.1, 0, 0.3);
-
-  const firstEvent = {
-    step: 1,
-    title: "Candidate generation and scoring",
-    stage: "candidate_generation",
-    decision: {
-      action: budget > 4 ? "escalate" : "rerank",
-      reason:
-        budget > 4
-          ? "Top-2 scorer gap is narrow; request more candidates."
-          : "Select best candidate under current budget.",
-    },
-    signals: [
-      {
-        name: "top2_gap",
-        value: topGap,
-        direction: "higher_better",
-        threshold: 0.08,
-      },
-      scorerSignal(
-        scorer,
-        scorerValueFromConfidence(
-          scorer,
-          clamp(confidence - 0.1 + rng() * 0.08),
-        ),
-      ),
-    ],
-    candidates: [
-      {
-        id: `${strategy.id}_${scorer.id}_r1`,
-        label: "Candidate 1",
-        text: `Reasoning candidate with answer ${finalAnswer}.`,
-        answer: finalAnswer,
-        status: budget > 4 ? "kept" : "selected",
-        selected: budget <= 4,
-        signals: {
-          [scorer.id]: scorerValueFromConfidence(
-            scorer,
-            clamp(confidence - 0.04 + rng() * 0.05),
-          ),
-          rerank_score: clamp(confidence - 0.06 + rng() * 0.07),
-        },
-      },
-      {
-        id: `${strategy.id}_${scorer.id}_r2`,
-        label: "Candidate 2",
-        text: `Competing candidate with answer ${wrongAnswer}.`,
-        answer: wrongAnswer,
-        status: "pruned",
-        selected: false,
-        signals: {
-          [scorer.id]: scorerValueFromConfidence(
-            scorer,
-            clamp(confidence - 0.24 + rng() * 0.05),
-          ),
-          rerank_score: clamp(confidence - 0.2 + rng() * 0.06),
-        },
-      },
-    ],
-  };
-
-  if (budget <= 4) {
-    return [firstEvent];
-  }
-
-  return [
-    firstEvent,
-    {
-      step: 2,
-      title: "Escalated reranking",
-      stage: "reranking",
-      decision: {
-        action: "stop",
-        reason: "Rerank confidence stabilized after additional candidates.",
-      },
-      signals: [
-        {
-          name: "top2_gap",
-          value: clamp(topGap + 0.08 + rng() * 0.07),
-          direction: "higher_better",
-          threshold: 0.08,
-        },
-        scorerSignal(scorer, scorerValueFromConfidence(scorer, confidence)),
-      ],
-      candidates: [
-        {
-          id: `${strategy.id}_${scorer.id}_r3`,
-          label: "Candidate 3",
-          text: `Escalated candidate selected with answer ${finalAnswer}.`,
-          answer: finalAnswer,
-          status: "selected",
-          selected: true,
-          signals: {
-            [scorer.id]: scorerValueFromConfidence(
-              scorer,
-              clamp(confidence + rng() * 0.05),
-            ),
-            rerank_score: clamp(confidence + rng() * 0.04),
-          },
-        },
-      ],
-    },
-  ];
-}
-
-function buildTree(strategy, scorer, confidence, rng) {
-  const runKey = `${strategy.id}_${scorer.id}`;
-  const root = 0.48 + rng() * 0.08;
-  const left = clamp(root + 0.08 + rng() * 0.07);
-  const mid = clamp(root + 0.12 + rng() * 0.06);
-  const right = clamp(root - 0.14 + rng() * 0.08);
-  return {
-    nodes: [
-      {
-        id: `${runKey}_n1`,
-        label: "Root",
-        value: root,
-        depth: 0,
-        x: 0.5,
-        y: 0.14,
-      },
-      {
-        id: `${runKey}_n2`,
-        label: "A",
-        value: left,
-        depth: 1,
-        x: 0.24,
-        y: 0.47,
-      },
-      {
-        id: `${runKey}_n3`,
-        label: "B",
-        value: mid,
-        depth: 1,
-        x: 0.52,
-        y: 0.47,
-      },
-      {
-        id: `${runKey}_n4`,
-        label: "C",
-        value: right,
-        depth: 1,
-        x: 0.8,
-        y: 0.47,
-      },
-      {
-        id: `${runKey}_n5`,
-        label: "B2",
-        value: confidence,
-        depth: 2,
-        x: 0.52,
-        y: 0.82,
-      },
-    ],
-    edges: [
-      { source: `${runKey}_n1`, target: `${runKey}_n2` },
-      { source: `${runKey}_n1`, target: `${runKey}_n3` },
-      { source: `${runKey}_n1`, target: `${runKey}_n4` },
-      { source: `${runKey}_n3`, target: `${runKey}_n5` },
-    ],
-    selected_path: [`${runKey}_n1`, `${runKey}_n3`, `${runKey}_n5`],
-  };
-}
-
-function buildTreeEvents(
-  strategy,
-  scorer,
-  context,
-  finalAnswer,
-  confidence,
-  rng,
-  budget,
-) {
-  const firstBest = clamp(0.58 + rng() * 0.12);
-  const firstEvent = {
-    step: 1,
-    title: "Depth-1 tree expansion",
-    stage: "tree_expand",
-    decision: {
-      action: budget > 4 ? "continue" : "stop",
-      reason:
-        budget > 4
-          ? "Need deeper expansion to disambiguate branches."
-          : "Expansion budget exhausted.",
-    },
-    signals: [
-      {
-        name: "best_value",
-        value: firstBest,
-        direction: "higher_better",
-        threshold: 0.75,
-      },
-      scorerSignal(
-        scorer,
-        scorerValueFromConfidence(
-          scorer,
-          clamp(confidence - 0.11 + (rng() - 0.5) * 0.05),
-        ),
-      ),
-    ],
-    candidates: [
-      {
-        id: `${strategy.id}_${scorer.id}_t1`,
-        label: "Node A",
-        text: `Candidate node explores partial reasoning toward ${finalAnswer}.`,
-        answer: "",
-        status: "kept",
-        selected: true,
-        signals: {
-          [scorer.id]: scorerValueFromConfidence(
-            scorer,
-            clamp(confidence - 0.08 + rng() * 0.04),
-          ),
-          value: firstBest,
-          depth: 1,
-        },
-      },
-      {
-        id: `${strategy.id}_${scorer.id}_t2`,
-        label: "Node B",
-        text: `Alternative node drifts to ${perturbAnswer(context.goldAnswer, rng)}.`,
-        answer: "",
-        status: "pruned",
-        selected: false,
-        signals: {
-          [scorer.id]: scorerValueFromConfidence(
-            scorer,
-            clamp(confidence - 0.24 + rng() * 0.04),
-          ),
-          value: clamp(firstBest - 0.2 + rng() * 0.06),
-          depth: 1,
-        },
-      },
-    ],
-  };
-
-  const events = [firstEvent];
-  if (budget > 4) {
-    events.push({
-      step: 2,
-      title: "Depth-2 selection",
-      stage: "selection",
-      decision: {
-        action: "stop",
-        reason: "Highest-value branch reaches solve threshold.",
-      },
-      signals: [
-        {
-          name: "best_value",
-          value: confidence,
-          direction: "higher_better",
-          threshold: 0.75,
-        },
-        scorerSignal(scorer, scorerValueFromConfidence(scorer, confidence)),
-      ],
-      candidates: [
-        {
-          id: `${strategy.id}_${scorer.id}_t3`,
-          label: "Node A2",
-          text: `Selected branch outputs answer ${finalAnswer}.`,
-          answer: finalAnswer,
-          status: "selected",
-          selected: true,
-          signals: {
-            [scorer.id]: scorerValueFromConfidence(scorer, confidence),
-            value: confidence,
-            depth: 2,
-          },
-        },
-      ],
-    });
-  }
-
-  return {
-    events,
-    tree: buildTree(strategy, scorer, confidence, rng),
-  };
-}
-
-function buildCustomStrategyScorerRun(
-  strategy,
-  scorer,
-  context,
-  budget,
-  sharedPrompt,
-  modelConfig,
-) {
-  const seed = hashString(
-    `${strategy.id}|${scorer.id}|${context.question}|${context.goldAnswer}|${budget}|${sharedPrompt}|${modelConfig.provider}|${modelConfig.model_id}`,
-  );
-  const rng = createRng(seed);
-  const difficulty = clamp(0.23 + (hashString(context.question) % 35) / 100);
-  const budgetFactor = budget / CUSTOM_BUDGETS[CUSTOM_BUDGETS.length - 1];
-  const baseQuality = familyBaseQuality(strategy.family);
-  const scorerShift = scorerQualityShift(scorer.id);
-
-  const successChance = clamp(
-    baseQuality +
-      scorerShift +
-      budgetFactor * 0.16 -
-      difficulty * 0.2 +
-      (rng() - 0.5) * 0.08,
-  );
-  const isCorrect = rng() < successChance;
-  const answer = isCorrect
-    ? String(context.goldAnswer || "")
-    : perturbAnswer(context.goldAnswer, rng);
-
-  const qualityScore = clamp(
-    baseQuality +
-      scorerShift +
-      budgetFactor * 0.13 +
-      (isCorrect ? 0.08 : -0.12) +
-      (rng() - 0.5) * 0.06,
-  );
-  const confidence = clamp(
-    qualityScore + (isCorrect ? 0.07 : -0.07) + (rng() - 0.5) * 0.05,
-    0.05,
-    0.98,
-  );
-
-  const run = {
-    budget,
-    budget_unit: getBudgetUnit(strategy.family),
-    used_budget:
-      strategy.family === "single_pass"
-        ? 1
-        : Math.max(2, Math.min(budget, Math.round(budget * (0.7 + rng() * 0.25)))),
-    tokens_used: Math.round(560 + budget * 90 + qualityScore * 220 + rng() * 140),
-    latency_ms: Math.round(3800 + budget * 780 + rng() * 1800),
-    provider: modelConfig.provider,
-    model_id: modelConfig.model_id,
-    strategy: {
-      id: strategy.id,
-      name: strategy.name,
-      family: strategy.family,
-    },
-    scorer: {
-      id: scorer.id,
-      name: scorer.name,
-      direction: scorer.direction,
-    },
-    final: {
-      answer,
-      is_correct: isCorrect,
-      selected_trajectory: `${strategy.id}_${scorer.id}_selected`,
-      confidence,
-      uncertainty: clamp(1 - confidence),
-      quality_score: qualityScore,
-      selection_reason: `${strategy.name} selected this trajectory using ${scorer.name} signals.`,
-    },
-    events: [],
-  };
-
-  if (strategy.family === "single_pass") {
-    run.events = buildSinglePassEvents(
-      strategy,
-      scorer,
-      context,
-      answer,
-      confidence,
-      rng,
-    );
-  } else if (strategy.family === "sample_and_vote") {
-    run.events = buildSampleVoteEvents(
-      strategy,
-      scorer,
-      context,
-      answer,
-      confidence,
-      rng,
-      budget,
-    );
-  } else if (strategy.family === "reranking") {
-    run.events = buildRerankEvents(
-      strategy,
-      scorer,
-      context,
-      answer,
-      confidence,
-      rng,
-      budget,
-    );
-  } else {
-    const treePayload = buildTreeEvents(
-      strategy,
-      scorer,
-      context,
-      answer,
-      confidence,
-      rng,
-      budget,
-    );
-    run.events = treePayload.events;
-    run.tree = treePayload.tree;
-  }
-
-  return {
-    id: `${strategy.id}__${scorer.id}`,
-    strategy_id: strategy.id,
-    scorer_id: scorer.id,
-    name: `${strategy.name} · ${scorer.name}`,
-    family: strategy.family,
-    summary: `${strategy.summary} Evaluated with ${scorer.name}.`,
-    run,
-    comparison_rank: 1,
-  };
-}
-
-function applyStrategyRanks(strategies) {
-  const ranked = [...strategies].sort(
-    (left, right) =>
-      (right.run?.final?.quality_score || 0) - (left.run?.final?.quality_score || 0),
-  );
-
-  const ranking = new Map(ranked.map((strategy, index) => [strategy.id, index + 1]));
-
-  strategies.forEach((strategy) => {
-    strategy.comparison_rank = ranking.get(strategy.id) || strategies.length;
-  });
-}
-
-function buildCustomScenarioPayload(
-  sample,
-  budget,
-  datasetName,
-  index,
-  sharedPrompt,
-  modelConfig,
-) {
-  const prompt = sharedPrompt
-    ? `${sharedPrompt}
-
-Question: ${sample.question}`
-    : sample.question;
-
-  const context = {
-    question: sample.question,
-    goldAnswer: sample.gold_answer,
-  };
-
-  const runs = [];
-  STRATEGY_LIBRARY.forEach((strategy) => {
-    SCORER_LIBRARY.forEach((scorer) => {
-      runs.push(
-        buildCustomStrategyScorerRun(
-          strategy,
-          scorer,
-          context,
-          budget,
-          sharedPrompt,
-          modelConfig,
-        ),
-      );
-    });
-  });
-
-  applyStrategyRanks(runs);
-
-  return {
-    scenario: {
-      id: `custom_${index + 1}`,
-      title: `${datasetName} #${index + 1}`,
-      description:
-        "Custom run generated in-browser from your input; each strategy is evaluated by PRM, sequence_prob, perplexity, and entropy.",
-      prompt,
-      ground_truth: sample.gold_answer,
-      shared_prompt: sharedPrompt || "",
-      input_source: "custom_single",
-      model_config: {
-        provider: modelConfig.provider,
-        model_id: modelConfig.model_id,
-        api_key_masked: modelConfig.api_key_masked,
-      },
-      strategy_count: STRATEGY_LIBRARY.length,
-      scorer_count: SCORER_LIBRARY.length,
-      run_count: runs.length,
-    },
-    available_budgets: CUSTOM_BUDGETS,
-    selected_budget: budget,
-    strategy_catalog: deepClone(STRATEGY_LIBRARY),
-    scorer_catalog: deepClone(SCORER_LIBRARY),
-    strategies: runs,
-  };
-}
-
-function buildCustomRuns(samples, datasetName, sharedPrompt, modelConfig) {
-  const catalog = [];
-  const payloads = {};
-
-  samples.forEach((sample, index) => {
-    const scenarioId = `custom_${index + 1}`;
-    const preview = String(sample.question).slice(0, 64);
-    const title = `${datasetName} · sample ${index + 1} · ${preview}${sample.question.length > 64 ? "..." : ""}`;
-
-    catalog.push({
-      id: scenarioId,
-      title,
-      description: "Custom question loaded by user",
-      available_budgets: CUSTOM_BUDGETS,
-      default_budget: CUSTOM_BUDGETS[1],
-    });
-
-    payloads[scenarioId] = {};
-    CUSTOM_BUDGETS.forEach((budget) => {
-      payloads[scenarioId][String(budget)] = buildCustomScenarioPayload(
-        sample,
-        budget,
-        datasetName,
-        index,
-        sharedPrompt,
-        modelConfig,
-      );
-      payloads[scenarioId][String(budget)].scenario.id = scenarioId;
-      payloads[scenarioId][String(budget)].scenario.title = title;
-    });
-  });
-
-  return { catalog, payloads };
 }
 
 async function buildCustomRunsViaBackend(sample, sharedPrompt, modelConfig) {
@@ -1180,7 +414,6 @@ async function runCustomInput() {
     return;
   }
 
-  const samples = [{ question, gold_answer: goldAnswer }];
   const modelConfig = {
     provider,
     model_id: modelId,
@@ -1189,21 +422,18 @@ async function runCustomInput() {
   };
 
   let customRuns;
-  let usedBackendRunner = true;
   try {
     customRuns = await buildCustomRunsViaBackend(
-      samples[0],
+      { question, gold_answer: goldAnswer },
       sharedPrompt,
       modelConfig,
     );
   } catch (error) {
-    usedBackendRunner = false;
-    customRuns = buildCustomRuns(
-      samples,
-      "Single Example",
-      sharedPrompt,
-      modelConfig,
+    setStatus(
+      `Custom run requires backend endpoint /v1/debugger/demo/run-single (${error.message}).`,
+      true,
     );
+    return;
   }
 
   state.customPayloads = customRuns.payloads;
@@ -1219,7 +449,7 @@ async function runCustomInput() {
   await loadScenarioPayload();
 
   setStatus(
-    `Ran ${STRATEGY_LIBRARY.length * SCORER_LIBRARY.length} strategy-scorer runs for your question with ${provider}:${modelId}. ${usedBackendRunner ? "Used backend /v1/debugger/demo/run-single." : "Backend run endpoint unavailable, used local prototype runner."} API key input is still a placeholder for future full backend model wiring.`,
+    `Ran backend strategy-scorer matrix for ${provider}:${modelId}. API key input remains placeholder until full backend credential wiring is implemented.`,
     false,
   );
 }
@@ -1243,7 +473,7 @@ async function restoreDemoData() {
 
     configureBudgetSlider(state.catalog[0].default_budget);
     await loadScenarioPayload();
-    setStatus("Restored built-in demo data.", false);
+    setStatus("Restored demo data.", false);
   } catch (error) {
     setStatus(`Failed to restore demo data: ${error.message}`, true);
   }
@@ -1256,7 +486,6 @@ async function loadScenarioPayload() {
   }
 
   const payload = await loadPayloadForScenario(state.scenarioId, budget);
-
   state.payload = payload;
 
   const currentStrategyExists = payload.strategies.some(
@@ -1375,9 +604,9 @@ function renderTimeline() {
   const events = selectedStrategy?.run?.events ?? [];
   const modeLabel =
     state.dataMode === "prototype"
-      ? " | prototype mode (local example)"
+      ? " | prototype mode (cached json)"
       : state.dataMode === "custom"
-        ? " | custom mode (user input)"
+        ? " | custom mode (backend run)"
         : "";
 
   elements.timelineHint.textContent = selectedStrategy
