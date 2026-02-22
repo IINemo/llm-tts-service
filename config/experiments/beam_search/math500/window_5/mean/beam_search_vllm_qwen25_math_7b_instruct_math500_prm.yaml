@@ -48,10 +48,7 @@ generation:
   top_k: 20
   batch_size: 1
   max_length: 8192
-<<<<<<< Updated upstream
-=======
-  checkpoint_batch_size: 200   # TODO: Enable when running on limited compute (e.g., CIAI cluster) - saves checkpoint every N samples to prevent data loss on preemption/OOM
->>>>>>> Stashed changes
+  checkpoint_batch_size: 200
 
 # Strategy - Beam Search
 strategy:
@@ -61,8 +58,6 @@ strategy:
   aggregation: mean
   scoring_window: 5         # Only use last 5 step scores for aggregation
   scoring_window_label: "window_5"
-  checkpoint_batch_size: 200
-
 # PRM scorer configuration
 scorer:
   type: prm
