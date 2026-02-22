@@ -10,9 +10,11 @@
 
 defaults:
   - /config
+  - /dataset/minerva_math
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/beam_search
   - /scorer/llm_critic
   - /evaluation/default
   - _self_
@@ -22,55 +24,29 @@ run_name: "beam_search_vllm_k2_think_minerva_math_llm_critic_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: none
+report_to: wandb
 wandb_project: llm-tts-eval-minerva-math
+wandb_group: "beam_search_k2_think_minerva_math_llm_critic"
 
-# Model configuration (vLLM backend) - K2-Think-V2 (70B)
+# Model overrides (LLM360/K2-Think instead of default Qwen3-8B)
 model:
-  type: vllm
   model_path: "LLM360/K2-Think"
-  gpu_memory_utilization: 0.9
-  tensor_parallel_size: 1
-  enable_prefix_caching: true
-  trust_remote_code: true
+  model_short_name: "k2_think"
   max_model_len: 4096
   disable_thinking_mode: true
 
-# System configuration
-system:
-  device: cuda
-  seed: 42
-
-# Generation configuration
+# Generation overrides
 generation:
   max_new_tokens: 4096
-  temperature: 0.7
-  top_p: 0.8
-  top_k: 20
-  batch_size: 1
   max_length: 8192
 
-# Strategy - Beam Search
+# Strategy overrides
 strategy:
-  type: beam_search
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30
-  aggregation: mean  # Original ToT: select by current step score only
-  batch_generation: true
-  prompt_buffer: 500
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
   min_step_tokens: 10
   max_step_tokens: 256
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false
-  use_reasoning: true
-  use_correction: false
   custom_words:
     - "for example"
     - "given that"
@@ -79,28 +55,12 @@ strategy:
     - "therefore"
     - "thus"
 
-# LLM Critic Scorer (Tree of Thoughts)
-# Note: For vLLM, the same model is used for both generation and evaluation
+# Scorer overrides
 scorer:
-  type: llm_critic
-  method: value  # "value" or "vote"
-  n_evaluate_sample: 3  # Paper uses 3 samples
-  temperature: 0.7
   max_tokens: 100
   timeout: 120
-  value_prompt_file: "tree-of-thought/llm_critic/value_prompt_math.txt"
 
-# Dataset configuration - Minerva Math
+# Dataset overrides
 dataset:
-  dataset_path: "test-time-compute/test_minerva_math"
-  dataset_config: null
-  dataset_split: "test"
-  subset: 272
-  offset: 0
-  question_field: "question"
-  answer_field: "answer"
-  answer_format: "numeric"
   data_name: minerva_math
-  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
-  prompt_file: null
