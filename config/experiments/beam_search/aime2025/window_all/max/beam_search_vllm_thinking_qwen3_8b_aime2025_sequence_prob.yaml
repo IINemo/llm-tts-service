@@ -67,7 +67,7 @@ scorer:
 
 # Dataset configuration - AIME 2025
 dataset:
-  dataset_path: "test-time-compute/test_aime25"
+  dataset_path: "test-time-compute/aime_2025"
   dataset_config: null
   dataset_split: "test"
   subset: 29
