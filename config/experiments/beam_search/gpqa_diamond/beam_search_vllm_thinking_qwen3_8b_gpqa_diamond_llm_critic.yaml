@@ -20,7 +20,7 @@ run_name: "beam_search/vllm_thinking_qwen3_8b/gpqa_diamond/llm_critic/mean/seed$
 
 # Main configuration
 verbose: true
-report_to: wandb
+report_to: none
 wandb_project: llm-tts-eval-gpqa-diamond
 wandb_group: "beam_search_qwen3_8b_thinking_gpqa_diamond_llm_critic_mean"
 
