@@ -54,20 +54,12 @@ generation:
 strategy:
   score_aggregation: mean
   max_steps: 100
-  min_step_tokens: 10
   max_step_tokens: 500
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
+  # Thinking mode: use linguistic markers for step boundaries (same as math tasks).
+  # The reasoning inside <think> tags is natural language, so semantic markers
+  # (e.g. "Let me", "So", "Wait") create meaningful step boundaries.
+  # Previous approach used newline-only splitting (\n, \n\n) which created
+  # ~130-190 single-line "steps" of reasoning text — too granular and noisy.
   # Multi-scoring: compute all logprob-based metrics + PRM
   calculate_entropy_score: true
   calculate_perplexity_score: true
