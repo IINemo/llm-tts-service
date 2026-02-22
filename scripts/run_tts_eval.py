@@ -409,9 +409,7 @@ def create_scorer(config):
             value_prompt_file=config.scorer.value_prompt_file,
             vote_prompt_file=config.scorer.vote_prompt_file,
             score_aggregation=getattr(config.scorer, "score_aggregation", "min"),
-            trajectory_context_steps=getattr(
-                config.scorer, "trajectory_context_steps", 0
-            ),
+            context_window=getattr(config.scorer, "context_window", 0),
         )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
