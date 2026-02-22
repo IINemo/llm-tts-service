@@ -2,11 +2,11 @@
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/gpqa_diamond/beam_search_vllm_thinking_qwen3_8b_gpqa_diamond_llm_critic
 #
 # Beam Search with LLM Critic scorer on GPQA Diamond
-# Generation: vLLM (Qwen3-8B, thinking mode), Scoring: vLLM (Qwen3-8B)
+# Generation: GPT-OSS-120B (OpenRouter), Scoring: GPT-OSS-120B (OpenRouter)
 
 defaults:
   - /config
-  - /model/vllm_qwen3
+  - /model/openrouter
   - /generation/default
   - /system/default
   - /strategy/beam_search
@@ -15,25 +15,25 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "beam_search/vllm_thinking_qwen3_8b/gpqa_diamond/llm_critic/seed${system.seed}_${now:%H-%M-%S}"
+run_name: "beam_search/openrouter_gpt_oss_120b/gpqa_diamond/llm_critic/seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-eval-gpqa-diamond
-wandb_group: "beam_search_qwen3_8b_thinking_gpqa_diamond_llm_critic"
+wandb_group: "beam_search_gpt_oss_120b_gpqa_diamond_llm_critic"
 
-# Model configuration (vLLM backend)
+# Model configuration (OpenRouter API)
 model:
-  type: "vllm"
-  model_path: "Qwen/Qwen3-8B"
-  model_short_name: "vllm_thinking_qwen3_8b"
-  gpu_memory_utilization: 0.85
-  tensor_parallel_size: 1
-  enable_prefix_caching: true
-  trust_remote_code: true
+  type: "openai_api"
+  provider: openrouter
+  model_path: "openai/gpt-oss-120b"
+  model_short_name: "openrouter_gpt_oss_120b"
+  supports_logprobs: true
+  api_key: null
+  top_logprobs: 10
+  prefill_mode: false
   max_context_budget: 32768
-  disable_thinking_mode: false
 
 # System configuration
 system:
@@ -56,7 +56,7 @@ strategy:
   max_steps: 250
   aggregation: mean
 
-# LLM Critic Scorer
+# LLM Critic Scorer using GPT-OSS-120B via OpenRouter
 scorer:
   type: llm_critic
   method: value
@@ -67,6 +67,11 @@ scorer:
   timeout: 120
   context_window: 5
   value_prompt_file: "tree-of-thought/llm_critic/value_prompt.txt"
+  model:
+    type: openai_api
+    provider: openrouter
+    model_name: "openai/gpt-oss-120b"
+    api_key: null
 
 # Dataset configuration - GPQA Diamond
 dataset:
