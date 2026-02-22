@@ -325,6 +325,17 @@ class StepScorerLLMCritic(StepScorerBase):
             chats, candidates_list, trajectories, sample_ids=sample_ids
         )
 
+    def _get_batch_call_fn(self):
+        """Return the appropriate batch call function for the current backend.
+
+        Returns None for local backend (which requires sequential calls).
+        """
+        if self.use_vllm:
+            return self._call_vllm_batch
+        elif not self.use_local:
+            return self._call_api_batch
+        return None
+
     def _score_value_method_batch(
         self,
         chats: List[List[Dict[str, str]]],
@@ -385,7 +396,8 @@ class StepScorerLLMCritic(StepScorerBase):
             else None
         )
 
-        if pending and self.use_vllm:
+        batch_fn = self._get_batch_call_fn()
+        if pending and batch_fn is not None:
             eval_scores: Dict[tuple, List[float]] = {
                 (p["group_idx"], p["cand_idx"]): [] for p in pending
             }
@@ -394,38 +406,7 @@ class StepScorerLLMCritic(StepScorerBase):
                 prompts = [item["prompt"] for item in pending]
                 outputs: List[str] = []
                 try:
-                    outputs = self._call_vllm_batch(prompts, sample_ids=pending_sample_ids)
-                except Exception as e:
-                    log.warning(f"Batch evaluation {i+1} failed: {e}")
-
-                for item_idx, item in enumerate(pending):
-                    output = outputs[item_idx] if item_idx < len(outputs) else ""
-                    try:
-                        score = self._parse_value_output(output)
-                    except Exception as e:
-                        log.warning(
-                            f"Evaluation {i+1} failed for candidate "
-                            f"{item['group_idx']}/{item['cand_idx']}: {e}"
-                        )
-                        score = 0.0
-                    eval_scores[(item["group_idx"], item["cand_idx"])].append(score)
-
-            for item in pending:
-                key = (item["group_idx"], item["cand_idx"])
-                score = float(sum(eval_scores[key]))
-                score_map[key] = score
-                self.cache[item["cache_key"]] = score
-            self.total_evaluations += len(pending)
-        elif pending and not self.use_local:
-            eval_scores: Dict[tuple, List[float]] = {
-                (p["group_idx"], p["cand_idx"]): [] for p in pending
-            }
-
-            for i in range(self.n_evaluate_sample):
-                prompts = [item["prompt"] for item in pending]
-                outputs: List[str] = []
-                try:
-                    outputs = self._call_api_batch(prompts, sample_ids=pending_sample_ids)
+                    outputs = batch_fn(prompts, sample_ids=pending_sample_ids)
                 except Exception as e:
                     log.warning(f"Batch evaluation {i+1} failed: {e}")
 
@@ -516,12 +497,13 @@ class StepScorerLLMCritic(StepScorerBase):
                 sample_ids[gidx] for gidx, p in enumerate(prompts) if p
             ]
 
-        if self.use_vllm:
+        batch_fn = self._get_batch_call_fn()
+        if batch_fn is not None:
             for i in range(self.n_evaluate_sample):
                 batch_prompts = [p for p in prompts if p]
                 outputs: List[str] = []
                 try:
-                    outputs = self._call_vllm_batch(batch_prompts, sample_ids=batch_sample_ids)
+                    outputs = batch_fn(batch_prompts, sample_ids=batch_sample_ids)
                 except Exception as e:
                     log.warning(f"Vote batch {i+1} failed: {e}")
                     outputs = []
@@ -536,44 +518,22 @@ class StepScorerLLMCritic(StepScorerBase):
                     if vote_idx is not None:
                         votes_by_group[group_idx][vote_idx] += 1.0
         else:
-            if self.use_local:
-                for group_idx, prompt in enumerate(prompts):
-                    if not prompt:
-                        continue
-                    # Set current sample_id for per-sample token tracking
-                    if sample_ids:
-                        self._current_sample_id = sample_ids[group_idx]
-                    for i in range(self.n_evaluate_sample):
-                        try:
-                            output = self._call_model(prompt)
-                            vote_idx = self._parse_vote_output(
-                                output, group_sizes[group_idx]
-                            )
-                            if vote_idx is not None:
-                                votes_by_group[group_idx][vote_idx] += 1.0
-                        except Exception as e:
-                            log.warning(f"Vote {i+1} failed: {e}")
-            else:
+            # Local backend: sequential calls
+            for group_idx, prompt in enumerate(prompts):
+                if not prompt:
+                    continue
+                if sample_ids:
+                    self._current_sample_id = sample_ids[group_idx]
                 for i in range(self.n_evaluate_sample):
-                    batch_prompts = [p for p in prompts if p]
-                    outputs: List[str] = []
                     try:
-                        outputs = self._call_api_batch(batch_prompts, sample_ids=batch_sample_ids)
-                    except Exception as e:
-                        log.warning(f"Vote batch {i+1} failed: {e}")
-                        outputs = []
-
-                    out_idx = 0
-                    for group_idx, prompt in enumerate(prompts):
-                        if not prompt:
-                            continue
-                        output = outputs[out_idx] if out_idx < len(outputs) else ""
-                        out_idx += 1
+                        output = self._call_model(prompt)
                         vote_idx = self._parse_vote_output(
                             output, group_sizes[group_idx]
                         )
                         if vote_idx is not None:
                             votes_by_group[group_idx][vote_idx] += 1.0
+                    except Exception as e:
+                        log.warning(f"Vote {i+1} failed: {e}")
 
         for group_idx, votes in enumerate(votes_by_group):
             results[group_idx] = votes
