@@ -71,7 +71,7 @@ dataset:
   dataset_path: "test-time-compute/aime_2025"
   dataset_config: null
   dataset_split: "test"
-  subset: 29
+  subset: 30
   offset: 0
   question_field: "question"
   answer_field: "answer"
