@@ -1,0 +1,88 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/gpqa_diamond/beam_search_gpt_oss_self_verification_gpqa_diamond
+#
+# Beam Search with Self-Verification scorer on GPQA Diamond
+# Generation: GPT-OSS-120B (API via Innopolis), Scoring: GPT-OSS-120B (API via Innopolis)
+
+defaults:
+  - /config
+  - /model/openai
+  - /generation/default
+  - /system/default
+  - /strategy/beam_search
+  - /scorer/self_verification
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "beam_search_gpt_oss_self_verification_gpqa_diamond_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: none
+wandb_project: llm-tts-eval-gpqa-diamond
+
+# Model configuration (GPT-OSS-120B via Innopolis API)
+model:
+  type: "openai_api"
+  model_path: "openai/gpt-oss-120b"
+  model_short_name: "gpt_oss_120b"
+  base_url: "https://openai.global.ai.innopolis.university/v1"
+  api_key: "any"
+  ssl_verify: false
+  supports_logprobs: false
+  disable_thinking_mode: false
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 65536
+
+# Strategy - Beam Search
+strategy:
+  beam_size: 3
+  candidates_per_beam: 5
+  max_steps: 250
+  aggregation: mean
+
+# Self-Verification Scorer using GPT-OSS-120B via Innopolis API
+scorer:
+  type: self_verification
+  method: value
+  n_evaluate_sample: 3
+  score_aggregation: min
+  temperature: 0.1
+  max_tokens: 1024
+  timeout: 120
+  trajectory_context_steps: 5
+  value_prompt_file: "tree-of-thought/self_verification/value_prompt_science_strict.txt"
+  model:
+    type: openai_api
+    model_name: "openai/gpt-oss-120b"
+    base_url: "https://openai.global.ai.innopolis.university/v1"
+    api_key: "any"
+    ssl_verify: false
+
+# Dataset configuration - GPQA Diamond
+dataset:
+  dataset_path: "test-time-compute/test_gpqa_diamond"
+  dataset_config: null
+  dataset_split: "test"
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "char"
+  data_name: gpqa_diamond
+  system_prompt: "You are an expert in graduate-level science. Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null

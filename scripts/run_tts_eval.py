@@ -707,6 +707,7 @@ def create_model(config):
                 model_path=model_path,
                 supports_logprobs=True,
                 base_url=base_url,
+                ssl_verify=config.model.get("ssl_verify", True),
             )
             step_generator = None  # DeepConf doesn't use step generator
         else:
@@ -755,6 +756,7 @@ def create_model(config):
                 early_stopping=early_stopping,
                 generation_parameters=generation_parameters,
                 base_url=base_url,
+                ssl_verify=config.model.get("ssl_verify", True),
             )
 
             # Set up uncertainty scorer if logprobs are supported and scorer is configured
