@@ -88,6 +88,8 @@ class StepScorerLLMCritic(StepScorerBase):
         vote_prompt: str = None,
         vote_prompt_file: str = None,
         use_vllm: bool = False,
+        score_aggregation: str = "min",
+        trajectory_context_steps: float = 0,
         name: str = "llm_critic",
     ):
         super().__init__(name=name)
@@ -100,6 +102,8 @@ class StepScorerLLMCritic(StepScorerBase):
         self.timeout = timeout
         self.use_vllm = use_vllm
         self.use_local = False
+        self.score_aggregation = score_aggregation
+        self.trajectory_context_steps = trajectory_context_steps
 
         # Load prompts: priority is direct string > custom file > default file
         self.value_prompt = self._load_prompt(
@@ -111,20 +115,20 @@ class StepScorerLLMCritic(StepScorerBase):
 
         # Value mapping aligned to ToT labels: sure/likely/impossible.
         self.value_map = {
-            "sure": 20.0,
+            "sure": 3.0,
             "likely": 1.0,
-            "impossible": 0.001,
+            "impossible": 0.1,
         }
 
         # Extended synonyms that map to the base labels above
         # Note: paper says "sure/maybe/impossible", code uses "sure/likely/impossible"
         self.value_synonyms = {
             "maybe": 1.0,  # paper uses "maybe" as equivalent to "likely"
-            "correct": 20.0,
-            "definitely": 20.0,
-            "unlikely": 0.001,
-            "incorrect": 0.001,
-            "wrong": 0.001,
+            "correct": 3.0,
+            "definitely": 3.0,
+            "unlikely": 0.1,
+            "incorrect": 0.1,
+            "wrong": 0.1,
         }
 
         # Statistics
@@ -141,8 +145,22 @@ class StepScorerLLMCritic(StepScorerBase):
 
         log.info(
             f"StepScorerLLMCritic initialized: method={method}, "
-            f"n_evaluate_sample={n_evaluate_sample}, use_vllm={use_vllm}"
+            f"n_evaluate_sample={n_evaluate_sample}, use_vllm={use_vllm}, "
+            f"score_aggregation={score_aggregation}"
         )
+
+    def _aggregate_scores(self, scores: List[float]) -> float:
+        """Aggregate multiple evaluation scores using the configured method."""
+        if not scores:
+            return 0.0
+        if self.score_aggregation == "min":
+            return float(min(scores))
+        elif self.score_aggregation == "mean":
+            return float(sum(scores) / len(scores))
+        elif self.score_aggregation == "max":
+            return float(max(scores))
+        else:  # "sum" (default, as in original ToT paper)
+            return float(sum(scores))
 
     def _load_prompt(
         self,
@@ -391,9 +409,7 @@ class StepScorerLLMCritic(StepScorerBase):
 
         # Build per-pending-item sample_ids for token attribution
         pending_sample_ids = (
-            [sample_ids[item["group_idx"]] for item in pending]
-            if sample_ids
-            else None
+            [sample_ids[item["group_idx"]] for item in pending] if sample_ids else None
         )
 
         batch_fn = self._get_batch_call_fn()
@@ -424,7 +440,7 @@ class StepScorerLLMCritic(StepScorerBase):
 
             for item in pending:
                 key = (item["group_idx"], item["cand_idx"])
-                score = float(sum(eval_scores[key]))
+                score = self._aggregate_scores(eval_scores[key])
                 score_map[key] = score
                 self.cache[item["cache_key"]] = score
             self.total_evaluations += len(pending)
@@ -493,9 +509,7 @@ class StepScorerLLMCritic(StepScorerBase):
         # Build sample_ids for non-empty prompts (matching batch_prompts filtering)
         batch_sample_ids = None
         if sample_ids:
-            batch_sample_ids = [
-                sample_ids[gidx] for gidx, p in enumerate(prompts) if p
-            ]
+            batch_sample_ids = [sample_ids[gidx] for gidx, p in enumerate(prompts) if p]
 
         batch_fn = self._get_batch_call_fn()
         if batch_fn is not None:
@@ -618,7 +632,7 @@ class StepScorerLLMCritic(StepScorerBase):
                     eval_scores[item["idx"]].append(score)
 
             for item in pending:
-                score = float(sum(eval_scores[item["idx"]]))
+                score = self._aggregate_scores(eval_scores[item["idx"]])
                 scores[item["idx"]] = score
                 self.cache[item["cache_key"]] = score
                 self.total_evaluations += 1
@@ -739,8 +753,7 @@ class StepScorerLLMCritic(StepScorerBase):
                 log.warning(f"Evaluation {i+1} failed: {e}")
                 scores.append(0.0)
 
-        # Aggregate scores using SUM (as in original ToT paper, not mean)
-        return float(sum(scores)) if scores else 0.0
+        return self._aggregate_scores(scores)
 
     def _run_voting(
         self,
@@ -1004,7 +1017,11 @@ class StepScorerLLMCritic(StepScorerBase):
                         if input_tokens == 0 and output_tokens == 0:
                             input_tokens = len(prompt) // 4
                             output_tokens = len(text) // 4
-                        sid = sample_ids[idx] if sample_ids and idx < len(sample_ids) else None
+                        sid = (
+                            sample_ids[idx]
+                            if sample_ids and idx < len(sample_ids)
+                            else None
+                        )
                         self._record_tokens(input_tokens, output_tokens, sample_id=sid)
                         texts.append(text)
                     else:
@@ -1118,7 +1135,12 @@ class StepScorerLLMCritic(StepScorerBase):
         return chat[-1].get("content", "") if chat else ""
 
     def _trajectory_to_text(self, trajectory: Optional[List[Any]]) -> str:
-        """Convert trajectory to text representation."""
+        """Convert trajectory to text representation.
+
+        If trajectory_context_steps is an int > 0, only the last N steps are included.
+        If trajectory_context_steps is a float between 0 and 1, it's treated as a
+        fraction of total steps (e.g., 0.2 = last 20%), with a minimum of 1 step.
+        """
         if not trajectory:
             return ""
 
@@ -1128,6 +1150,16 @@ class StepScorerLLMCritic(StepScorerBase):
                 steps.append(step.text)
             else:
                 steps.append(str(step))
+
+        if self.trajectory_context_steps > 0:
+            if 0 < self.trajectory_context_steps < 1:
+                import math
+
+                n_keep = max(1, math.ceil(len(steps) * self.trajectory_context_steps))
+            else:
+                n_keep = int(self.trajectory_context_steps)
+            if len(steps) > n_keep:
+                steps = steps[-n_keep:]
 
         return "\n".join(steps)
 

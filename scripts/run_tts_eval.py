@@ -122,8 +122,8 @@ from llm_tts.generators import (
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
 from llm_tts.scorers import (
     StepScorerConfidence,
-    StepScorerPRM,
     StepScorerLLMCritic,
+    StepScorerPRM,
     StepScorerUncertainty,
 )
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
@@ -408,6 +408,10 @@ def create_scorer(config):
             timeout=config.scorer.timeout,
             value_prompt_file=config.scorer.value_prompt_file,
             vote_prompt_file=config.scorer.vote_prompt_file,
+            score_aggregation=getattr(config.scorer, "score_aggregation", "min"),
+            trajectory_context_steps=getattr(
+                config.scorer, "trajectory_context_steps", 0
+            ),
         )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
@@ -480,7 +484,8 @@ def create_model(config):
             # Self-consistency, baseline, extended_thinking, and llm_critic don't need uncertainty wrapper
             scorer_type = config.scorer.type if config.scorer else "entropy"
             if (
-                config.strategy.type in ("self_consistency", "baseline", "extended_thinking")
+                config.strategy.type
+                in ("self_consistency", "baseline", "extended_thinking")
                 or scorer_type == "llm_critic"
             ):
                 vllm_model = llm
