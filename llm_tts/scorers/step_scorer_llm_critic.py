@@ -89,7 +89,7 @@ class StepScorerLLMCritic(StepScorerBase):
         vote_prompt_file: str = None,
         use_vllm: bool = False,
         score_aggregation: str = "min",
-        trajectory_context_steps: float = 0,
+        context_window: int = 0,
         name: str = "llm_critic",
     ):
         super().__init__(name=name)
@@ -103,7 +103,7 @@ class StepScorerLLMCritic(StepScorerBase):
         self.use_vllm = use_vllm
         self.use_local = False
         self.score_aggregation = score_aggregation
-        self.trajectory_context_steps = trajectory_context_steps
+        self.context_window = context_window
 
         # Load prompts: priority is direct string > custom file > default file
         self.value_prompt = self._load_prompt(
@@ -1137,9 +1137,8 @@ class StepScorerLLMCritic(StepScorerBase):
     def _trajectory_to_text(self, trajectory: Optional[List[Any]]) -> str:
         """Convert trajectory to text representation.
 
-        If trajectory_context_steps is an int > 0, only the last N steps are included.
-        If trajectory_context_steps is a float between 0 and 1, it's treated as a
-        fraction of total steps (e.g., 0.2 = last 20%), with a minimum of 1 step.
+        If context_window > 0, only the last N steps are included in the prompt.
+        0 means all steps (default).
         """
         if not trajectory:
             return ""
@@ -1151,15 +1150,8 @@ class StepScorerLLMCritic(StepScorerBase):
             else:
                 steps.append(str(step))
 
-        if self.trajectory_context_steps > 0:
-            if 0 < self.trajectory_context_steps < 1:
-                import math
-
-                n_keep = max(1, math.ceil(len(steps) * self.trajectory_context_steps))
-            else:
-                n_keep = int(self.trajectory_context_steps)
-            if len(steps) > n_keep:
-                steps = steps[-n_keep:]
+        if self.context_window > 0 and len(steps) > self.context_window:
+            steps = steps[-self.context_window:]
 
         return "\n".join(steps)
 
