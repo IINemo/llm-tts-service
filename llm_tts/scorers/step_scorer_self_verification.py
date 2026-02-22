@@ -361,6 +361,7 @@ class StepScorerSelfVerification(StepScorerBase):
                     deferred_duplicates.append(((group_idx, cand_idx), first_key))
                 elif cache_key in self.cache:
                     score_map[(group_idx, cand_idx)] = self.cache[cache_key]
+                    local_seen_texts[step_text] = (group_idx, cand_idx)
                 else:
                     prompt = self.value_prompt.format(
                         problem=problem,
@@ -375,8 +376,7 @@ class StepScorerSelfVerification(StepScorerBase):
                             "cache_key": cache_key,
                         }
                     )
-
-                local_seen_texts[step_text] = (group_idx, cand_idx)
+                    local_seen_texts[step_text] = (group_idx, cand_idx)
 
         # Build per-pending-item sample_ids for token attribution
         pending_sample_ids = (
