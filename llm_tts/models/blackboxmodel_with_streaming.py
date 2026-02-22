@@ -88,6 +88,10 @@ class BlackboxModelWithStreaming(BlackboxModel):
             client_kwargs["http_client"] = _httpx.Client(
                 verify=False,
                 timeout=timeout,
+                limits=_httpx.Limits(
+                    max_connections=300,
+                    max_keepalive_connections=100,
+                ),
             )
             # Some API proxies block the default "OpenAI/Python" user-agent;
             # override it so requests are not rejected.
@@ -145,6 +149,10 @@ class BlackboxModelWithStreaming(BlackboxModel):
             client_kwargs["http_client"] = _httpx.Client(
                 verify=False,
                 timeout=timeout,
+                limits=_httpx.Limits(
+                    max_connections=300,
+                    max_keepalive_connections=100,
+                ),
             )
             client_kwargs["default_headers"] = {
                 "User-Agent": "python-httpx/0.28.1",
