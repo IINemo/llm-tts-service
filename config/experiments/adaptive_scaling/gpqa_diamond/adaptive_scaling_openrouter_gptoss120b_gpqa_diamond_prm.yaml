@@ -1,0 +1,88 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/gpqa_diamond/adaptive_scaling_openrouter_gptoss120b_gpqa_diamond_prm
+# Adaptive Scaling for GPQA-Diamond using OpenRouter API + PRM scorer
+#
+# Environment variable required: OPENROUTER_API_KEY
+
+defaults:
+  - /config
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - /scorer/prm
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "adaptive_scaling_openrouter_gptoss120b_gpqa_diamond_prm_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-gpqa-diamond
+wandb_group: "adaptive_scaling_openrouter_gptoss120b_gpqa_diamond_prm"
+
+# Model configuration (OpenRouter API)
+model:
+  type: "openai_api"
+  provider: openrouter
+  model_path: "openai/gpt-oss-120b"
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  supports_logprobs: true
+  prefill_mode: false
+  max_context_budget: 128000
+  disable_thinking_mode: false
+
+# System configuration
+system:
+  device: cpu
+  seed: 0
+
+# Generation configuration
+generation:
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+
+# Strategy - Adaptive Scaling
+strategy:
+  type: adaptive
+  candidates_per_step: 8
+  max_steps: 250
+  scaling_rate: 0.9
+  momentum_rate: 0.9
+  adaptive_scaling_method: momentum
+  detector_type: structured
+  min_step_tokens: 10
+  max_step_tokens: 1024
+  use_sequence: true
+  use_conclusion: true
+  use_thinking: true
+  use_verification: true
+  use_structure: false
+  use_reasoning: true
+  use_correction: false
+
+# PRM scorer configuration
+scorer:
+  type: prm
+  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+  device: cuda:0
+  batch_size: 1
+
+# Dataset configuration - GPQA-Diamond
+dataset:
+  subset: 200
+  offset: 0
+  dataset_path: "test-time-compute/test_gpqa_diamond"
+  dataset_config: null
+  dataset_split: "test"
+  data_name: "gpqa_diamond"
+
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null
+  answer_field: "answer"
+  answer_format: "char"
