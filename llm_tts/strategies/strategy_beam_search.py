@@ -147,6 +147,8 @@ class StrategyBeamSearch(StrategyBase):
         self.step_generator.reset_sample_stats()
         if hasattr(self.scorer, "reset_prm_stats"):
             self.scorer.reset_prm_stats()
+        if hasattr(self.scorer, "reset_stats"):
+            self.scorer.reset_stats()
 
         # Initialize beams with empty trajectory
         beams = [{"steps": [], "scores": []}]
@@ -231,6 +233,14 @@ class StrategyBeamSearch(StrategyBase):
                 prm_stats["prm_tflops"] or 0
             )
 
+        # Merge self-verification scorer stats if available
+        if hasattr(self.scorer, "get_total_stats"):
+            sv_stats = self.scorer.get_total_stats()
+            token_stats.update(sv_stats)
+            token_stats["tflops"] = (token_stats.get("tflops") or 0) + (
+                sv_stats.get("self_verification_tflops") or 0
+            )
+
         return {
             "trajectory": trajectory_text,
             "steps": best_beam["steps"],
@@ -276,12 +286,16 @@ class StrategyBeamSearch(StrategyBase):
         use_prm_scorer = (
             hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
         )
-        log.info(f"Using PRM scorer: {use_prm_scorer}")
+        # Self-verification scorer does its own LLM calls, doesn't need uncertainty logprobs
+        use_self_verification = hasattr(self.scorer, "score_candidates_batch")
+        log.info(f"Using PRM scorer: {use_prm_scorer}, self-verification: {use_self_verification}")
 
         # Reset per-sample token tracking in generator
         self.step_generator.reset_per_sample_stats()
         if hasattr(self.scorer, "reset_prm_stats"):
             self.scorer.reset_prm_stats()
+        if hasattr(self.scorer, "reset_stats"):
+            self.scorer.reset_stats()
 
         # sample_beams[sample_id] = list of ACTIVE beams only
         # Each beam has: steps, scores, total_tokens, beam_idx, unique_id, ancestors
@@ -414,7 +428,7 @@ class StrategyBeamSearch(StrategyBase):
                     requests=batch_requests,
                     trajectories=batch_trajectories,
                     candidates_per_step=self.candidates_per_beam,
-                    compute_uncertainty=not use_prm_scorer,
+                    compute_uncertainty=not use_prm_scorer and not use_self_verification,
                     sample_ids=batch_sample_ids,
                     beam_ids=batch_beam_ids,
                 )
@@ -1020,6 +1034,18 @@ class StrategyBeamSearch(StrategyBase):
             prm_tflops = prm_stats["prm_tflops"] or 0
             token_stats["tflops"] = gen_tflops + prm_tflops
 
+        # Merge self-verification scorer stats if available
+        if (
+            token_stats is not None
+            and hasattr(self.scorer, "get_stats_for")
+            and sample_id is not None
+        ):
+            sv_stats = self.scorer.get_stats_for(sample_id)
+            token_stats.update(sv_stats)
+            gen_tflops = token_stats.get("tflops") or 0
+            sv_tflops = sv_stats.get("self_verification_tflops") or 0
+            token_stats["tflops"] = gen_tflops + sv_tflops
+
         is_completed = bool(steps and steps[-1].is_trajectory_complete)
 
         result = {
@@ -1057,7 +1083,7 @@ class StrategyBeamSearch(StrategyBase):
         if self.scoring_window is not None and len(clean) > self.scoring_window:
             clean = clean[-self.scoring_window :]
         if self.aggregation == "last":
-            return scores[-1]
+            return clean[-1]
         elif self.aggregation == "sum":
             return sum(clean)
         elif self.aggregation == "mean":
