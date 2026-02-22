@@ -176,19 +176,19 @@ class StrategyBeamSearch(StrategyBase):
                     continue
 
                 # Pass trajectory context so PRM can score candidate in context of previous steps
-                scores = self.scorer.score_candidates(
+                scorer_scores = self.scorer.score_candidates(
                     request, candidates, trajectory=beam["steps"]
                 )
 
                 # Expand with new candidates
-                for cand, score in zip(candidates, scores):
-                    scores = beam["scores"] + [score]
+                for cand, score in zip(candidates, scorer_scores):
+                    beam_scores = beam["scores"] + [score]
                     new_beams.append(
-                        {"steps": beam["steps"] + [cand], "scores": scores}
+                        {"steps": beam["steps"] + [cand], "scores": beam_scores}
                     )
 
                     log.info(
-                        f"    Candidate: score={score:.3f}, aggregated score={self._aggregate_scores(scores):.3f}, text='{cand.text[:80]}'"
+                        f"    Candidate: score={score:.3f}, aggregated score={self._aggregate_scores(beam_scores):.3f}, text='{cand.text[:80]}'"
                     )
 
             if not new_beams:

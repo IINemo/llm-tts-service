@@ -858,6 +858,17 @@ def create_tts_strategy(
                 log.warning("Scorer: unknown model type, may not work correctly")
                 scorer.set_model(model, use_vllm=False)
 
+        # Initialize FLOP calculator for self-verification token/compute tracking
+        if hasattr(scorer, "init_flop_calculator"):
+            try:
+                flop_model_name = getattr(config.model, "model_path", None) or getattr(
+                    config.model, "model_name", None
+                )
+                if flop_model_name:
+                    scorer.init_flop_calculator(flop_model_name)
+            except Exception as e:
+                log.warning(f"Could not init self-verification FLOP calculator: {e}")
+
     if config.strategy.type == "baseline":
         # Get eos_patterns from config, default to ["<end of response>"]
         eos_patterns = getattr(config.strategy, "detector_eos_patterns", None)

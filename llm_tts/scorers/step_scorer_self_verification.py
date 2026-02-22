@@ -215,12 +215,13 @@ class StepScorerSelfVerification(StepScorerBase):
         self._current_sample_id = sample_id
 
     def reset_stats(self):
-        """Clear per-sample stats (call before each batch)."""
+        """Clear per-sample stats and cache (call before each batch)."""
         self._per_sample_input_tokens.clear()
         self._per_sample_output_tokens.clear()
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self._current_sample_id = None
+        self.cache.clear()
 
     def get_stats_for(self, sample_id: Any) -> Dict[str, Any]:
         """Get self-verification stats for a specific sample."""
@@ -335,6 +336,9 @@ class StepScorerSelfVerification(StepScorerBase):
         results: List[List[float]] = [[] for _ in candidates_list]
         pending: List[Dict[str, Any]] = []
         score_map: Dict[tuple, float] = {}
+        # Deferred duplicates: maps (group_idx, cand_idx) -> (group_idx, first_cand_idx)
+        # Resolved after batch scoring when the first occurrence has a score.
+        deferred_duplicates: List[tuple] = []
 
         for group_idx, (chat, candidates, trajectory) in enumerate(
             zip(chats, candidates_list, trajectories)
@@ -344,14 +348,17 @@ class StepScorerSelfVerification(StepScorerBase):
 
             problem = self._extract_problem(chat)
             trajectory_text = self._trajectory_to_text(trajectory)
-            local_seen_texts: Dict[str, bool] = {}
+            # Maps step_text -> (group_idx, cand_idx) of the first occurrence
+            local_seen_texts: Dict[str, tuple] = {}
 
             for cand_idx, candidate in enumerate(candidates):
                 step_text = self._get_step_text(candidate)
                 cache_key = f"{problem}|||{trajectory_text}|||{step_text}"
 
                 if step_text in local_seen_texts:
-                    score_map[(group_idx, cand_idx)] = 0.0
+                    # Defer: copy score from first occurrence after scoring
+                    first_key = local_seen_texts[step_text]
+                    deferred_duplicates.append(((group_idx, cand_idx), first_key))
                 elif cache_key in self.cache:
                     score_map[(group_idx, cand_idx)] = self.cache[cache_key]
                 else:
@@ -369,7 +376,7 @@ class StepScorerSelfVerification(StepScorerBase):
                         }
                     )
 
-                local_seen_texts[step_text] = True
+                local_seen_texts[step_text] = (group_idx, cand_idx)
 
         # Build per-pending-item sample_ids for token attribution
         pending_sample_ids = (
@@ -455,6 +462,10 @@ class StepScorerSelfVerification(StepScorerBase):
                 score_map[(item["group_idx"], item["cand_idx"])] = score
                 self.cache[item["cache_key"]] = score
                 self.total_evaluations += 1
+
+        # Resolve deferred duplicates: copy score from first occurrence
+        for dup_key, first_key in deferred_duplicates:
+            score_map[dup_key] = score_map.get(first_key, 0.0)
 
         for group_idx, candidates in enumerate(candidates_list):
             group_scores: List[float] = []
