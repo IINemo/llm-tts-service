@@ -64,6 +64,9 @@ strategy:
 | `strategy.filter_method` | `"top10"`, `"top5"`, `"none"`, or `"threshold"` | `"top10"` |
 | `strategy.confidence_threshold` | Threshold value (only when `filter_method="threshold"`) | null |
 | `strategy.data_name` | Dataset name for answer extraction | null |
+| `strategy.mode` | `"offline"` (single batch) or `"online"` (incremental) | `"offline"` |
+| `strategy.online_batch_size` | Traces per batch in online mode | 4 |
+| `strategy.min_agreement` | Agreement threshold for early stopping (online) | 0.8 |
 | `generation.temperature` | Sampling temperature (controls diversity) | 0.7 |
 | `generation.max_new_tokens` | Max tokens per trace | 32768 |
 
@@ -73,7 +76,14 @@ Generation parameters (`temperature`, `top_p`, `max_new_tokens`) are configured 
 
 ## Algorithm Overview
 
-### Core Idea
+### Modes
+
+DeepConf supports two execution modes:
+
+- **Offline** (default): Generate all N traces in a single batched call, then filter and vote. Most efficient when you want a fixed compute budget.
+- **Online**: Generate traces in small batches, check consensus after each batch, and stop early when filtered traces agree. Saves compute when traces converge early.
+
+### Core Idea (Offline)
 
 DeepConf generates multiple reasoning traces in a single batched call, scores each trace by confidence using token-level logprobs, filters low-confidence traces, and performs weighted majority voting.
 
@@ -126,6 +136,37 @@ selected = argmax(weight)
 ```
 
 Each trace "votes" with weight = its minimum window confidence.
+
+### Online Mode Algorithm
+
+In online mode, traces are generated incrementally and samples stop independently:
+
+```
+all_traces = [[] for M samples]
+completed = [False] * M
+
+while any sample not completed:
+    active = [samples not yet completed]
+
+    # Generate online_batch_size traces for each active sample
+    candidates = step_generator.generate_step_candidates_batch(
+        requests=[requests[i] for i in active],
+        candidates_per_step=online_batch_size,
+        sample_ids=active,
+    )
+
+    for each active sample:
+        # Compute confidence, extract answers for new traces
+        # Add new traces to pool
+        # Check: budget exhausted → mark completed
+        # Check: agreement >= min_agreement → early stop
+```
+
+Key properties:
+- **Per-sample tracking**: Samples that converge early stop generating, while others continue. This saves compute on "easy" problems.
+- **Prefix caching**: vLLM's prefix caching works across batch calls for the same prompt, so incremental generation is efficient.
+- **Budget is a hard cap**: Online mode never exceeds `budget` traces per sample, even if consensus is not reached.
+- **Same output format**: Online and offline produce identical result dictionaries. Online adds an `early_stopped` flag.
 
 ---
 
@@ -194,6 +235,9 @@ budget: 8
 window_size: 2048
 filter_method: "top10"
 confidence_threshold: null
+mode: "offline"
+online_batch_size: 4
+min_agreement: 0.8
 ```
 
 ### Filter Methods
@@ -251,6 +295,31 @@ strategy:
   confidence_threshold: 12.0
   window_size: 2048
 ```
+
+### Example: Online Mode
+
+```yaml
+strategy:
+  type: deepconf
+  budget: 16
+  mode: "online"
+  online_batch_size: 4
+  min_agreement: 0.8
+  window_size: 2048
+  filter_method: "top10"
+```
+
+With online mode, easy samples may stop after just 4 traces (one batch) if all agree, while hard samples continue up to the full budget of 16.
+
+### When to Use Online vs Offline
+
+| Scenario | Recommended Mode |
+|----------|-----------------|
+| Fixed compute budget, all samples similar difficulty | Offline |
+| Mixed difficulty, want to save compute on easy samples | Online |
+| Small budget (≤ 8) | Offline (overhead not worth it) |
+| Large budget (≥ 16) with diverse difficulty | Online |
+| Benchmarking/reproducing paper results | Offline |
 
 ---
 

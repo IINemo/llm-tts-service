@@ -883,6 +883,9 @@ def create_tts_strategy(
             filter_method=config.strategy.get("filter_method", "top10"),
             confidence_threshold=config.strategy.get("confidence_threshold", None),
             data_name=data_name,
+            mode=config.strategy.get("mode", "offline"),
+            online_batch_size=config.strategy.get("online_batch_size", 4),
+            min_agreement=config.strategy.get("min_agreement", 0.8),
         )
 
     elif config.strategy.type == "beam_search":
