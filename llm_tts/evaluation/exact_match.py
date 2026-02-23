@@ -43,6 +43,7 @@ def _extract_boolean_answer(text: str) -> str | None:
     """Extract True/False boolean answers from text."""
     if not text:
         return None
+    text = _strip_thinking_tags(text)
     text_lower = text.lower().strip()
     if re.search(r"\btrue\b", text_lower):
         return "True"
@@ -51,14 +52,42 @@ def _extract_boolean_answer(text: str) -> str | None:
     return None
 
 
+def _strip_thinking_tags(text: str) -> str:
+    """Strip <think>...</think> tags, keeping only content after the last closing tag.
+
+    If there is content after </think>, return that. Otherwise return the
+    content inside the last <think>...</think> block (for models that put
+    everything inside thinking tags).
+    """
+    # If there is content after the last </think>, use that
+    parts = text.rsplit("</think>", 1)
+    if len(parts) == 2 and parts[1].strip():
+        return parts[1].strip()
+    # Otherwise strip all thinking tags and return the inner content
+    return re.sub(r"</?think>", "", text).strip()
+
+
 def _extract_single_letter_answer(text: str) -> str | None:
     """Extract single alphabetical character answers (A, B, C, D, etc.) from text."""
     if not text:
         return None
+    text = _strip_thinking_tags(text)
+
+    # Try to extract from \boxed{X} format (last occurrence)
+    boxed_matches = re.findall(r"\\boxed\{([A-Za-z])\}", text)
+    if boxed_matches:
+        return boxed_matches[-1].upper()
+
+    # Try to extract from \text{X} format (last occurrence)
+    text_matches = re.findall(r"\\text\{([A-Za-z])\}", text)
+    if text_matches:
+        return text_matches[-1].upper()
+
     # Single letter at end
-    match = re.search(r"\b([A-Z])[.,]?\s*$", text.strip())
+    match = re.search(r"\b([A-Z])[.,]?\s*$", text)
     if match:
         return match.group(1).upper()
+
     return None
 
 
@@ -80,10 +109,17 @@ class EvaluatorExactMatch:
                 f"dataset_answer_format must be 'numeric', 'boolean', 'char', or 'string', got '{dataset_answer_format}'"
             )
 
-    def _score_single(self, inp: tuple[str, str, str]) -> float:
+    def _score_single(
+        self, inp: tuple[str, str, str], pre_extracted: bool = False
+    ) -> float:
         """
         Score a single sample - used for running accuracy during generation.
         Uses EXACT same logic as batch evaluation but for one sample.
+
+        Args:
+            inp: (problem, solution, gold_answer) tuple
+            pre_extracted: If True, solution is already an extracted answer
+                (e.g. from \\boxed{}), so skip extract_answer and only normalize.
         """
         _, solution, gold_answer = inp
 
@@ -112,7 +148,13 @@ class EvaluatorExactMatch:
 
         # Numeric: call math_equal directly (no ProcessPool for single samples - too slow)
         try:
-            pred = extract_answer(solution, data_name=self.data_name)
+            if pre_extracted:
+                pred = strip_string(
+                    str(solution) if solution else "",
+                    skip_unit=self.data_name in ["carp_en", "minerva_math"],
+                )
+            else:
+                pred = extract_answer(solution, data_name=self.data_name)
             gold = _normalize_gold_answer(gold_answer, self.data_name)
             log.info(
                 f"_score_single BEFORE math_equal: pred={repr(pred)}, gold={repr(gold)}"

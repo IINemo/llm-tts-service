@@ -13,7 +13,10 @@ import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from vllm import SamplingParams
+try:
+    from vllm import SamplingParams
+except:
+    SamplingParams = None
 
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
@@ -93,6 +96,8 @@ class StrategyBeamSearch(StrategyBase):
         aggregation: str = "mean",
         batch_generation: bool = True,
         prompt_buffer: int = 500,
+        scoring_window: Optional[int] = None,
+        batch_size: int = 1000,
     ):
         self.step_generator = step_generator
         self.scorer = scorer
@@ -102,6 +107,8 @@ class StrategyBeamSearch(StrategyBase):
         self.aggregation = aggregation
         self.batch_generation = batch_generation
         self.prompt_buffer = prompt_buffer
+        self.scoring_window = scoring_window
+        self.batch_size = batch_size
 
         # Get stop tokens info for logging
         stop_tokens = getattr(step_generator, "stop_tokens", [])
@@ -112,6 +119,7 @@ class StrategyBeamSearch(StrategyBase):
             f"StrategyBeamSearch initialized: beam_size={beam_size}, "
             f"candidates_per_beam={candidates_per_beam}, max_steps={max_steps}, "
             f"aggregation={aggregation}, batch_generation={batch_generation}, "
+            f"scoring_window={scoring_window}, "
             f"stop_tokens={len(stop_tokens)}, min_step_tokens={min_step_tokens}, "
             f"eos_token_ids={eos_token_ids}"
         )
@@ -209,9 +217,61 @@ class StrategyBeamSearch(StrategyBase):
         }
 
     def generate_trajectories_batch(
-        self,
-        requests: List[List[Dict[str, str]]],
-        sample_indices: Optional[List[int]] = None,
+            self,
+            requests: List[List[Dict[str, str]]],
+            sample_indices: Optional[List[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Public entrypoint.
+
+        If self.batch_size is None (default) or >= len(requests), this behaves
+        exactly like the previous implementation (single batch).
+
+        Otherwise, it processes the dataset in chunks and concatenates results
+        in the original order.
+        """
+
+        if self.batch_size is None or self.batch_size <= 0 or self.batch_size >= len(requests):
+            return self._generate_trajectories_batch(requests, sample_indices=sample_indices)
+
+        num_batches = (len(requests) + self.batch_size - 1) // self.batch_size
+        log.info(
+            f"Batched Beam Search wrapper: chunking enabled "
+            f"(M={len(requests)}, batch_size={self.batch_size}, num_batches={num_batches})"
+        )
+
+        results: List[Dict[str, Any]] = []
+        for batch_id, start in enumerate(range(0, len(requests), self.batch_size)):
+            end = min(start + self.batch_size, len(requests))
+            log.info(
+                f"\n{'#' * 70}\n"
+                f"Dataset batch {batch_id + 1}/{num_batches}: "
+                f"requests[{start}:{end}] (size={end - start}), "
+                f"{'#' * 70}"
+            )
+            chunk_requests = requests[start:end]
+            if sample_indices is None:
+                chunk_sample_indices = None
+            else:
+                chunk_sample_indices = [x for x in sample_indices if start <= x < end]
+
+            chunk_results = self._generate_trajectories_batch(
+                chunk_requests,
+                sample_indices=chunk_sample_indices,
+            )
+            results.extend(chunk_results)
+
+            log.info(
+                f"Dataset batch {batch_id}/{num_batches} complete: "
+                f"produced {len(chunk_results)} results"
+            )
+
+        return results
+
+    def _generate_trajectories_batch(
+            self,
+            requests: List[List[Dict[str, str]]],
+            sample_indices: Optional[List[int]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Generate trajectories for ALL samples in parallel using batched beam search.
@@ -766,17 +826,28 @@ class StrategyBeamSearch(StrategyBase):
     def _aggregate_scores(self, scores: list[float]) -> float:
         """Aggregate scores across steps according to selected strategy."""
         if len(scores) == 0:
-            return 0
+            return 0.0
+            # Filter out None (skipped PRM steps) and non-finite values (NaN, inf, -inf)
+        clean = [s for s in scores if s is not None and np.isfinite(s)]
+        if not clean:
+            log.warning(f"All {len(scores)} scores are non-finite, returning 0.0")
+            return 0.0
+        if len(clean) < len(scores):
+            log.warning(
+                f"Dropped {len(scores) - len(clean)} non-finite scores out of {len(scores)}"
+            )
+        if self.scoring_window is not None and len(clean) > self.scoring_window:
+            clean = clean[-self.scoring_window :]
         if self.aggregation == "sum":
-            return sum(scores)
+            return sum(clean)
         elif self.aggregation == "mean":
-            return np.mean(scores).item()
+            return np.mean(clean).item()
         elif self.aggregation == "product":
-            return np.prod(scores).item()
+            return np.prod(clean).item()
         elif self.aggregation == "max":
-            return np.max(scores).item()
+            return np.max(clean).item()
         elif self.aggregation == "min":
-            return np.min(scores).item()
+            return np.min(clean).item()
         else:
             raise Exception(f"Unknown aggregation {self.aggregation}")
 

@@ -20,6 +20,7 @@ import json
 import logging
 import os
 from typing import Dict, List, Optional
+from tqdm import tqdm
 
 import numpy as np
 
@@ -89,6 +90,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         token_ids: List[int],
         logprobs: List,
         uncertainty_wrapper,
+        output=None,
     ) -> List[float]:
         """
         Compute uncertainty score for each step independently.
@@ -144,11 +146,13 @@ class StrategyOfflineBestOfN(StrategyBase):
             if step_token_ids and step_logprobs:
                 try:
                     uncertainty = uncertainty_wrapper.score(
-                        step_token_ids, step_logprobs
+                        step_token_ids, step_logprobs,
+                        output=output, claim_range=(step_start_idx, current_token_idx),
                     )
                     # Convert to validity score: higher = better (lower uncertainty)
                     validity_score = 1.0 / (1.0 + uncertainty)
                 except Exception as e:
+                    raise e # TODO(rediska): delete
                     log.warning(f"Failed to score step {step_idx}: {e}")
                     validity_score = 0.5  # Neutral score on error
             else:
@@ -468,8 +472,12 @@ class StrategyOfflineBestOfN(StrategyBase):
         all_trajectory_ids_for_scoring = []  # Trajectory IDs within sample for logging
         trajectory_to_sample_map = []  # (sample_data_idx, traj_idx_within_sample)
 
-        for request_output, prompt, request, sample_idx in zip(
-            outputs, prompts, requests, sample_indices
+        for request_output, prompt, request, sample_idx in tqdm(
+            zip(
+                outputs, prompts, requests, sample_indices
+            ),
+            total=len(outputs),
+            desc="Computing uncertainty",
         ):
             context_tokens = len(self.step_generator.tokenizer.encode(prompt))
 
@@ -513,6 +521,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                         token_ids=list(output.token_ids),
                         logprobs=list(output.logprobs),
                         uncertainty_wrapper=self.step_generator.model,
+                        output=output,
                     )
                     aggregated = self._aggregate_scores(step_scores)
                 else:

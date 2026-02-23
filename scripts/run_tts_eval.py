@@ -7,6 +7,8 @@
 # This is required for vLLM which uses multiprocessing internally
 import os
 
+from llm_tts.scorers.step_scorer_prm import StepsExtractor
+
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
 import multiprocessing
@@ -45,7 +47,11 @@ except ImportError:
 
 # lm-polygraph uncertainty wrapper (for vLLM uncertainty scoring)
 try:
-    from lm_polygraph.estimators import MeanTokenEntropy, Perplexity
+    from lm_polygraph.estimators import (
+        MaximumSequenceProbability,
+        MeanTokenEntropy,
+        Perplexity,
+    )
     from lm_polygraph.stat_calculators import EntropyCalculator, VLLMLogprobsCalculator
     from lm_polygraph.utils import VLLMWithUncertainty
 
@@ -53,7 +59,7 @@ try:
 except ImportError:
     POLYGRAPH_UNCERTAINTY_AVAILABLE = False
     VLLMWithUncertainty = None
-from utils.results import load_results_json, parse_resume_arguments, save_results_json
+from scripts.utils.results import load_results_json, parse_resume_arguments, save_results_json
 
 from llm_tts.evaluation import (
     EvaluatorAlignScore,
@@ -249,9 +255,14 @@ def create_scorer(config):
                 config.scorer, "gpu_memory_utilization", 0.9
             ),
         )
-    elif config.scorer.type == "uncertainty":
+    elif config.scorer.type in ("uncertainty", "uhead"):
         scorer = StepScorerUncertainty()
-    elif config.scorer.type in ("perplexity", "entropy", "uncertainty_pd"):
+    elif config.scorer.type in (
+        "perplexity",
+        "entropy",
+        "uncertainty_pd",
+        "sequence_prob",
+    ):
         scorer = StepScorerConfidence()
     else:
         raise ValueError(f"Scorer type {config.scorer.type} not supported")
@@ -330,6 +341,10 @@ def create_model(config):
                 if scorer_type == "perplexity":
                     stat_calculators = [VLLMLogprobsCalculator()]
                     estimator = Perplexity()
+                elif scorer_type == "sequence_prob":
+                    # Sequence probability scoring (sum of log-probs, not normalized)
+                    stat_calculators = [VLLMLogprobsCalculator()]
+                    estimator = MaximumSequenceProbability()
                 elif scorer_type == "uncertainty_pd":
                     # PD-Gap scoring using top-k logprobs matrix
                     from llm_tts.scorers.estimator_uncertainty_pd import PDGap
@@ -357,9 +372,9 @@ def create_model(config):
                         VLLMUncertaintyHeadFeatures(
                             uncertainty_head,
                             model_path=config.model.model_path,
-                            max_model_len=config.model.get("max_model_len", 32768),
-                            gpu_memory_utilization=config.model.get("hs_gpu_memory_utilization", 0.9),
-                            tensor_parallel_size=config.model.get("tensor_parallel_size", 1),
+                            max_model_len=config.scorer.get("max_model_len", 32768),
+                            gpu_memory_utilization=config.scorer.get("gpu_memory_utilization", 0.9),
+                            tensor_parallel_size=config.scorer.get("tensor_parallel_size", 1),
                         ),
                         CalculatorApplyUQHead(
                             uncertainty_head,
@@ -371,7 +386,7 @@ def create_model(config):
                 else:
                     raise ValueError(
                         f"Unsupported scorer type for vLLM: {scorer_type}. "
-                        f"Supported types: perplexity, uncertainty_pd, entropy, prm"
+                        f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm"
                     )
 
                 vllm_model = VLLMWithUncertainty(
@@ -381,7 +396,7 @@ def create_model(config):
                     **vllm_with_uncertainty_arguments,
                 )
                 log.info(
-                    f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__}"
+                    f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__} and {vllm_with_uncertainty_arguments}"
                 )
 
             # Always use ThinkingMarkerDetector for step boundary detection
@@ -658,6 +673,8 @@ def create_tts_strategy(
             max_steps=config.strategy.max_steps,
             aggregation=getattr(config.strategy, "aggregation", "mean"),
             batch_generation=config.strategy.get("batch_generation", True),
+            scoring_window=config.strategy.get("scoring_window", None),
+            batch_size=config.strategy.get("batch_size", 1000),
         )
     elif config.strategy.type == "phi_decoding":
         strategy = PhiDecoding(
@@ -1443,10 +1460,18 @@ def evaluate_results(
             sanitized_model = model_name.replace("/", "_").replace(":", "_")
             eval_key = f"llm_judge_{sanitized_model}"
             batch_evaluators[eval_key] = EvaluatorLLMAsAJudge(**llm_cfg)
+        elif eval_name == "exact_match":
+            batch_evaluators["exact_match"] = EvaluatorExactMatch(
+                dataset_answer_format=config.dataset.answer_format,
+                data_name=config.dataset.data_name,
+            )
     if batch_evaluators:
         log.info(f"Batch evaluators: {list(batch_evaluators.keys())}")
 
-    save_path_file = Path(save_path) / "results.json"
+    if save_path.endswith(".json"):
+        save_path_file = Path(save_path)
+    else:
+        save_path_file = Path(save_path) / "results.json"
 
     # Process each evaluator separately (allows resuming per-evaluator)
     for eval_name, evaluator_fn in evaluators.items():
@@ -1744,7 +1769,10 @@ def evaluate_results(
     )
 
     # Save metrics locally (so FLOPs metrics aren't only in W&B)
-    metrics_path = Path(save_path) / "metrics.json"
+    if not save_path.endswith('.json'):
+        metrics_path = Path(save_path) / "metrics.json"
+    else:
+        metrics_path = Path(save_path)
     try:
         with open(metrics_path, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2, ensure_ascii=False, sort_keys=True)
@@ -1787,10 +1815,10 @@ def main(config):
     log.info(f"Output directory: {output_dir}")
 
     # Redirect stderr to file in output directory (captures tqdm progress bars)
-    stderr_log_path = Path(output_dir) / "stderr.log"
-    stderr_file = open(stderr_log_path, "w", buffering=1)  # Line buffered
-    sys.stderr = stderr_file
-    log.info(f"Stderr redirected to: {stderr_log_path}")
+    # stderr_log_path = Path(output_dir) / "stderr.log"
+    # stderr_file = open(stderr_log_path, "w", buffering=1)  # Line buffered
+    # sys.stderr = stderr_file
+    # log.info(f"Stderr redirected to: {stderr_log_path}")
 
     # Setup wandb if configured
     if getattr(config, "report_to", None) == "wandb":

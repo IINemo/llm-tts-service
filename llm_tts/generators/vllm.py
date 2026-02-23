@@ -427,6 +427,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         best_prefix_len: int,
         is_trajectory_complete: bool,
         raw_text: str,
+        output=None,
     ) -> StepCandidate:
         """Create a StepCandidate with uncertainty scoring.
 
@@ -450,6 +451,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             uncertainty_score = self.model.score(
                 token_ids[:best_prefix_len],
                 logprobs[:best_prefix_len],
+                output=output,
+                claim_range=(0, best_prefix_len),
             )
         else:
             uncertainty_score = 0.0
@@ -527,6 +530,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             best_prefix_len=best_prefix_len,
             is_trajectory_complete=is_trajectory_complete,
             raw_text=output.text,
+            output=output,
         )
 
     def _generate_step_candidates_impl(

@@ -3,12 +3,9 @@
 Run LLM-as-a-judge evaluation locally on results.json
 
 Usage:
-    export OPENAI_API_KEY="sk-..."
     python scripts/run_llm_judge_local.py outputs/.../results.json
 
-Or with OpenRouter:
-    export OPENROUTER_API_KEY="sk-..."
-    python scripts/run_llm_judge_local.py outputs/.../results.json --base-url https://openrouter.ai/api/v1
+API keys are loaded from .env file (OPENAI_API_KEY or OPENROUTER_API_KEY).
 """
 
 import argparse
@@ -19,7 +16,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import openai
+from dotenv import load_dotenv
 from tqdm import tqdm
+
+load_dotenv()
 
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))

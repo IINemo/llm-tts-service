@@ -526,8 +526,19 @@ def extract_answer(pred_str, data_name, use_last_number=True):
         else:
             a = ans.split("$")[0].strip()
         pred = a
-    elif "he answer is" in pred_str:
-        pred = pred_str.split("he answer is")[-1].strip()
+    elif "<Answer>:" in pred_str:
+        # Handle Qwen3 thinking mode format: <Answer>: X
+        # Check this before "the answer is" since thinking mode uses <Answer>:
+        pred = pred_str.split("<Answer>:")[-1].strip().split("\n")[0].strip()
+        # Remove <end of response> tag if present
+        pred = pred.split("<end of response>")[0].strip()
+    elif re.search(r"\bthe answer is\b", pred_str, re.IGNORECASE):
+        pred = (
+            re.split(r"\bthe answer is\b", pred_str, flags=re.IGNORECASE)[-1]
+            .strip()
+            .split("\n")[0]
+            .strip()
+        )
     elif "final answer is" in pred_str:
         pred = pred_str.split("final answer is")[-1].strip()
     elif "答案是" in pred_str:
@@ -625,10 +636,12 @@ def parse_ground_truth(example: Dict[str, Any], data_name):
         gt_cot, gt_ans = None, example["final_answer"][0].strip("$")
     elif data_name in [
         "aime24",
+        "aime25",
         "amc23",
         "cmath",
         "gaokao2024_I",
         "gaokao2024_II",
+        "gpqa_diamond",
         "imo2024",
         "math500",
     ]:
