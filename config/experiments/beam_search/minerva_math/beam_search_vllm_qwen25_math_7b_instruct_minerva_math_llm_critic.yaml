@@ -75,7 +75,7 @@ scorer:
   temperature: 0.1
   max_tokens: 500
   timeout: 120
-  context_window: 5
+  trajectory_context_steps: 5
   value_prompt_file: "tree-of-thought/llm_critic/value_prompt_math_strict.txt"
   model:
     type: openai_api
