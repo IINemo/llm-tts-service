@@ -12,9 +12,9 @@ Usage:
         --data-name math500
 
     # With all scoring windows:
-    python scripts/analyze_candidates.py \
-        --candidates-path outputs/.../candidates.json \
-        --data-name math500 \
+    python3 scripts/analyze_candidates.py \
+        --candidates-path outputs/2026-02-22_offline_bon_vllm_thinking_qwen3_8b_human_eval_plus_multi_scorer_seed44_23-33-01/candidates.json \
+        --data-name human_eval_plus \
         --scoring-windows all
 """
 
@@ -22,7 +22,10 @@ import argparse
 import csv
 import json
 import logging
+import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -36,6 +39,8 @@ sys.path.insert(0, str(project_root / "scripts"))
 from llm_tts.evaluation.exact_match import EvaluatorExactMatch  # noqa: E402
 
 log = logging.getLogger(__name__)
+
+CODE_DATASETS = {"human_eval_plus", "mbpp_plus"}
 
 
 def load_candidates(path: str) -> List[Dict]:
@@ -136,16 +141,177 @@ def select_best_candidate(
     return best_idx
 
 
+def _extract_code(solution: str) -> str:
+    """Extract Python code from model response."""
+    if not solution:
+        return ""
+
+    code_block_pattern = r"```(?:python)?\s*\n(.*?)```"
+    code_blocks = re.findall(code_block_pattern, solution, re.DOTALL)
+    if code_blocks:
+        code = code_blocks[-1].strip()
+        if code.startswith("python\n"):
+            code = code[7:]
+        elif code.startswith("python3\n"):
+            code = code[8:]
+        elif code.startswith("Python\n"):
+            code = code[7:]
+        return code.strip()
+
+    func_pattern = r"(def \w+\s*\([^)]*\):.*?)(?:\n\n|\Z)"
+    func_matches = re.findall(func_pattern, solution, re.DOTALL)
+    if func_matches:
+        return func_matches[-1].strip()
+
+    return solution.strip()
+
+
+_mbpp_task_ids_cache = None
+
+
+def _normalize_task_id(data_name: str, index: int) -> str:
+    """Convert sample index to EvalPlus task_id."""
+    if data_name == "human_eval_plus":
+        return f"HumanEval/{index}"
+    elif data_name == "mbpp_plus":
+        global _mbpp_task_ids_cache
+        if _mbpp_task_ids_cache is None:
+            from evalplus.data import get_mbpp_plus
+
+            _mbpp_task_ids_cache = sorted(get_mbpp_plus().keys())
+        return _mbpp_task_ids_cache[index]
+    raise ValueError(f"Unknown code dataset: {data_name}")
+
+
+def precompute_correctness_code(
+    candidates_data: List[Dict],
+    data_name: str,
+) -> List[List[bool]]:
+    """Pre-compute correctness via EvalPlus execution for coding datasets.
+
+    Runs all candidates through EvalPlus in a single batch and maps results
+    back to per-sample, per-candidate pass/fail labels.
+
+    Returns:
+        List of lists: correctness_labels[sample_idx][candidate_idx] = True/False
+    """
+    if data_name == "human_eval_plus":
+        from evalplus.data import get_human_eval_plus
+
+        all_problems = get_human_eval_plus()
+        evalplus_dataset = "humaneval"
+    elif data_name == "mbpp_plus":
+        from evalplus.data import get_mbpp_plus
+
+        all_problems = get_mbpp_plus()
+        evalplus_dataset = "mbpp"
+    else:
+        raise ValueError(f"Unknown code dataset: {data_name}")
+
+    # Build samples.jsonl with all candidates (multiple per task_id)
+    # Track order: candidate_order[i] = (sample_idx, candidate_idx)
+    samples = []
+    candidate_order = []
+    task_id_counts = {}  # track how many solutions per task_id
+
+    for sample_idx, sample in enumerate(candidates_data):
+        task_id = _normalize_task_id(data_name, sample["index"])
+        candidates = sample.get("candidates", [])
+        for cand_idx, candidate in enumerate(candidates):
+            code = _extract_code(candidate.get("trajectory", ""))
+            samples.append({"task_id": task_id, "solution": code})
+            candidate_order.append((sample_idx, cand_idx))
+            task_id_counts[task_id] = task_id_counts.get(task_id, 0) + 1
+
+    # Add dummy entries for problems not in candidates
+    evaluated_task_ids = set(task_id_counts.keys())
+    for task_id in all_problems:
+        if task_id not in evaluated_task_ids:
+            samples.append({"task_id": task_id, "solution": ""})
+
+    log.info(
+        f"EvalPlus batch: {len(candidate_order)} candidates across "
+        f"{len(evaluated_task_ids)} problems + "
+        f"{len(samples) - len(candidate_order)} dummy entries"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        samples_path = Path(tmpdir) / "samples.jsonl"
+        with open(samples_path, "w") as f:
+            for s in samples:
+                f.write(json.dumps(s) + "\n")
+
+        cmd = [
+            "evalplus.evaluate",
+            "--dataset",
+            evalplus_dataset,
+            "--samples",
+            str(samples_path),
+            "--i-just-wanna-run",
+        ]
+
+        log.info(f"Running EvalPlus: {' '.join(cmd)}")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10 * len(candidate_order) + 600,
+        )
+
+        if result.returncode != 0:
+            log.error(f"EvalPlus stderr:\n{result.stderr}")
+            raise RuntimeError(f"EvalPlus failed with return code {result.returncode}")
+
+        # Parse results
+        results_files = list(Path(tmpdir).glob("*_eval_results.json"))
+        if not results_files:
+            raise FileNotFoundError(f"EvalPlus results file not found in {tmpdir}")
+
+        with open(results_files[0]) as f:
+            eval_results = json.load(f)
+
+        eval_data = eval_results.get("eval", {})
+
+        # Map results back: for each task_id, results are in submission order
+        # Track which result index to use per task_id
+        task_id_result_idx = {}
+
+        correctness_labels = [
+            [False] * len(sample.get("candidates", [])) for sample in candidates_data
+        ]
+
+        for sample_idx, cand_idx in candidate_order:
+            task_id = _normalize_task_id(
+                data_name, candidates_data[sample_idx]["index"]
+            )
+            idx_in_task = task_id_result_idx.get(task_id, 0)
+            task_id_result_idx[task_id] = idx_in_task + 1
+
+            task_results = eval_data.get(task_id, [])
+            if idx_in_task < len(task_results):
+                entry = task_results[idx_in_task]
+                passed = entry.get("plus_status") == "pass"
+                correctness_labels[sample_idx][cand_idx] = passed
+
+    return correctness_labels
+
+
 def precompute_correctness(
     candidates_data: List[Dict],
     data_name: str,
     answer_format: str = "numeric",
 ) -> List[List[bool]]:
-    """Pre-compute exact-match correctness of each candidate answer once.
+    """Pre-compute correctness of each candidate answer once.
+
+    For coding datasets (human_eval_plus, mbpp_plus), uses EvalPlus execution.
+    For other datasets, uses exact-match comparison.
 
     Returns:
         List of lists: correctness_labels[sample_idx][candidate_idx] = True/False
     """
+    if data_name in CODE_DATASETS:
+        return precompute_correctness_code(candidates_data, data_name)
+
     evaluator = EvaluatorExactMatch(
         dataset_answer_format=answer_format, data_name=data_name
     )
@@ -316,8 +482,9 @@ def main():
         "--answer-format",
         type=str,
         default="numeric",
-        choices=["numeric", "boolean", "char", "string"],
-        help="Answer format for exact match evaluation (default: numeric)",
+        choices=["numeric", "boolean", "char", "string", "code"],
+        help="Answer format for evaluation (default: numeric). "
+        "Use 'code' for coding datasets (auto-detected from data-name).",
     )
     parser.add_argument(
         "--scoring-windows",
@@ -364,8 +531,11 @@ def main():
             max_steps = max(max_steps, num_steps)
     log.info(f"Max steps across all candidates: {max_steps}")
 
-    # Pre-compute exact-match correctness labels
-    log.info("Pre-computing exact-match correctness labels...")
+    # Pre-compute correctness labels
+    eval_method = (
+        "EvalPlus execution" if args.data_name in CODE_DATASETS else "exact match"
+    )
+    log.info(f"Pre-computing correctness labels via {eval_method}...")
     em_labels = precompute_correctness(
         candidates_data,
         data_name=args.data_name,
@@ -374,7 +544,7 @@ def main():
     em_correct = sum(1 for labels in em_labels if any(labels))
     oracle_acc = em_correct / len(em_labels) if em_labels else 0.0
     log.info(
-        f"Exact match: {em_correct}/{len(em_labels)} samples have at least one correct candidate (oracle={oracle_acc:.4f})"
+        f"{em_correct}/{len(em_labels)} samples have at least one correct candidate (oracle={oracle_acc:.4f})"
     )
 
     # Build list of windows to evaluate
