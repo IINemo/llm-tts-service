@@ -836,11 +836,13 @@ class StrategyBeamSearch(StrategyBase):
 
         batch_requests = [requests[sample_id] for sample_id, _ in to_generate]
         batch_trajectories = [beam["steps"] for _, beam in to_generate]
+        batch_sample_ids = [sample_id for sample_id, _ in to_generate]
 
         answer_results = self.step_generator.generate_answer_candidates_batch(
             batch_requests,
             batch_trajectories,
             candidates_per_step=1,
+            sample_ids=batch_sample_ids,
         )
 
         for batch_idx, (sample_id, beam) in enumerate(to_generate):
