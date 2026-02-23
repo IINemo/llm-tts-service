@@ -50,7 +50,8 @@ const elements = {
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    const errorText = await response.text();
+    throw new Error(`Request failed: ${response.status} - ${errorText}`);
   }
   return response.json();
 }
@@ -62,7 +63,8 @@ async function postJson(url, payload) {
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    const errorText = await response.text();
+    throw new Error(`Request failed: ${response.status} - ${errorText}`);
   }
   return response.json();
 }

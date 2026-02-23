@@ -1,7 +1,7 @@
 """Routes for the Visual Debugger demo."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -45,7 +45,7 @@ def visual_debugger_page() -> FileResponse:
 
 
 @router.get("/v1/debugger/demo/scenarios")
-def list_visual_debugger_scenarios():
+def list_visual_debugger_scenarios() -> Dict[str, Any]:
     """List available demo scenarios for the visual debugger."""
     scenarios = list_demo_scenarios()
     return {"scenarios": scenarios}
@@ -55,7 +55,7 @@ def list_visual_debugger_scenarios():
 def get_visual_debugger_scenario(
     scenario_id: str,
     budget: Optional[int] = Query(default=None, ge=1),
-):
+) -> Dict[str, Any]:
     """Get one scenario payload with strategy runs resolved for a target budget."""
     try:
         payload = get_demo_scenario(scenario_id=scenario_id, budget=budget)
