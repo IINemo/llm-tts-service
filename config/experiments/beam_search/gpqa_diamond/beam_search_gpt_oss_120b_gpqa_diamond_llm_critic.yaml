@@ -69,7 +69,7 @@ scorer:
   max_tokens: 1024
   timeout: 120
   trajectory_context_steps: 5
-  value_prompt_file: "tree-of-thought/llm_critic/value_prompt.txt"
+  value_prompt_file: "tree-of-thought/llm_critic/value_prompt_science_strict.txt"
   model:
     type: openai_api
     model_name: "openai/gpt-oss-120b"
