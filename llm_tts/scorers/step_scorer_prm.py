@@ -260,6 +260,7 @@ class StepScorerPRM(StepScorerRewardBase):
                 gpu_memory_utilization=self.gpu_memory_utilization,
                 enforce_eager=True,  # More stable for reward models
                 max_model_len=4096,
+                enable_prefix_caching=True,
             )
             self.prm_tokenizer = self.prm_model.get_tokenizer()
             log.info("vLLM PRM model loaded successfully")
