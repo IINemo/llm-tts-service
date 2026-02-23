@@ -966,11 +966,17 @@ def create_tts_strategy(
             scorer_env = os.environ.copy()
             scorer_env["CUDA_VISIBLE_DEVICES"] = scorer_gpu
 
+            # Redirect stdout/stderr to files to avoid pipe buffer deadlock.
+            # (If captured via PIPE and never read, the 64KB buffer fills up
+            # and the server blocks on write, freezing all request processing.)
+            scorer_log_dir = output_dir or "."
+            scorer_stdout_path = os.path.join(scorer_log_dir, "scorer_vllm_server.log")
+            scorer_stdout_f = open(scorer_stdout_path, "w")
             scorer_proc = subprocess.Popen(
                 vllm_cmd,
                 env=scorer_env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=scorer_stdout_f,
+                stderr=subprocess.STDOUT,
             )
 
             # Register cleanup to kill the server on exit
@@ -982,6 +988,7 @@ def create_tts_strategy(
                         scorer_proc.wait(timeout=10)
                     except subprocess.TimeoutExpired:
                         scorer_proc.kill()
+                scorer_stdout_f.close()
 
             atexit.register(_kill_scorer_server)
 
@@ -993,10 +1000,16 @@ def create_tts_strategy(
             start_time = time.time()
             while time.time() - start_time < max_wait:
                 if scorer_proc.poll() is not None:
-                    stderr_out = scorer_proc.stderr.read().decode()
+                    # Read the log file for error details
+                    scorer_stdout_f.flush()
+                    try:
+                        with open(scorer_stdout_path, "r") as f:
+                            log_tail = f.read()[-2000:]
+                    except Exception:
+                        log_tail = "(could not read log)"
                     raise RuntimeError(
                         f"Scorer vLLM server exited with code "
-                        f"{scorer_proc.returncode}:\n{stderr_out[-2000:]}"
+                        f"{scorer_proc.returncode}:\n{log_tail}"
                     )
                 try:
                     resp = httpx.get(f"{base_url}/models", timeout=5)

@@ -1191,7 +1191,7 @@ class StepScorerLLMCritic(StepScorerBase):
                 log.warning(f"API call failed for prompt {idx}: {e}")
                 return idx, ""
 
-        with ThreadPoolExecutor(max_workers=min(len(prompts), 8)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(prompts), 4)) as pool:
             futures = [
                 pool.submit(_call_single, idx, prompt)
                 for idx, prompt in enumerate(prompts)
