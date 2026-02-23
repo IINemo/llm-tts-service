@@ -43,6 +43,111 @@ APIUncertaintyScorer = APIWithUncertainty
 
 
 # =========================================================================
+# Circuit breaker for API connection failures
+# =========================================================================
+
+
+class APICircuitBreaker:
+    """Tracks consecutive API failures across threads and enforces cooldown.
+
+    When many concurrent requests fail (e.g., API goes down), this prevents
+    hammering the API with retries. Instead, it pauses all requests with
+    exponential backoff and aborts if the API stays down too long.
+
+    Thread-safe: uses a lock for shared state.
+    """
+
+    def __init__(
+        self,
+        max_consecutive_failures: int = 30,
+        max_total_downtime: float = 600.0,
+        initial_cooldown: float = 5.0,
+        max_cooldown: float = 120.0,
+    ):
+        import threading
+        import time
+
+        self._lock = threading.Lock()
+        self._consecutive_failures = 0
+        self._max_consecutive_failures = max_consecutive_failures
+        self._max_total_downtime = max_total_downtime
+        self._initial_cooldown = initial_cooldown
+        self._max_cooldown = max_cooldown
+        self._cooldown = initial_cooldown
+        self._first_failure_time: Optional[float] = None
+        self._last_cooldown_time: float = 0
+        self._is_open = False  # True = circuit is open (blocking requests)
+        self._time = time
+
+    def record_success(self):
+        """Record a successful API call. Resets failure tracking."""
+        with self._lock:
+            if self._consecutive_failures > 0:
+                log.info(
+                    f"[CIRCUIT BREAKER] API recovered after {self._consecutive_failures} "
+                    f"consecutive failures. Resetting."
+                )
+            self._consecutive_failures = 0
+            self._first_failure_time = None
+            self._cooldown = self._initial_cooldown
+            self._is_open = False
+
+    def record_failure(self) -> bool:
+        """Record a failed API call.
+
+        Returns:
+            True if should continue retrying, False if circuit is open (abort).
+        """
+        with self._lock:
+            self._consecutive_failures += 1
+            now = self._time.time()
+
+            if self._first_failure_time is None:
+                self._first_failure_time = now
+
+            total_downtime = now - self._first_failure_time
+
+            # Check if we've exceeded max downtime
+            if total_downtime > self._max_total_downtime:
+                if not self._is_open:
+                    log.error(
+                        f"[CIRCUIT BREAKER] API down for {total_downtime:.0f}s "
+                        f"(>{self._max_total_downtime:.0f}s). Aborting all requests."
+                    )
+                    self._is_open = True
+                return False
+
+            # Check if too many consecutive failures — trigger cooldown
+            if self._consecutive_failures >= self._max_consecutive_failures:
+                if now - self._last_cooldown_time > self._cooldown:
+                    log.warning(
+                        f"[CIRCUIT BREAKER] {self._consecutive_failures} consecutive failures "
+                        f"(downtime={total_downtime:.0f}s). "
+                        f"Cooling down for {self._cooldown:.0f}s..."
+                    )
+                    self._last_cooldown_time = now
+                    cooldown = self._cooldown
+                    # Exponential backoff on cooldown, capped
+                    self._cooldown = min(self._cooldown * 2, self._max_cooldown)
+                    # Release lock during sleep
+                    self._lock.release()
+                    try:
+                        self._time.sleep(cooldown)
+                    finally:
+                        self._lock.acquire()
+                    # Reset counter to give the API another chance
+                    self._consecutive_failures = 0
+
+            return True
+
+    @property
+    def is_open(self) -> bool:
+        """True if circuit breaker has tripped (API considered down)."""
+        with self._lock:
+            return self._is_open
+
+
+# =========================================================================
 # Main generator class
 # =========================================================================
 
@@ -115,6 +220,14 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         # Answer patterns for response phase
         self.answer_patterns = (
             list(answer_patterns) if answer_patterns else ["<end of response>"]
+        )
+
+        # Circuit breaker for API connection failures
+        self._circuit_breaker = APICircuitBreaker(
+            max_consecutive_failures=30,
+            max_total_downtime=600.0,  # 10 minutes max downtime before abort
+            initial_cooldown=5.0,
+            max_cooldown=120.0,
         )
 
         # Initialize detector and derive stop tokens
@@ -414,6 +527,20 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         # across concurrent threads. The detector is stateless and safe to share.
         early_stopping = BoundaryEarlyStopping(detector=self.detector)
 
+        _empty_result = {
+            "text": "",
+            "logprobs": [],
+            "raw_collected": "",
+            "step_text": "",
+            "trajectory_complete": False,
+            "finish_reason": "error",
+        }
+
+        # Check circuit breaker before attempting
+        if self._circuit_breaker.is_open:
+            log.warning(f"[{call_id}] Circuit breaker open, skipping")
+            return _empty_result
+
         max_retries = 5
         results = None
         for attempt in range(max_retries):
@@ -428,8 +555,14 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     timeout=300,
                     call_id=call_id,
                 )
+                self._circuit_breaker.record_success()
                 break
             except Exception as e:
+                should_continue = self._circuit_breaker.record_failure()
+                if not should_continue:
+                    log.error(f"[{call_id}] Circuit breaker tripped, aborting")
+                    return _empty_result
+
                 if attempt < max_retries - 1:
                     wait = 2**attempt
                     log.warning(
@@ -445,26 +578,11 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     log.error(
                         f"[{call_id}] Streaming call failed after {max_retries} attempts: {e}"
                     )
-                    # Return empty result instead of crashing the whole batch
-                    return {
-                        "text": "",
-                        "logprobs": [],
-                        "raw_collected": "",
-                        "step_text": "",
-                        "trajectory_complete": False,
-                        "finish_reason": "error",
-                    }
+                    return _empty_result
 
         if not results or len(results) == 0:
             log.error(f"[{call_id}] No result returned from streaming generation")
-            return {
-                "text": "",
-                "logprobs": [],
-                "raw_collected": "",
-                "step_text": "",
-                "trajectory_complete": False,
-                "finish_reason": "error",
-            }
+            return _empty_result
 
         result = results[0]
 
@@ -510,6 +628,13 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         # client-side early stopping. Without this, n=1 calls would take the
         # model's streaming path and BoundaryEarlyStopping would cut generation
         # at the first step boundary — breaking baseline, answer generation, etc.
+        _empty_result = [{"text": "", "logprobs": [], "finish_reason": "error"}]
+
+        # Check circuit breaker before attempting
+        if self._circuit_breaker.is_open:
+            log.warning(f"[{call_id}] Circuit breaker open, skipping")
+            return _empty_result
+
         max_retries = 5
         results = None
         for attempt in range(max_retries):
@@ -525,8 +650,14 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     timeout=300,
                     call_id=call_id,
                 )
+                self._circuit_breaker.record_success()
                 break
             except Exception as e:
+                should_continue = self._circuit_breaker.record_failure()
+                if not should_continue:
+                    log.error(f"[{call_id}] Circuit breaker tripped, aborting")
+                    return _empty_result
+
                 if attempt < max_retries - 1:
                     wait = 2**attempt
                     log.warning(
@@ -542,12 +673,11 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     log.error(
                         f"[{call_id}] Batch call failed after {max_retries} attempts (n={n}): {e}"
                     )
-                    # Return empty result instead of crashing the whole batch
-                    return [{"text": "", "logprobs": [], "finish_reason": "error"}]
+                    return _empty_result
 
         if not results or len(results) == 0:
             log.error(f"[{call_id}] No result returned from batch generation (n={n})")
-            return [{"text": "", "logprobs": [], "finish_reason": "error"}]
+            return _empty_result
 
         # For n>1, results is List[List[dict]] — one list per chat
         chat_results = results[0]
