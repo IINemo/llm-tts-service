@@ -35,6 +35,7 @@ model:
   ssl_verify: false
   prefill_mode: false
   max_context_budget: 32768
+  max_concurrent_requests: 50
 
 # System configuration
 system:
@@ -49,6 +50,7 @@ generation:
   top_k: 20
   batch_size: 1
   max_length: 65536
+  checkpoint_batch_size: 10
 
 # Strategy - Beam Search
 strategy:

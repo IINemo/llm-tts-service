@@ -415,6 +415,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         early_stopping = BoundaryEarlyStopping(detector=self.detector)
 
         max_retries = 5
+        results = None
         for attempt in range(max_retries):
             try:
                 results = self.model.generate_texts(
@@ -437,16 +438,33 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     import time
 
                     time.sleep(wait)
+                    # Recreate client on repeated failures to clear stuck connections
+                    if attempt >= 2 and hasattr(self.model, "recreate_client"):
+                        self.model.recreate_client()
                 else:
                     log.error(
                         f"[{call_id}] Streaming call failed after {max_retries} attempts: {e}"
                     )
-                    raise
+                    # Return empty result instead of crashing the whole batch
+                    return {
+                        "text": "",
+                        "logprobs": [],
+                        "raw_collected": "",
+                        "step_text": "",
+                        "trajectory_complete": False,
+                        "finish_reason": "error",
+                    }
 
         if not results or len(results) == 0:
-            raise ValueError(
-                f"[{call_id}] No result returned from streaming generation"
-            )
+            log.error(f"[{call_id}] No result returned from streaming generation")
+            return {
+                "text": "",
+                "logprobs": [],
+                "raw_collected": "",
+                "step_text": "",
+                "trajectory_complete": False,
+                "finish_reason": "error",
+            }
 
         result = results[0]
 
@@ -493,6 +511,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         # model's streaming path and BoundaryEarlyStopping would cut generation
         # at the first step boundary — breaking baseline, answer generation, etc.
         max_retries = 5
+        results = None
         for attempt in range(max_retries):
             try:
                 results = self.model.generate_texts(
@@ -516,16 +535,19 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                     import time
 
                     time.sleep(wait)
+                    # Recreate client on repeated failures to clear stuck connections
+                    if attempt >= 2 and hasattr(self.model, "recreate_client"):
+                        self.model.recreate_client()
                 else:
                     log.error(
                         f"[{call_id}] Batch call failed after {max_retries} attempts (n={n}): {e}"
                     )
-                    raise
+                    # Return empty result instead of crashing the whole batch
+                    return [{"text": "", "logprobs": [], "finish_reason": "error"}]
 
         if not results or len(results) == 0:
-            raise ValueError(
-                f"[{call_id}] No result returned from batch generation (n={n})"
-            )
+            log.error(f"[{call_id}] No result returned from batch generation (n={n})")
+            return [{"text": "", "logprobs": [], "finish_reason": "error"}]
 
         # For n>1, results is List[List[dict]] — one list per chat
         chat_results = results[0]
