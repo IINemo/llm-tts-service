@@ -908,9 +908,46 @@ class StrategyBeamSearch(StrategyBase):
 
         # If answer step was appended (more steps than scores), record it separately
         # so the eval script logs it as "Generated Answer" instead of a numbered step
-        if len(steps) > len(scores) and steps:
+        has_answer_step = len(steps) > len(scores) and bool(steps)
+        if has_answer_step:
             answer_step = steps[-1]
             result["answer_step"] = answer_step.raw_text or answer_step.text
+
+        # Token breakdown: thinking (trajectory) vs answer
+        if steps:
+            thinking_steps = steps[:-1] if has_answer_step else steps
+            answer_step_obj = steps[-1] if has_answer_step else None
+
+            result["trajectory_tokens"] = sum(
+                len(s.token_ids) for s in thinking_steps if s.token_ids
+            )
+            result["answer_tokens"] = (
+                len(answer_step_obj.token_ids)
+                if answer_step_obj and answer_step_obj.token_ids
+                else 0
+            )
+
+            # Detect termination reason from last thinking step flags:
+            #   context_limit_hit: is_trajectory_complete=True, is_thinking_complete=False
+            #   max_steps_hit: is_trajectory_complete=False, is_thinking_complete=False
+            if thinking_steps:
+                last_thinking = thinking_steps[-1]
+                result["context_limit_hit"] = (
+                    last_thinking.is_trajectory_complete
+                    and not last_thinking.is_thinking_complete
+                )
+                result["max_steps_hit"] = (
+                    not last_thinking.is_trajectory_complete
+                    and not last_thinking.is_thinking_complete
+                )
+            else:
+                result["context_limit_hit"] = False
+                result["max_steps_hit"] = False
+        else:
+            result["trajectory_tokens"] = 0
+            result["answer_tokens"] = 0
+            result["context_limit_hit"] = False
+            result["max_steps_hit"] = False
 
         if token_stats is not None:
             result["token_stats"] = token_stats
