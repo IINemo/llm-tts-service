@@ -29,6 +29,76 @@ from .step_scorer_base import CandidateScore, StepScorerBase
 
 log = logging.getLogger(__name__)
 
+
+class _ScorerCircuitBreaker:
+    """Circuit breaker for scorer API calls.
+
+    Tracks consecutive failures across all scorer threads.  When enough
+    failures accumulate, imposes an exponential cooldown so that the scorer
+    does not waste minutes retrying a dead API.
+
+    Thread-safe: uses a lock around all mutable state.
+    """
+
+    def __init__(
+        self,
+        max_consecutive_failures: int = 15,
+        max_total_downtime: float = 300.0,
+        initial_cooldown: float = 5.0,
+        max_cooldown: float = 60.0,
+    ):
+        self._lock = threading.Lock()
+        self.max_consecutive_failures = max_consecutive_failures
+        self.max_total_downtime = max_total_downtime
+        self.initial_cooldown = initial_cooldown
+        self.max_cooldown = max_cooldown
+
+        self._consecutive_failures = 0
+        self._total_downtime = 0.0
+        self._tripped = False
+
+    def record_success(self):
+        with self._lock:
+            self._consecutive_failures = 0
+            self._total_downtime = 0.0
+            self._tripped = False
+
+    def record_failure(self) -> bool:
+        """Record a failure. Returns True if we should keep retrying, False to abort."""
+        with self._lock:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.max_consecutive_failures:
+                self._tripped = True
+                log.error(
+                    f"[SCORER CB] Circuit breaker tripped after "
+                    f"{self._consecutive_failures} consecutive failures"
+                )
+                return False
+            if self._total_downtime >= self.max_total_downtime:
+                self._tripped = True
+                log.error(
+                    f"[SCORER CB] Circuit breaker tripped: "
+                    f"total downtime {self._total_downtime:.0f}s >= {self.max_total_downtime}s"
+                )
+                return False
+            return True
+
+    def should_attempt(self) -> bool:
+        """Check if we should attempt an API call."""
+        with self._lock:
+            return not self._tripped
+
+    def wait_cooldown(self, attempt: int):
+        """Wait with exponential backoff and track total downtime."""
+        delay = min(self.initial_cooldown * (2**attempt), self.max_cooldown)
+        with self._lock:
+            self._total_downtime += delay
+        log.info(
+            f"[SCORER CB] Cooling down {delay:.1f}s (total downtime: {self._total_downtime:.0f}s)"
+        )
+        time.sleep(delay)
+
+
 # Default prompt file paths (relative to project root config/prompts/)
 DEFAULT_VALUE_PROMPT_FILE = "tree-of-thought/llm_critic/value_prompt_math_strict.txt"
 DEFAULT_VOTE_PROMPT_FILE = "tree-of-thought/llm_critic/vote_prompt.txt"
@@ -131,6 +201,14 @@ class StepScorerLLMCritic(StepScorerBase):
             "incorrect": 0.1,
             "wrong": 0.1,
         }
+
+        # Circuit breaker shared across all scorer API calls
+        self._circuit_breaker = _ScorerCircuitBreaker(
+            max_consecutive_failures=15,
+            max_total_downtime=300.0,
+            initial_cooldown=5.0,
+            max_cooldown=60.0,
+        )
 
         # Statistics
         self.total_evaluations = 0
@@ -986,15 +1064,21 @@ class StepScorerLLMCritic(StepScorerBase):
         return self._call_api_single(prompt, sample_id=sample_id)
 
     def _call_api_single(self, prompt: str, sample_id: Any = None) -> str:
-        """Call API for a single prompt with retry logic.
+        """Call API for a single prompt with retry logic and circuit breaker.
 
         Uses the model OpenAI client directly for better concurrent throughput.
+        The circuit breaker prevents wasting minutes on a dead API.
         """
         import openai
 
         messages = [{"role": "user", "content": prompt}]
-        max_retries = 5
+        max_retries = 3  # Reduced from 5 — circuit breaker handles prolonged outages
         base_delay = 3.0
+
+        # Check circuit breaker before even trying
+        if not self._circuit_breaker.should_attempt():
+            log.warning("[SCORER] Circuit breaker is open, skipping API call")
+            return ""
 
         # Use model's openai client directly for thread-safe concurrent calls
         client = getattr(self.model, "client", None) or getattr(
@@ -1009,6 +1093,11 @@ class StepScorerLLMCritic(StepScorerBase):
             return ""
 
         for attempt in range(max_retries):
+            # Re-check circuit breaker on each retry
+            if not self._circuit_breaker.should_attempt():
+                log.warning("[SCORER] Circuit breaker tripped during retries")
+                return ""
+
             try:
                 response = client.chat.completions.create(
                     model=model_name,
@@ -1036,21 +1125,27 @@ class StepScorerLLMCritic(StepScorerBase):
                     input_tokens = len(prompt) // 4
                     output_tokens = len(text) // 4
                 self._record_tokens(input_tokens, output_tokens, sample_id=sample_id)
+                self._circuit_breaker.record_success()
                 return text
-                return ""
 
             except (openai.APITimeoutError, openai.APIConnectionError) as e:
+                can_continue = self._circuit_breaker.record_failure()
+                if not can_continue:
+                    log.error(f"[SCORER] Circuit breaker tripped on {type(e).__name__}")
+                    return ""
                 if attempt < max_retries - 1:
-                    delay = base_delay * (2**attempt)
-                    log.warning(
-                        f"API error on attempt {attempt + 1}: {e}. Retrying in {delay:.1f}s..."
-                    )
-                    time.sleep(delay)
+                    self._circuit_breaker.wait_cooldown(attempt)
                 else:
-                    log.error(f"API call failed after {max_retries} attempts: {e}")
+                    log.error(
+                        f"[SCORER] API call failed after {max_retries} attempts: {e}"
+                    )
                     return ""
 
             except openai.RateLimitError as e:
+                can_continue = self._circuit_breaker.record_failure()
+                if not can_continue:
+                    log.error("[SCORER] Circuit breaker tripped on RateLimitError")
+                    return ""
                 if attempt < max_retries - 1:
                     delay = base_delay * (2**attempt) * 3
                     log.warning(
@@ -1061,6 +1156,11 @@ class StepScorerLLMCritic(StepScorerBase):
                     log.error(f"Rate limit persists after {max_retries} attempts: {e}")
                     return ""
 
+            except Exception as e:
+                log.error(f"[SCORER] Unexpected error: {type(e).__name__}: {e}")
+                self._circuit_breaker.record_failure()
+                return ""
+
         return ""
 
     def _call_api_batch(
@@ -1068,10 +1168,16 @@ class StepScorerLLMCritic(StepScorerBase):
     ) -> List[str]:
         """Call API for each prompt concurrently with per-prompt retry.
 
-        Each prompt runs independently via _call_api (which has its own retry).
-        A failure on one prompt doesn't affect others.
+        Each prompt runs independently via _call_api (which has its own retry
+        and circuit breaker check). If the circuit breaker is open, all
+        prompts return empty immediately.
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # Fast-path: if circuit breaker is already open, skip everything
+        if not self._circuit_breaker.should_attempt():
+            log.warning("[SCORER] Circuit breaker open, skipping entire batch")
+            return [""] * len(prompts)
 
         results: List[Optional[str]] = [None] * len(prompts)
 
