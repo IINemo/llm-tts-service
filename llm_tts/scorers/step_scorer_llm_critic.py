@@ -137,13 +137,13 @@ class StepScorerLLMCritic(StepScorerBase):
         self.cache: Dict[str, float] = {}
 
         # FLOP/token tracking for LLM critic evaluations
-        self._token_lock = threading.Lock()
         self.flop_calculator: Optional[FLOPCalculator] = None
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
         self._per_sample_input_tokens: Dict[Any, int] = {}
         self._per_sample_output_tokens: Dict[Any, int] = {}
         self._current_sample_id: Any = None
+        self._tokens_lock = threading.Lock()
 
         log.info(
             f"StepScorerLLMCritic initialized: method={method}, "
@@ -217,8 +217,8 @@ class StepScorerLLMCritic(StepScorerBase):
     def _record_tokens(
         self, input_tokens: int, output_tokens: int, sample_id: Any = None
     ):
-        """Record input and output tokens for tracking. Thread-safe."""
-        with self._token_lock:
+        """Record input and output tokens for tracking (thread-safe)."""
+        with self._tokens_lock:
             self._total_input_tokens += input_tokens
             self._total_output_tokens += output_tokens
 
@@ -981,19 +981,14 @@ class StepScorerLLMCritic(StepScorerBase):
             return results[0]
         return ""
 
-    def _call_api(self, prompt: str) -> str:
-        """Call API-based model for evaluation with retry logic.
+    def _call_api(self, prompt: str, sample_id: Any = None) -> str:
+        """Call API-based model for evaluation with retry logic."""
+        return self._call_api_single(prompt, sample_id=sample_id)
 
-        Uses the model's OpenAI client directly with reasoning_effort=low
-        for reasoning models.
-        """
-        return self._call_api_single(prompt)
+    def _call_api_single(self, prompt: str, sample_id: Any = None) -> str:
+        """Call API for a single prompt with retry logic.
 
-    def _call_api_single(self, prompt: str) -> str:
-        """Call API for a single prompt with retry logic. Thread-safe.
-
-        Calls the OpenAI client directly (bypassing model.generate_texts executor)
-        for better concurrency in batch scoring scenarios.
+        Uses the model OpenAI client directly for better concurrent throughput.
         """
         import openai
 
@@ -1010,8 +1005,8 @@ class StepScorerLLMCritic(StepScorerBase):
         )
 
         if client is None:
-            log.error("No OpenAI client found on model, falling back to generate_texts")
-            return self._call_api(prompt)
+            log.error("No OpenAI client found on model")
+            return ""
 
         for attempt in range(max_retries):
             try:
@@ -1040,8 +1035,9 @@ class StepScorerLLMCritic(StepScorerBase):
                 if input_tokens == 0 and output_tokens == 0:
                     input_tokens = len(prompt) // 4
                     output_tokens = len(text) // 4
-                self._record_tokens(input_tokens, output_tokens)
+                self._record_tokens(input_tokens, output_tokens, sample_id=sample_id)
                 return text
+                return ""
 
             except (openai.APITimeoutError, openai.APIConnectionError) as e:
                 if attempt < max_retries - 1:
@@ -1067,29 +1063,36 @@ class StepScorerLLMCritic(StepScorerBase):
 
         return ""
 
-    def _call_api_batch(self, prompts: List[str]) -> List[str]:
-        """Call API for multiple prompts in parallel using ThreadPoolExecutor."""
+    def _call_api_batch(
+        self, prompts: List[str], sample_ids: Optional[List[Any]] = None
+    ) -> List[str]:
+        """Call API for each prompt concurrently with per-prompt retry.
+
+        Each prompt runs independently via _call_api (which has its own retry).
+        A failure on one prompt doesn't affect others.
+        """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        max_workers = min(len(prompts), 10)
-        log.info(f"Parallel API batch: {len(prompts)} prompts, {max_workers} workers")
+        results: List[Optional[str]] = [None] * len(prompts)
 
-        results = [""] * len(prompts)
+        def _call_single(idx: int, prompt: str) -> tuple:
+            sid = sample_ids[idx] if sample_ids and idx < len(sample_ids) else None
+            try:
+                return idx, self._call_api(prompt, sample_id=sid)
+            except Exception as e:
+                log.warning(f"API call failed for prompt {idx}: {e}")
+                return idx, ""
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_idx = {
-                executor.submit(self._call_api_single, prompt): idx
+        with ThreadPoolExecutor(max_workers=min(len(prompts), 16)) as pool:
+            futures = [
+                pool.submit(_call_single, idx, prompt)
                 for idx, prompt in enumerate(prompts)
-            }
-            for future in as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                try:
-                    results[idx] = future.result()
-                except Exception as e:
-                    log.error(f"Prompt {idx} failed: {e}")
-                    results[idx] = ""
+            ]
+            for future in as_completed(futures):
+                idx, text = future.result()
+                results[idx] = text
 
-        return results
+        return [t if t is not None else "" for t in results]
 
     def _parse_value_output(self, output: str) -> float:
         """
