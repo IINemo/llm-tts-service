@@ -790,31 +790,50 @@ class StrategyBeamSearch(StrategyBase):
         beams_needing_answers: List[tuple],  # [(sample_id, beam_dict)]
         requests: List[List[Dict[str, str]]],
     ) -> None:
-        """Generate answer phases for beams where thinking is complete but trajectory is not.
+        """Generate answer phases for beams that need an answer step.
 
-        After beam search selects the best thinking trajectory, this method generates
-        the answer phase (text after </think> with \\boxed{}) in one batched call.
+        Handles three scenarios:
+        1. Normal: thinking complete, trajectory not yet complete
+        2. Context limit / skipped: trajectory forced complete while still in thinking
+        3. Max steps: beam expired while still in thinking (not trajectory-complete)
+
+        The generator's generate_answer_candidates_batch already handles injecting
+        </think> if the thinking phase was never closed, so no special handling needed.
         Modifies beams in-place by appending answer StepCandidates.
 
         Args:
             beams_needing_answers: List of (sample_id, beam_dict) pairs
             requests: Original requests for each sample
         """
-        # Filter beams where thinking is done but trajectory is not
+        # Include all beams that don't already have both phases complete
         to_generate = []
         for sample_id, beam in beams_needing_answers:
-            if (
-                beam["steps"]
-                and beam["steps"][-1].is_thinking_complete
-                and not beam["steps"][-1].is_trajectory_complete
-            ):
-                to_generate.append((sample_id, beam))
+            if not beam["steps"]:
+                continue
+            last_step = beam["steps"][-1]
+            if last_step.is_thinking_complete and last_step.is_trajectory_complete:
+                continue  # Both phases done, skip
+            to_generate.append((sample_id, beam))
 
         if not to_generate:
             return
 
+        # Log per-beam reason for answer generation
+        for sample_id, beam in to_generate:
+            last_step = beam["steps"][-1]
+            if last_step.is_thinking_complete:
+                reason = "normal (thinking complete)"
+            elif last_step.is_trajectory_complete:
+                reason = "context limit during thinking"
+            else:
+                reason = "max steps during thinking"
+            log.info(
+                f"Sample {sample_id}: Generating answer — {reason} "
+                f"(thinking_complete={last_step.is_thinking_complete}, "
+                f"trajectory_complete={last_step.is_trajectory_complete})"
+            )
         log.info(
-            f"Generating {len(to_generate)} answer phases for thinking-complete beams"
+            f"Generating {len(to_generate)} answer phases"
         )
 
         batch_requests = [requests[sample_id] for sample_id, _ in to_generate]
