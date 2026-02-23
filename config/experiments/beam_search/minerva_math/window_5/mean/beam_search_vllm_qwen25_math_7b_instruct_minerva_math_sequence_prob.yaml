@@ -1,0 +1,82 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/window_5/mean/beam_search_vllm_nothink_qwen25_7b_minerva_math_sequence_prob
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
+# Beam Search with vLLM + Non-Thinking Mode (Qwen2.5-7B) on Minerva Math
+# Uses Sequence Probability scorer for step evaluation (sum of log-probs, not normalized)
+#
+# SLURM: This config is designed for SLURM execution. The scripts/slurm/submit.sh wrapper will forward
+# SLURM errors (OOM kills, etc.) to the experiment's stderr.log for complete error tracking.
+# scoring_window=5: only last 5 step scores used for beam ranking
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /strategy/beam_search
+  - /scorer/sequence_prob
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "beam_search_vllm_nothink_qwen25_7b_minerva_math_sequence_prob_window_5_mean_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-minerva-math
+wandb_group: "beam_search_qwen25_math_7b_instruct_minerva_math_sequence_prob_window_5_mean"
+# Model configuration (vLLM backend)
+# Single GPU since sequence_prob scorer uses the same model (no separate PRM)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_context_budget: 4096
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (non-thinking mode settings)
+generation:
+  max_new_tokens: 4096
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  batch_size: 1
+  max_length: 8192
+  checkpoint_batch_size: 200
+
+# Strategy - Beam Search
+strategy:
+  beam_size: 5
+  candidates_per_beam: 8
+  max_steps: 30
+  scoring_window: 5         # Only use last 5 step scores for aggregation
+  scoring_window_label: "window_5"
+
+# Sequence probability scorer configuration (uses same model, no separate GPU needed)
+scorer:
+  type: sequence_prob
+  batch_size: 1
+
+# Dataset configuration - Minerva Math
+dataset:
+  dataset_path: "test-time-compute/test_minerva_math"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 272
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: minerva_math
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null

@@ -1,6 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/adaptive_scaling/human_eval_plus/adaptive_scaling_vllm_qwen3_8b_human_eval_plus_perplexity
-# MUR (Adaptive Scaling) for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
+# MUR (Adaptive Scaling) for HumanEval+ using vLLM with Qwen3-8B and linguistic step boundaries
 # Uses sequence_prob scorer (MUR fixes sequence_prob as signal for scaled step selection)
 
 defaults:
@@ -47,7 +47,7 @@ generation:
   checkpoint_batch_size: 198
   max_length: 32768
 
-# Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
+# Strategy - Adaptive Scaling (MUR) with linguistic step boundaries
 strategy:
   type: adaptive
   candidates_per_step: 8
@@ -60,20 +60,7 @@ strategy:
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
-  min_step_tokens: 10
   max_step_tokens: 1024
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
 # Dataset configuration - HumanEval+
 dataset:

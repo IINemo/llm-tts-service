@@ -43,7 +43,7 @@ generation:
   batch_size: 1
   max_length: 65536
 
-# Strategy - Beam Search with newline-based step boundaries for code
+# Strategy - Beam Search with linguistic step boundaries
 strategy:
   type: beam_search
   beam_size: 3
@@ -57,20 +57,7 @@ strategy:
     - 151645  # <|im_end|>
     - 151643  #
   # Step boundary detector settings - used for post-hoc step splitting
-  min_step_tokens: 10
   max_step_tokens: 500
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
 # perplexity scorer configuration
 scorer:

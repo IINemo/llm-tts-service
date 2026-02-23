@@ -22,6 +22,8 @@ GPU=""           # specific GPU id(s), e.g. "0" or "0,1"
 TIMEOUT=""       # in seconds, e.g. 14400 = 4h
 DRY_RUN="no"
 LABEL=""         # custom tsp label
+WINDOW=""        # scoring window: 3, 5, all (adds window_X/mean subdir)
+AGGREGATION=""   # aggregation mode: mean, min (default: mean when --window is set)
 
 # Detect project directory (two levels up from this script)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,7 +42,9 @@ Required:
 
 Optional:
   --model <name>         Model: qwen25_7b (default), qwen3_8b_thinking, qwen3_8b, qwen25_math_7b, qwen25_math_15b
-  --scorers <list>       Scorers: all, prm, entropy, perplexity, sequence_prob
+  --scorers <list>       Scorers: all, prm, entropy, perplexity, sequence_prob, pd_gap
+  --window <w>           Scoring window: 3, 5, all (adds window_X/<aggregation> subdir to config path)
+  --aggregation <agg>    Aggregation mode: mean (default), min (used with --window)
   --seed <n>             Starting seed (default: 42)
   --seeds <n>            Number of seeds to run (default: 1; queues seed, seed+1, ...)
   --gpu <id>             GPU id(s) to use (default: auto via tsp; use "0,1" for multi-gpu)
@@ -68,6 +72,12 @@ Examples:
   # Beam search with PRM on 2 GPUs
   ./submit.sh --strategy beam_search --dataset olympiadbench --scorers prm --gpu 0,1
 
+  # Beam search with scoring window
+  ./submit.sh --strategy beam_search --dataset aime2024 --model qwen3_8b_thinking --scorers entropy,perplexity --window 5
+
+  # Beam search with scoring window and min aggregation
+  ./submit.sh --strategy beam_search --dataset minerva_math --model qwen25_math_7b --scorers prm --window all --aggregation min
+
   # Multiple seeds (queues 4 jobs with seeds 42,43,44,45)
   ./submit.sh --strategy baseline --dataset aime2024 --model qwen3_8b_thinking --seeds 4
 
@@ -88,6 +98,8 @@ while [[ $# -gt 0 ]]; do
         --seeds)      SEEDS="$2"; shift 2 ;;
         --gpu)        GPU="$2"; shift 2 ;;
         --timeout)    TIMEOUT="$2"; shift 2 ;;
+        --window)     WINDOW="$2"; shift 2 ;;
+        --aggregation) AGGREGATION="$2"; shift 2 ;;
         --label)      LABEL="$2"; shift 2 ;;
         --dry-run)    DRY_RUN="yes"; shift ;;
         -h|--help)    show_help ;;
@@ -128,12 +140,16 @@ DATASET_CONFIGS[olympiadbench]="olympiadbench"
 DATASET_CONFIGS[gaokao2023en]="gaokao2023en"
 DATASET_CONFIGS[minerva_math]="minerva_math"
 DATASET_CONFIGS[gpqa_diamond]="gpqa_diamond"
+DATASET_CONFIGS[mbpp_plus]="mbpp_plus"
+DATASET_CONFIGS[human_eval_plus]="human_eval_plus"
 
 declare -A SCORER_CONFIGS
 SCORER_CONFIGS[entropy]="entropy"
 SCORER_CONFIGS[perplexity]="perplexity"
 SCORER_CONFIGS[sequence_prob]="sequence_prob"
 SCORER_CONFIGS[prm]="prm"
+SCORER_CONFIGS[pd_gap]="pd_gap"
+SCORER_CONFIGS[multi_scorer]="multi_scorer"
 
 declare -A MODEL_CONFIGS
 MODEL_CONFIGS[qwen25_7b]="vllm_nothink_qwen25_7b"
@@ -154,14 +170,21 @@ get_config_name() {
     if [[ -z "$dataset_key" ]]; then echo "Error: Unknown dataset: $dataset" >&2; exit 1; fi
     if [[ -z "$model_key" ]]; then echo "Error: Unknown model: $model" >&2; exit 1; fi
 
+    # Build window/aggregation subdir (e.g. "window_5/mean/")
+    local window_subdir=""
+    if [[ -n "$WINDOW" ]]; then
+        local agg="${AGGREGATION:-mean}"
+        window_subdir="window_${WINDOW}/${agg}/"
+    fi
+
     if [[ "$strategy" == "baseline" ]]; then
-        echo "experiments/${strategy_key}/${dataset_key}/baseline_${model_key}_${dataset_key}"
+        echo "experiments/${strategy_key}/${dataset_key}/${window_subdir}baseline_${model_key}_${dataset_key}"
     elif [[ "$strategy" == "self_consistency" ]]; then
-        echo "experiments/${strategy_key}/${dataset_key}/self_consistency_${model_key}_${dataset_key}"
+        echo "experiments/${strategy_key}/${dataset_key}/${window_subdir}self_consistency_${model_key}_${dataset_key}"
     else
         local scorer_key=${SCORER_CONFIGS[$scorer]}
         if [[ -z "$scorer_key" ]]; then echo "Error: Unknown scorer: $scorer" >&2; exit 1; fi
-        echo "experiments/${strategy_key}/${dataset_key}/${strategy}_${model_key}_${dataset_key}_${scorer_key}"
+        echo "experiments/${strategy_key}/${dataset_key}/${window_subdir}${strategy}_${model_key}_${dataset_key}_${scorer_key}"
     fi
 }
 
@@ -178,7 +201,7 @@ get_num_gpus_for_job() {
     if [[ -n "$GPU" ]]; then
         # Count commas + 1
         echo $(( $(echo "$GPU" | tr -cd ',' | wc -c) + 1 ))
-    elif [[ "$scorer" == "prm" ]]; then
+    elif [[ "$scorer" == "prm" || "$scorer" == "multi_scorer" ]]; then
         echo "2"
     else
         echo "1"
@@ -201,10 +224,17 @@ get_job_label() {
     local strategy=$1 dataset=$2 scorer=$3
     if [[ -n "$LABEL" ]]; then
         echo "$LABEL"
-    elif [[ -n "$scorer" && "$scorer" != "none" ]]; then
-        echo "${strategy}_${dataset}_${scorer}"
     else
-        echo "${strategy}_${dataset}"
+        local window_suffix=""
+        if [[ -n "$WINDOW" ]]; then
+            local agg="${AGGREGATION:-mean}"
+            window_suffix="_w${WINDOW}_${agg}"
+        fi
+        if [[ -n "$scorer" && "$scorer" != "none" ]]; then
+            echo "${strategy}_${dataset}_${scorer}${window_suffix}"
+        else
+            echo "${strategy}_${dataset}${window_suffix}"
+        fi
     fi
 }
 
@@ -231,6 +261,8 @@ submit_tsp_job() {
         cat > "$wrapper" << WRAPPER_EOF
 #!/bin/bash
 eval "\$(grep '^export ' ~/.bashrc 2>/dev/null)"
+eval "\$(conda shell.bash hook 2>/dev/null)"
+conda activate lm-polygraph-env 2>/dev/null || true
 export CUDA_VISIBLE_DEVICES=\${CUDA_VISIBLE_DEVICES:-\$TS_VISIBLE_DEVICES}
 cd "${PROJECT_DIR}" || exit 1
 
@@ -253,8 +285,13 @@ WRAPPER_EOF
         if [[ -n "$GPU" ]]; then
             tsp_args="-L $label -g $GPU"
         fi
+        # Chain jobs on the same GPU sequentially via -D
+        if [[ -n "$PREV_JOB_ID" ]]; then
+            tsp_args="$tsp_args -D $PREV_JOB_ID"
+        fi
         local job_id
         job_id=$(tsp $tsp_args timeout ${timeout} bash ${wrapper})
+        PREV_JOB_ID=$job_id
         echo "Queued job $job_id: $label (seed=$seed, gpus=$num_gpus, timeout=${timeout}s)"
     fi
 }
@@ -291,6 +328,9 @@ fi
 if [[ -n "$SCORERS" ]]; then
     echo "Scorers:  $SCORERS"
 fi
+if [[ -n "$WINDOW" ]]; then
+    echo "Window:   $WINDOW (aggregation: ${AGGREGATION:-mean})"
+fi
 echo "============================================"
 echo ""
 
@@ -298,12 +338,12 @@ echo ""
 if [[ "$STRATEGY" == "baseline" || "$STRATEGY" == "self_consistency" ]]; then
     scorer_list=("none")
 elif [[ "$SCORERS" == "all" ]]; then
-    scorer_list=("entropy" "perplexity" "sequence_prob" "prm")
+    scorer_list=("entropy" "perplexity" "sequence_prob" "pd_gap" "prm")
 elif [[ -n "$SCORERS" ]]; then
     IFS=',' read -ra scorer_list <<< "$SCORERS"
 else
     echo "Error: --scorers required for $STRATEGY strategy"
-    echo "Options: all, prm, entropy, perplexity, sequence_prob"
+    echo "Options: all, prm, entropy, perplexity, sequence_prob, pd_gap"
     exit 1
 fi
 
@@ -311,6 +351,9 @@ if [[ "$DRY_RUN" == "yes" ]]; then
     echo "DRY RUN — would queue:"
     echo ""
 fi
+
+# Track previous job ID for dependency chaining
+PREV_JOB_ID=""
 
 # Submit jobs (scorer × seed)
 for scorer in "${scorer_list[@]}"; do

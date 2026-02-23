@@ -1,6 +1,6 @@
 # @package _global_
 # Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/mbpp_plus/online_bon_openrouter_gpt4o_mini_mbpp_plus_entropy
-# Online Best-of-N for MBPP+ using OpenRouter API with newline-based step boundaries
+# Online Best-of-N for MBPP+ using OpenRouter API with linguistic step boundaries
 # Uses Entropy scorer for step evaluation
 #
 # Environment variable required: OPENROUTER_API_KEY
@@ -47,23 +47,10 @@ generation:
   top_k: 20
   batch_size: 1
 
-# Strategy - Online Best-of-N with newline-based step boundaries for code
+# Strategy - Online Best-of-N with linguistic step boundaries
 strategy:
   max_steps: 50
-  min_step_tokens: 10
   max_step_tokens: 2048
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
 # Entropy scorer configuration
 scorer:

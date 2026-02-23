@@ -290,6 +290,7 @@ class StepCandidateGeneratorBase:
         requests: List[List[Dict[str, str]]],
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
+        sample_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Generate answer candidates for multiple trajectories.
 
@@ -299,6 +300,8 @@ class StepCandidateGeneratorBase:
             requests: Per-trajectory chat messages.
             trajectories: Per-trajectory step lists.
             candidates_per_step: Number of answer candidates per trajectory.
+            sample_ids: Optional list mapping each trajectory to a sample_id
+                for per-sample token tracking.
 
         Returns:
             List of candidate lists, one per trajectory.

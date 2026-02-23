@@ -1628,6 +1628,16 @@ def _generate_trajectories_batch(
             if "token_stats" in result:
                 result_dict["token_stats"] = result["token_stats"]
 
+            # Propagate beam search diagnostics
+            for key in (
+                "trajectory_tokens",
+                "answer_tokens",
+                "context_limit_hit",
+                "max_steps_hit",
+            ):
+                if key in result:
+                    result_dict[key] = result[key]
+
             # Store answer_step for thinking mode strategies
             if "answer_step" in result:
                 result_dict["answer_step"] = result["answer_step"]
@@ -1715,6 +1725,16 @@ def _generate_trajectories_batch(
                 safe_name = eval_name.replace("-", "_").replace(".", "_")
                 sample_metrics[f"running_correct_{safe_name}"] = stats["correct"]
                 sample_metrics[f"running_accuracy_{safe_name}"] = stats["accuracy"]
+
+            # Beam search per-sample metrics: token breakdown and context limit
+            if "trajectory_tokens" in result:
+                sample_metrics["trajectory_tokens"] = result["trajectory_tokens"]
+            if "answer_tokens" in result:
+                sample_metrics["answer_tokens"] = result["answer_tokens"]
+            if "context_limit_hit" in result:
+                sample_metrics["context_limit_hit"] = int(result["context_limit_hit"])
+            if "max_steps_hit" in result:
+                sample_metrics["max_steps_hit"] = int(result["max_steps_hit"])
 
             if "validity_scores" in result and result["validity_scores"]:
                 valid_scores = [s for s in result["validity_scores"] if s is not None]
@@ -2393,6 +2413,47 @@ def evaluate_results(
     if total_prm_tokens > 0:
         metrics["compute/prm_input_tokens"] = int(total_prm_tokens)
         metrics["compute/prm_tflops"] = float(total_prm_tflops)
+
+    # Beam search token breakdown and termination diagnostics
+    all_trajectory_tokens = [
+        r["trajectory_tokens"] for r in results if "trajectory_tokens" in r
+    ]
+    all_answer_tokens = [r["answer_tokens"] for r in results if "answer_tokens" in r]
+    context_limit_hits = sum(1 for r in results if r.get("context_limit_hit", False))
+    max_steps_hits = sum(1 for r in results if r.get("max_steps_hit", False))
+    no_answer_count = sum(1 for r in results if not r.get("extracted_answer"))
+    if all_trajectory_tokens:
+        metrics["compute/avg_trajectory_tokens"] = float(np.mean(all_trajectory_tokens))
+        metrics["compute/avg_answer_tokens"] = float(np.mean(all_answer_tokens))
+        metrics["context_limit_hit_count"] = context_limit_hits
+        metrics["context_limit_hit_rate"] = (
+            context_limit_hits / len(results) if results else 0.0
+        )
+        metrics["max_steps_hit_count"] = max_steps_hits
+        metrics["max_steps_hit_rate"] = (
+            max_steps_hits / len(results) if results else 0.0
+        )
+        log.info(
+            f"Token breakdown: avg trajectory={np.mean(all_trajectory_tokens):.0f}, "
+            f"avg answer={np.mean(all_answer_tokens):.0f}"
+        )
+        log.info(
+            f"Context limit hits: {context_limit_hits}/{len(results)} "
+            f"({context_limit_hits / len(results):.1%})"
+        )
+        log.info(
+            f"Max steps hits: {max_steps_hits}/{len(results)} "
+            f"({max_steps_hits / len(results):.1%})"
+        )
+    # No-answer rate (applies to all strategies)
+    if results:
+        metrics["no_answer_count"] = no_answer_count
+        metrics["no_answer_rate"] = no_answer_count / len(results)
+        if no_answer_count > 0:
+            log.warning(
+                f"No answer extracted: {no_answer_count}/{len(results)} "
+                f"({no_answer_count / len(results):.1%})"
+            )
 
     # Add LLM judge statistics (if available)
     if llm_judge_stats:
