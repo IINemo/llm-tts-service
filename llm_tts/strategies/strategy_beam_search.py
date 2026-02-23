@@ -927,10 +927,10 @@ class StrategyBeamSearch(StrategyBase):
                 else 0
             )
 
-            # Detect termination reason from last thinking step flags:
-            #   context_limit_hit: is_trajectory_complete=True, is_thinking_complete=False
-            #   max_steps_hit: is_trajectory_complete=False, is_thinking_complete=False
-            if thinking_steps:
+            # Detect termination reason from last thinking step flags.
+            # Only meaningful in thinking mode (has_answer_step=True), because
+            # in non-thinking mode is_thinking_complete is always False.
+            if has_answer_step and thinking_steps:
                 last_thinking = thinking_steps[-1]
                 result["context_limit_hit"] = (
                     last_thinking.is_trajectory_complete

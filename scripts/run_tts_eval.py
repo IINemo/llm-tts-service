@@ -2143,7 +2143,7 @@ def evaluate_results(
     all_answer_tokens = [r["answer_tokens"] for r in results if "answer_tokens" in r]
     context_limit_hits = sum(1 for r in results if r.get("context_limit_hit", False))
     max_steps_hits = sum(1 for r in results if r.get("max_steps_hit", False))
-    no_answer_count = sum(1 for r in results if r.get("extracted_answer") is None)
+    no_answer_count = sum(1 for r in results if not r.get("extracted_answer"))
     if all_trajectory_tokens:
         metrics["compute/avg_trajectory_tokens"] = float(np.mean(all_trajectory_tokens))
         metrics["compute/avg_answer_tokens"] = float(np.mean(all_answer_tokens))
