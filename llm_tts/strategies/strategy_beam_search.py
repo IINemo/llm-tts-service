@@ -165,7 +165,7 @@ class StrategyBeamSearch(StrategyBase):
             hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
         )
         # LLM critic scorer does its own LLM calls, doesn't need uncertainty logprobs
-        use_llm_critic = hasattr(self.scorer, "score_candidates_batch")
+        use_llm_critic = getattr(self.scorer, "name", None) == "llm_critic"
         log.info(f"Using PRM scorer: {use_prm_scorer}, LLM critic: {use_llm_critic}")
 
         # Reset per-sample token tracking in generator
@@ -366,8 +366,8 @@ class StrategyBeamSearch(StrategyBase):
                     all_candidates_data = self._batch_score_with_prm(
                         requests, all_candidates_data, prompt_metadata
                     )
-                elif hasattr(self.scorer, "score_candidates_batch"):
-                    # Use scorer-provided batch scoring (e.g., LLM critic)
+                elif use_llm_critic:
+                    # Use LLM critic batch scoring
                     all_candidates_data = self._batch_score_with_scorer(
                         requests, all_candidates_data, prompt_metadata
                     )
@@ -902,30 +902,21 @@ class StrategyBeamSearch(StrategyBase):
         trajectory_text = convert_trajectory_to_string(steps)
         extracted = extract_answer(trajectory_text)
 
-        # Merge PRM scorer stats if available
-        if (
-            token_stats is not None
-            and hasattr(self.scorer, "get_prm_stats_for")
-            and sample_id is not None
-        ):
-            prm_stats = self.scorer.get_prm_stats_for(sample_id)
-            token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
-            token_stats["prm_tflops"] = prm_stats["prm_tflops"]
-            gen_tflops = token_stats.get("tflops") or 0
-            prm_tflops = prm_stats["prm_tflops"] or 0
-            token_stats["tflops"] = gen_tflops + prm_tflops
-
-        # Merge LLM critic scorer stats if available
-        if (
-            token_stats is not None
-            and hasattr(self.scorer, "get_stats_for")
-            and sample_id is not None
-        ):
-            sv_stats = self.scorer.get_stats_for(sample_id)
-            token_stats.update(sv_stats)
-            gen_tflops = token_stats.get("tflops") or 0
-            sv_tflops = sv_stats.get("llm_critic_tflops") or 0
-            token_stats["tflops"] = gen_tflops + sv_tflops
+        # Merge scorer-specific stats into token_stats (mutually exclusive)
+        if token_stats is not None and sample_id is not None:
+            if hasattr(self.scorer, "get_prm_stats_for"):
+                prm_stats = self.scorer.get_prm_stats_for(sample_id)
+                token_stats["prm_input_tokens"] = prm_stats["prm_input_tokens"]
+                token_stats["prm_tflops"] = prm_stats["prm_tflops"]
+                gen_tflops = token_stats.get("tflops") or 0
+                prm_tflops = prm_stats["prm_tflops"] or 0
+                token_stats["tflops"] = gen_tflops + prm_tflops
+            elif getattr(self.scorer, "name", None) == "llm_critic":
+                critic_stats = self.scorer.get_stats_for(sample_id)
+                token_stats.update(critic_stats)
+                gen_tflops = token_stats.get("tflops") or 0
+                critic_tflops = critic_stats.get("llm_critic_tflops") or 0
+                token_stats["tflops"] = gen_tflops + critic_tflops
 
         is_completed = bool(steps and steps[-1].is_trajectory_complete)
 

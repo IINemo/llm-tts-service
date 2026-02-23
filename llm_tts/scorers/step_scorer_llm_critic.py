@@ -1061,8 +1061,9 @@ class StepScorerLLMCritic(StepScorerBase):
         1. Exact match on last line (primary ToT labels)
         2. Token search on last line (primary + synonym labels)
         3. Prefix match (keyword at start of token, e.g. "likelyMK" -> "likely")
-        4. Regex search on full output (fallback)
-        5. Default to 0.0 (unmatched = no contribution, as in original ToT)
+        4. Regex word boundary search on full output
+        5. Loose keyword search on full normalized output
+        6. Default to 0.0 (unmatched = no contribution, as in original ToT)
         """
         output_lower = output.lower().strip()
         all_keywords = {**self.value_map, **self.value_synonyms}
@@ -1097,7 +1098,7 @@ class StepScorerLLMCritic(StepScorerBase):
             if token in all_keywords:
                 return all_keywords[token]
 
-        # 4. Default to 0.0 — unmatched outputs contribute nothing
+        # 6. Default to 0.0 — unmatched outputs contribute nothing
         #    (matches original ToT where unrecognized labels are not counted)
         log.debug(f"No rating found in output: '{output[:100]}', defaulting to 0.0")
         return 0.0

@@ -855,11 +855,12 @@ def create_tts_strategy(
         # Initialize FLOP calculator for LLM critic token/compute tracking
         if hasattr(scorer, "init_flop_calculator"):
             try:
-                flop_model_name = getattr(config.model, "model_path", None) or getattr(
-                    config.model, "model_name", None
+                scorer_model_name = (
+                    scorer_model_cfg.get("model_name")
+                    or scorer_model_cfg.get("model_path")
                 )
-                if flop_model_name:
-                    scorer.init_flop_calculator(flop_model_name)
+                if scorer_model_name:
+                    scorer.init_flop_calculator(scorer_model_name)
             except Exception as e:
                 log.warning(f"Could not init LLM critic FLOP calculator: {e}")
 
