@@ -10,7 +10,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/self_verification
+  - /scorer/llm_critic
   - /evaluation/default
   - _self_
 
@@ -71,20 +71,20 @@ strategy:
 
 # Self-Verification Scorer using Kimi K2 Think via OpenRouter API
 scorer:
-  type: self_verification
+  type: llm_critic
   method: value
   n_evaluate_sample: 3
   temperature: 0.7
   max_tokens: 2048
   timeout: 600
-  value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
+  context_window: 5
+  value_prompt_file: "tree-of-thought/llm_critic/value_prompt_math_strict.txt"
   # Override scorer model to use Kimi K2 Think via API
   model:
     type: openai_api
-    model_name: "MBZUAI-IFM/K2-Think-v2"
-    base_url: "https://api.k2think.ai/v1"
-    api_key: null  # Set via override or K2THINK_API_KEY env var
-    api_key_env: "K2THINK_API_KEY"
+    provider: openrouter
+    model_name: "qwen/qwen-2.5-7b-instruct"
+    api_key: null
 
 # Dataset configuration
 dataset:

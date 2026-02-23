@@ -10,7 +10,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
-  - /scorer/self_verification
+  - /scorer/llm_critic
   - /evaluation/default
   - _self_
 
@@ -78,20 +78,20 @@ strategy:
 
 # Self-Verification Scorer using Qwen3-32B via OpenRouter API (multi-threaded batch)
 scorer:
-  type: self_verification
+  type: llm_critic
   method: value
   n_evaluate_sample: 3
   temperature: 0.7
   max_tokens: 100
   timeout: 120
-  value_prompt_file: "tree-of-thought/self_verification/value_prompt_math.txt"
+  context_window: 5
+  value_prompt_file: "tree-of-thought/llm_critic/value_prompt_math_strict.txt"
   # Override scorer model to use Qwen3-32B via OpenRouter API
   model:
     type: openai_api
-    model_name: "qwen/qwen3-32b"
-    base_url: "https://openrouter.ai/api/v1"
     provider: openrouter
-    api_key: null  # Resolved from OPENROUTER_API_KEY env var
+    model_name: "qwen/qwen-2.5-7b-instruct"
+    api_key: null
 
 # Dataset configuration - Minerva Math
 dataset:

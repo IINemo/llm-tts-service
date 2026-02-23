@@ -1,45 +1,45 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/minerva_math/beam_search_vllm_self_verification_strict_minerva_math
-#
-# Beam Search with strict self-verification prompt
-# Same model (Qwen2.5-Math-7B) for generation and scoring via vLLM
-# Strict verification prompt forces model to re-check calculations
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/olympiadbench/beam_search_vllm_qwen25_math_7b_instruct_olympiadbench_llm_critic
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
+# Beam Search with vLLM + Qwen2.5-Math-7B-Instruct on OlympiadBench
+# Uses LLM Critic scorer via OpenRouter API for step evaluation
 
 defaults:
   - /config
-  - /dataset/minerva_math
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/beam_search
   - /scorer/llm_critic
   - /evaluation/default
   - _self_
 
 # Run naming
-run_name: "beam_search_vllm_self_verification_strict_minerva_math_${now:%H-%M-%S}"
+run_name: "beam_search_vllm_nothink_qwen25_7b_olympiadbench_llm_critic_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
-report_to: none
-wandb_project: llm-tts-eval-minerva-math
+report_to: wandb
+wandb_project: llm-tts-eval-olympiadbench
+wandb_group: "beam_search_qwen25_math_7b_instruct_olympiadbench_llm_critic"
 
 # Model configuration (vLLM backend)
 model:
-  type: vllm
+  type: "vllm"
   model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
   gpu_memory_utilization: 0.9
   tensor_parallel_size: 1
   enable_prefix_caching: true
   trust_remote_code: true
-  max_model_len: 4096
-  disable_thinking_mode: true
+  max_context_budget: 4096
 
 # System configuration
 system:
   device: cuda
   seed: 42
 
-# Generation configuration
+# Generation configuration (non-thinking mode settings)
 generation:
   max_new_tokens: 4096
   temperature: 0.7
@@ -50,34 +50,11 @@ generation:
 
 # Strategy - Beam Search
 strategy:
-  type: beam_search
   beam_size: 5
   candidates_per_beam: 8
   max_steps: 30
-  aggregation: mean
-  batch_generation: true
-  prompt_buffer: 500
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
-  min_step_tokens: 10
-  max_step_tokens: 256
-  use_sequence: true
-  use_conclusion: true
-  use_thinking: true
-  use_verification: true
-  use_structure: false
-  use_reasoning: true
-  use_correction: false
-  custom_words:
-    - "for example"
-    - "given that"
-    - "similarly"
-    - "step"
-    - "therefore"
-    - "thus"
 
-# Self-Verification Scorer - strict prompt, low temperature
+# LLM Critic scorer configuration
 scorer:
   type: llm_critic
   method: value
@@ -94,17 +71,17 @@ scorer:
     model_name: "qwen/qwen-2.5-7b-instruct"
     api_key: null
 
-# Dataset configuration - Minerva Math
+# Dataset configuration - OlympiadBench
 dataset:
-  dataset_path: "test-time-compute/test_minerva_math"
+  dataset_path: "karantonis/test_olympiadbench"
   dataset_config: null
   dataset_split: "test"
-  subset: 272
+  subset: 675
   offset: 0
   question_field: "question"
   answer_field: "answer"
   answer_format: "numeric"
-  data_name: minerva_math
+  data_name: olympiadbench
   system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
   prompt_template: "{question}"
   prompt_file: null
