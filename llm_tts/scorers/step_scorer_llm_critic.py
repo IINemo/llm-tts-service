@@ -18,6 +18,7 @@ Supports both:
 import logging
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -142,6 +143,7 @@ class StepScorerLLMCritic(StepScorerBase):
         self._per_sample_input_tokens: Dict[Any, int] = {}
         self._per_sample_output_tokens: Dict[Any, int] = {}
         self._current_sample_id: Any = None
+        self._tokens_lock = threading.Lock()
 
         log.info(
             f"StepScorerLLMCritic initialized: method={method}, "
@@ -215,18 +217,19 @@ class StepScorerLLMCritic(StepScorerBase):
     def _record_tokens(
         self, input_tokens: int, output_tokens: int, sample_id: Any = None
     ):
-        """Record input and output tokens for tracking."""
-        self._total_input_tokens += input_tokens
-        self._total_output_tokens += output_tokens
+        """Record input and output tokens for tracking (thread-safe)."""
+        with self._tokens_lock:
+            self._total_input_tokens += input_tokens
+            self._total_output_tokens += output_tokens
 
-        sid = sample_id if sample_id is not None else self._current_sample_id
-        if sid is not None:
-            self._per_sample_input_tokens[sid] = (
-                self._per_sample_input_tokens.get(sid, 0) + input_tokens
-            )
-            self._per_sample_output_tokens[sid] = (
-                self._per_sample_output_tokens.get(sid, 0) + output_tokens
-            )
+            sid = sample_id if sample_id is not None else self._current_sample_id
+            if sid is not None:
+                self._per_sample_input_tokens[sid] = (
+                    self._per_sample_input_tokens.get(sid, 0) + input_tokens
+                )
+                self._per_sample_output_tokens[sid] = (
+                    self._per_sample_output_tokens.get(sid, 0) + output_tokens
+                )
 
     def set_current_sample_id(self, sample_id: Any):
         """Set the current sample ID for token tracking."""
@@ -926,7 +929,7 @@ class StepScorerLLMCritic(StepScorerBase):
             return results[0]
         return ""
 
-    def _call_api(self, prompt: str) -> str:
+    def _call_api(self, prompt: str, sample_id: Any = None) -> str:
         """Call API-based model for evaluation with retry logic."""
         import openai
 
@@ -959,7 +962,7 @@ class StepScorerLLMCritic(StepScorerBase):
                         input_tokens = len(prompt) // 4
                         output_tokens = len(text) // 4
 
-                    self._record_tokens(input_tokens, output_tokens)
+                    self._record_tokens(input_tokens, output_tokens, sample_id=sample_id)
                     return text
                 return ""
 
@@ -990,68 +993,33 @@ class StepScorerLLMCritic(StepScorerBase):
     def _call_api_batch(
         self, prompts: List[str], sample_ids: Optional[List[Any]] = None
     ) -> List[str]:
-        """Call API-based model for evaluation with batched prompts and retry logic."""
-        import openai
+        """Call API for each prompt concurrently with per-prompt retry.
 
-        messages_list = [[{"role": "user", "content": prompt}] for prompt in prompts]
+        Each prompt runs independently via _call_api (which has its own retry).
+        A failure on one prompt doesn't affect others.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        max_retries = 3
-        base_delay = 2.0
+        results: List[Optional[str]] = [None] * len(prompts)
 
-        for attempt in range(max_retries):
+        def _call_single(idx: int, prompt: str) -> tuple:
+            sid = sample_ids[idx] if sample_ids and idx < len(sample_ids) else None
             try:
-                results = self.model.generate_texts(
-                    chats=messages_list,
-                    n=1,
-                    max_new_tokens=self.max_tokens,
-                    temperature=self.temperature,
-                    timeout=self.timeout,
-                )
+                return idx, self._call_api(prompt, sample_id=sid)
+            except Exception as e:
+                log.warning(f"API call failed for prompt {idx}: {e}")
+                return idx, ""
 
-                texts: List[str] = []
-                for idx, (prompt, result) in enumerate(zip(prompts, results or [])):
-                    if result:
-                        text = result.get("text", "")
-                        input_tokens = result.get("prompt_tokens", 0)
-                        output_tokens = result.get("completion_tokens", 0)
-                        if input_tokens == 0 and output_tokens == 0:
-                            input_tokens = len(prompt) // 4
-                            output_tokens = len(text) // 4
-                        sid = (
-                            sample_ids[idx]
-                            if sample_ids and idx < len(sample_ids)
-                            else None
-                        )
-                        self._record_tokens(input_tokens, output_tokens, sample_id=sid)
-                        texts.append(text)
-                    else:
-                        texts.append("")
+        with ThreadPoolExecutor(max_workers=min(len(prompts), 64)) as pool:
+            futures = [
+                pool.submit(_call_single, idx, prompt)
+                for idx, prompt in enumerate(prompts)
+            ]
+            for future in as_completed(futures):
+                idx, text = future.result()
+                results[idx] = text
 
-                return texts
-
-            except (openai.APITimeoutError, openai.APIConnectionError) as e:
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2**attempt)
-                    log.warning(
-                        f"API error on attempt {attempt + 1}: {e}. Retrying in {delay:.1f}s..."
-                    )
-                    time.sleep(delay)
-                else:
-                    log.error(f"API call failed after {max_retries} attempts: {e}")
-                    raise
-
-            except openai.RateLimitError as e:
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2**attempt) * 3
-                    log.warning(
-                        f"Rate limit on attempt {attempt + 1}: {e}. Retrying in {delay:.1f}s..."
-                    )
-                    time.sleep(delay)
-                else:
-                    log.error(f"Rate limit persists after {max_retries} attempts: {e}")
-                    raise
-
-        return ["" for _ in prompts]
+        return [t if t is not None else "" for t in results]
 
     def _parse_value_output(self, output: str) -> float:
         """
