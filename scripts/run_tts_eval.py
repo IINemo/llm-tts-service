@@ -924,10 +924,15 @@ def create_tts_strategy(
             scorer_port = int(scorer_model_cfg.get("port", 8711))
             scorer_gpu_util = scorer_model_cfg.get("gpu_memory_utilization", 0.9)
             scorer_max_model_len = scorer_model_cfg.get("max_model_len", 4096)
+            scorer_max_num_seqs = scorer_model_cfg.get("max_num_seqs", 8)
+            scorer_max_num_batched_tokens = scorer_model_cfg.get(
+                "max_num_batched_tokens", None
+            )
 
             log.info(
                 f"Scorer: launching vLLM server for {scorer_model_path} "
-                f"on GPU {scorer_gpu}, port {scorer_port}"
+                f"on GPU {scorer_gpu}, port {scorer_port}, "
+                f"max_num_seqs={scorer_max_num_seqs}"
             )
 
             vllm_cmd = [
@@ -944,10 +949,19 @@ def create_tts_strategy(
                 str(scorer_max_model_len),
                 "--tensor-parallel-size",
                 str(scorer_model_cfg.get("tensor_parallel_size", 1)),
+                "--max-num-seqs",
+                str(scorer_max_num_seqs),
                 "--trust-remote-code",
                 "--seed",
                 str(config.system.seed),
             ]
+            if scorer_max_num_batched_tokens is not None:
+                vllm_cmd.extend(
+                    [
+                        "--max-num-batched-tokens",
+                        str(scorer_max_num_batched_tokens),
+                    ]
+                )
 
             scorer_env = os.environ.copy()
             scorer_env["CUDA_VISIBLE_DEVICES"] = scorer_gpu

@@ -84,6 +84,8 @@ scorer:
     gpu_memory_utilization: 0.9
     trust_remote_code: true
     max_model_len: 4096
+    max_num_seqs: 8
+    max_num_batched_tokens: 2048
 
 # Dataset configuration - Minerva Math
 dataset:
