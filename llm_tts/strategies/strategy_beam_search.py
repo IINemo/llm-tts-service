@@ -832,9 +832,7 @@ class StrategyBeamSearch(StrategyBase):
                 f"(thinking_complete={last_step.is_thinking_complete}, "
                 f"trajectory_complete={last_step.is_trajectory_complete})"
             )
-        log.info(
-            f"Generating {len(to_generate)} answer phases"
-        )
+        log.info(f"Generating {len(to_generate)} answer phases")
 
         batch_requests = [requests[sample_id] for sample_id, _ in to_generate]
         batch_trajectories = [beam["steps"] for _, beam in to_generate]

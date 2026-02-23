@@ -1358,7 +1358,12 @@ def _generate_trajectories_batch(
                 result_dict["token_stats"] = result["token_stats"]
 
             # Propagate beam search diagnostics
-            for key in ("trajectory_tokens", "answer_tokens", "context_limit_hit", "max_steps_hit"):
+            for key in (
+                "trajectory_tokens",
+                "answer_tokens",
+                "context_limit_hit",
+                "max_steps_hit",
+            ):
                 if key in result:
                     result_dict[key] = result[key]
 
@@ -2139,7 +2144,9 @@ def evaluate_results(
         metrics["compute/prm_tflops"] = float(total_prm_tflops)
 
     # Beam search token breakdown and termination diagnostics
-    all_trajectory_tokens = [r["trajectory_tokens"] for r in results if "trajectory_tokens" in r]
+    all_trajectory_tokens = [
+        r["trajectory_tokens"] for r in results if "trajectory_tokens" in r
+    ]
     all_answer_tokens = [r["answer_tokens"] for r in results if "answer_tokens" in r]
     context_limit_hits = sum(1 for r in results if r.get("context_limit_hit", False))
     max_steps_hits = sum(1 for r in results if r.get("max_steps_hit", False))
