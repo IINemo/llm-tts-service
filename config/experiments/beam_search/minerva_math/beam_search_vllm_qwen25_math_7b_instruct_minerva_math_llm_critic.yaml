@@ -20,7 +20,7 @@ run_name: "beam_search_vllm_qwen25_math_7b_instruct_minerva_math_llm_critic_seed
 
 # Main configuration
 verbose: true
-report_to: wandb
+report_to: none
 wandb_project: llm-tts-eval-minerva-math
 wandb_group: "beam_search_qwen25_math_7b_instruct_minerva_math_llm_critic"
 

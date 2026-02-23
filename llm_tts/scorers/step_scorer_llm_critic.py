@@ -203,9 +203,11 @@ class StepScorerLLMCritic(StepScorerBase):
         }
 
         # Circuit breaker shared across all scorer API calls
+        # Note: with 8 concurrent threads, a single batch timeout counts as
+        # 8 failures, so threshold must be high enough to survive a few bad batches.
         self._circuit_breaker = _ScorerCircuitBreaker(
-            max_consecutive_failures=15,
-            max_total_downtime=300.0,
+            max_consecutive_failures=50,
+            max_total_downtime=600.0,
             initial_cooldown=5.0,
             max_cooldown=60.0,
         )
