@@ -28,3 +28,12 @@ vote_prompt_file: "tree-of-thought/llm_critic/vote_prompt.txt"
 # Direct prompt strings (override files if set)
 # value_prompt: null
 # vote_prompt: null
+
+# Scorer model (REQUIRED) - must be explicitly specified
+# Example:
+#   model:
+#     type: openai_api
+#     provider: openrouter
+#     model_name: "openai/gpt-oss-120b"
+#     api_key: null
+model: null
