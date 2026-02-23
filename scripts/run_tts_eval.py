@@ -841,25 +841,16 @@ def create_tts_strategy(
     # Set model on scorer if it supports it (e.g., StepScorerLLMCritic)
     if scorer is not None and hasattr(scorer, "set_model"):
         scorer_model_cfg = getattr(config.scorer, "model", None)
-        if scorer_model_cfg is not None:
-            if scorer_model_cfg.get("type") != "openai_api":
-                raise ValueError("Scorer model override only supports type=openai_api")
-            scorer_model = _create_api_model_for_scorer(scorer_model_cfg)
-            scorer.set_model(scorer_model, use_vllm=False)
-            log.info("Scorer: using API override model")
-        else:
-            if isinstance(model, BlackboxModelWithStreaming):
-                scorer.set_model(model, use_vllm=False)
-                log.info("Scorer: using API backend")
-            elif hasattr(model, "vllm_engine"):
-                scorer.set_model(model.vllm_engine, use_vllm=True)
-                log.info("Scorer: using vLLM backend")
-            elif isinstance(model, WhiteboxModel):
-                scorer.set_model(model, use_local=True)
-                log.info("Scorer: using local WhiteboxModel backend")
-            else:
-                log.warning("Scorer: unknown model type, may not work correctly")
-                scorer.set_model(model, use_vllm=False)
+        if scorer_model_cfg is None:
+            raise ValueError(
+                "scorer.model must be specified for llm_critic scorer. "
+                "Add a scorer.model section with type=openai_api to your config."
+            )
+        if scorer_model_cfg.get("type") != "openai_api":
+            raise ValueError("Scorer model only supports type=openai_api")
+        scorer_model = _create_api_model_for_scorer(scorer_model_cfg)
+        scorer.set_model(scorer_model, use_vllm=False)
+        log.info("Scorer: using API model")
 
         # Initialize FLOP calculator for LLM critic token/compute tracking
         if hasattr(scorer, "init_flop_calculator"):
