@@ -450,131 +450,128 @@ def create_model(config):
 
         log.info("vLLM model loaded successfully")
 
-        # Create step generator for strategies that need it
-        # DeepConf has its own generation logic
-        step_generator = None
-        if config.strategy.type not in ("deepconf",):
-            if not VLLM_GENERATOR_AVAILABLE:
-                raise ImportError(
-                    "vLLM step generator not available. "
-                    "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
-                )
+        # Create step generator
+        if not VLLM_GENERATOR_AVAILABLE:
+            raise ImportError(
+                "vLLM step generator not available. "
+                "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
+            )
 
-            # Self-consistency and baseline don't need uncertainty wrapper
-            # (self-consistency uses majority voting, baseline uses raw vLLM batch generation)
-            if config.strategy.type in (
-                "self_consistency",
-                "baseline",
-                "extended_thinking",
-            ):
-                vllm_model = llm
-                log.info(
-                    f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
-                )
-            else:
-                if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
-                    raise ImportError(
-                        "lm-polygraph uncertainty components not available. "
-                        "Ensure lm_polygraph_updates package is installed."
-                    )
-
-                # Select estimator based on scorer config
-                scorer_type = config.scorer.type if config.scorer else "entropy"
-                if scorer_type == "perplexity":
-                    stat_calculators = [VLLMLogprobsCalculator()]
-                    estimator = Perplexity()
-                elif scorer_type == "sequence_prob":
-                    # Sequence probability scoring (sum of log-probs, not normalized)
-                    stat_calculators = [VLLMLogprobsCalculator()]
-                    estimator = MaximumSequenceProbability()
-                elif scorer_type == "uncertainty_pd":
-                    # PD-Gap scoring using top-k logprobs matrix
-                    from llm_tts.scorers.estimator_uncertainty_pd import PDGap
-
-                    stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
-                    estimator = PDGap()
-                elif scorer_type == "entropy":
-                    # Entropy-based scoring
-                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
-                    estimator = MeanTokenEntropy()
-                elif scorer_type == "prm":
-                    # PRM scorer uses its own model for scoring
-                    # Use entropy wrapper for generation (scores not used for selection)
-                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
-                    estimator = MeanTokenEntropy()
-                else:
-                    raise ValueError(
-                        f"Unsupported scorer type for vLLM: {scorer_type}. "
-                        f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm"
-                    )
-
-                vllm_model = VLLMWithUncertainty(
-                    llm=llm,
-                    stat_calculators=stat_calculators,
-                    estimator=estimator,
-                )
-                log.info(
-                    f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__}"
-                )
-
-            # Always use ThinkingMarkerDetector for step boundary detection
-            # Stop tokens are derived from detector's semantic markers
-            # thinking_mode controls two-phase generation (<think>...</think>)
-            # Logic for disable_thinking_mode:
-            #   None  = model doesn't support thinking (e.g., Qwen2.5-Math) -> thinking_mode=False
-            #   False = model supports thinking, enabled (e.g., Qwen3) -> thinking_mode=True
-            #   True  = model supports thinking, disabled -> thinking_mode=False
-            disable_thinking_mode = config.model.get("disable_thinking_mode", None)
-            thinking_mode = disable_thinking_mode is False
+        # Self-consistency, baseline, deepconf don't need uncertainty wrapper
+        if config.strategy.type in (
+            "self_consistency",
+            "baseline",
+            "extended_thinking",
+            "deepconf",
+        ):
+            vllm_model = llm
             log.info(
-                f"Creating VLLMStepGenerator with ThinkingMarkerDetector "
-                f"(thinking_mode={thinking_mode})"
+                f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
+            )
+        else:
+            if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
+                raise ImportError(
+                    "lm-polygraph uncertainty components not available. "
+                    "Ensure lm_polygraph_updates package is installed."
+                )
+
+            # Select estimator based on scorer config
+            scorer_type = config.scorer.type if config.scorer else "entropy"
+            if scorer_type == "perplexity":
+                stat_calculators = [VLLMLogprobsCalculator()]
+                estimator = Perplexity()
+            elif scorer_type == "sequence_prob":
+                # Sequence probability scoring (sum of log-probs, not normalized)
+                stat_calculators = [VLLMLogprobsCalculator()]
+                estimator = MaximumSequenceProbability()
+            elif scorer_type == "uncertainty_pd":
+                # PD-Gap scoring using top-k logprobs matrix
+                from llm_tts.scorers.estimator_uncertainty_pd import PDGap
+
+                stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
+                estimator = PDGap()
+            elif scorer_type == "entropy":
+                # Entropy-based scoring
+                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                estimator = MeanTokenEntropy()
+            elif scorer_type == "prm":
+                # PRM scorer uses its own model for scoring
+                # Use entropy wrapper for generation (scores not used for selection)
+                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                estimator = MeanTokenEntropy()
+            else:
+                raise ValueError(
+                    f"Unsupported scorer type for vLLM: {scorer_type}. "
+                    f"Supported types: perplexity, sequence_prob, uncertainty_pd, entropy, prm"
+                )
+
+            vllm_model = VLLMWithUncertainty(
+                llm=llm,
+                stat_calculators=stat_calculators,
+                estimator=estimator,
+            )
+            log.info(
+                f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__}"
             )
 
-            if "min_step_tokens" not in config.strategy:
-                log.warning("strategy.min_step_tokens not set, defaulting to 50")
-            if "max_step_tokens" not in config.strategy:
-                log.warning("strategy.max_step_tokens not set, defaulting to 300")
-            detector = ThinkingMarkerDetector(
-                min_step_tokens=config.strategy.get("min_step_tokens", 50),
-                max_step_tokens=config.strategy.get("max_step_tokens", 300),
-                use_sequence=config.strategy.get("use_sequence", True),
-                use_conclusion=config.strategy.get("use_conclusion", True),
-                use_thinking=config.strategy.get("use_thinking", True),
-                use_verification=config.strategy.get("use_verification", True),
-                use_reasoning=config.strategy.get("use_reasoning", False),
-                use_correction=config.strategy.get("use_correction", False),
-                use_structure=config.strategy.get("use_structure", False),
-                custom_markers=config.strategy.get("custom_markers", None),
-            )
+        # Always use ThinkingMarkerDetector for step boundary detection
+        # Stop tokens are derived from detector's semantic markers
+        # thinking_mode controls two-phase generation (<think>...</think>)
+        # Logic for disable_thinking_mode:
+        #   None  = model doesn't support thinking (e.g., Qwen2.5-Math) -> thinking_mode=False
+        #   False = model supports thinking, enabled (e.g., Qwen3) -> thinking_mode=True
+        #   True  = model supports thinking, disabled -> thinking_mode=False
+        disable_thinking_mode = config.model.get("disable_thinking_mode", None)
+        thinking_mode = disable_thinking_mode is False
+        log.info(
+            f"Creating VLLMStepGenerator with ThinkingMarkerDetector "
+            f"(thinking_mode={thinking_mode})"
+        )
 
-            # Stop token IDs (e.g., [151645, 151643] for Qwen EOS)
-            # Stop tokens are derived from detector's use_* flags automatically
-            stop_token_ids = config.strategy.get("stop_token_ids", None)
-            if stop_token_ids is not None:
-                stop_token_ids = list(stop_token_ids)
+        if "min_step_tokens" not in config.strategy:
+            log.warning("strategy.min_step_tokens not set, defaulting to 50")
+        if "max_step_tokens" not in config.strategy:
+            log.warning("strategy.max_step_tokens not set, defaulting to 300")
+        detector = ThinkingMarkerDetector(
+            min_step_tokens=config.strategy.get("min_step_tokens", 50),
+            max_step_tokens=config.strategy.get("max_step_tokens", 300),
+            use_sequence=config.strategy.get("use_sequence", True),
+            use_conclusion=config.strategy.get("use_conclusion", True),
+            use_thinking=config.strategy.get("use_thinking", True),
+            use_verification=config.strategy.get("use_verification", True),
+            use_reasoning=config.strategy.get("use_reasoning", False),
+            use_correction=config.strategy.get("use_correction", False),
+            use_structure=config.strategy.get("use_structure", False),
+            custom_markers=config.strategy.get("custom_markers", None),
+        )
 
-            step_generator = VLLMStepGenerator(
-                model=vllm_model,
-                thinking_mode=thinking_mode,
-                detector=detector,
-                stop_token_ids=stop_token_ids,
-                max_new_tokens=config.generation.max_new_tokens,
-                temperature=config.generation.temperature,
-                top_p=config.generation.top_p,
-                top_k=config.generation.get("top_k", 20),
-                presence_penalty=config.generation.get("presence_penalty", 0.0),
-                answer_patterns=config.strategy.get(
-                    "detector_answer_patterns",
-                    [],  # Empty by default - rely on EOS token IDs
-                ),
-                max_context_budget=config.model.get(
-                    "max_context_budget", config.model.get("max_model_len", 32768)
-                ),
-                disable_thinking_mode=config.model.get("disable_thinking_mode", None),
-            )
+        # Stop token IDs (e.g., [151645, 151643] for Qwen EOS)
+        # Stop tokens are derived from detector's use_* flags automatically
+        stop_token_ids = config.strategy.get("stop_token_ids", None)
+        if stop_token_ids is not None:
+            stop_token_ids = list(stop_token_ids)
 
-            log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
+        step_generator = VLLMStepGenerator(
+            model=vllm_model,
+            thinking_mode=thinking_mode,
+            detector=detector,
+            stop_token_ids=stop_token_ids,
+            max_new_tokens=config.generation.max_new_tokens,
+            temperature=config.generation.temperature,
+            top_p=config.generation.top_p,
+            top_k=config.generation.get("top_k", 20),
+            presence_penalty=config.generation.get("presence_penalty", 0.0),
+            answer_patterns=config.strategy.get(
+                "detector_answer_patterns",
+                [],  # Empty by default - rely on EOS token IDs
+            ),
+            max_context_budget=config.model.get(
+                "max_context_budget", config.model.get("max_model_len", 32768)
+            ),
+            disable_thinking_mode=config.model.get("disable_thinking_mode", None),
+        )
+
+        log.info(f"Created vLLM step generator: {type(step_generator).__name__}")
 
         return model, step_generator
 
@@ -661,128 +658,117 @@ def create_model(config):
             api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
             base_url = config.model.get("base_url", None)
 
-        # Check if DeepConf strategy
-        if config.strategy.type == "deepconf":
-            # DeepConf uses streaming with logprobs but no boundary detector
-            model = BlackboxModelWithStreaming(
-                openai_api_key=api_key,
-                model_path=model_path,
-                supports_logprobs=True,
-                base_url=base_url,
-            )
-            step_generator = None  # DeepConf doesn't use step generator
-        else:
-            # Other strategies use boundary detection via early stopping
-            from lm_polygraph.utils import APIWithUncertainty
+        # All strategies use boundary detection via early stopping
+        from lm_polygraph.utils import APIWithUncertainty
 
-            from llm_tts.early_stopping import BoundaryEarlyStopping
+        from llm_tts.early_stopping import BoundaryEarlyStopping
 
-            # Determine thinking mode (same logic as vLLM)
-            disable_thinking_mode = config.model.get("disable_thinking_mode", None)
-            thinking_mode = disable_thinking_mode is False
+        # Determine thinking mode (same logic as vLLM)
+        disable_thinking_mode = config.model.get("disable_thinking_mode", None)
+        thinking_mode = disable_thinking_mode is False
 
-            # Always use ThinkingMarkerDetector for step boundary detection
-            if "min_step_tokens" not in config.strategy:
-                log.warning("strategy.min_step_tokens not set, defaulting to 50")
-            if "max_step_tokens" not in config.strategy:
-                log.warning("strategy.max_step_tokens not set, defaulting to 300")
-            detector = ThinkingMarkerDetector(
-                min_step_tokens=config.strategy.get("min_step_tokens", 50),
-                max_step_tokens=config.strategy.get("max_step_tokens", 300),
-                use_sequence=config.strategy.get("use_sequence", True),
-                use_conclusion=config.strategy.get("use_conclusion", True),
-                use_thinking=config.strategy.get("use_thinking", True),
-                use_verification=config.strategy.get("use_verification", True),
-                use_structure=config.strategy.get("use_structure", False),
-                use_reasoning=config.strategy.get("use_reasoning", False),
-                use_correction=config.strategy.get("use_correction", False),
-                custom_markers=config.strategy.get("custom_markers"),
-            )
+        # Always use ThinkingMarkerDetector for step boundary detection
+        if "min_step_tokens" not in config.strategy:
+            log.warning("strategy.min_step_tokens not set, defaulting to 50")
+        if "max_step_tokens" not in config.strategy:
+            log.warning("strategy.max_step_tokens not set, defaulting to 300")
+        detector = ThinkingMarkerDetector(
+            min_step_tokens=config.strategy.get("min_step_tokens", 50),
+            max_step_tokens=config.strategy.get("max_step_tokens", 300),
+            use_sequence=config.strategy.get("use_sequence", True),
+            use_conclusion=config.strategy.get("use_conclusion", True),
+            use_thinking=config.strategy.get("use_thinking", True),
+            use_verification=config.strategy.get("use_verification", True),
+            use_structure=config.strategy.get("use_structure", False),
+            use_reasoning=config.strategy.get("use_reasoning", False),
+            use_correction=config.strategy.get("use_correction", False),
+            custom_markers=config.strategy.get("custom_markers"),
+        )
 
-            generation_parameters = GenerationParameters()
-            generation_parameters.temperature = config.generation.temperature
-            generation_parameters.max_new_tokens = config.generation.max_new_tokens
-            generation_parameters.top_p = config.generation.top_p
-            generation_parameters.top_k = config.generation.top_k
+        generation_parameters = GenerationParameters()
+        generation_parameters.temperature = config.generation.temperature
+        generation_parameters.max_new_tokens = config.generation.max_new_tokens
+        generation_parameters.top_p = config.generation.top_p
+        generation_parameters.top_k = config.generation.top_k
 
-            # Create boundary-based early stopping
-            early_stopping = BoundaryEarlyStopping(detector=detector)
+        # Create boundary-based early stopping
+        early_stopping = BoundaryEarlyStopping(detector=detector)
 
-            supports_logprobs = config.model.get("supports_logprobs", True)
+        supports_logprobs = config.model.get("supports_logprobs", True)
 
-            model = BlackboxModelWithStreaming(
-                openai_api_key=api_key,
-                model_path=model_path,
-                supports_logprobs=supports_logprobs,
-                early_stopping=early_stopping,
-                generation_parameters=generation_parameters,
-                base_url=base_url,
-            )
+        model = BlackboxModelWithStreaming(
+            openai_api_key=api_key,
+            model_path=model_path,
+            supports_logprobs=supports_logprobs,
+            early_stopping=early_stopping,
+            generation_parameters=generation_parameters,
+            base_url=base_url,
+        )
 
-            # Set up uncertainty scorer if logprobs are supported and scorer is configured
-            scorer_type = config.scorer.type if config.scorer else None
-            if supports_logprobs and scorer_type and POLYGRAPH_UNCERTAINTY_AVAILABLE:
-                if scorer_type == "perplexity":
-                    stat_calculators = [VLLMLogprobsCalculator()]
-                    estimator = Perplexity()
-                elif scorer_type == "sequence_prob":
-                    stat_calculators = [VLLMLogprobsCalculator()]
-                    estimator = MaximumSequenceProbability()
-                elif scorer_type == "uncertainty_pd":
-                    from llm_tts.scorers.estimator_uncertainty_pd import PDGap
+        # Set up uncertainty scorer if logprobs are supported and scorer is configured
+        scorer_type = config.scorer.type if config.scorer else None
+        if supports_logprobs and scorer_type and POLYGRAPH_UNCERTAINTY_AVAILABLE:
+            if scorer_type == "perplexity":
+                stat_calculators = [VLLMLogprobsCalculator()]
+                estimator = Perplexity()
+            elif scorer_type == "sequence_prob":
+                stat_calculators = [VLLMLogprobsCalculator()]
+                estimator = MaximumSequenceProbability()
+            elif scorer_type == "uncertainty_pd":
+                from llm_tts.scorers.estimator_uncertainty_pd import PDGap
 
-                    stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
-                    estimator = PDGap()
-                elif scorer_type == "entropy":
-                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
-                    estimator = MeanTokenEntropy()
-                elif scorer_type == "prm":
-                    # PRM uses its own model; use entropy for generation scoring
-                    stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
-                    estimator = MeanTokenEntropy()
-                else:
-                    stat_calculators = None
-                    estimator = None
+                stat_calculators = [VLLMLogprobsCalculator(output_matrix=True)]
+                estimator = PDGap()
+            elif scorer_type == "entropy":
+                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                estimator = MeanTokenEntropy()
+            elif scorer_type == "prm":
+                # PRM uses its own model; use entropy for generation scoring
+                stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+                estimator = MeanTokenEntropy()
+            else:
+                stat_calculators = None
+                estimator = None
 
-                if stat_calculators and estimator:
-                    # Wrap model with uncertainty scorer (same pattern as VLLMWithUncertainty)
-                    model = APIWithUncertainty(
-                        model=model,
-                        stat_calculators=stat_calculators,
-                        estimator=estimator,
-                    )
-                    log.info(
-                        f"Wrapped model with APIWithUncertainty({type(estimator).__name__})"
-                    )
+            if stat_calculators and estimator:
+                # Wrap model with uncertainty scorer (same pattern as VLLMWithUncertainty)
+                model = APIWithUncertainty(
+                    model=model,
+                    stat_calculators=stat_calculators,
+                    estimator=estimator,
+                )
+                log.info(
+                    f"Wrapped model with APIWithUncertainty({type(estimator).__name__})"
+                )
 
-            step_generator = StepCandidateGeneratorThroughAPI(
-                model=model,
-                thinking_mode=thinking_mode,
-                detector=detector,
-                answer_patterns=config.strategy.get(
-                    "detector_answer_patterns",
-                    [],
-                ),
-                max_new_tokens=config.generation.max_new_tokens,
-                temperature=config.generation.temperature,
-                top_p=config.generation.top_p,
-                top_k=config.generation.get("top_k", 20),
-                presence_penalty=config.generation.get("presence_penalty", 0.0),
-                max_context_budget=config.model.get(
-                    "max_context_budget", config.model.get("max_model_len", 32768)
-                ),
-                prefill_mode=config.model.get("prefill_mode", False),
-                disable_thinking_mode=disable_thinking_mode,
-                supports_logprobs=supports_logprobs,
-                max_concurrent_requests=config.model.get(
-                    "max_concurrent_requests", 256
-                ),
-            )
+        step_generator = StepCandidateGeneratorThroughAPI(
+            model=model,
+            thinking_mode=thinking_mode,
+            detector=detector,
+            answer_patterns=config.strategy.get(
+                "detector_answer_patterns",
+                [],
+            ),
+            max_new_tokens=config.generation.max_new_tokens,
+            temperature=config.generation.temperature,
+            top_p=config.generation.top_p,
+            top_k=config.generation.get("top_k", 20),
+            presence_penalty=config.generation.get("presence_penalty", 0.0),
+            max_context_budget=config.model.get(
+                "max_context_budget", config.model.get("max_model_len", 32768)
+            ),
+            prefill_mode=config.model.get("prefill_mode", False),
+            disable_thinking_mode=disable_thinking_mode,
+            supports_logprobs=supports_logprobs,
+            max_concurrent_requests=config.model.get(
+                "max_concurrent_requests", 256
+            ),
+        )
 
-            log.info(
-                f"Created API step generator: thinking_mode={thinking_mode}, "
-                f"uncertainty={'APIWithUncertainty' if hasattr(model, 'estimator') else 'no'}"
-            )
+        log.info(
+            f"Created API step generator: thinking_mode={thinking_mode}, "
+            f"uncertainty={'APIWithUncertainty' if hasattr(model, 'estimator') else 'no'}"
+        )
     else:
         raise ValueError(f"Model type {config.model.type} not supported")
 
@@ -888,24 +874,15 @@ def create_tts_strategy(
             batch_size=config.strategy.get("batch_size", 1000),
         )
     elif config.strategy.type == "deepconf":
-        # DeepConf supports both API models (with logprobs) and local HuggingFace models
-        # Validation is done inside StrategyDeepConf.__init__
+        # DeepConf uses step_generator for generation, extracts logprobs for confidence
+        data_name = config.strategy.get("data_name", None)
         strategy = StrategyDeepConf(
-            model=model,
-            mode=config.strategy.mode,
+            step_generator=step_generator,
             budget=config.strategy.get("budget", 8),
-            warmup_traces=config.strategy.get("warmup_traces", 4),
-            total_budget=config.strategy.get("total_budget", 10),
-            confidence_percentile=config.strategy.get("confidence_percentile", 90),
             window_size=config.strategy.get("window_size", 2048),
             filter_method=config.strategy.get("filter_method", "top10"),
-            temperature=config.strategy.get("temperature", 0.7),
-            top_p=config.strategy.get("top_p", 1.0),
-            max_tokens=config.strategy.get("max_tokens", 512),
-            top_logprobs=config.strategy.get("top_logprobs", 20),
-            n_threads=config.strategy.get("n_threads", 8),
-            disable_thinking_mode=config.model.get("disable_thinking_mode", True),
-            seed=config.system.seed,
+            confidence_threshold=config.strategy.get("confidence_threshold", None),
+            data_name=data_name,
         )
 
     elif config.strategy.type == "beam_search":

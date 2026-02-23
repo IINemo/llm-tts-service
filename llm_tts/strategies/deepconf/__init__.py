@@ -1,7 +1,7 @@
 """
 DeepConf strategy package.
 
-Confidence-based test-time scaling with offline and online modes.
+Confidence-based test-time scaling using framework's step_generator.
 """
 
 from .strategy import StrategyDeepConf
