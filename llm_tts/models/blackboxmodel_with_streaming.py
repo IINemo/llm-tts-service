@@ -218,6 +218,15 @@ class BlackboxModelWithStreaming(BlackboxModel):
             stop = args.get("stop", None)
             results = []
             for chat in chats:
+                # When the last message is from the assistant, tell the API
+                # to continue from it rather than starting a new turn.
+                # Without this, providers (e.g. OpenRouter) may treat it as
+                # a completed response, emit a BOS token, and fall into
+                # pre-training mode (producing gibberish / wrong language).
+                extra_body = {}
+                if chat and chat[-1].get("role") == "assistant":
+                    extra_body["continue_final_message"] = True
+
                 response = self.client.chat.completions.create(
                     model=self.model_path,
                     messages=chat,
@@ -228,6 +237,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
                     logprobs=needs_logprobs,
                     top_logprobs=20 if needs_logprobs else None,
                     stop=stop,
+                    extra_body=extra_body if extra_body else None,
                 )
                 chat_results = []
                 for choice in response.choices:
@@ -260,6 +270,16 @@ class BlackboxModelWithStreaming(BlackboxModel):
         for chat in chats:
             # Create streaming request
             stop = args.get("stop", None)
+
+            # When the last message is from the assistant, tell the API
+            # to continue from it rather than starting a new turn.
+            # Without this, providers (e.g. OpenRouter) may treat it as
+            # a completed response, emit a BOS token, and fall into
+            # pre-training mode (producing gibberish / wrong language).
+            extra_body = {}
+            if chat and chat[-1].get("role") == "assistant":
+                extra_body["continue_final_message"] = True
+
             response = self.client.chat.completions.create(
                 model=self.model_path,
                 messages=chat,
@@ -269,6 +289,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
                 logprobs=needs_logprobs,
                 top_logprobs=20 if needs_logprobs else None,
                 stop=stop,
+                extra_body=extra_body if extra_body else None,
             )
 
             accumulated_text = ""
