@@ -120,7 +120,12 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import StepScorerConfidence, StepScorerPRM, StepScorerUncertainty
+from llm_tts.scorers import (
+    StepScorerConfidence,
+    StepScorerLLMCritic,
+    StepScorerPRM,
+    StepScorerUncertainty,
+)
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 
 # vLLM step generator (optional)
@@ -392,6 +397,20 @@ def create_scorer(config):
             scorer.init_flop_calculator(config.scorer.model_path)
         except Exception as e:
             log.warning(f"Could not init PRM FLOP calculator: {e}")
+    elif config.scorer.type == "llm_critic":
+        # LLM Critic Scorer (Tree of Thoughts paper)
+        # Model will be set later in create_tts_strategy() after model is initialized
+        scorer = StepScorerLLMCritic(
+            method=config.scorer.method,
+            n_evaluate_sample=config.scorer.n_evaluate_sample,
+            temperature=config.scorer.temperature,
+            max_tokens=config.scorer.max_tokens,
+            timeout=config.scorer.timeout,
+            value_prompt_file=config.scorer.value_prompt_file,
+            vote_prompt_file=config.scorer.vote_prompt_file,
+            score_aggregation=getattr(config.scorer, "score_aggregation", "min"),
+            context_window=getattr(config.scorer, "context_window", 0),
+        )
     elif config.scorer.type == "uncertainty":
         scorer = StepScorerUncertainty()
     elif config.scorer.type in (
@@ -460,16 +479,17 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            # Self-consistency and baseline don't need uncertainty wrapper
-            # (self-consistency uses majority voting, baseline uses raw vLLM batch generation)
-            if config.strategy.type in (
-                "self_consistency",
-                "baseline",
-                "extended_thinking",
+            # Self-consistency, baseline, extended_thinking, and llm_critic don't need uncertainty wrapper
+            scorer_type = config.scorer.type if config.scorer else "entropy"
+            if (
+                config.strategy.type
+                in ("self_consistency", "baseline", "extended_thinking")
+                or scorer_type == "llm_critic"
             ):
                 vllm_model = llm
                 log.info(
-                    f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
+                    f"Strategy={config.strategy.type}, scorer={scorer_type}: "
+                    f"using raw vLLM (no uncertainty wrapper)"
                 )
             else:
                 if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
@@ -789,9 +809,202 @@ def create_model(config):
     return model, step_generator
 
 
+def _create_api_model_for_scorer(model_cfg):
+    """Create an API-backed model instance for scoring only."""
+    model_path = model_cfg.get("model_name") or model_cfg.get("model_path")
+    log.info(f"LLM critic scorer API model: {model_path}")
+
+    provider = model_cfg.get("provider")
+    base_url = model_cfg.get("base_url")
+    api_key_env = model_cfg.get("api_key_env")
+
+    if api_key_env:
+        api_key = model_cfg.get("api_key") or os.getenv(api_key_env)
+    elif provider == "openrouter":
+        api_key = model_cfg.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+        if base_url is None:
+            base_url = "https://openrouter.ai/api/v1"
+    else:
+        api_key = model_cfg.get("api_key") or os.getenv("OPENAI_API_KEY")
+
+    return BlackboxModelWithStreaming(
+        openai_api_key=api_key,
+        model_path=model_path,
+        supports_logprobs=model_cfg.get("supports_logprobs", False),
+        base_url=base_url,
+    )
+
+
 def create_tts_strategy(
     config, model, step_generator, scorer, output_dir=None, flop_calculator=None
 ):
+    # Set model on scorer if it supports it (e.g., StepScorerLLMCritic)
+    if scorer is not None and hasattr(scorer, "set_model"):
+        scorer_model_cfg = getattr(config.scorer, "model", None)
+        scorer_model_type = (
+            scorer_model_cfg.get("type", "openai_api") if scorer_model_cfg else None
+        )
+
+        if scorer_model_type == "vllm_shared":
+            # Reuse the same vLLM engine that is used for generation
+            vllm_engine = getattr(model, "vllm_engine", None)
+            if vllm_engine is None:
+                raise ValueError(
+                    "scorer.model.type=vllm_shared requires a vLLM generation model"
+                )
+            scorer.set_model(vllm_engine, use_vllm=True)
+            log.info("Scorer: reusing generation vLLM engine for scoring")
+        elif scorer_model_type == "vllm":
+            # Launch a vLLM OpenAI-compatible server as a subprocess on a
+            # dedicated GPU, then connect to it via the API scorer path.
+            import atexit
+            import subprocess
+            import time
+
+            scorer_gpu = str(scorer_model_cfg.get("gpu", "1"))
+            scorer_model_path = scorer_model_cfg.get(
+                "model_path"
+            ) or scorer_model_cfg.get("model_name")
+            scorer_port = int(scorer_model_cfg.get("port", 8711))
+            scorer_gpu_util = scorer_model_cfg.get("gpu_memory_utilization", 0.9)
+            scorer_max_model_len = scorer_model_cfg.get("max_model_len", 4096)
+            scorer_max_num_seqs = scorer_model_cfg.get("max_num_seqs", 8)
+            scorer_max_num_batched_tokens = scorer_model_cfg.get(
+                "max_num_batched_tokens", None
+            )
+
+            log.info(
+                f"Scorer: launching vLLM server for {scorer_model_path} "
+                f"on GPU {scorer_gpu}, port {scorer_port}, "
+                f"max_num_seqs={scorer_max_num_seqs}"
+            )
+
+            vllm_cmd = [
+                sys.executable,
+                "-m",
+                "vllm.entrypoints.openai.api_server",
+                "--model",
+                scorer_model_path,
+                "--port",
+                str(scorer_port),
+                "--gpu-memory-utilization",
+                str(scorer_gpu_util),
+                "--max-model-len",
+                str(scorer_max_model_len),
+                "--tensor-parallel-size",
+                str(scorer_model_cfg.get("tensor_parallel_size", 1)),
+                "--max-num-seqs",
+                str(scorer_max_num_seqs),
+                "--trust-remote-code",
+                "--seed",
+                str(config.system.seed),
+            ]
+            if scorer_max_num_batched_tokens is not None:
+                vllm_cmd.extend(
+                    [
+                        "--max-num-batched-tokens",
+                        str(scorer_max_num_batched_tokens),
+                    ]
+                )
+
+            scorer_env = os.environ.copy()
+            scorer_env["CUDA_VISIBLE_DEVICES"] = scorer_gpu
+
+            # Redirect stdout/stderr to file to avoid pipe buffer deadlock.
+            scorer_log_dir = output_dir or "."
+            scorer_stdout_path = os.path.join(scorer_log_dir, "scorer_vllm_server.log")
+            scorer_stdout_f = open(scorer_stdout_path, "w")
+            scorer_proc = subprocess.Popen(
+                vllm_cmd,
+                env=scorer_env,
+                stdout=scorer_stdout_f,
+                stderr=subprocess.STDOUT,
+            )
+
+            def _kill_scorer_server():
+                if scorer_proc.poll() is None:
+                    log.info("Shutting down scorer vLLM server...")
+                    scorer_proc.terminate()
+                    try:
+                        scorer_proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        scorer_proc.kill()
+                scorer_stdout_f.close()
+
+            atexit.register(_kill_scorer_server)
+
+            # Wait for the server to be ready
+            import httpx
+
+            base_url = f"http://localhost:{scorer_port}/v1"
+            max_wait = 300  # 5 minutes
+            start_time = time.time()
+            while time.time() - start_time < max_wait:
+                if scorer_proc.poll() is not None:
+                    scorer_stdout_f.flush()
+                    try:
+                        with open(scorer_stdout_path, "r") as f:
+                            log_tail = f.read()[-2000:]
+                    except Exception:
+                        log_tail = "(could not read log)"
+                    raise RuntimeError(
+                        f"Scorer vLLM server exited with code "
+                        f"{scorer_proc.returncode}:\n{log_tail}"
+                    )
+                try:
+                    resp = httpx.get(f"{base_url}/models", timeout=5)
+                    if resp.status_code == 200:
+                        log.info(
+                            f"Scorer vLLM server ready at {base_url} "
+                            f"(waited {time.time() - start_time:.1f}s)"
+                        )
+                        break
+                except Exception:
+                    pass
+                time.sleep(2)
+            else:
+                _kill_scorer_server()
+                raise RuntimeError(
+                    f"Scorer vLLM server did not start within {max_wait}s"
+                )
+
+            scorer_model = _create_api_model_for_scorer(
+                {
+                    "type": "openai_api",
+                    "model_name": scorer_model_path,
+                    "base_url": base_url,
+                    "api_key": "unused",
+                }
+            )
+            scorer.set_model(scorer_model, use_vllm=False)
+            log.info(
+                f"Scorer: using vLLM server on GPU {scorer_gpu} "
+                f"via API at {base_url}"
+            )
+        elif scorer_model_cfg is not None and scorer_model_type == "openai_api":
+            scorer_model = _create_api_model_for_scorer(scorer_model_cfg)
+            scorer.set_model(scorer_model, use_vllm=False)
+            log.info("Scorer: using API model")
+        else:
+            raise ValueError(
+                "scorer.model must be specified for llm_critic scorer. "
+                "Supported types: openai_api, vllm, vllm_shared"
+            )
+
+        # Initialize FLOP calculator for LLM critic token/compute tracking
+        if hasattr(scorer, "init_flop_calculator"):
+            try:
+                scorer_model_name = (
+                    scorer_model_cfg.get("model_name")
+                    or scorer_model_cfg.get("model_path")
+                    if scorer_model_cfg
+                    else getattr(config.model, "model_path", None)
+                )
+                if scorer_model_name:
+                    scorer.init_flop_calculator(scorer_model_name)
+            except Exception as e:
+                log.warning(f"Could not init LLM critic FLOP calculator: {e}")
+
     if config.strategy.type == "baseline":
         # Get eos_patterns from config, default to ["<end of response>"]
         eos_patterns = getattr(config.strategy, "detector_eos_patterns", None)
