@@ -287,29 +287,41 @@ class StepScorerLLMCritic(StepScorerBase):
         """
         Score candidates with detailed information.
 
-        Args:
-            chat: Current chat (contains the problem/question)
-            candidates: List of candidate steps to evaluate
-            trajectory: Previous steps in the reasoning chain
-
-        Returns:
-            List of CandidateScore objects with detailed scoring info
+        Delegates to score_candidates_batch with a single group and wraps
+        the raw scores into CandidateScore objects.
         """
         if not candidates:
             return []
 
-        # Extract problem from chat
-        problem = self._extract_problem(chat)
+        # Delegate to batch method with a single group
+        scores_list = self.score_candidates_batch(
+            chats=[chat],
+            candidates_list=[candidates],
+            trajectories=[trajectory],
+        )
+        scores = scores_list[0]
 
-        # Convert trajectory to text
-        trajectory_text = self._trajectory_to_text(trajectory)
+        # Wrap raw scores into CandidateScore objects
+        score_key = "votes" if self.method == "vote" else "value"
+        total_votes = sum(scores) if self.method == "vote" else None
+        results = []
+        for cand_idx, candidate in enumerate(candidates):
+            step_text = self._get_step_text(candidate)
+            score = scores[cand_idx] if cand_idx < len(scores) else 0.0
+            metadata = {"scorer_type": "llm_critic", "method": self.method}
+            if total_votes is not None:
+                metadata["total_votes"] = total_votes
+            results.append(
+                CandidateScore(
+                    candidate_text=step_text,
+                    claim_scores=[score],
+                    aggregate_scores={score_key: score},
+                    metadata=metadata,
+                )
+            )
+            log.info(f"Candidate {cand_idx}: {score_key}={score:.3f}")
 
-        if self.method == "value":
-            return self._score_value_method(problem, trajectory_text, candidates)
-        elif self.method == "vote":
-            return self._score_vote_method(problem, trajectory_text, candidates)
-        else:
-            raise ValueError(f"Unknown method: {self.method}")
+        return results
 
     def score_candidates_batch(
         self,
@@ -395,10 +407,11 @@ class StepScorerLLMCritic(StepScorerBase):
                     score_map[(group_idx, cand_idx)] = self.cache[cache_key]
                     local_seen_texts[step_text] = (group_idx, cand_idx)
                 else:
-                    prompt = self.value_prompt.format(
-                        problem=problem,
-                        trajectory=trajectory_text if trajectory_text else "(empty)",
-                        step=step_text,
+                    prompt = (
+                        self.value_prompt
+                        .replace("{problem}", problem)
+                        .replace("{trajectory}", trajectory_text if trajectory_text else "(empty)")
+                        .replace("{step}", step_text)
                     )
                     pending.append(
                         {
@@ -498,11 +511,12 @@ class StepScorerLLMCritic(StepScorerBase):
             candidates_str = "\n".join(
                 f"{i+1}. {text}" for i, text in enumerate(candidate_texts)
             )
-            prompt = self.vote_prompt.format(
-                problem=problem,
-                trajectory=trajectory_text if trajectory_text else "(empty)",
-                candidates=candidates_str,
-                n_candidates=len(candidate_texts),
+            prompt = (
+                self.vote_prompt
+                .replace("{problem}", problem)
+                .replace("{trajectory}", trajectory_text if trajectory_text else "(empty)")
+                .replace("{candidates}", candidates_str)
+                .replace("{n_candidates}", str(len(candidate_texts)))
             )
             prompts.append(prompt)
             group_sizes.append(len(candidate_texts))
@@ -558,172 +572,6 @@ class StepScorerLLMCritic(StepScorerBase):
         self.total_evaluations += len([p for p in prompts if p])
         return results
 
-    def _score_value_method(
-        self,
-        problem: str,
-        trajectory_text: str,
-        candidates: List[Any],
-    ) -> List[CandidateScore]:
-        """
-        Score each candidate independently using value method.
-
-        From ToT paper: "V(pθ, S)(s) ∼ p_value_θ(v|s)"
-        Prompts LLM to classify each state as sure/likely/unlikely/impossible.
-        """
-        results = []
-        # Track duplicates within this batch (as in original ToT)
-        local_seen_texts: Dict[str, bool] = {}
-
-        pending: List[Dict[str, Any]] = []
-        scores: Dict[int, float] = {}
-
-        for cand_idx, candidate in enumerate(candidates):
-            step_text = self._get_step_text(candidate)
-            cache_key = f"{problem}|||{trajectory_text}|||{step_text}"
-
-            # Handle duplicates within same batch (return 0 as in original ToT)
-            if step_text in local_seen_texts:
-                scores[cand_idx] = 0.0
-                log.debug(
-                    f"Duplicate candidate {cand_idx}: score=0 (duplicate in batch)"
-                )
-            # Check cache
-            elif cache_key in self.cache:
-                scores[cand_idx] = self.cache[cache_key]
-                log.debug(
-                    f"Cache hit for candidate {cand_idx}: score={scores[cand_idx]:.3f}"
-                )
-            else:
-                pending.append(
-                    {
-                        "idx": cand_idx,
-                        "step_text": step_text,
-                        "cache_key": cache_key,
-                    }
-                )
-
-            local_seen_texts[step_text] = True
-
-        # Batch-evaluate pending candidates for vLLM
-        if pending and self.use_vllm:
-            eval_scores: Dict[int, List[float]] = {item["idx"]: [] for item in pending}
-
-            for i in range(self.n_evaluate_sample):
-                prompts = [
-                    self.value_prompt.format(
-                        problem=problem,
-                        trajectory=trajectory_text if trajectory_text else "(empty)",
-                        step=item["step_text"],
-                    )
-                    for item in pending
-                ]
-                outputs: List[str] = []
-                try:
-                    outputs = self._call_vllm_batch(prompts)
-                except Exception as e:
-                    log.warning(f"Batch evaluation {i+1} failed: {e}")
-
-                for item_idx, item in enumerate(pending):
-                    output = outputs[item_idx] if item_idx < len(outputs) else ""
-                    try:
-                        score = self._parse_value_output(output)
-                    except Exception as e:
-                        log.warning(
-                            f"Evaluation {i+1} failed for candidate {item['idx']}: {e}"
-                        )
-                        score = 0.0
-                    eval_scores[item["idx"]].append(score)
-
-            for item in pending:
-                score = self._aggregate_scores(eval_scores[item["idx"]])
-                scores[item["idx"]] = score
-                self.cache[item["cache_key"]] = score
-                self.total_evaluations += 1
-
-        # Sequential fallback for non-vLLM or if no pending batch
-        for item in pending:
-            if item["idx"] in scores:
-                continue
-            score = self._evaluate_single_step(
-                problem, trajectory_text, item["step_text"]
-            )
-            scores[item["idx"]] = score
-            self.cache[item["cache_key"]] = score
-            self.total_evaluations += 1
-
-        for cand_idx, candidate in enumerate(candidates):
-            step_text = self._get_step_text(candidate)
-            score = scores.get(cand_idx, 0.0)
-            results.append(
-                CandidateScore(
-                    candidate_text=step_text,
-                    claim_scores=[score],
-                    aggregate_scores={"value": score},
-                    metadata={
-                        "scorer_type": "llm_critic",
-                        "method": "value",
-                    },
-                )
-            )
-
-            log.info(f"Candidate {cand_idx}: value_score={score:.3f}")
-
-        return results
-
-    def _score_vote_method(
-        self,
-        problem: str,
-        trajectory_text: str,
-        candidates: List[Any],
-    ) -> List[CandidateScore]:
-        """
-        Score candidates using voting method.
-
-        From ToT paper: "V(pθ, S)(s) = 1[s = s*], where s* ∼ p_vote_θ(s*|S)"
-        Presents all candidates and asks which is most promising.
-        """
-        if len(candidates) == 1:
-            # Single candidate (no voting then)
-            step_text = self._get_step_text(candidates[0])
-            return [
-                CandidateScore(
-                    candidate_text=step_text,
-                    claim_scores=[1.0],
-                    aggregate_scores={"votes": 1.0},
-                    metadata={
-                        "scorer_type": "llm_critic",
-                        "method": "vote",
-                    },
-                )
-            ]
-
-        # Get candidate texts
-        candidate_texts = [self._get_step_text(c) for c in candidates]
-
-        # Run voting
-        votes = self._run_voting(problem, trajectory_text, candidate_texts)
-
-        # Create results
-        results = []
-        for cand_idx, (candidate, vote_count) in enumerate(zip(candidates, votes)):
-            step_text = self._get_step_text(candidate)
-            results.append(
-                CandidateScore(
-                    candidate_text=step_text,
-                    claim_scores=[vote_count],
-                    aggregate_scores={"votes": vote_count},
-                    metadata={
-                        "scorer_type": "llm_critic",
-                        "method": "vote",
-                        "total_votes": sum(votes),
-                    },
-                )
-            )
-            log.info(f"Candidate {cand_idx}: votes={vote_count}")
-
-        self.total_evaluations += 1
-        return results
-
     def _evaluate_single_step(
         self,
         problem: str,
@@ -736,10 +584,11 @@ class StepScorerLLMCritic(StepScorerBase):
         Calls the LLM n_evaluate_sample times and aggregates scores.
         """
         # Build prompt
-        prompt = self.value_prompt.format(
-            problem=problem,
-            trajectory=trajectory_text if trajectory_text else "(empty)",
-            step=step_text,
+        prompt = (
+            self.value_prompt
+            .replace("{problem}", problem)
+            .replace("{trajectory}", trajectory_text if trajectory_text else "(empty)")
+            .replace("{step}", step_text)
         )
 
         # Get evaluations
@@ -757,62 +606,6 @@ class StepScorerLLMCritic(StepScorerBase):
                 scores.append(0.0)
 
         return self._aggregate_scores(scores)
-
-    def _run_voting(
-        self,
-        problem: str,
-        trajectory_text: str,
-        candidate_texts: List[str],
-    ) -> List[float]:
-        """
-        Run voting evaluation for candidates.
-
-        Returns vote counts for each candidate.
-        """
-        # Format candidates for prompt
-        candidates_str = "\n".join(
-            f"{i+1}. {text}" for i, text in enumerate(candidate_texts)
-        )
-
-        prompt = self.vote_prompt.format(
-            problem=problem,
-            trajectory=trajectory_text if trajectory_text else "(empty)",
-            candidates=candidates_str,
-            n_candidates=len(candidate_texts),
-        )
-
-        # Collect votes
-        votes = [0.0] * len(candidate_texts)
-
-        if self.use_vllm:
-            prompts = [prompt] * self.n_evaluate_sample
-            try:
-                outputs = self._call_vllm_batch(prompts)
-            except Exception as e:
-                log.warning(f"Vote batch failed: {e}")
-                outputs = []
-
-            for i, output in enumerate(outputs):
-                vote_idx = self._parse_vote_output(output, len(candidate_texts))
-                if vote_idx is not None:
-                    votes[vote_idx] += 1.0
-                log.debug(
-                    f"Vote {i+1}/{self.n_evaluate_sample}: output='{output[:50]}...', vote_idx={vote_idx}"
-                )
-        else:
-            for i in range(self.n_evaluate_sample):
-                try:
-                    output = self._call_model(prompt)
-                    vote_idx = self._parse_vote_output(output, len(candidate_texts))
-                    if vote_idx is not None:
-                        votes[vote_idx] += 1.0
-                    log.debug(
-                        f"Vote {i+1}/{self.n_evaluate_sample}: output='{output[:50]}...', vote_idx={vote_idx}"
-                    )
-                except Exception as e:
-                    log.warning(f"Vote {i+1} failed: {e}")
-
-        return votes
 
     def _call_model(self, prompt: str) -> str:
         """
@@ -956,11 +749,12 @@ class StepScorerLLMCritic(StepScorerBase):
                     input_tokens = result.get("prompt_tokens", 0)
                     output_tokens = result.get("completion_tokens", 0)
 
-                    # Fallback: estimate tokens if not provided by API
                     if input_tokens == 0 and output_tokens == 0:
-                        # Rough estimate: ~4 chars per token
-                        input_tokens = len(prompt) // 4
-                        output_tokens = len(text) // 4
+                        log.warning(
+                            "API response missing token counts "
+                            "(prompt_tokens/completion_tokens not returned). "
+                            "Token tracking will be inaccurate for this call."
+                        )
 
                     self._record_tokens(input_tokens, output_tokens, sample_id=sample_id)
                     return text

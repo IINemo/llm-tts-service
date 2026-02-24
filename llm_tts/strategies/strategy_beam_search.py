@@ -20,6 +20,7 @@ from llm_tts.generators import (
     convert_trajectory_to_string,
 )
 from llm_tts.generators.base import CompletionReason, StepCandidate, get_completion_info
+from llm_tts.scorers.step_scorer_llm_critic import StepScorerLLMCritic
 from llm_tts.utils.answer_extraction import extract_answer
 
 from .strategy_base import StrategyBase
@@ -165,7 +166,7 @@ class StrategyBeamSearch(StrategyBase):
             hasattr(self.scorer, "prm_model") and self.scorer.prm_model is not None
         )
         # LLM critic scorer does its own LLM calls, doesn't need uncertainty logprobs
-        use_llm_critic = getattr(self.scorer, "name", None) == "llm_critic"
+        use_llm_critic = isinstance(self.scorer, StepScorerLLMCritic)
         log.info(f"Using PRM scorer: {use_prm_scorer}, LLM critic: {use_llm_critic}")
 
         # Reset per-sample token tracking in generator
@@ -966,11 +967,14 @@ class StrategyBeamSearch(StrategyBase):
                 gen_tflops = token_stats.get("tflops") or 0
                 prm_tflops = prm_stats["prm_tflops"] or 0
                 token_stats["tflops"] = gen_tflops + prm_tflops
-            elif getattr(self.scorer, "name", None) == "llm_critic":
+            elif isinstance(self.scorer, StepScorerLLMCritic):
                 critic_stats = self.scorer.get_stats_for(sample_id)
-                token_stats.update(critic_stats)
+                token_stats["llm_critic_input_tokens"] = critic_stats.get("llm_critic_input_tokens", 0)
+                token_stats["llm_critic_output_tokens"] = critic_stats.get("llm_critic_output_tokens", 0)
+                token_stats["llm_critic_total_tokens"] = critic_stats.get("llm_critic_total_tokens", 0)
+                token_stats["llm_critic_tflops"] = critic_stats.get("llm_critic_tflops", 0)
                 gen_tflops = token_stats.get("tflops") or 0
-                critic_tflops = critic_stats.get("llm_critic_tflops") or 0
+                critic_tflops = token_stats["llm_critic_tflops"] or 0
                 token_stats["tflops"] = gen_tflops + critic_tflops
 
         is_completed = bool(steps and steps[-1].is_trajectory_complete)
