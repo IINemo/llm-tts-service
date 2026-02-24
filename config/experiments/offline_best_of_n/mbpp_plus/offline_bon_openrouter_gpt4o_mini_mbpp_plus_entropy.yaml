@@ -1,6 +1,6 @@
 # @package _global_
 # Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/mbpp_plus/offline_bon_openrouter_gpt4o_mini_mbpp_plus_entropy
-# Offline Best-of-N for MBPP+ using OpenRouter API with newline-based step boundaries
+# Offline Best-of-N for MBPP+ using OpenRouter API with linguistic step boundaries
 # Uses Entropy scorer for step evaluation
 #
 # Environment variable required: OPENROUTER_API_KEY
@@ -29,10 +29,6 @@ model:
   type: "openai_api"
   provider: openrouter
   model_path: "openai/gpt-4o-mini"  # Fast and cost-effective for code
-  # Alternative models:
-  # - "anthropic/claude-3.5-sonnet" (best quality)
-  # - "deepseek/deepseek-coder" (code-specialized)
-  # - "qwen/qwen-2.5-coder-32b-instruct" (open-source coder)
   api_key: null  # Set via OPENROUTER_API_KEY env var
   supports_logprobs: true
   prefill_mode: false
@@ -51,24 +47,11 @@ generation:
   top_k: 20
   batch_size: 1
 
-# Strategy - Offline Best-of-N with newline-based step boundaries for code
+# Strategy - Offline Best-of-N with linguistic step boundaries
 strategy:
+  type: offline_best_of_n
+  max_step_tokens: 500
   max_steps: 100
-  score_aggregation: mean
-  min_step_tokens: 10
-  max_step_tokens: 2048
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
 # Entropy scorer configuration
 scorer:

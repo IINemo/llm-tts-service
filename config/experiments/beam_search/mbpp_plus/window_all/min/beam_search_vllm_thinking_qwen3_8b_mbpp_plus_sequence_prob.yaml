@@ -1,0 +1,86 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/mbpp_plus/window_all/min/beam_search_vllm_thinking_qwen3_8b_mbpp_plus_sequence_prob
+# Note: Do NOT specify CUDA_VISIBLE_DEVICES when submitting via scripts/slurm/submit.sh - SLURM assigns GPUs automatically
+# Beam Search with Thinking Mode (Qwen3-8B) + Sequence Probability scorer on MBPP+
+# scoring_window=all: all step scores used for beam ranking
+# Aggregation: min (conservative - maximizes the minimum step score)
+
+defaults:
+  - /config
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /strategy/beam_search
+  - /scorer/sequence_prob
+  - /evaluation/mbpp_plus/default
+  - _self_
+
+# Run naming
+run_name: "beam_search/vllm_thinking_qwen3_8b/mbpp_plus/sequence_prob/window_all/min/seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-mbpp-plus
+wandb_group: "beam_search_qwen3_8b_thinking_mbpp_plus_sequence_prob_window_all_min"
+
+# Model configuration (vLLM backend)
+model:
+  type: "vllm"
+  model_path: "Qwen/Qwen3-8B"
+  model_short_name: "vllm_thinking_qwen3_8b"
+  gpu_memory_utilization: 0.85
+  tensor_parallel_size: 1
+  enable_prefix_caching: true
+  trust_remote_code: true
+  max_context_budget: 32768
+  disable_thinking_mode: false  # ENABLE native thinking mode
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (thinking mode settings)
+generation:
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 65536
+
+# Strategy - Beam Search
+strategy:
+  beam_size: 3
+  candidates_per_beam: 5
+  max_steps: 250
+  aggregation: min  # conservative - maximizes the minimum step score
+  scoring_window: null      # all step scores used for beam ranking
+  scoring_window_label: "window_all"
+  max_step_tokens: 500
+
+# Sequence Probability scorer configuration
+scorer:
+  type: sequence_prob
+  batch_size: 1
+
+# Dataset configuration - MBPP+
+dataset:
+  data_name: "mbpp_plus"
+  dataset_path: "evalplus/mbppplus"
+  dataset_split: "test"  # 378 problems
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "code"
+  prompt_file: null
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - mbpp_plus
+  mbpp_plus:
+    mode: full
+    timeout: 10

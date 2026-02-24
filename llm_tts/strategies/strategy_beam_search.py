@@ -78,6 +78,8 @@ class StrategyBeamSearch(StrategyBase):
         max_steps: Maximum reasoning steps.
         aggregation: How to aggregate scores across steps ("mean", "sum", "min", "max", "product").
         batch_generation: If True, use batched mode in generate_trajectories_batch.
+        scoring_window: If set, only use the last N step scores for aggregation.
+            None means use all steps (default).
     """
 
     def __init__(
@@ -92,6 +94,7 @@ class StrategyBeamSearch(StrategyBase):
         aggregation: str = "mean",
         batch_generation: bool = True,
         prompt_buffer: int = 500,
+        scoring_window: Optional[int] = None,
     ):
         self.step_generator = step_generator
         self.scorer = scorer
@@ -101,6 +104,7 @@ class StrategyBeamSearch(StrategyBase):
         self.aggregation = aggregation
         self.batch_generation = batch_generation
         self.prompt_buffer = prompt_buffer
+        self.scoring_window = scoring_window
 
         if beam_size <= 0:
             raise ValueError(f"beam_size must be > 0, got {beam_size}")
@@ -120,6 +124,7 @@ class StrategyBeamSearch(StrategyBase):
             f"StrategyBeamSearch initialized: beam_size={beam_size}, "
             f"candidates_per_beam={candidates_per_beam}, max_steps={max_steps}, "
             f"aggregation={aggregation}, batch_generation={batch_generation}, "
+            f"scoring_window={scoring_window}, "
             f"stop_tokens={len(stop_tokens)}, min_step_tokens={min_step_tokens}, "
             f"eos_token_ids={eos_token_ids}"
         )
@@ -168,9 +173,23 @@ class StrategyBeamSearch(StrategyBase):
             self.scorer.reset_prm_stats()
 
         # sample_beams[sample_id] = list of ACTIVE beams only
+        # Each beam has: steps, scores, total_tokens, beam_idx, unique_id, ancestors
         sample_beams = {
-            i: [{"steps": [], "scores": [], "total_tokens": 0}] for i in range(M)
+            i: [
+                {
+                    "steps": [],
+                    "scores": [],
+                    "total_tokens": 0,
+                    "beam_idx": 0,
+                    "unique_id": 0,
+                    "ancestors": [0],  # Track lineage: list of unique_ids of ancestors
+                }
+            ]
+            for i in range(M)
         }
+
+        # Global counter for unique beam IDs (per sample for clarity)
+        self._beam_id_counter = {i: 0 for i in range(M)}
 
         # Store COMPLETED beams separately so they are never expanded
         completed_beams_by_sample: Dict[int, List[Dict[str, Any]]] = {
@@ -239,10 +258,12 @@ class StrategyBeamSearch(StrategyBase):
                         continue
 
                     beam_tokens = beam.get("total_tokens", 0)
+                    beam_uid = beam.get("unique_id", beam_idx)
                     if beam_tokens >= max_trajectory_tokens - 200:
                         skipped_beams.append((sample_id, beam_idx, beam))
                         log.info(
-                            f"Sample {sample_id}: Skipping beam {beam_idx} (tokens: {beam_tokens} >= limit)"
+                            f"Sample {sample_id}: Skipping beam id={beam_uid} "
+                            f"(orig_idx={beam_idx}, tokens: {beam_tokens} >= limit)"
                         )
                     else:
                         prompt_metadata.append((sample_id, beam_idx, beam))
@@ -378,6 +399,11 @@ class StrategyBeamSearch(StrategyBase):
                     new_tokens = len(cand_data["token_ids"])
                     new_total_tokens = parent_beam.get("total_tokens", 0) + new_tokens
 
+                    # Assign unique ID and track lineage
+                    self._beam_id_counter[sample_id] += 1
+                    new_unique_id = self._beam_id_counter[sample_id]
+                    parent_ancestors = parent_beam.get("ancestors", [])
+
                     # Mark complete if exceeding context limit
                     if (
                         new_total_tokens >= max_trajectory_tokens
@@ -393,6 +419,9 @@ class StrategyBeamSearch(StrategyBase):
                         "steps": parent_beam["steps"] + [step_candidate],
                         "scores": parent_beam["scores"] + [score],
                         "total_tokens": new_total_tokens,
+                        "beam_idx": beam_idx,  # Track original beam index
+                        "unique_id": new_unique_id,
+                        "ancestors": parent_ancestors + [new_unique_id],
                     }
                     new_sample_beams[sample_id].append(new_beam)
 
@@ -429,6 +458,61 @@ class StrategyBeamSearch(StrategyBase):
                     reverse=True,
                 )
 
+                # Enhanced logging with explicit aggregation details
+                log.info(
+                    f"Sample {sample_indices[sample_id]}: Step {step_num} - Beam Selection"
+                    f" (aggregation={self.aggregation}, "
+                    f"{'lower aggregated score = better' if self.aggregation in ['min', 'product'] else 'higher aggregated score = better'})"
+                )
+
+                # Find the min/max step index for each beam to mark it
+                all_scores_parts = []
+                for i, b in enumerate(beams):
+                    scores = b["scores"]
+                    agg_score = self._aggregate_scores(scores)
+
+                    # Find which step is the aggregated value
+                    agg_idx = 0
+                    if self.aggregation == "min":
+                        agg_idx = scores.index(min(scores)) if scores else 0
+                    elif self.aggregation == "max":
+                        agg_idx = scores.index(max(scores)) if scores else 0
+
+                    # Mark the aggregated step in the list
+                    score_list_with_mark = [
+                        f"{s:.3f}↓" if idx == agg_idx else f"{s:.3f}"
+                        for idx, s in enumerate(scores)
+                    ]
+                    marked_steps_str = ", ".join(score_list_with_mark)
+
+                    # Get lineage info
+                    beam_uid = b.get("unique_id", i)
+                    ancestors = b.get("ancestors", [])
+                    orig_idx = b.get("beam_idx", i)
+
+                    # Format ancestors: show full chain or abbreviated if long
+                    if len(ancestors) <= 4:
+                        ancestors_str = str(ancestors)
+                    else:
+                        ancestors_str = f"[{ancestors[0]}, {ancestors[1]}, ..., {ancestors[-2]}, {ancestors[-1]}]"
+
+                    beam_status = (
+                        "[BEST]"
+                        if i == 0
+                        else "[KEPT]" if i < self.beam_size else "[PRUNED]"
+                    )
+                    all_scores_parts.append(
+                        f"  {beam_status} id={beam_uid} (sorted={i}, orig={orig_idx}, lineage={ancestors_str}): "
+                        f"agg={agg_score:.3f}, steps=[{marked_steps_str}]"
+                    )
+
+                all_scores_str = "\n".join(all_scores_parts)
+                total_candidates = len(beams)
+                log.info(
+                    f"Total candidates: {total_candidates} (from {len(sample_beams.get(sample_id, []))} active beams × {self.candidates_per_beam} candidates)"
+                )
+                log.info(f"Sorted beams:\n{all_scores_str}")
+
                 # Split into completed and active
                 completed, active = self._split_completed(beams)
 
@@ -439,6 +523,38 @@ class StrategyBeamSearch(StrategyBase):
                 # Keep only top beam_size ACTIVE beams for next step
                 active = active[: self.beam_size]
                 sample_beams[sample_id] = active
+
+                # Log beam search state after selection (before next generation)
+                if active:
+                    active_beams_parts = []
+                    for i, b in enumerate(active):
+                        score = self._aggregate_scores(b["scores"])
+                        n_steps = len(b["steps"])
+                        tokens = b.get("total_tokens", 0)
+                        beam_uid = b.get("unique_id", i)
+                        ancestors = b.get("ancestors", [])
+                        orig_idx = b.get("beam_idx", i)
+
+                        # Format ancestors
+                        if len(ancestors) <= 4:
+                            ancestors_str = str(ancestors)
+                        else:
+                            ancestors_str = f"[{ancestors[0]}, {ancestors[1]}, ..., {ancestors[-2]}, {ancestors[-1]}]"
+
+                        active_beams_parts.append(
+                            f"  id={beam_uid} (sorted={i}, orig={orig_idx}, lineage={ancestors_str}): "
+                            f"{n_steps} steps, {tokens} tokens, agg={score:.3f}"
+                        )
+                    active_beams_str = "\n".join(active_beams_parts)
+                    log.info(
+                        f"Active beams for next step ({len(active)}/{total_candidates} kept):\n{active_beams_str}"
+                    )
+                else:
+                    log.info(
+                        "Active beams for next step: (none - all beams completed or pruned)"
+                    )
+
+                log.info("")  # Empty line for readability
 
                 if not active:
                     # No active beams remain; select best beam for finalization
@@ -462,8 +578,16 @@ class StrategyBeamSearch(StrategyBase):
                 )
                 # Log chosen trajectory details - show each step separately
                 scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
+                beam_uid = best_beam.get("unique_id", "N/A")
+                ancestors = best_beam.get("ancestors", [])
+                lineage_str = (
+                    str(ancestors)
+                    if len(ancestors) <= 4
+                    else f"[{ancestors[0]}, {ancestors[1]}, ..., {ancestors[-1]}]"
+                )
                 log.info(
                     f"Sample {sample_indices[sample_id]}: Completed with "
+                    f"beam_id={beam_uid}, lineage={lineage_str}, "
                     f"{len(best_beam['steps'])} steps, "
                     f"score={self._aggregate_scores(best_beam['scores']):.3f}, "
                     f"scores=[{scores_str}]"
@@ -503,8 +627,16 @@ class StrategyBeamSearch(StrategyBase):
             )
             # Log chosen trajectory details - show each step separately
             scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
+            beam_uid = best_beam.get("unique_id", "N/A")
+            ancestors = best_beam.get("ancestors", [])
+            lineage_str = (
+                str(ancestors)
+                if len(ancestors) <= 4
+                else f"[{ancestors[0]}, {ancestors[1]}, ..., {ancestors[-1]}]"
+            )
             log.warning(
                 f"Sample {sample_indices[sample_id]}: Reached max_steps with "
+                f"beam_id={beam_uid}, lineage={lineage_str}, "
                 f"{len(best_beam['steps'])} steps, "
                 f"score={self._aggregate_scores(best_beam['scores']):.3f}, "
                 f"scores=[{scores_str}]"
@@ -658,40 +790,59 @@ class StrategyBeamSearch(StrategyBase):
         beams_needing_answers: List[tuple],  # [(sample_id, beam_dict)]
         requests: List[List[Dict[str, str]]],
     ) -> None:
-        """Generate answer phases for beams where thinking is complete but trajectory is not.
+        """Generate answer phases for beams that need an answer step.
 
-        After beam search selects the best thinking trajectory, this method generates
-        the answer phase (text after </think> with \\boxed{}) in one batched call.
+        Handles three scenarios:
+        1. Normal: thinking complete, trajectory not yet complete
+        2. Context limit / skipped: trajectory forced complete while still in thinking
+        3. Max steps: beam expired while still in thinking (not trajectory-complete)
+
+        The generator's generate_answer_candidates_batch already handles injecting
+        </think> if the thinking phase was never closed, so no special handling needed.
         Modifies beams in-place by appending answer StepCandidates.
 
         Args:
             beams_needing_answers: List of (sample_id, beam_dict) pairs
             requests: Original requests for each sample
         """
-        # Filter beams where thinking is done but trajectory is not
+        # Include all beams that don't already have both phases complete
         to_generate = []
         for sample_id, beam in beams_needing_answers:
-            if (
-                beam["steps"]
-                and beam["steps"][-1].is_thinking_complete
-                and not beam["steps"][-1].is_trajectory_complete
-            ):
-                to_generate.append((sample_id, beam))
+            if not beam["steps"]:
+                continue
+            last_step = beam["steps"][-1]
+            if last_step.is_thinking_complete and last_step.is_trajectory_complete:
+                continue  # Both phases done, skip
+            to_generate.append((sample_id, beam))
 
         if not to_generate:
             return
 
-        log.info(
-            f"Generating {len(to_generate)} answer phases for thinking-complete beams"
-        )
+        # Log per-beam reason for answer generation
+        for sample_id, beam in to_generate:
+            last_step = beam["steps"][-1]
+            if last_step.is_thinking_complete:
+                reason = "normal (thinking complete)"
+            elif last_step.is_trajectory_complete:
+                reason = "context limit during thinking"
+            else:
+                reason = "max steps during thinking"
+            log.info(
+                f"Sample {sample_id}: Generating answer — {reason} "
+                f"(thinking_complete={last_step.is_thinking_complete}, "
+                f"trajectory_complete={last_step.is_trajectory_complete})"
+            )
+        log.info(f"Generating {len(to_generate)} answer phases")
 
         batch_requests = [requests[sample_id] for sample_id, _ in to_generate]
         batch_trajectories = [beam["steps"] for _, beam in to_generate]
+        batch_sample_ids = [sample_id for sample_id, _ in to_generate]
 
         answer_results = self.step_generator.generate_answer_candidates_batch(
             batch_requests,
             batch_trajectories,
             candidates_per_step=1,
+            sample_ids=batch_sample_ids,
         )
 
         for batch_idx, (sample_id, beam) in enumerate(to_generate):
@@ -757,9 +908,46 @@ class StrategyBeamSearch(StrategyBase):
 
         # If answer step was appended (more steps than scores), record it separately
         # so the eval script logs it as "Generated Answer" instead of a numbered step
-        if len(steps) > len(scores) and steps:
+        has_answer_step = len(steps) > len(scores) and bool(steps)
+        if has_answer_step:
             answer_step = steps[-1]
             result["answer_step"] = answer_step.raw_text or answer_step.text
+
+        # Token breakdown: thinking (trajectory) vs answer
+        if steps:
+            thinking_steps = steps[:-1] if has_answer_step else steps
+            answer_step_obj = steps[-1] if has_answer_step else None
+
+            result["trajectory_tokens"] = sum(
+                len(s.token_ids) for s in thinking_steps if s.token_ids
+            )
+            result["answer_tokens"] = (
+                len(answer_step_obj.token_ids)
+                if answer_step_obj and answer_step_obj.token_ids
+                else 0
+            )
+
+            # Detect termination reason from last thinking step flags.
+            # Only meaningful in thinking mode (has_answer_step=True), because
+            # in non-thinking mode is_thinking_complete is always False.
+            if has_answer_step and thinking_steps:
+                last_thinking = thinking_steps[-1]
+                result["context_limit_hit"] = (
+                    last_thinking.is_trajectory_complete
+                    and not last_thinking.is_thinking_complete
+                )
+                result["max_steps_hit"] = (
+                    not last_thinking.is_trajectory_complete
+                    and not last_thinking.is_thinking_complete
+                )
+            else:
+                result["context_limit_hit"] = False
+                result["max_steps_hit"] = False
+        else:
+            result["trajectory_tokens"] = 0
+            result["answer_tokens"] = 0
+            result["context_limit_hit"] = False
+            result["max_steps_hit"] = False
 
         if token_stats is not None:
             result["token_stats"] = token_stats
@@ -769,8 +957,8 @@ class StrategyBeamSearch(StrategyBase):
         """Aggregate scores across steps according to selected strategy."""
         if len(scores) == 0:
             return 0.0
-        # Filter out non-finite values (NaN, inf, -inf)
-        clean = [s for s in scores if np.isfinite(s)]
+        # Filter out None (skipped PRM steps) and non-finite values (NaN, inf, -inf)
+        clean = [s for s in scores if s is not None and np.isfinite(s)]
         if not clean:
             log.warning(f"All {len(scores)} scores are non-finite, returning 0.0")
             return 0.0
@@ -778,6 +966,9 @@ class StrategyBeamSearch(StrategyBase):
             log.warning(
                 f"Dropped {len(scores) - len(clean)} non-finite scores out of {len(scores)}"
             )
+        # Apply sliding window: only use the last N valid scores
+        if self.scoring_window is not None and len(clean) > self.scoring_window:
+            clean = clean[-self.scoring_window :]
         if self.aggregation == "sum":
             return sum(clean)
         elif self.aggregation == "mean":

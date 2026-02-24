@@ -845,14 +845,36 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                         for future in as_completed(futures):
                             results.append(future.result())
             else:
-                # Batch path — stop tokens passed directly to API
-                results = self._generate_batch(
-                    messages,
-                    n=candidates_per_step,
-                    max_tokens=max_tokens,
-                    stop=api_stop,
-                    call_id=f"sample={sample_id}",
-                )
+                # Batch path — stop tokens passed directly to API.
+                # Use N concurrent n=1 calls instead of a single n=N call,
+                # because many API providers (e.g. OpenRouter) silently
+                # ignore n>1 and return only 1 completion.
+                if candidates_per_step == 1:
+                    results = self._generate_batch(
+                        messages,
+                        n=1,
+                        max_tokens=max_tokens,
+                        stop=api_stop,
+                        call_id=f"sample={sample_id} cand=0",
+                    )
+                else:
+                    results = []
+                    with ThreadPoolExecutor(
+                        max_workers=candidates_per_step
+                    ) as cand_executor:
+                        futures = [
+                            cand_executor.submit(
+                                self._generate_batch,
+                                messages,
+                                n=1,
+                                max_tokens=max_tokens,
+                                stop=api_stop,
+                                call_id=f"sample={sample_id} cand={ci}",
+                            )
+                            for ci in range(candidates_per_step)
+                        ]
+                        for future in as_completed(futures):
+                            results.extend(future.result())
 
             # Log progress and all candidates
             with _count_lock:
@@ -866,9 +888,9 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
         # Execute concurrently across trajectories.
         # Cap outer workers so total concurrent connections stays within budget:
-        #   streaming: outer × candidates_per_step concurrent API calls
-        #   batch: outer × 1 concurrent API calls
-        if use_streaming and candidates_per_step > 1:
+        #   Both paths use outer × candidates_per_step concurrent API calls
+        #   when candidates_per_step > 1.
+        if candidates_per_step > 1:
             outer_workers = min(
                 self.max_concurrent_requests // candidates_per_step,
                 len(active_indices),
@@ -1136,6 +1158,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         requests: List[List[Dict[str, str]]],
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
+        sample_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Generate answer candidates for multiple trajectories in one call."""
         if len(requests) != len(trajectories):
@@ -1176,6 +1199,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             candidates_per_step=candidates_per_step,
             stop_tokens_override=self.response_stop_tokens,
             max_tokens=answer_max_tokens,
+            sample_ids=sample_ids,
         )
 
         # Mark all as trajectory complete

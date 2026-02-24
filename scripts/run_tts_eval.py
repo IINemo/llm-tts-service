@@ -136,6 +136,7 @@ from llm_tts.strategies import (
     StrategyBaseline,
     StrategyBeamSearch,
     StrategyDeepConf,
+    StrategyExtendedThinking,
     StrategyOfflineBestOfN,
     StrategyOnlineBestOfN,
     StrategySelfConsistency,
@@ -461,7 +462,11 @@ def create_model(config):
 
             # Self-consistency and baseline don't need uncertainty wrapper
             # (self-consistency uses majority voting, baseline uses raw vLLM batch generation)
-            if config.strategy.type in ("self_consistency", "baseline"):
+            if config.strategy.type in (
+                "self_consistency",
+                "baseline",
+                "extended_thinking",
+            ):
                 vllm_model = llm
                 log.info(
                     f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
@@ -654,7 +659,7 @@ def create_model(config):
             base_url = "https://openrouter.ai/api/v1"
         else:
             api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
-            base_url = None
+            base_url = config.model.get("base_url", None)
 
         # Check if DeepConf strategy
         if config.strategy.type == "deepconf":
@@ -820,6 +825,45 @@ def create_tts_strategy(
         # Offline Best-of-N generates N trajectories, scores with PRM, selects best
         # With batch_generation=True, all M×N trajectories generated in single vLLM call
         batch_generation = config.strategy.get("batch_generation", True)
+
+        # Multi-scoring: per-scorer flags for computing extra metrics
+        multi_score_flags = {}
+        for flag in [
+            "calculate_entropy_score",
+            "calculate_perplexity_score",
+            "calculate_sequence_prob_score",
+            "calculate_pd_gap_score",
+            "calculate_prm_score",
+        ]:
+            multi_score_flags[flag] = getattr(config.strategy, flag, False)
+
+        # Create separate PRM scorer if calculate_prm_score=True
+        # and primary scorer is not already PRM
+        extra_prm_scorer = None
+        if multi_score_flags.get("calculate_prm_score"):
+            primary_is_prm = (
+                hasattr(scorer, "prm_model") and scorer.prm_model is not None
+            )
+            if not primary_is_prm:
+                prm_model_path = getattr(config.strategy, "prm_model_path", None)
+                if prm_model_path:
+                    log.info(
+                        f"Creating extra PRM scorer for multi-scoring: {prm_model_path}"
+                    )
+                    extra_prm_scorer = StepScorerPRM(
+                        prm_model_path=prm_model_path,
+                        device=getattr(config.strategy, "prm_device", "cuda:1"),
+                        batch_size=getattr(config.strategy, "prm_batch_size", 4),
+                        torch_dtype=getattr(
+                            config.strategy, "prm_torch_dtype", "bfloat16"
+                        ),
+                        use_vllm=getattr(config.strategy, "prm_use_vllm", True),
+                    )
+                else:
+                    log.warning(
+                        "calculate_prm_score=True but no prm_model_path specified"
+                    )
+
         strategy = StrategyOfflineBestOfN(
             scorer=scorer,
             num_trajectories=config.strategy.get("num_trajectories", 4),
@@ -828,6 +872,9 @@ def create_tts_strategy(
             score_aggregation=config.strategy.get("score_aggregation", "mean"),
             output_dir=output_dir,
             batch_generation=batch_generation,
+            scoring_window=config.strategy.get("scoring_window", None),
+            prm_scorer=extra_prm_scorer,
+            **multi_score_flags,
         )
     elif config.strategy.type == "adaptive":
         strategy = AdaptiveScalingBestOfN(
@@ -870,6 +917,7 @@ def create_tts_strategy(
             max_steps=config.strategy.max_steps,
             aggregation=getattr(config.strategy, "aggregation", "mean"),
             batch_generation=config.strategy.get("batch_generation", True),
+            scoring_window=config.strategy.get("scoring_window", None),
         )
     elif config.strategy.type == "phi_decoding":
         strategy = PhiDecoding(
@@ -904,6 +952,22 @@ def create_tts_strategy(
             max_empty_steps=config.strategy.max_empty_steps,
             uncertainty_threshold=config.strategy.uncertainty_threshold,
             uncertainty_sampling=config.strategy.uncertainty_sampling,
+        )
+    elif config.strategy.type == "extended_thinking":
+        eos_patterns = getattr(config.strategy, "detector_eos_patterns", None)
+        if eos_patterns:
+            eos_patterns = list(eos_patterns)
+        stop_token_ids = getattr(config.strategy, "stop_token_ids", None)
+        if stop_token_ids:
+            stop_token_ids = list(stop_token_ids)
+        strategy = StrategyExtendedThinking(
+            step_generator=step_generator,
+            max_continuations=config.strategy.get("max_continuations", 3),
+            continuation_token=config.strategy.get("continuation_token", "\nWait, "),
+            max_steps=config.strategy.get("max_steps", 50),
+            output_dir=output_dir,
+            eos_patterns=eos_patterns,
+            stop_token_ids=stop_token_ids,
         )
     else:
         raise ValueError(f"Strategy type {config.strategy.type} not supported")
@@ -995,6 +1059,9 @@ def _generate_trajectories_batch(
 
     # Split into chunks for intermediate checkpointing
     num_chunks = (total_to_process + checkpoint_batch_size - 1) // checkpoint_batch_size
+
+    # Collect candidates data for multi-scoring analysis (saved to candidates.json)
+    all_candidates_data = []
 
     for chunk_idx in range(num_chunks):
         batch_start = chunk_idx * checkpoint_batch_size
@@ -1261,10 +1328,11 @@ def _generate_trajectories_batch(
             log.info("-" * 60)
             log.info(f"Num steps: {len(result['steps'])}")
             if "validity_scores" in result and result["validity_scores"]:
-                scores = result["validity_scores"]
-                log.info(
-                    f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
-                )
+                scores = [s for s in result["validity_scores"] if s is not None]
+                if scores:
+                    log.info(
+                        f"Confidence:  avg={np.mean(scores):.3f}, min={np.min(scores):.3f}, max={np.max(scores):.3f}"
+                    )
             log.info("=" * 60)
 
             # Store result with per-evaluator results
@@ -1289,6 +1357,16 @@ def _generate_trajectories_batch(
             if "token_stats" in result:
                 result_dict["token_stats"] = result["token_stats"]
 
+            # Propagate beam search diagnostics
+            for key in (
+                "trajectory_tokens",
+                "answer_tokens",
+                "context_limit_hit",
+                "max_steps_hit",
+            ):
+                if key in result:
+                    result_dict[key] = result[key]
+
             # Store answer_step for thinking mode strategies
             if "answer_step" in result:
                 result_dict["answer_step"] = result["answer_step"]
@@ -1302,6 +1380,18 @@ def _generate_trajectories_batch(
                 result_dict["entry_point"] = instance["entry_point"]
 
             results.append(result_dict)
+
+            # Collect candidates_data for multi-scoring analysis
+            if "candidates_data" in result:
+                all_candidates_data.append(
+                    {
+                        "index": i,
+                        "question": question,
+                        "gold_answer": gold_answer_num,
+                        "num_candidates": len(result["candidates_data"]),
+                        "candidates": result["candidates_data"],
+                    }
+                )
 
             # Compute running metrics
             token_stats = result.get("token_stats")
@@ -1365,8 +1455,20 @@ def _generate_trajectories_batch(
                 sample_metrics[f"running_correct_{safe_name}"] = stats["correct"]
                 sample_metrics[f"running_accuracy_{safe_name}"] = stats["accuracy"]
 
+            # Beam search per-sample metrics: token breakdown and context limit
+            if "trajectory_tokens" in result:
+                sample_metrics["trajectory_tokens"] = result["trajectory_tokens"]
+            if "answer_tokens" in result:
+                sample_metrics["answer_tokens"] = result["answer_tokens"]
+            if "context_limit_hit" in result:
+                sample_metrics["context_limit_hit"] = int(result["context_limit_hit"])
+            if "max_steps_hit" in result:
+                sample_metrics["max_steps_hit"] = int(result["max_steps_hit"])
+
             if "validity_scores" in result and result["validity_scores"]:
-                sample_metrics["confidence"] = float(np.mean(result["validity_scores"]))
+                valid_scores = [s for s in result["validity_scores"] if s is not None]
+                if valid_scores:
+                    sample_metrics["confidence"] = float(np.mean(valid_scores))
 
             # Append metrics line
             try:
@@ -1394,6 +1496,15 @@ def _generate_trajectories_batch(
     # Final save after all chunks complete
     save_results_json(results, save_path_file)
     log.info(f"Final save: {len(results)} results to {save_path_file}")
+
+    # Save candidates.json for multi-scoring post-hoc analysis
+    if all_candidates_data:
+        candidates_path = save_path_file.parent / "candidates.json"
+        save_results_json(all_candidates_data, candidates_path)
+        log.info(
+            f"Saved {len(all_candidates_data)} samples with candidates data "
+            f"to {candidates_path}"
+        )
 
     return results
 
@@ -1461,6 +1572,10 @@ def generate_trajectories(
 
 def log_evaluation_inconsistencies(results, save_path: str):
     """Log samples where exact_match and llm_judge disagree."""
+    if not results:
+        log.info("No results to check for inconsistencies")
+        return
+
     # Find llm_judge evaluator name
     llm_judge_name = None
     for key in results[0].get("eval", {}):
@@ -1884,6 +1999,15 @@ def evaluate_results(
                 }
             save_results_json(results, save_path_file)
 
+    # Collect statistics from LLM judge evaluators
+    llm_judge_stats = {}
+    for eval_name, evaluator_fn in batch_evaluators.items():
+        if isinstance(evaluator_fn, EvaluatorLLMAsAJudge):
+            stats = evaluator_fn.get_stats()
+            # Prefix with evaluator name for disambiguation
+            for key, value in stats.items():
+                llm_judge_stats[f"{eval_name}/{key}"] = value
+
     # Combine all evaluator names for summary
     all_evaluator_names = list(evaluators.keys()) + list(batch_evaluators.keys())
 
@@ -1905,22 +2029,34 @@ def evaluate_results(
 
     log.info("Summary:")
     log.info(f"Total samples: {len(results)}")
-    log.info(f"Completed: {completed} ({completed/len(results):.1%})")
-    log.info(f"Errors: {errors} ({errors/len(results):.1%})")
-    for name in sorted(all_evaluator_names):
-        correct = summary_correct[name]
-        incorrect = summary_incorrect[name]
-        log.info(f"[{name}]")
-        log.info(f"Correct: {correct} ({correct/len(results):.1%})")
-        log.info(f"Incorrect: {incorrect} ({incorrect/len(results):.1%})")
+    if results:
+        log.info(f"Completed: {completed} ({completed/len(results):.1%})")
+        log.info(f"Errors: {errors} ({errors/len(results):.1%})")
+        for name in sorted(all_evaluator_names):
+            correct = summary_correct[name]
+            incorrect = summary_incorrect[name]
+            log.info(f"[{name}]")
+            log.info(f"Correct: {correct} ({correct/len(results):.1%})")
+            log.info(f"Incorrect: {incorrect} ({incorrect/len(results):.1%})")
+    else:
+        log.info("Completed: 0 (0.0%)")
+        log.info("Errors: 0 (0.0%)")
+        for name in sorted(all_evaluator_names):
+            correct = summary_correct[name]
+            incorrect = summary_incorrect[name]
+            log.info(f"[{name}]")
+            log.info(f"Correct: {correct} (0.0%)")
+            log.info(f"Incorrect: {incorrect} (0.0%)")
 
     # Average statistics
     all_validities = []
     all_reasoning_steps = []
     for r in results:
         if "validity_scores" in r and r["validity_scores"]:
-            all_validities.extend(r["validity_scores"])
-            all_reasoning_steps.append(r.get("reasoning_steps", len(r["steps"])))
+            valid = [s for s in r["validity_scores"] if s is not None]
+            if valid:
+                all_validities.extend(valid)
+                all_reasoning_steps.append(r.get("reasoning_steps", len(r["steps"])))
 
     # Token / FLOPs aggregates
     missing_stats_count = sum(1 for r in results if r.get("token_stats") is None)
@@ -1947,12 +2083,19 @@ def evaluate_results(
     if total_prm_tokens > 0:
         log.info(f"Total PRM input tokens: {total_prm_tokens:,}")
         log.info(f"Total PRM TFLOPs: {total_prm_tflops:.2f}")
-    log.info(f"Avg tokens per sample: {total_tokens / len(results):,.0f}")
-    log.info(f"Avg output tokens per sample: {total_output_tokens / len(results):,.0f}")
-    log.info(f"Avg TFLOPs per sample: {total_tflops / len(results):.4f}")
+    if results:
+        log.info(f"Avg tokens per sample: {total_tokens / len(results):,.0f}")
+        log.info(
+            f"Avg output tokens per sample: {total_output_tokens / len(results):,.0f}"
+        )
+        log.info(f"Avg TFLOPs per sample: {total_tflops / len(results):.4f}")
     log.info("Step Statistics:")
-    log.info(f"Avg reasoning steps per trajectory: {np.mean(all_reasoning_steps):.1f}")
-    log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
+    if all_reasoning_steps:
+        log.info(
+            f"Avg reasoning steps per trajectory: {np.mean(all_reasoning_steps):.1f}"
+        )
+    if all_validities:
+        log.info(f"Avg validity score: {np.mean(all_validities):.3f}")
 
     # Build final metrics (also saved locally)
     metrics = {
@@ -1999,6 +2142,82 @@ def evaluate_results(
     if total_prm_tokens > 0:
         metrics["compute/prm_input_tokens"] = int(total_prm_tokens)
         metrics["compute/prm_tflops"] = float(total_prm_tflops)
+
+    # Beam search token breakdown and termination diagnostics
+    all_trajectory_tokens = [
+        r["trajectory_tokens"] for r in results if "trajectory_tokens" in r
+    ]
+    all_answer_tokens = [r["answer_tokens"] for r in results if "answer_tokens" in r]
+    context_limit_hits = sum(1 for r in results if r.get("context_limit_hit", False))
+    max_steps_hits = sum(1 for r in results if r.get("max_steps_hit", False))
+    no_answer_count = sum(1 for r in results if not r.get("extracted_answer"))
+    if all_trajectory_tokens:
+        metrics["compute/avg_trajectory_tokens"] = float(np.mean(all_trajectory_tokens))
+        metrics["compute/avg_answer_tokens"] = float(np.mean(all_answer_tokens))
+        metrics["context_limit_hit_count"] = context_limit_hits
+        metrics["context_limit_hit_rate"] = (
+            context_limit_hits / len(results) if results else 0.0
+        )
+        metrics["max_steps_hit_count"] = max_steps_hits
+        metrics["max_steps_hit_rate"] = (
+            max_steps_hits / len(results) if results else 0.0
+        )
+        log.info(
+            f"Token breakdown: avg trajectory={np.mean(all_trajectory_tokens):.0f}, "
+            f"avg answer={np.mean(all_answer_tokens):.0f}"
+        )
+        log.info(
+            f"Context limit hits: {context_limit_hits}/{len(results)} "
+            f"({context_limit_hits / len(results):.1%})"
+        )
+        log.info(
+            f"Max steps hits: {max_steps_hits}/{len(results)} "
+            f"({max_steps_hits / len(results):.1%})"
+        )
+    # No-answer rate (applies to all strategies)
+    if results:
+        metrics["no_answer_count"] = no_answer_count
+        metrics["no_answer_rate"] = no_answer_count / len(results)
+        if no_answer_count > 0:
+            log.warning(
+                f"No answer extracted: {no_answer_count}/{len(results)} "
+                f"({no_answer_count / len(results):.1%})"
+            )
+
+    # Add LLM judge statistics (if available)
+    if llm_judge_stats:
+        metrics.update(llm_judge_stats)
+        # Log LLM judge stats to console
+        log.info("LLM Judge Statistics:")
+        for key, value in llm_judge_stats.items():
+            if isinstance(value, float):
+                log.info(f"  {key}: {value:.4f}")
+            else:
+                log.info(f"  {key}: {value}")
+
+    # Compute additional LLM judge stats from stored results
+    for eval_name in batch_evaluators.keys():
+        if isinstance(batch_evaluators[eval_name], EvaluatorLLMAsAJudge):
+            # Count unclear samples (where all votes failed to parse)
+            unclear_count = 0
+            consensus_scores = []
+            for r in results:
+                if "eval" in r and eval_name in r["eval"]:
+                    eval_data = r["eval"][eval_name]
+                    if eval_data.get("label") is None:  # NaN/None = unclear
+                        unclear_count += 1
+                    if "consensus" in eval_data and eval_data["consensus"] is not None:
+                        consensus_scores.append(eval_data["consensus"])
+
+            if unclear_count > 0:
+                metrics[f"{eval_name}/unclear_count"] = unclear_count
+                metrics[f"{eval_name}/unclear_rate"] = (
+                    unclear_count / len(results) if results else 0.0
+                )
+
+            if consensus_scores:
+                metrics[f"{eval_name}/avg_consensus"] = float(np.mean(consensus_scores))
+                metrics[f"{eval_name}/min_consensus"] = float(np.min(consensus_scores))
 
     # Save metrics locally (so FLOPs metrics aren't only in W&B)
     metrics_path = Path(save_path) / "metrics.json"
@@ -2252,7 +2471,12 @@ def main(config):
     # Load model
     model_name = config.model.get("model_name") or config.model.get("model_path")
     log.info(f"Loading model: {model_name}")
-    model, step_generator = create_model(config)
+    try:
+        model, step_generator = create_model(config)
+        log.info("Model loaded successfully")
+    except Exception as e:
+        log.exception(f"Model loading failed: {e}")
+        raise
 
     # Create FLOP calculator for compute cost estimation
     flop_calculator = None
@@ -2298,20 +2522,37 @@ def main(config):
     if not data_name:
         raise ValueError("data_name must be set in config.dataset or config.strategy")
 
-    results = generate_trajectories(
-        results=results,
-        save_path=output_dir,
-        strategy=generator,
-        dataset=dataset,
-        processed_indices=processed_indices,
-        prompt_template=prompt_template,
-        system_prompt=system_prompt,
-        question_field=config.dataset.get("question_field", "question"),
-        answer_field=config.dataset.get("answer_field", "answer"),
-        exact_match_dataset_answer_format=config.dataset.answer_format,
-        data_name=data_name,
-        config=config,  # Pass config for multi-evaluator support
-    )
+    # Generate trajectories with error logging
+    log.info("Starting trajectory generation...")
+    try:
+        results = generate_trajectories(
+            results=results,
+            save_path=output_dir,
+            strategy=generator,
+            dataset=dataset,
+            processed_indices=processed_indices,
+            prompt_template=prompt_template,
+            system_prompt=system_prompt,
+            question_field=config.dataset.get("question_field", "question"),
+            answer_field=config.dataset.get("answer_field", "answer"),
+            exact_match_dataset_answer_format=config.dataset.answer_format,
+            data_name=data_name,
+            config=config,  # Pass config for multi-evaluator support
+        )
+        log.info("Trajectory generation completed successfully")
+
+    except Exception as e:
+        log.exception(f"Trajectory generation failed: {e}")
+
+        # Save partial results before crashing
+        try:
+            partial_results_path = Path(output_dir) / "results_partial.json"
+            with open(partial_results_path, "w") as f:
+                json.dump(results, f, indent=2, default=str)
+            log.info(f"Saved partial results to {partial_results_path}")
+        except Exception as save_err:
+            log.error(f"Failed to save partial results: {save_err}")
+        raise
 
     # Free GPU memory before evaluation (model not needed for LLM judge API calls)
     log.info("Freeing GPU memory before evaluation phase...")
@@ -2342,11 +2583,17 @@ def main(config):
         log.warning(f"Failed to free GPU memory: {e}")
 
     # Evaluate results
-    evaluate_results(
-        config=config,
-        results=results,
-        save_path=output_dir,
-    )
+    log.info("Starting evaluation phase...")
+    try:
+        evaluate_results(
+            config=config,
+            results=results,
+            save_path=output_dir,
+        )
+        log.info("Evaluation completed successfully")
+    except Exception as e:
+        log.exception(f"Evaluation failed: {e}")
+        raise
 
     # Save log files and finish wandb session
     if getattr(config, "report_to", None) == "wandb":
@@ -2354,12 +2601,17 @@ def main(config):
             import wandb
 
             if wandb.run is not None:
-                log_file = Path(output_dir) / "run_tts_eval.log"
-                stderr_log = Path(output_dir) / "stderr.log"
-                if log_file.exists():
-                    wandb.save(str(log_file))
-                if stderr_log.exists():
-                    wandb.save(str(stderr_log))
+                log.info("Saving output files to wandb...")
+                # Save all JSON, JSONL, and log files
+                for ext in ["*.json", "*.jsonl", "*.log"]:
+                    for output_file in Path(output_dir).glob(ext):
+                        try:
+                            wandb.save(str(output_file))
+                            log.debug(f"Saved {output_file.name} to wandb")
+                        except Exception as save_err:
+                            log.warning(
+                                f"Failed to save {output_file.name}: {save_err}"
+                            )
             wandb.finish()
             log.info("Finished wandb session")
         except Exception as e:
@@ -2374,4 +2626,67 @@ def main(config):
 if __name__ == "__main__":
     # Parse custom resume arguments before Hydra processes sys.argv
     parse_resume_arguments()
-    main()
+
+    # Store variables for cleanup on error
+    output_dir = None
+    stderr_file = None
+    config = None
+
+    try:
+        main()
+    except (KeyboardInterrupt, MemoryError, Exception) as e:
+        import logging
+
+        error_log = logging.getLogger(__name__)
+
+        # Try to get output_dir from HydraConfig if main() didn't set it
+        if output_dir is None:
+            try:
+                from hydra.core.hydra_config import HydraConfig
+
+                output_dir = HydraConfig.get().runtime.output_dir
+            except Exception:
+                error_log.warning("Could not get output_dir from HydraConfig")
+
+        # Log the error
+        if isinstance(e, KeyboardInterrupt):
+            error_log.info("Job interrupted by user (KeyboardInterrupt)")
+        elif isinstance(e, MemoryError):
+            error_log.error(f"Job failed due to MemoryError (GPU/CPU OOM): {e}")
+        else:
+            error_log.exception(f"Job failed with exception: {e}")
+
+        # Save logs to wandb even on error
+        if output_dir:
+            try:
+                from pathlib import Path
+
+                import wandb
+
+                # Sync all output files to wandb before crashing
+                if wandb.run is not None:
+                    error_log.info("Saving log files to wandb after error...")
+
+                    # Save all JSON, JSONL, and log files
+                    for ext in ["*.json", "*.jsonl", "*.log"]:
+                        for log_file in Path(output_dir).glob(ext):
+                            try:
+                                wandb.save(str(log_file))
+                                error_log.info(f"Saved {log_file.name} to wandb")
+                            except Exception as save_err:
+                                error_log.warning(
+                                    f"Failed to save {log_file.name}: {save_err}"
+                                )
+
+                    # Finish wandb run with error status
+                    wandb.finish(exit_code=1)
+                    error_log.info("Wandb session finished (with error)")
+            except Exception as wandb_err:
+                error_log.warning(f"Failed to save logs to wandb on error: {wandb_err}")
+
+        # Close stderr redirect file
+        if stderr_file:
+            sys.stderr = sys.__stderr__
+            stderr_file.close()
+
+        raise

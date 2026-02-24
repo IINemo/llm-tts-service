@@ -1,6 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_vllm_qwen3_8b_human_eval_plus_perplexity
-# Offline Best-of-N for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
+# Offline Best-of-N for HumanEval+ using vLLM with Qwen3-8B and linguistic step boundaries
 # Uses perplexity scorer for step evaluation
 
 defaults:
@@ -31,7 +31,7 @@ model:
   enable_prefix_caching: true
   trust_remote_code: true
   max_model_len: 8192
-  disable_thinking_mode: true
+  disable_thinking_mode: false
 
 # System configuration
 system:
@@ -40,31 +40,18 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 512
-  temperature: 0.7
+  max_new_tokens: 32768
+  temperature: 0.6
   top_p: 0.95
-  top_k: 50
+  top_k: 20
   batch_size: 1
+  max_length: 65536
 
-# Strategy - Offline Best-of-N with newline-based step boundaries for code
+# Strategy - Offline Best-of-N with linguistic step boundaries
 strategy:
-  max_steps: 20
-  score_aggregation: mean
-  # Stop tokens for Qwen models
-  min_step_tokens: 5
-  max_step_tokens: 128
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
+  type: offline_best_of_n
+  max_step_tokens: 500
+  max_steps: 100
 
 # perplexity scorer configuration
 scorer:
