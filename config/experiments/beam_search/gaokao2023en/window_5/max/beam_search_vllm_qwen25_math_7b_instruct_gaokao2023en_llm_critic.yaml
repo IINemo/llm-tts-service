@@ -1,0 +1,77 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0,1 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/gaokao2023en/window_5/max/beam_search_vllm_qwen25_math_7b_instruct_gaokao2023en_llm_critic
+#
+# Beam Search with LLM Critic scorer on gaokao2023en
+# Generation: vLLM (Qwen2.5-Math-7B-Instruct) on GPU 0, Scoring: vLLM (Qwen2.5-7B-Instruct) on GPU 1
+# scoring_window=5: only last 5 step scores used for beam ranking
+# Aggregation: max
+
+defaults:
+  - /config
+  - /dataset/gaokao2023en
+  - /model/vllm_qwen3
+  - /generation/default
+  - /system/default
+  - /strategy/beam_search
+  - /scorer/llm_critic
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "beam_search/vllm_qwen25_math_7b/gaokao2023en/llm_critic/window_5/max/seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-gaokao2023en
+wandb_group: "beam_search_qwen25_math_7b_gaokao2023en_llm_critic_window_5_max"
+
+# Model overrides (Qwen2.5-Math-7B-Instruct instead of default Qwen3-8B)
+model:
+  model_path: "Qwen/Qwen2.5-Math-7B-Instruct"
+  model_short_name: "qwen25_math_7b_instruct"
+  max_model_len: 4096
+  disable_thinking_mode: true
+
+# Generation overrides
+generation:
+  max_new_tokens: 4096
+  max_length: 8192
+
+# Strategy - Beam Search
+strategy:
+  beam_size: 5
+  candidates_per_beam: 8
+  max_steps: 30
+  aggregation: max
+  scoring_window: 5
+  scoring_window_label: "window_5"
+  min_step_tokens: 10
+  max_step_tokens: 256
+  custom_words:
+    - "for example"
+    - "given that"
+    - "similarly"
+    - "step"
+    - "therefore"
+    - "thus"
+
+# LLM Critic scorer - vLLM (Qwen2.5-7B-Instruct) on GPU 1
+scorer:
+  max_tokens: 200
+  timeout: 600
+  context_window: 5
+  model:
+    type: vllm
+    model_path: "Qwen/Qwen2.5-7B-Instruct"
+    gpu: 1
+    gpu_memory_utilization: 0.9
+    trust_remote_code: true
+    max_model_len: 4096
+    max_num_seqs: 8
+    max_num_batched_tokens: 2048
+
+# Dataset overrides
+dataset:
+  data_name: gaokao2023en
+  prompt_template: "{question}"
