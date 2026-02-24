@@ -19,7 +19,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
     convert_trajectory_to_string,
 )
-from llm_tts.generators.base import StepCandidate
+from llm_tts.generators.base import CompletionReason, StepCandidate
 from llm_tts.utils.answer_extraction import extract_answer
 
 from .strategy_base import StrategyBase
@@ -358,6 +358,7 @@ class StrategyBeamSearch(StrategyBase):
                                 "validity": validity,
                                 "is_complete": is_trajectory_complete,
                                 "is_thinking_complete": is_thinking_complete,
+                                "completion_reason": data.get("completion_reason"),
                                 "sample_id": sample_id,
                                 "beam_idx": beam_idx,
                                 "parent_beam": parent_beam,
@@ -380,6 +381,15 @@ class StrategyBeamSearch(StrategyBase):
                 sample_id, beam_idx, parent_beam = prompt_metadata[prompt_idx]
 
                 for cand_data in candidates:
+                    step_other_data = {
+                        "validity_score": cand_data["validity"],
+                        "uncertainty_score": cand_data["uncertainty"],
+                    }
+                    if cand_data.get("completion_reason"):
+                        step_other_data["completion_reason"] = cand_data[
+                            "completion_reason"
+                        ]
+
                     step_candidate = StepCandidate(
                         text=cand_data["text"],
                         token_ids=cand_data["token_ids"],
@@ -388,10 +398,7 @@ class StrategyBeamSearch(StrategyBase):
                         is_thinking_complete=cand_data.get(
                             "is_thinking_complete", False
                         ),
-                        other_data={
-                            "validity_score": cand_data["validity"],
-                            "uncertainty_score": cand_data["uncertainty"],
-                        },
+                        other_data=step_other_data,
                     )
 
                     score = cand_data.get("prm_score", cand_data["validity"])
@@ -410,6 +417,11 @@ class StrategyBeamSearch(StrategyBase):
                         and not step_candidate.is_trajectory_complete
                     ):
                         step_candidate.is_trajectory_complete = True
+                        if step_candidate.other_data is None:
+                            step_candidate.other_data = {}
+                        step_candidate.other_data["completion_reason"] = (
+                            CompletionReason.CONTEXT_LIMIT
+                        )
                         log.info(
                             f"Sample {sample_id}: Trajectory marked complete "
                             f"(tokens: {new_total_tokens} >= {max_trajectory_tokens})"
@@ -428,7 +440,13 @@ class StrategyBeamSearch(StrategyBase):
             # 7b) Add skipped beams as completed (hit context limit)
             for sample_id, beam_idx, skipped_beam in skipped_beams:
                 if skipped_beam["steps"]:
-                    skipped_beam["steps"][-1].is_trajectory_complete = True
+                    last = skipped_beam["steps"][-1]
+                    last.is_trajectory_complete = True
+                    if last.other_data is None:
+                        last.other_data = {}
+                    last.other_data["completion_reason"] = (
+                        CompletionReason.CONTEXT_LIMIT
+                    )
                 new_sample_beams[sample_id].append(skipped_beam)
 
             # 8) Prune to top-k ACTIVE beams per sample and record completions
@@ -932,9 +950,24 @@ class StrategyBeamSearch(StrategyBase):
             # in non-thinking mode is_thinking_complete is always False.
             if has_answer_step and thinking_steps:
                 last_thinking = thinking_steps[-1]
-                result["context_limit_hit"] = (
+                forced_complete = (
                     last_thinking.is_trajectory_complete
                     and not last_thinking.is_thinking_complete
+                )
+                # Distinguish real context limit from boxed-answer-in-think or
+                # garbage detection: check if the generator set CONTEXT_LIMIT,
+                # or if trajectory tokens are near the budget as a fallback.
+                has_context_limit_reason = (
+                    last_thinking.other_data
+                    and last_thinking.other_data.get("completion_reason")
+                    == CompletionReason.CONTEXT_LIMIT
+                )
+                max_ctx = getattr(self.step_generator, "context_budget", 0)
+                near_budget = (
+                    max_ctx > 0 and result["trajectory_tokens"] > max_ctx * 0.8
+                )
+                result["context_limit_hit"] = forced_complete and (
+                    has_context_limit_reason or near_budget
                 )
                 result["max_steps_hit"] = (
                     not last_thinking.is_trajectory_complete
