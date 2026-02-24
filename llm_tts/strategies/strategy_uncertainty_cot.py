@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from llm_tts.generators.base import convert_trajectory_to_string
+from llm_tts.generators.base import convert_trajectory_to_string, get_completion_info
 from llm_tts.utils import extract_answer
 
 from .strategy_base import StrategyBase, count_reasoning_steps
@@ -234,7 +234,7 @@ class StrategyUncertaintyCoT(StrategyBase):
         thinking_mode = getattr(self.step_generator, "thinking_mode", False)
         reasoning_steps = count_reasoning_steps(trajectory_steps, thinking_mode)
 
-        return {
+        result = {
             "trajectory": trajectory_text,
             "extracted_answer": extracted,
             "steps": trajectory_steps,
@@ -253,6 +253,8 @@ class StrategyUncertaintyCoT(StrategyBase):
                 "num_multi_path_steps": num_multi_path_steps,
             },
         }
+        result.update(get_completion_info(trajectory_steps))
+        return result
 
     def _generate_answer_step(
         self,
