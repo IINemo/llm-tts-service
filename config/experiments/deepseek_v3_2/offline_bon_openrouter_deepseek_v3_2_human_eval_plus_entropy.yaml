@@ -1,0 +1,81 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/deepseek_v3_2/offline_bon_openrouter_deepseek_v3_2_human_eval_plus_entropy
+# Offline Best-of-N for HumanEval+ using DeepSeek-V3.2 via OpenRouter with Entropy scorer
+# DeepSeek-V3.2 is a non-thinking model; uses prefill for step continuation
+#
+# Environment variable required: OPENROUTER_API_KEY
+
+defaults:
+  - /config
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - /strategy/offline_bon
+  - /scorer/entropy
+  - /evaluation/human_eval_plus/default
+  - _self_
+
+# Run naming
+run_name: "offline_bon_openrouter_deepseek_v3_2_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-human-eval-plus
+wandb_group: "offline_bon_openrouter_deepseek_v3_2_human_eval_plus_entropy"
+
+# Model configuration (OpenRouter API)
+model:
+  type: "openai_api"
+  provider: openrouter
+  model_path: "deepseek/deepseek-v3.2-exp"
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  supports_logprobs: true
+  prefill_mode: true
+  max_context_budget: 163840
+  disable_thinking_mode: true
+
+# System configuration
+system:
+  device: cpu
+  seed: 0
+
+# Generation configuration
+generation:
+  max_new_tokens: 16384
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+
+# Strategy - Offline Best-of-N with linguistic step boundaries
+strategy:
+  type: offline_best_of_n
+  max_step_tokens: 1024
+  max_steps: 100
+
+# Entropy scorer configuration
+scorer:
+  type: entropy
+  batch_size: 1
+
+# Dataset configuration - HumanEval+
+dataset:
+  data_name: "human_eval_plus"
+  dataset_path: "evalplus/humanevalplus"
+  dataset_split: "test"
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "code"
+  prompt_file: null
+  system_prompt: "Do not output any other code except for asked self-contained Python script. Do not provide any guides on how to run it. Code will be parsed from codeblock to check it's correct."
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - human_eval_plus
+  human_eval_plus:
+    mode: full
+    timeout: 10
