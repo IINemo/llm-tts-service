@@ -9,7 +9,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
     convert_trajectory_to_string,
 )
-from llm_tts.generators.base import CompletionReason
+from llm_tts.generators.base import CompletionReason, get_completion_info
 from llm_tts.utils import extract_answer
 
 if TYPE_CHECKING:
@@ -580,18 +580,18 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 f"answer={extracted!r}"
             )
 
-            outputs.append(
-                {
-                    "trajectory": final_trajectory,
-                    "extracted_answer": extracted,
-                    "steps": selected_steps[idx],
-                    "reasoning_steps": reasoning_steps,
-                    "validity_scores": validity_scores[idx],
-                    "completed": len(selected_steps[idx]) > 0,
-                    "token_stats": token_stats,
-                    "answer_step": answer_steps[idx],
-                }
-            )
+            result = {
+                "trajectory": final_trajectory,
+                "extracted_answer": extracted,
+                "steps": selected_steps[idx],
+                "reasoning_steps": reasoning_steps,
+                "validity_scores": validity_scores[idx],
+                "completed": len(selected_steps[idx]) > 0,
+                "token_stats": token_stats,
+                "answer_step": answer_steps[idx],
+            }
+            result.update(get_completion_info(selected_steps[idx]))
+            outputs.append(result)
 
         return outputs
 

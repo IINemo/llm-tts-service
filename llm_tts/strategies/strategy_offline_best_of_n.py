@@ -25,6 +25,7 @@ from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
     convert_trajectory_to_string,
+    get_completion_info,
 )
 from llm_tts.scorers.multi_scorer import (
     compute_logprob_scores,
@@ -869,6 +870,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                 "best_idx": best_idx,
                 "completed": best_result.get("is_complete", False),
                 "token_stats": token_stats,
+                **get_completion_info(best_result.get("steps", [])),
             }
 
             # Add candidates_data for multi-scoring analysis
@@ -906,6 +908,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             "best_idx": 0,
             "completed": False,
             "token_stats": {},
+            **get_completion_info([]),
         }
 
     def cleanup(self):

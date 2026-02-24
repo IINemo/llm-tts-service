@@ -9,7 +9,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorBase,
     convert_trajectory_to_string,
 )
-from llm_tts.generators.base import CompletionReason
+from llm_tts.generators.base import CompletionReason, get_completion_info
 from llm_tts.utils.answer_extraction import extract_answer
 
 from .strategy_base import StrategyBase
@@ -533,19 +533,19 @@ class StrategyOnlineBestOfN(StrategyBase):
                 )
                 log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
 
-            outputs.append(
-                {
-                    "trajectory": final_trajectory,
-                    "extracted_answer": extracted,
-                    "steps": selected_steps[idx],
-                    "answer_step": answer_steps[idx],
-                    "reasoning_steps": reasoning_steps,
-                    "validity_scores": validity_scores[idx],
-                    "completed": bool(selected_steps[idx])
-                    and selected_steps[idx][-1].is_trajectory_complete,
-                    "token_stats": token_stats,
-                }
-            )
+            result = {
+                "trajectory": final_trajectory,
+                "extracted_answer": extracted,
+                "steps": selected_steps[idx],
+                "answer_step": answer_steps[idx],
+                "reasoning_steps": reasoning_steps,
+                "validity_scores": validity_scores[idx],
+                "completed": bool(selected_steps[idx])
+                and selected_steps[idx][-1].is_trajectory_complete,
+                "token_stats": token_stats,
+            }
+            result.update(get_completion_info(selected_steps[idx]))
+            outputs.append(result)
 
         return outputs
 
@@ -625,6 +625,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                         "validity_scores": [],
                         "completed": False,
                         "token_stats": self.step_generator.get_sample_stats_for(sid),
+                        **get_completion_info([]),
                     }
                 with completed_lock:
                     completed_count[0] += 1
@@ -924,7 +925,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         reasoning_steps = len(selected_steps)
         token_stats = self.step_generator.get_sample_stats_for(sample_id)
 
-        return {
+        result = {
             "trajectory": final_trajectory,
             "extracted_answer": extracted,
             "steps": selected_steps,
@@ -935,6 +936,8 @@ class StrategyOnlineBestOfN(StrategyBase):
             and selected_steps[-1].is_trajectory_complete,
             "token_stats": token_stats,
         }
+        result.update(get_completion_info(selected_steps))
+        return result
 
     def cleanup(self):
         """Clean up resources"""

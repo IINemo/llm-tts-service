@@ -896,7 +896,12 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 if is_thinking_complete:
                     completion_reason = CompletionReason.THINKING_COMPLETE
                 elif is_trajectory_complete:
-                    if not self.thinking_mode:
+                    if self.thinking_mode:
+                        if repetition_detected:
+                            completion_reason = CompletionReason.REPETITION_DETECTED
+                        elif stopped_at_eos:
+                            completion_reason = CompletionReason.EOS_PATTERN
+                    else:
                         if stopped_at_eos:
                             completion_reason = CompletionReason.EOS_PATTERN
                         elif stopped_at_answer:
