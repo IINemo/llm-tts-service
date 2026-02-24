@@ -408,9 +408,11 @@ class StepScorerLLMCritic(StepScorerBase):
                     local_seen_texts[step_text] = (group_idx, cand_idx)
                 else:
                     prompt = (
-                        self.value_prompt
-                        .replace("{problem}", problem)
-                        .replace("{trajectory}", trajectory_text if trajectory_text else "(empty)")
+                        self.value_prompt.replace("{problem}", problem)
+                        .replace(
+                            "{trajectory}",
+                            trajectory_text if trajectory_text else "(empty)",
+                        )
                         .replace("{step}", step_text)
                     )
                     pending.append(
@@ -512,9 +514,10 @@ class StepScorerLLMCritic(StepScorerBase):
                 f"{i+1}. {text}" for i, text in enumerate(candidate_texts)
             )
             prompt = (
-                self.vote_prompt
-                .replace("{problem}", problem)
-                .replace("{trajectory}", trajectory_text if trajectory_text else "(empty)")
+                self.vote_prompt.replace("{problem}", problem)
+                .replace(
+                    "{trajectory}", trajectory_text if trajectory_text else "(empty)"
+                )
                 .replace("{candidates}", candidates_str)
                 .replace("{n_candidates}", str(len(candidate_texts)))
             )
@@ -585,8 +588,7 @@ class StepScorerLLMCritic(StepScorerBase):
         """
         # Build prompt
         prompt = (
-            self.value_prompt
-            .replace("{problem}", problem)
+            self.value_prompt.replace("{problem}", problem)
             .replace("{trajectory}", trajectory_text if trajectory_text else "(empty)")
             .replace("{step}", step_text)
         )
@@ -756,7 +758,9 @@ class StepScorerLLMCritic(StepScorerBase):
                             "Token tracking will be inaccurate for this call."
                         )
 
-                    self._record_tokens(input_tokens, output_tokens, sample_id=sample_id)
+                    self._record_tokens(
+                        input_tokens, output_tokens, sample_id=sample_id
+                    )
                     return text
                 return ""
 
@@ -914,7 +918,7 @@ class StepScorerLLMCritic(StepScorerBase):
                 steps.append(str(step))
 
         if self.context_window > 0 and len(steps) > self.context_window:
-            steps = steps[-self.context_window:]
+            steps = steps[-self.context_window :]
 
         return "\n".join(steps)
 

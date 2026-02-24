@@ -969,10 +969,18 @@ class StrategyBeamSearch(StrategyBase):
                 token_stats["tflops"] = gen_tflops + prm_tflops
             elif isinstance(self.scorer, StepScorerLLMCritic):
                 critic_stats = self.scorer.get_stats_for(sample_id)
-                token_stats["llm_critic_input_tokens"] = critic_stats.get("llm_critic_input_tokens", 0)
-                token_stats["llm_critic_output_tokens"] = critic_stats.get("llm_critic_output_tokens", 0)
-                token_stats["llm_critic_total_tokens"] = critic_stats.get("llm_critic_total_tokens", 0)
-                token_stats["llm_critic_tflops"] = critic_stats.get("llm_critic_tflops", 0)
+                token_stats["llm_critic_input_tokens"] = critic_stats.get(
+                    "llm_critic_input_tokens", 0
+                )
+                token_stats["llm_critic_output_tokens"] = critic_stats.get(
+                    "llm_critic_output_tokens", 0
+                )
+                token_stats["llm_critic_total_tokens"] = critic_stats.get(
+                    "llm_critic_total_tokens", 0
+                )
+                token_stats["llm_critic_tflops"] = critic_stats.get(
+                    "llm_critic_tflops", 0
+                )
                 gen_tflops = token_stats.get("tflops") or 0
                 critic_tflops = token_stats["llm_critic_tflops"] or 0
                 token_stats["tflops"] = gen_tflops + critic_tflops
