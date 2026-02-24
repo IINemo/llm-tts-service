@@ -207,23 +207,19 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
 
         request_with_trajectory = copy.deepcopy(request)
 
-        if self.prefill_mode:
-            request_with_trajectory.append(
-                {
-                    "role": "assistant",
-                    "content": convert_trajectory_to_string(trajectory),
-                    "prefix": True,
-                }
-            )
-        else:
-            # Append trajectory text as continuation in assistant role
-            trajectory_text = convert_trajectory_to_string(trajectory)
-            request_with_trajectory.append(
-                {
-                    "role": "assistant",
-                    "content": trajectory_text,
-                }
-            )
+        # Append trajectory as assistant message for continuation.
+        # Note: "prefix": True is Anthropic-specific; OpenAI-compatible APIs
+        # (including OpenRouter) treat a trailing assistant message as a
+        # continuation prompt by default, so we omit the flag to avoid
+        # confusing providers that don't understand it (which causes BOS
+        # token emission and pre-training data leakage).
+        trajectory_text = convert_trajectory_to_string(trajectory)
+        request_with_trajectory.append(
+            {
+                "role": "assistant",
+                "content": trajectory_text,
+            }
+        )
 
         return request_with_trajectory
 
