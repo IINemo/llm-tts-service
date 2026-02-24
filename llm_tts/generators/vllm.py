@@ -836,7 +836,15 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     # Stopped at EOS token ID (stop_reason=None but didn't hit max)
                     stopped_at_eos = stop_reason is None and len(token_ids) < max_tokens
 
-                    is_trajectory_complete = repetition_detected or stopped_at_eos
+                    # When thinking is complete, the trajectory is NOT done —
+                    # the answer phase still needs to run.  Without this guard
+                    # min_step_tokens can cause vLLM to generate past </think>
+                    # until an EOS token, setting stopped_at_eos=True and
+                    # making all downstream strategies skip answer generation.
+                    if thinking_complete:
+                        is_trajectory_complete = False
+                    else:
+                        is_trajectory_complete = repetition_detected or stopped_at_eos
                     step_text = text.strip()
                     target_text = text.strip()
 
