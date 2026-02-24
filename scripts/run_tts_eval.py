@@ -1464,6 +1464,8 @@ def _generate_trajectories_batch(
                 sample_metrics["context_limit_hit"] = int(result["context_limit_hit"])
             if "max_steps_hit" in result:
                 sample_metrics["max_steps_hit"] = int(result["max_steps_hit"])
+            if "completion_reason" in result and result["completion_reason"]:
+                sample_metrics["completion_reason"] = result["completion_reason"]
 
             if "validity_scores" in result and result["validity_scores"]:
                 valid_scores = [s for s in result["validity_scores"] if s is not None]

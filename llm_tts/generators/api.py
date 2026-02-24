@@ -640,7 +640,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             # Handle repetitions
             if not thinking_complete and self._detect_line_repetitions(text):
                 is_trajectory_complete = True
-                completion_reason = CompletionReason.EOS_PATTERN
+                completion_reason = CompletionReason.REPETITION_DETECTED
 
             # Truncate at sentence boundary if hit max tokens
             if not thinking_complete and token_count >= self.step_token_limit:
