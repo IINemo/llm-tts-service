@@ -109,6 +109,9 @@ class StrategyChainOfThought(StrategyBase):
                 "temperature": self.temperature,
                 "max_new_tokens": self.max_new_tokens,
             },
+            "completion_reason": None,
+            "context_limit_hit": False,
+            "max_steps_hit": False,
         }
 
     def cleanup(self):
