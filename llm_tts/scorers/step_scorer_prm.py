@@ -560,8 +560,8 @@ class StepScorerPRM(StepScorerRewardBase):
 
         if raw_score_count != num_included:
             log.warning(
-                f"PRM model returned {raw_score_count} scores but expected {num_included} "
-                f"(for {num_included} included steps)"
+                f"PRM model returned {raw_score_count} scores but {num_included} steps were sent "
+                f"(total={len(step_texts)}, skipped={num_skipped})"
             )
 
         log.info(
@@ -569,12 +569,7 @@ class StepScorerPRM(StepScorerRewardBase):
             f"{[f'{s:.3f}' for s in scored_step_scores]}"
         )
 
-        # Pad scored steps if model returned fewer than expected
-        while len(scored_step_scores) < num_included:
-            scored_step_scores.append(0.0)
-        scored_step_scores = scored_step_scores[:num_included]
-
-        # Prepend None for skipped steps
+        # Prepend None for skipped steps, use PRM scores as-is
         full_scores = [None] * num_skipped + scored_step_scores
 
         # Log final scores summary
@@ -766,18 +761,12 @@ class StepScorerPRM(StepScorerRewardBase):
             if raw_score_count != num_included:
                 log.warning(
                     f"Traj {traj_id} (sample={sample_id}): PRM model returned "
-                    f"{raw_score_count} scores but expected {num_included} "
+                    f"{raw_score_count} scores but {num_included} steps were sent "
                     f"(num_steps={num_steps}, skipped={num_skipped})"
                 )
 
-            # Pad scored steps if model returned fewer than expected
-            while len(scored_step_scores) < num_included:
-                scored_step_scores.append(0.0)
-            scored_step_scores = scored_step_scores[:num_included]
-
-            # Prepend None for skipped steps
+            # Prepend None for skipped steps, use PRM scores as-is
             final_scores = [None] * num_skipped + scored_step_scores
-            final_scores = final_scores[:num_steps]
             results[traj_idx] = final_scores
 
             # Log detailed scores for this trajectory
