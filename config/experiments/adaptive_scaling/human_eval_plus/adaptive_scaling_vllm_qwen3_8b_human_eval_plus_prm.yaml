@@ -48,7 +48,7 @@ generation:
   checkpoint_batch_size: 198
   max_length: 32768
 
-# Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
+# Strategy - Adaptive Scaling (MUR) with linguistic step boundaries
 strategy:
   type: adaptive
   candidates_per_step: 8
@@ -60,20 +60,7 @@ strategy:
   stop_token_ids:
     - 151645  # <|im_end|>
     - 151643  # <|endoftext|>
-  min_step_tokens: 10
   max_step_tokens: 1024
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
 # PRM scorer configuration
 scorer:

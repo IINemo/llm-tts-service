@@ -1158,6 +1158,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
         requests: List[List[Dict[str, str]]],
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
+        sample_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Generate answer candidates for multiple trajectories in one call."""
         if len(requests) != len(trajectories):
@@ -1198,6 +1199,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
             candidates_per_step=candidates_per_step,
             stop_tokens_override=self.response_stop_tokens,
             max_tokens=answer_max_tokens,
+            sample_ids=sample_ids,
         )
 
         # Mark all as trajectory complete

@@ -59,20 +59,7 @@ strategy:
   aggregation: min  # conservative - maximizes the minimum step score
   scoring_window: null      # all step scores used for beam ranking (baseline)
   scoring_window_label: "window_all"
-  min_step_tokens: 10
   max_step_tokens: 500
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
 # PD-Gap scorer configuration (uses same model, no separate GPU needed)
 scorer:

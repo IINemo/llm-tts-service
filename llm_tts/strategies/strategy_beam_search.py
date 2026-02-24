@@ -822,7 +822,9 @@ class StrategyBeamSearch(StrategyBase):
         log.info(f"Batch scorer evaluation for {len(candidates_list)} prompt groups")
 
         all_scores = self.scorer.score_candidates_batch(
-            chats, candidates_list, trajectories=trajectories,
+            chats,
+            candidates_list,
+            trajectories=trajectories,
             sample_ids=scorer_sample_ids,
         )
 
@@ -837,40 +839,59 @@ class StrategyBeamSearch(StrategyBase):
         beams_needing_answers: List[tuple],  # [(sample_id, beam_dict)]
         requests: List[List[Dict[str, str]]],
     ) -> None:
-        """Generate answer phases for beams where thinking is complete but trajectory is not.
+        """Generate answer phases for beams that need an answer step.
 
-        After beam search selects the best thinking trajectory, this method generates
-        the answer phase (text after </think> with \\boxed{}) in one batched call.
+        Handles three scenarios:
+        1. Normal: thinking complete, trajectory not yet complete
+        2. Context limit / skipped: trajectory forced complete while still in thinking
+        3. Max steps: beam expired while still in thinking (not trajectory-complete)
+
+        The generator's generate_answer_candidates_batch already handles injecting
+        </think> if the thinking phase was never closed, so no special handling needed.
         Modifies beams in-place by appending answer StepCandidates.
 
         Args:
             beams_needing_answers: List of (sample_id, beam_dict) pairs
             requests: Original requests for each sample
         """
-        # Filter beams where thinking is done but trajectory is not
+        # Include all beams that don't already have both phases complete
         to_generate = []
         for sample_id, beam in beams_needing_answers:
-            if (
-                beam["steps"]
-                and beam["steps"][-1].is_thinking_complete
-                and not beam["steps"][-1].is_trajectory_complete
-            ):
-                to_generate.append((sample_id, beam))
+            if not beam["steps"]:
+                continue
+            last_step = beam["steps"][-1]
+            if last_step.is_thinking_complete and last_step.is_trajectory_complete:
+                continue  # Both phases done, skip
+            to_generate.append((sample_id, beam))
 
         if not to_generate:
             return
 
-        log.info(
-            f"Generating {len(to_generate)} answer phases for thinking-complete beams"
-        )
+        # Log per-beam reason for answer generation
+        for sample_id, beam in to_generate:
+            last_step = beam["steps"][-1]
+            if last_step.is_thinking_complete:
+                reason = "normal (thinking complete)"
+            elif last_step.is_trajectory_complete:
+                reason = "context limit during thinking"
+            else:
+                reason = "max steps during thinking"
+            log.info(
+                f"Sample {sample_id}: Generating answer — {reason} "
+                f"(thinking_complete={last_step.is_thinking_complete}, "
+                f"trajectory_complete={last_step.is_trajectory_complete})"
+            )
+        log.info(f"Generating {len(to_generate)} answer phases")
 
         batch_requests = [requests[sample_id] for sample_id, _ in to_generate]
         batch_trajectories = [beam["steps"] for _, beam in to_generate]
+        batch_sample_ids = [sample_id for sample_id, _ in to_generate]
 
         answer_results = self.step_generator.generate_answer_candidates_batch(
             batch_requests,
             batch_trajectories,
             candidates_per_step=1,
+            sample_ids=batch_sample_ids,
         )
 
         for batch_idx, (sample_id, beam) in enumerate(to_generate):
@@ -930,9 +951,46 @@ class StrategyBeamSearch(StrategyBase):
 
         # If answer step was appended (more steps than scores), record it separately
         # so the eval script logs it as "Generated Answer" instead of a numbered step
-        if len(steps) > len(scores) and steps:
+        has_answer_step = len(steps) > len(scores) and bool(steps)
+        if has_answer_step:
             answer_step = steps[-1]
             result["answer_step"] = answer_step.raw_text or answer_step.text
+
+        # Token breakdown: thinking (trajectory) vs answer
+        if steps:
+            thinking_steps = steps[:-1] if has_answer_step else steps
+            answer_step_obj = steps[-1] if has_answer_step else None
+
+            result["trajectory_tokens"] = sum(
+                len(s.token_ids) for s in thinking_steps if s.token_ids
+            )
+            result["answer_tokens"] = (
+                len(answer_step_obj.token_ids)
+                if answer_step_obj and answer_step_obj.token_ids
+                else 0
+            )
+
+            # Detect termination reason from last thinking step flags.
+            # Only meaningful in thinking mode (has_answer_step=True), because
+            # in non-thinking mode is_thinking_complete is always False.
+            if has_answer_step and thinking_steps:
+                last_thinking = thinking_steps[-1]
+                result["context_limit_hit"] = (
+                    last_thinking.is_trajectory_complete
+                    and not last_thinking.is_thinking_complete
+                )
+                result["max_steps_hit"] = (
+                    not last_thinking.is_trajectory_complete
+                    and not last_thinking.is_thinking_complete
+                )
+            else:
+                result["context_limit_hit"] = False
+                result["max_steps_hit"] = False
+        else:
+            result["trajectory_tokens"] = 0
+            result["answer_tokens"] = 0
+            result["context_limit_hit"] = False
+            result["max_steps_hit"] = False
 
         if token_stats is not None:
             result["token_stats"] = token_stats
