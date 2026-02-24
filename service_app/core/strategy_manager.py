@@ -344,7 +344,7 @@ class StrategyManager:
                 step_generator=self._step_generator,
                 scorer=scorer,
                 beam_size=config.get("beam_size", 4),
-                candidates_per_beam=config.get("candidates_per_beam", 4),
+                candidates_per_beam=config.get("candidates_per_step", 4),
                 max_steps=config.get("max_steps", 100),
             )
 
