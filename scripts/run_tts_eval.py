@@ -106,7 +106,11 @@ try:
 except ImportError:
     POLYGRAPH_UNCERTAINTY_AVAILABLE = False
     VLLMWithUncertainty = None
-from utils.results import load_results_json, parse_resume_arguments, save_results_json
+from utils.results import (
+    load_results_json,
+    parse_resume_arguments,
+    save_results_json,
+)
 
 from llm_tts.evaluation import (
     EvaluatorAlignScore,
@@ -532,6 +536,7 @@ def create_model(config):
                     from luh.calculator_apply_uq_head import CalculatorApplyUQHead
                     from luh.luh_claim_estimator_dummy import LuhClaimEstimatorDummy
                     from luh.vllm.vllm_uhead_features import VLLMUncertaintyHeadFeatures
+
                     uncertainty_head = AutoUncertaintyHead.from_pretrained(
                         config.scorer.uq_head_path, base_model=llm
                     )
@@ -540,8 +545,12 @@ def create_model(config):
                             uncertainty_head,
                             model_path=config.model.model_path,
                             max_model_len=config.scorer.get("max_model_len", 32768),
-                            gpu_memory_utilization=config.scorer.get("gpu_memory_utilization", 0.9),
-                            tensor_parallel_size=config.scorer.get("tensor_parallel_size", 1),
+                            gpu_memory_utilization=config.scorer.get(
+                                "gpu_memory_utilization", 0.9
+                            ),
+                            tensor_parallel_size=config.scorer.get(
+                                "tensor_parallel_size", 1
+                            ),
                         ),
                         CalculatorApplyUQHead(
                             uncertainty_head,
@@ -549,7 +558,9 @@ def create_model(config):
                         ),
                     ]
                     estimator = LuhClaimEstimatorDummy()
-                    vllm_with_uncertainty_arguments = stat_calculators[0].vllm_with_uncertainty_arguments()
+                    vllm_with_uncertainty_arguments = stat_calculators[
+                        0
+                    ].vllm_with_uncertainty_arguments()
                 else:
                     raise ValueError(
                         f"Unsupported scorer type for vLLM: {scorer_type}. "
