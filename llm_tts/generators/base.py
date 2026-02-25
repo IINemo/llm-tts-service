@@ -38,6 +38,7 @@ class StepCandidate:
         raw_text: str = None,
         other_data: Dict[str, Any] = None,
         is_thinking_complete: bool = False,
+        output=None,
     ):
         self.text = text
         self.token_ids = token_ids
@@ -47,6 +48,7 @@ class StepCandidate:
         self.generation_scores = generation_scores
         self.raw_text = raw_text or text
         self.other_data = other_data
+        self.output = output
 
     def __str__(self):
         return f"StepCandidate(text='{self.text[:50]}...', complete={self.is_complete})"
