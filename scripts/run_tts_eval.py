@@ -467,7 +467,11 @@ def create_model(config):
         model.is_vllm = True
         model.vllm_engine = llm
 
-        log.info("vLLM model loaded successfully")
+        model_gpu_util = config.model.get("gpu_memory_utilization", 0.9)
+        log.info(
+            f"vLLM model loaded successfully "
+            f"(gpu_memory_utilization={model_gpu_util})"
+        )
 
         # Create step generator for strategies that need it
         # DeepConf has its own generation logic
@@ -876,6 +880,7 @@ def create_tts_strategy(
             log.info(
                 f"Scorer: launching vLLM server for {scorer_model_path} "
                 f"on GPU {scorer_gpu}, port {scorer_port}, "
+                f"gpu_memory_utilization={scorer_gpu_util}, "
                 f"max_num_seqs={scorer_max_num_seqs}"
             )
 

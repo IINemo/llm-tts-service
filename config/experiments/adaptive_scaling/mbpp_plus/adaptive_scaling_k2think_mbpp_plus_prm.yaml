@@ -65,6 +65,7 @@ scorer:
   model_path: "Qwen/Qwen2.5-Math-PRM-7B"
   device: cuda:0
   batch_size: 1
+  gpu_memory_utilization: 0.9
 
 # Dataset configuration - MBPP+
 dataset:

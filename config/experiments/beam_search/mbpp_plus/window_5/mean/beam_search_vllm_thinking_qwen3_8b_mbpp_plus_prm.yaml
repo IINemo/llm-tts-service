@@ -64,6 +64,7 @@ strategy:
 scorer:
   type: prm
   batch_size: 1
+  gpu_memory_utilization: 0.9
 
 # Dataset configuration - MBPP+
 dataset:
