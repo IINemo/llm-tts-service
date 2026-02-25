@@ -18,6 +18,7 @@ try:
         project_name="llm-tts-service",
         task_name="scorer-endpoint",
         continue_last_task=True,
+        output_uri=False,
     )
 except Exception:
     pass
