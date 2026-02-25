@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List
 
-from llm_tts.generators.base import convert_trajectory_to_string
+from llm_tts.generators.base import convert_trajectory_to_string, get_completion_info
 from llm_tts.utils.answer_extraction import extract_answer
 
 from .strategy_base import StrategyBase, count_reasoning_steps
@@ -310,6 +310,7 @@ class StrategyExtendedThinking(StrategyBase):
                         "validity_scores": [],
                         "completed": False,
                         "token_stats": {},
+                        **get_completion_info([]),
                     }
                 )
                 continue
@@ -342,19 +343,20 @@ class StrategyExtendedThinking(StrategyBase):
                 f"extracted_answer={extracted!r}"
             )
 
-            results.append(
-                {
-                    "trajectory": final_trajectory,
-                    "extracted_answer": extracted,
-                    "steps": trajectory,
-                    "answer_step": answer_text,
-                    "reasoning_steps": reasoning_steps,
-                    "validity_scores": [],
-                    "completed": completed[idx],
-                    "token_stats": token_stats,
-                    "continuations": continuations[idx],
-                }
-            )
+            result = {
+                "trajectory": final_trajectory,
+                "extracted_answer": extracted,
+                "steps": trajectory,
+                "answer_step": answer_text,
+                "reasoning_steps": reasoning_steps,
+                "validity_scores": [],
+                "completed": completed[idx],
+                "token_stats": token_stats,
+                "continuations": continuations[idx],
+            }
+            # Pass reasoning steps only (exclude answer step)
+            result.update(get_completion_info(list(trajectories[idx])))
+            results.append(result)
 
         completed_count = sum(1 for r in results if r["completed"])
         total_continuations = sum(continuations)

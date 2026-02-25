@@ -11,7 +11,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
     convert_trajectory_to_string,
 )
-from llm_tts.generators.base import CompletionReason
+from llm_tts.generators.base import CompletionReason, get_completion_info
 
 from .strategy_base import StrategyBase
 
@@ -133,12 +133,14 @@ class PhiDecoding(StrategyBase):
             selected_steps.append(final_answer)
             validity_scores.append(final_validity)
 
-        return {
+        result = {
             "trajectory": convert_trajectory_to_string(trajectory),
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,
         }
+        result.update(get_completion_info(selected_steps))
+        return result
 
     # Simulate the future trajectory and rerank the candidates
     def foresight_rerank(

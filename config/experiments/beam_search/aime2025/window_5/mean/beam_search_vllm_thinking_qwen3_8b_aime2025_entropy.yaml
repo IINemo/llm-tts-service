@@ -50,6 +50,7 @@ generation:
   top_k: 20
   batch_size: 1
   max_length: 65536
+  checkpoint_batch_size: 15
 
 # Strategy - Beam Search
 strategy:
@@ -67,10 +68,10 @@ scorer:
 
 # Dataset configuration - AIME 2025
 dataset:
-  dataset_path: "test-time-compute/test_aime25"
+  dataset_path: "test-time-compute/aime_2025"
   dataset_config: null
   dataset_split: "test"
-  subset: 29
+  subset: 30
   offset: 0
   question_field: "question"
   answer_field: "answer"

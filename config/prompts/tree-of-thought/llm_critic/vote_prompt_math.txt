@@ -1,0 +1,11 @@
+Given a math problem and several candidate reasoning steps, decide which step is most promising for solving the problem correctly.
+
+Problem: {problem}
+
+Current reasoning so far:
+{trajectory}
+
+Candidate next steps:
+{candidates}
+
+Analyze each candidate step briefly, checking for correctness and progress toward the solution. Then conclude in the last line "The best choice is s", where s is the integer id of the choice (1-{n_candidates}).

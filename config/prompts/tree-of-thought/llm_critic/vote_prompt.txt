@@ -1,0 +1,13 @@
+Given a problem and multiple candidate next steps, select which step is most promising.
+
+Problem: {problem}
+
+Current reasoning so far:
+{trajectory}
+
+Candidate steps:
+{candidates}
+
+Analyze each candidate carefully. Which step is most likely to lead to the correct answer?
+
+Respond with just the number (1-{n_candidates}) of the best candidate:
