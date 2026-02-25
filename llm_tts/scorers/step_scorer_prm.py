@@ -244,7 +244,8 @@ class StepScorerPRM(StepScorerRewardBase):
             physical_gpu = gpu_id
 
         log.info(
-            f"Loading PRM model from {self.prm_model_path} (vLLM backend) on GPU {physical_gpu}"
+            f"Loading PRM model from {self.prm_model_path} (vLLM backend) on GPU {physical_gpu} "
+            f"(gpu_memory_utilization={self.gpu_memory_utilization})"
         )
 
         # Temporarily set CUDA_VISIBLE_DEVICES to only the target GPU
