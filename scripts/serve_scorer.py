@@ -10,6 +10,18 @@ Usage:
     python scripts/serve_scorer.py --model Qwen/Qwen2.5-7B-Instruct --port 8000 --device cuda:0
 """
 
+# ClearML auto-init (when run as ClearML task, agent injects Task.init)
+try:
+    from clearml import Task
+
+    task = Task.init(
+        project_name="llm-tts-service",
+        task_name="scorer-endpoint",
+        continue_last_task=True,
+    )
+except Exception:
+    pass
+
 import argparse
 import logging
 import os

@@ -18,7 +18,7 @@ echo "=== GPU Info ==="
 nvidia-smi
 nvidia-smi -L
 echo "=== Installing dependencies ==="
-pip install fastapi uvicorn[standard] pydantic pydantic-settings
+pip install fastapi uvicorn[standard] pydantic pydantic-settings boto3
 echo "================"
 """
 
