@@ -172,16 +172,17 @@ class StrategyManager:
     def _init_vllm_backend(self):
         """Load vLLM model, wrap with uncertainty, create step generator.
         Called lazily on first vLLM request, then cached."""
-        from vllm import LLM
-        from lm_polygraph.utils import VLLMWithUncertainty
-        from lm_polygraph.stat_calculators import (
-            VLLMLogprobsCalculator,
-            EntropyCalculator,
-        )
         from lm_polygraph.estimators import MeanTokenEntropy
+        from lm_polygraph.stat_calculators import (
+            EntropyCalculator,
+            VLLMLogprobsCalculator,
+        )
+        from lm_polygraph.utils import VLLMWithUncertainty
+        from vllm import LLM
+
         from llm_tts.generators.vllm import VLLMStepGenerator
-        from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
         from llm_tts.scorers.step_scorer_confidence import StepScorerConfidence
+        from llm_tts.step_boundary_detectors.thinking import ThinkingMarkerDetector
 
         log.info(f"Loading vLLM model: {settings.vllm_model_path}")
 
@@ -346,6 +347,8 @@ class StrategyManager:
                 beam_size=config.get("beam_size", 4),
                 candidates_per_beam=config.get("candidates_per_step", 4),
                 max_steps=config.get("max_steps", 100),
+                aggregation=config.get("score_aggregation", "mean"),
+                scoring_window=config.get("window_size", None),
             )
 
         log.info(f"Created vLLM strategy: {strategy_type} with scorer: {scorer_type}")

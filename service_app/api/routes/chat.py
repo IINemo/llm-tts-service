@@ -84,7 +84,9 @@ async def create_chat_completion(request: ChatCompletionRequest):
             )
 
         # Convert messages to dict format
-        messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+        messages = [
+            {"role": msg.role, "content": msg.content} for msg in request.messages
+        ]
 
         # Determine strategy type and provider
         strategy_type = request.tts_strategy or "self_consistency"
@@ -92,7 +94,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
         # Build strategy config
         strategy_config = {
-            "provider": request.provider or ("vllm" if is_vllm_strategy else "openrouter"),
+            "provider": request.provider
+            or ("vllm" if is_vllm_strategy else "openrouter"),
             "temperature": request.temperature,
             "max_tokens": request.max_tokens or 4096,
             "num_paths": request.num_paths or 5,
@@ -103,6 +106,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             "beam_size": request.tts_beam_size,
             "max_steps": request.tts_max_steps,
             "score_aggregation": request.tts_score_aggregation,
+            "window_size": request.tts_window_size,
         }
 
         # Create strategy

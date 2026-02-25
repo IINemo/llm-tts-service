@@ -64,7 +64,10 @@ class ChatCompletionRequest(BaseModel):
         default=8, description="Number of trajectories for offline BoN", ge=1, le=256
     )
     tts_candidates_per_step: Optional[int] = Field(
-        default=4, description="Candidates per step for online BoN / beam search", ge=1, le=64
+        default=4,
+        description="Candidates per step for online BoN / beam search",
+        ge=1,
+        le=64,
     )
     tts_beam_size: Optional[int] = Field(
         default=4, description="Beam size for beam search", ge=1, le=64
@@ -75,6 +78,9 @@ class ChatCompletionRequest(BaseModel):
     tts_score_aggregation: Optional[str] = Field(
         default="min",
         description="Score aggregation: min, mean, max, product, last",
+    )
+    tts_window_size: Optional[int] = Field(
+        default=None, description="Window size for scoring (1-N steps)", ge=1, le=50
     )
 
     class Config:
@@ -104,7 +110,8 @@ class ChatCompletionChoice(BaseModel):
 
     # TTS-specific metadata (optional)
     tts_metadata: Optional[Dict[str, Any]] = Field(
-        None, description="TTS strategy metadata (consensus_score, answer_distribution, etc.)"
+        None,
+        description="TTS strategy metadata (consensus_score, answer_distribution, etc.)",
     )
 
 
