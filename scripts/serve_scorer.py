@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import socket
 import time
 import uuid
@@ -230,6 +231,29 @@ def get_local_ip():
         return "0.0.0.0"
 
 
+def detect_mig_device():
+    """Auto-detect MIG UUID and set CUDA_VISIBLE_DEVICES if needed."""
+    import subprocess as sp
+
+    if os.environ.get("CUDA_VISIBLE_DEVICES"):
+        log.info(
+            "CUDA_VISIBLE_DEVICES already set: %s", os.environ["CUDA_VISIBLE_DEVICES"]
+        )
+        return
+
+    try:
+        out = sp.check_output(["nvidia-smi", "-L"], text=True)
+        for line in out.splitlines():
+            line = line.strip()
+            if "MIG" in line and "UUID:" in line:
+                uuid = line.split("UUID:")[1].strip().rstrip(")")
+                log.info("Detected MIG UUID: %s", uuid)
+                os.environ["CUDA_VISIBLE_DEVICES"] = uuid
+                return
+    except Exception as e:
+        log.warning("MIG detection failed: %s", e)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="HuggingFace Scorer API Server")
     parser.add_argument(
@@ -240,6 +264,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", default="cuda:0", help="Device (cuda:0, cpu, etc.)")
     args = parser.parse_args()
 
+    detect_mig_device()
     load_model(args.model, args.device)
 
     local_ip = get_local_ip()

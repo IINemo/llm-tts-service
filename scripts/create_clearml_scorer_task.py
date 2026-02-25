@@ -11,11 +11,12 @@ from clearml import Task
 
 # HuggingFace transformers GPU image (lighter than vLLM)
 DEFAULT_DOCKER_IMAGE = "huggingface/transformers-pytorch-gpu:latest"
-DEFAULT_DOCKER_ARGS = "--entrypoint= --network=host --shm-size=4g"
+DEFAULT_DOCKER_ARGS = "--entrypoint= --network=host --shm-size=4g --gpus all"
 
 DOCKER_BASH_SETUP = r"""
 echo "=== GPU Info ==="
 nvidia-smi
+nvidia-smi -L
 echo "=== Installing dependencies ==="
 pip install fastapi uvicorn[standard] pydantic pydantic-settings
 echo "================"
