@@ -183,12 +183,48 @@ async def create_chat_completion(
         metadata["selected_answer"] = result.get("extracted_answer", "")
         if is_vllm_strategy:
             metadata["strategy"] = strategy_type
-            metadata["reasoning_steps"] = result.get("reasoning_steps", 0)
             metadata["completed"] = result.get("completed", False)
-            if "aggregated_score" in result:
-                metadata["aggregated_score"] = result["aggregated_score"]
+            metadata["completion_reason"] = result.get("completion_reason")
+
+            # Per-step scores
             if "validity_scores" in result:
                 metadata["validity_scores"] = result["validity_scores"]
+            if "aggregated_score" in result:
+                metadata["aggregated_score"] = result["aggregated_score"]
+
+            # Reasoning steps as serializable dicts
+            steps = result.get("steps", [])
+            metadata["reasoning_steps"] = len(steps)
+            metadata["steps"] = [
+                {
+                    "text": getattr(s, "text", s) if not isinstance(s, str) else s,
+                    "score": (
+                        result["validity_scores"][i]
+                        if i < len(result.get("validity_scores", []))
+                        else None
+                    ),
+                }
+                for i, s in enumerate(steps)
+            ]
+
+            # Token stats
+            token_stats = result.get("token_stats", {})
+            if token_stats:
+                metadata["token_stats"] = {
+                    "input_tokens": token_stats.get("input_tokens", 0),
+                    "output_tokens": token_stats.get("output_tokens", 0),
+                    "tflops": token_stats.get("tflops"),
+                }
+
+            # Offline BoN: all trajectories and their scores
+            if "all_trajectories" in result:
+                metadata["all_trajectories"] = [
+                    {"text": t, "score": s}
+                    for t, s in zip(
+                        result["all_trajectories"],
+                        result.get("all_scores", []),
+                    )
+                ]
 
         # Estimate token usage
         prompt_text = " ".join(msg["content"] for msg in messages)

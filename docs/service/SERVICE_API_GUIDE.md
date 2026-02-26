@@ -191,20 +191,116 @@ The OpenAI SDK also supports `extra_query` and `extra_headers`, but these are no
 
 ## Accessing TTS Metadata
 
-The response includes TTS-specific metadata in an extra `tts_metadata` field on each choice. Since this field is not part of the standard OpenAI schema, the SDK's typed response object does not expose it as an attribute. To access it:
+The response includes TTS-specific metadata in an extra `tts_metadata` field on each choice. Since this field is not part of the standard OpenAI schema, the SDK's typed response object does not expose it as an attribute. Use `response.model_dump()` to access it.
+
+### Self-Consistency Response
 
 ```python
-raw = response.model_dump()
-metadata = raw["choices"][0]["tts_metadata"]
+from openai import OpenAI
 
-# For self_consistency:
-print(metadata["consensus_score"])       # 1.0 = all paths agree
-print(metadata["uncertainty_score"])     # 0.0 = fully certain
-print(metadata["answer_distribution"])   # {"105": 5}
+client = OpenAI(base_url="<THINKBOOSTER_ENDPOINT>/v1/self_consistency", api_key="<YOUR_API_KEY>")
 
-# For vLLM strategies:
-print(metadata["aggregated_score"])      # scorer's trajectory score
-print(metadata["reasoning_steps"])       # number of steps generated
+response = client.chat.completions.create(
+    model="deepseek/deepseek-r1",
+    messages=[
+        {"role": "system", "content": "Think step by step. Put your final answer in \\boxed{}."},
+        {"role": "user", "content": (
+            "Each of the 2001 students at a high school studies either Spanish or French, "
+            "and some study both. The number who study Spanish is between 80 percent and "
+            "85 percent of the school population, and the number who study French is between "
+            "30 percent and 40 percent. Let m be the smallest number of students who could "
+            "study both languages, and let M be the largest. Find M - m."
+        )}
+    ],
+    extra_body={"num_paths": 8, "max_tokens": 4096}
+)
+
+# Generated trajectory (best reasoning path)
+print(response.choices[0].message.content)
+
+# TTS metadata
+meta = response.model_dump()["choices"][0]["tts_metadata"]
+
+print(meta["selected_answer"])        # "298"
+print(meta["consensus_score"])        # 1.0 — all 8 paths agree
+print(meta["uncertainty_score"])      # 0.0 — fully certain
+print(meta["answer_distribution"])    # {"298": 8}
+print(meta["all_answers"])            # ["298", "298", "298", ...]
+print(meta["elapsed_time"])           # 4.19 (seconds)
+```
+
+### Beam Search Response
+
+```python
+client = OpenAI(base_url="<THINKBOOSTER_ENDPOINT>/v1/beam_search/prm", api_key="<YOUR_API_KEY>")
+
+response = client.chat.completions.create(
+    model="Qwen/Qwen3-30B-A3B",
+    messages=[
+        {"role": "system", "content": "Think step by step. Put your final answer in \\boxed{}."},
+        {"role": "user", "content": (
+            "Find the number of ordered pairs (x, y) of positive integers that satisfy "
+            "x + 2y = 2xy."
+        )}
+    ],
+    extra_body={
+        "max_tokens": 8192,
+        "tts_beam_size": 4,
+        "tts_candidates_per_step": 4,
+        "tts_max_steps": 50,
+    }
+)
+
+# Best trajectory (full reasoning chain selected by beam search)
+print(response.choices[0].message.content)
+
+# TTS metadata
+meta = response.model_dump()["choices"][0]["tts_metadata"]
+
+# --- Answer & completion ---
+print(meta["selected_answer"])        # "1" — extracted from \boxed{}
+print(meta["completed"])              # True
+print(meta["completion_reason"])      # "thinking_complete" / "answer_pattern" / ...
+
+# --- Per-step reasoning with scores ---
+for i, step in enumerate(meta["steps"]):
+    score = step["score"]
+    preview = step["text"][:80].replace("\n", " ")
+    print(f"  Step {i+1}: score={score:.3f}  {preview}...")
+
+# --- Aggregate statistics ---
+print(meta["reasoning_steps"])        # 6 — number of reasoning steps
+print(meta["validity_scores"])        # [0.92, 0.88, 0.95, 0.91, 0.87, 0.94]
+print(meta["elapsed_time"])           # 12.5 (seconds)
+
+# --- Token usage & compute ---
+print(meta["token_stats"]["input_tokens"])    # 156
+print(meta["token_stats"]["output_tokens"])   # 1024
+print(meta["token_stats"]["tflops"])          # 0.42
+```
+
+### Offline Best-of-N Response
+
+```python
+client = OpenAI(base_url="<THINKBOOSTER_ENDPOINT>/v1/offline_bon/prm", api_key="<YOUR_API_KEY>")
+
+response = client.chat.completions.create(
+    model="Qwen/Qwen3-30B-A3B",
+    messages=[...],
+    extra_body={"max_tokens": 8192, "tts_num_trajectories": 16}
+)
+
+meta = response.model_dump()["choices"][0]["tts_metadata"]
+
+# --- Best trajectory (already in message.content) ---
+print(meta["selected_answer"])
+print(meta["aggregated_score"])       # 0.94 — score of the winning trajectory
+
+# --- All 16 generated trajectories with scores ---
+for i, traj in enumerate(meta["all_trajectories"]):
+    marker = " <-- best" if i == 0 else ""  # sorted by score, best first
+    print(f"  Trajectory {i+1}: score={traj['score']:.3f}{marker}")
+    print(f"    {traj['text'][:100]}...")
 ```
 
 ## Full Parameter Reference
