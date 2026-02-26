@@ -45,12 +45,12 @@ The OpenAI SDK concatenates `base_url` with the hardcoded endpoint path `/chat/c
 ```
 base_url                                                → SDK sends POST to
 ──────────────────────────────────────────────────────────────────────────────────────────
-https://thinkbooster.ai/v1                              → /v1/chat/completions
-https://thinkbooster.ai/v1/self_consistency              → /v1/self_consistency/chat/completions
-https://thinkbooster.ai/v1/beam_search/prm               → /v1/beam_search/prm/chat/completions
+<thinkbooster_endpoint>/v1                              → /v1/chat/completions
+<thinkbooster_endpoint>/v1/self_consistency              → /v1/self_consistency/chat/completions
+<thinkbooster_endpoint>/v1/beam_search/prm               → /v1/beam_search/prm/chat/completions
 ```
 
-> **Note:** Replace `thinkbooster.ai` with your actual deployment URL (e.g. `localhost:8001` for local development).
+> **Note:** Replace `<thinkbooster_endpoint>` with your actual deployment URL (e.g. `localhost:8001` for local development).
 
 This is the cleanest approach — no `extra_body` needed for the two most common settings:
 
@@ -59,8 +59,8 @@ from openai import OpenAI
 
 # Strategy in the URL, budget in extra_body
 client = OpenAI(
-    base_url="https://thinkbooster.ai/v1/self_consistency",
-    api_key="your-openrouter-key"
+    base_url="<thinkbooster_endpoint>/v1/self_consistency",
+    api_key="<YOUR_API_KEY>"
 )
 
 response = client.chat.completions.create(
@@ -86,8 +86,8 @@ With strategy **and** scorer:
 ```python
 # Beam search with PRM scorer — both encoded in the URL
 client = OpenAI(
-    base_url="https://thinkbooster.ai/v1/beam_search/prm",
-    api_key="dummy"
+    base_url="<thinkbooster_endpoint>/v1/beam_search/prm",
+    api_key="<YOUR_API_KEY>"
 )
 
 response = client.chat.completions.create(
@@ -134,8 +134,8 @@ The standard OpenAI SDK pattern for vendor extensions. All TTS parameters go int
 
 ```python
 client = OpenAI(
-    base_url="https://thinkbooster.ai/v1",
-    api_key="your-openrouter-key"
+    base_url="<thinkbooster_endpoint>/v1",
+    api_key="<YOUR_API_KEY>"
 )
 
 response = client.chat.completions.create(
@@ -163,7 +163,7 @@ URL path and body parameters can be combined. URL path takes priority for strate
 
 ```python
 # Strategy + scorer from URL, budget and aggregation from body
-client = OpenAI(base_url="https://thinkbooster.ai/v1/offline_bon/prm", api_key="dummy")
+client = OpenAI(base_url="<thinkbooster_endpoint>/v1/offline_bon/prm", api_key="<YOUR_API_KEY>")
 
 response = client.chat.completions.create(
     model="Qwen/Qwen3-30B-A3B",
@@ -244,7 +244,7 @@ For LangChain users, we provide `ChatTTS` — a custom `BaseChatModel` that wrap
 from llm_tts.integrations import ChatTTS
 
 llm = ChatTTS(
-    base_url="https://thinkbooster.ai/v1",
+    base_url="<thinkbooster_endpoint>/v1",
     model="deepseek/deepseek-r1",
     tts_strategy="self_consistency",
     tts_budget=8,
