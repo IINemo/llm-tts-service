@@ -184,11 +184,9 @@ class StepScorerLLMCritic(StepScorerBase):
             vote_prompt, vote_prompt_file, DEFAULT_VOTE_PROMPT_FILE, "vote"
         )
 
-        # Value mapping aligned to ToT labels: sure/likely/impossible.
-        # Narrower gaps to avoid score collapse (sure vs likely was 3x before).
         self.value_map = {
-            "sure": 1.0,
-            "likely": 0.6,
+            "sure": 3.0,
+            "likely": 1.0,
             "impossible": 0.1,
         }
 
