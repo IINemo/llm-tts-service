@@ -51,8 +51,9 @@ class ChatCompletionRequest(BaseModel):
 
     # Provider selection
     provider: Optional[str] = Field(
-        default="openrouter",
-        description="API provider: openrouter, openai, or vllm",
+        default=None,
+        description="API provider: openrouter, openai, or vllm. "
+        "Defaults to 'openrouter' for self_consistency and 'vllm' for offline_bon/online_bon/beam_search.",
     )
 
     # vLLM TTS strategy parameters (passed via extra_body)

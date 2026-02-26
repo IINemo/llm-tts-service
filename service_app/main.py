@@ -25,14 +25,15 @@ app = FastAPI(
     description="""
     LLM Test-Time Scaling Service with OpenAI-compatible API.
 
-    This service exposes TTS strategies (DeepConf, Tree-of-Thoughts, Best-of-N, etc.) through
-    an OpenAI-compatible interface. You can use the OpenAI Python SDK or
-    any OpenAI-compatible client to interact with this service.
+    This service exposes TTS strategies (Self-Consistency, Offline Best-of-N,
+    Online Best-of-N, Beam Search) through an OpenAI-compatible interface.
+    You can use the OpenAI Python SDK or any OpenAI-compatible client.
 
     ## Features
     - Drop-in replacement for OpenAI's Chat Completions API
-    - Supports DeepConf strategy (offline and online modes)
-    - Supports Tree-of-Thoughts (ToT) strategy with beam search
+    - Self-consistency strategy via OpenAI/OpenRouter APIs
+    - Offline Best-of-N, Online Best-of-N, Beam Search via local vLLM backend
+    - Multiple scorers: entropy, perplexity, sequence_prob, PRM
     - Compatible with OpenAI Python SDK
     - Additional TTS-specific parameters for advanced control
 
@@ -42,18 +43,19 @@ app = FastAPI(
     from openai import OpenAI
 
     client = OpenAI(
-        base_url="http://localhost:8000/v1",
-        api_key="dummy"  # Not required yet
+        base_url="http://localhost:8001/v1",
+        api_key="your-openrouter-key"
     )
 
     response = client.chat.completions.create(
         model="openai/gpt-4o-mini",
-        messages=[{"role": "user", "content": "Solve: 2+2=?"}],
-        # TTS parameters
+        messages=[
+            {"role": "system", "content": "Reason step by step, put answer in \\\\boxed{}."},
+            {"role": "user", "content": "What is 15 * 7?"}
+        ],
         extra_body={
-            "tts_strategy": "deepconf",
-            "tts_mode": "offline",
-            "tts_budget": 8
+            "tts_strategy": "self_consistency",
+            "num_paths": 5
         }
     )
 
@@ -61,8 +63,10 @@ app = FastAPI(
     ```
 
     ## Environment Variables
-    - `OPENROUTER_API_KEY`: OpenRouter API key (required)
+    - `OPENROUTER_API_KEY`: OpenRouter API key (required for self_consistency)
     - `OPENAI_API_KEY`: Direct OpenAI API key (optional)
+    - `VLLM_MODEL_PATH`: Local model for vLLM strategies (optional)
+    - `PRM_MODEL_PATH`: PRM scorer model path (optional)
     """,
     docs_url="/docs",
     redoc_url="/redoc",
