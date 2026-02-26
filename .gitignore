@@ -157,7 +157,7 @@ Thumbs.db
 
 # Data files
 *.csv
-*.json
+# *.json
 *.jsonl
 *.parquet
 *.h5
