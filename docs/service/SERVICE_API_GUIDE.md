@@ -347,9 +347,12 @@ response = client.chat.completions.create(
     messages=[{"role": "user", "content":
         "Find the number of ordered pairs (x, y) of "
         "positive integers satisfying x + 2y = 2xy."}],
-    extra_body={"max_tokens": 8192, "tts_beam_size": 4},
+    extra_body={
+        "model_base_url": "http://gpu-server:8000/v1",
+        "max_tokens": 8192, "tts_beam_size": 4,
+    },
 )
-print(response.choices[0].message.content)  # reasoning chain
+print(response.choices[0].message.content)
 ```
 
 ## Example for Paper (appendix)
@@ -369,6 +372,7 @@ response = client.chat.completions.create(
         "Find the number of ordered pairs (x, y) of "
         "positive integers satisfying x + 2y = 2xy."}],
     extra_body={
+        "model_base_url": "http://gpu-server:8000/v1",
         "max_tokens": 8192,
         "tts_beam_size": 4,
         "tts_candidates_per_step": 4,
