@@ -8,6 +8,7 @@ defaults:
   - /model/vllm_qwen3
   - /generation/default
   - /system/default
+  - /strategy/adaptive
   - /scorer/prm
   - /evaluation/human_eval_plus/default
   - _self_
@@ -50,17 +51,23 @@ generation:
 
 # Strategy - Adaptive Scaling (MUR) with linguistic step boundaries
 strategy:
-  type: adaptive
-  candidates_per_step: 8
+  strategy: adaptive
   max_steps: 250
-  scaling_rate: 0.9
-  momentum_rate: 0.9
-  adaptive_scaling_method: momentum
-  detector_type: structured
-  stop_token_ids:
-    - 151645  # <|im_end|>
-    - 151643  # <|endoftext|>
+  # Stop tokens for Qwen models
+  min_step_tokens: 10
   max_step_tokens: 1024
+  # Disable linguistic markers (not useful for code)
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  # Use newlines as step separators for code
+  custom_markers:
+    - "\n"
+    - "\n\n"
 
 # PRM scorer configuration
 scorer:

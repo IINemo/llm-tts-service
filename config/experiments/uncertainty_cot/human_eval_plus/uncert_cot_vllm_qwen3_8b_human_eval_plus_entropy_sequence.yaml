@@ -1,5 +1,5 @@
 # @package _global_
-# Run: python3 scripts/run_tts_eval.py --config-path=../config --config-name=experiments/uncertainty_cot/human_eval_plus/uncert_cot_openrouter_gpt4o_mini_human_eval_plus_perplexity.yaml
+# Run: python3 scripts/run_tts_eval.py --config-path=../config --config-name=experiments/uncertainty_cot/human_eval_plus/uncert_cot_vllm_qwen3_8b_human_eval_plus_entropy_sequence.yaml
 # Environment variable required: OPENROUTER_API_KEY
 
 defaults:
@@ -12,13 +12,13 @@ defaults:
   - _self_
 
 # Run naming
-run_name: "uncert_cot_openrouter_gpt4o_mini_human_eval_plus_entropy_seed${system.seed}_${now:%H-%M-%S}"
+run_name: "human_eval_plus_qwen3_8b-uncertainty_cot_entropy_sequence_seed${system.seed}_${now:%H-%M-%S}"
 
 # Main configuration
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "uncert_cot_openrouter_gpt4o_mini_human_eval_plus_entropy"
+wandb_group: "human_eval_plus_qwen3_8b-uncertainty_cot_entropy_sequence"
 
 # Model configuration (OpenRouter API)
 model:
@@ -34,7 +34,7 @@ model:
 # System configuration
 system:
   device: cuda
-  seed: 0
+  seed: 2
 
 # Generation configuration
 generation:
@@ -52,7 +52,20 @@ strategy:
   max_steps: 20
   max_empty_steps: 5
   uncertainty_threshold: 0.3
+  min_step_tokens: 10
   max_step_tokens: 500
+  # Disable linguistic markers (not useful for code)
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  # Use newlines as step separators for code
+  custom_markers:
+    - "\n"
+    - "\n\n"
 
 # Dataset configuration - HumanEval+
 dataset:

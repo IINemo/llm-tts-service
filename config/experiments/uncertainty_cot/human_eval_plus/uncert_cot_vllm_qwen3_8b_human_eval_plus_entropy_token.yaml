@@ -18,7 +18,7 @@ run_name: "uncert_cot_openrouter_gpt4o_mini_human_eval_plus_entropy_seed${system
 verbose: true
 report_to: wandb
 wandb_project: llm-tts-human-eval-plus
-wandb_group: "uncert_cot_openrouter_gpt4o_mini_human_eval_plus_entropy"
+wandb_group: "uncert_cot_vllm_qwen3_8b_human_eval_plus_entropy_sequence"
 
 # Model configuration (OpenRouter API)
 model:

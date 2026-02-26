@@ -63,6 +63,8 @@ strategy:
 # PRM scorer configuration
 scorer:
   type: prm
+  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+  device: cuda:1
   batch_size: 1
 
 # Dataset configuration - HumanEval+

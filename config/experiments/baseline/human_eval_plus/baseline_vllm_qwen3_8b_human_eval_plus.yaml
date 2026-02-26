@@ -1,5 +1,5 @@
 # @package _global_
-# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/human_eval_plus/baseline_vllm_codeqwen15_7b_chat_human_eval_plus
+# Run: CUDA_VISIBLE_DEVICES=0 python3 scripts/run_tts_eval.py --config-path=../config --config-name=experiments/baseline/human_eval_plus/baseline_vllm_qwen3_8b_human_eval_plus.yaml
 # Baseline evaluation for HumanEval+ using local vLLM model
 
 defaults:

@@ -1,5 +1,5 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_openrouter_claude_sonnet4_human_eval_plus_prm
+# Run: python3 scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/human_eval_plus/offline_bon_openrouter_claude_sonnet4_human_eval_plus_prm
 # Offline Best-of-N for HumanEval+ using OpenRouter API with linguistic step boundaries
 # Uses prm scorer for step evaluation
 #
@@ -51,8 +51,9 @@ generation:
 # Strategy - Offline Best-of-N with linguistic step boundaries
 strategy:
   type: offline_best_of_n
-  max_step_tokens: 500
-  max_steps: 100
+  min_step_tokens: 10
+  max_step_tokens: 1024
+  max_steps: 250
 
 # prm scorer configuration
 scorer:
@@ -72,6 +73,7 @@ dataset:
   answer_field: "answer"  # EvalPlus loader field (canonical solution)
   answer_format: "code"
   prompt_file: null  # EvalPlus API provides correct prompt format, no template needed
+  system_prompt: "Do not output any other code except for asked self-contained Python script. Do not provide any guides on how to run it. Code will be parsed from codeblock to check it's correct."
 
 # Evaluation configuration
 evaluation:

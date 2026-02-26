@@ -1,5 +1,5 @@
 # @package _global_
-# Run: python3 scripts/run_tts_eval.py --config-path=../config --config-name=experiments/uncertainty_cot/human_eval_plus/uncert_cot_openrouter_gpt4o_mini_human_eval_plus_perplexity.yaml
+# Run: python3 scripts/run_tts_eval.py --config-path=../config --config-name=experiments/uncertainty_cot/human_eval_plus/uncert_cot_vllm_qwen3_8b_human_eval_plus_pd_sequence.yaml
 # Environment variable required: OPENROUTER_API_KEY
 
 defaults:
@@ -52,7 +52,18 @@ strategy:
   max_steps: 20
   max_empty_steps: 5
   uncertainty_threshold: 0.3
+  min_step_tokens: 10
   max_step_tokens: 500
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  custom_markers:
+    - "\n"
+    - "\n\n"
 
 # Dataset configuration - HumanEval+
 dataset:

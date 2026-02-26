@@ -1,5 +1,5 @@
 # @package _global_
-# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/deepseek_v3_2/adaptive_scaling_openrouter_deepseek_v3_2_human_eval_plus_entropy
+# Run: python3 scripts/run_tts_eval.py --config-path=../config --config-name=experiments/deepseek_v3_2/adaptive_scaling_openrouter_deepseek_v3_2_human_eval_plus_entropy
 # MUR (Adaptive Scaling) for HumanEval+ using DeepSeek-V3.2 via OpenRouter with Entropy scorer
 # DeepSeek-V3.2 is a non-thinking model with prefill support
 #
@@ -27,7 +27,7 @@ wandb_group: "adaptive_scaling_openrouter_deepseek_v3_2_human_eval_plus_entropy"
 model:
   type: "openai_api"
   provider: openrouter
-  model_path: "deepseek/deepseek-v3.2-exp"
+  model_path: "deepseek/deepseek-v3.2"
   api_key: null  # Set via OPENROUTER_API_KEY env var
   supports_logprobs: true
   prefill_mode: true
@@ -58,6 +58,16 @@ strategy:
   adaptive_scaling_method: momentum
   detector_type: structured
   max_step_tokens: 1024
+  use_sequence: false
+  use_conclusion: false
+  use_thinking: false
+  use_verification: false
+  use_structure: false
+  use_reasoning: false
+  use_correction: false
+  custom_markers:
+    - "\n"
+    - "\n\n"
 
 # Entropy scorer configuration
 scorer:
