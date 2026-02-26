@@ -55,18 +55,25 @@ This is the cleanest approach — no `extra_body` needed for the two most common
 ```python
 from openai import OpenAI
 
-# Strategy and scorer are in the URL — nothing else needed
+# Strategy in the URL, budget in extra_body
 client = OpenAI(
     base_url="http://localhost:8001/v1/self_consistency",
     api_key="your-openrouter-key"
 )
 
 response = client.chat.completions.create(
-    model="openai/gpt-4o-mini",
+    model="deepseek/deepseek-r1",
     messages=[
-        {"role": "system", "content": "Reason step by step, put answer in \\boxed{}."},
-        {"role": "user", "content": "What is 15 * 7?"}
-    ]
+        {"role": "system", "content": "Think step by step. Put your final answer in \\boxed{}."},
+        {"role": "user", "content": (
+            "Each of the 2001 students at a high school studies either Spanish or French, "
+            "and some study both. The number who study Spanish is between 80 percent and "
+            "85 percent of the school population, and the number who study French is between "
+            "30 percent and 40 percent. Let m be the smallest number of students who could "
+            "study both languages, and let M be the largest. Find M - m."
+        )}
+    ],
+    extra_body={"num_paths": 8}
 )
 
 print(response.choices[0].message.content)
@@ -82,9 +89,15 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="Qwen/Qwen2.5-7B-Instruct",
-    messages=[...],
-    # Fine-grained params still go through extra_body when needed
+    model="Qwen/Qwen3-30B-A3B",
+    messages=[
+        {"role": "system", "content": "Think step by step. Put your final answer in \\boxed{}."},
+        {"role": "user", "content": (
+            "Find the number of ordered pairs (x, y) of positive integers that satisfy "
+            "x + 2y = 2xy."
+        )}
+    ],
+    # Fine-grained params go through extra_body
     extra_body={
         "tts_beam_size": 4,
         "tts_candidates_per_step": 4,
@@ -123,11 +136,14 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="openai/gpt-4o-mini",
-    messages=[...],
+    model="deepseek/deepseek-r1",
+    messages=[
+        {"role": "system", "content": "Think step by step. Put your final answer in \\boxed{}."},
+        {"role": "user", "content": "How many positive integers less than 1000 are divisible by 3 but not by 7?"}
+    ],
     extra_body={
         "tts_strategy": "self_consistency",
-        "num_paths": 5
+        "num_paths": 16
     }
 )
 ```
@@ -142,12 +158,18 @@ This is how all major OpenAI-compatible services pass vendor-specific parameters
 URL path and body parameters can be combined. URL path takes priority for strategy and scorer; fine-grained parameters always come from the body:
 
 ```python
-# Strategy from URL, details from body
+# Strategy + scorer from URL, budget and aggregation from body
 client = OpenAI(base_url="http://localhost:8001/v1/offline_bon/prm", api_key="dummy")
 
 response = client.chat.completions.create(
-    model="Qwen/Qwen2.5-7B-Instruct",
-    messages=[...],
+    model="Qwen/Qwen3-30B-A3B",
+    messages=[
+        {"role": "system", "content": "Think step by step. Put your final answer in \\boxed{}."},
+        {"role": "user", "content": (
+            "Let S be the set of integers from 1 to 2^40 that are divisible by 2^20. "
+            "How many perfect squares does S contain?"
+        )}
+    ],
     extra_body={
         "tts_num_trajectories": 16,
         "tts_score_aggregation": "mean",
@@ -186,7 +208,7 @@ print(metadata["reasoning_steps"])       # number of steps generated
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `model` | string | `openai/gpt-4o-mini` | Model name (OpenRouter format: `provider/model`) |
+| `model` | string | — | Model name (OpenRouter format: `provider/model`, e.g. `deepseek/deepseek-r1`) |
 | `messages` | array | required | Chat messages (`role` + `content`) |
 | `temperature` | float | 0.7 | Sampling temperature (0.0 – 2.0) |
 | `max_tokens` | int | 4096 | Maximum tokens to generate |
@@ -218,12 +240,14 @@ from llm_tts.integrations import ChatTTS
 
 llm = ChatTTS(
     base_url="http://localhost:8001/v1",
-    model="openai/gpt-4o-mini",
+    model="deepseek/deepseek-r1",
     tts_strategy="self_consistency",
-    tts_budget=5,
+    tts_budget=8,
 )
 
-msg = llm.invoke("What is 15 * 7?")
+msg = llm.invoke(
+    "A function f satisfies f(x) + f(1 - 1/x) = arctan(x) for all x != 0. Find f(2)."
+)
 
 # Standard LangChain access
 print(msg.content)
