@@ -1,10 +1,16 @@
 """
 OpenAI-compatible /v1/chat/completions endpoint.
+
+Supports three URL patterns (all hit the same handler):
+  POST /v1/chat/completions                          — strategy & scorer from body
+  POST /v1/{strategy}/chat/completions               — strategy from URL
+  POST /v1/{strategy}/{scorer}/chat/completions      — strategy & scorer from URL
 """
 
 import logging
 import time
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -22,53 +28,88 @@ log = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_VALID_STRATEGIES = {"self_consistency", "offline_bon", "online_bon", "beam_search"}
+_VALID_SCORERS = {"entropy", "perplexity", "sequence_prob", "prm"}
+
 
 def estimate_tokens(text: str) -> int:
     """Rough token estimation (4 chars ≈ 1 token)."""
     return len(text) // 4
 
 
+_completion_responses = {
+    400: {"model": ErrorResponse},
+    500: {"model": ErrorResponse},
+}
+
+
+@router.post(
+    "/v1/{url_strategy}/{url_scorer}/chat/completions",
+    response_model=ChatCompletionResponse,
+    responses=_completion_responses,
+    include_in_schema=False,
+)
+@router.post(
+    "/v1/{url_strategy}/chat/completions",
+    response_model=ChatCompletionResponse,
+    responses=_completion_responses,
+    include_in_schema=False,
+)
 @router.post(
     "/v1/chat/completions",
     response_model=ChatCompletionResponse,
-    responses={
-        400: {"model": ErrorResponse},
-        500: {"model": ErrorResponse},
-    },
+    responses=_completion_responses,
 )
-async def create_chat_completion(request: ChatCompletionRequest):
+async def create_chat_completion(
+    request: ChatCompletionRequest,
+    url_strategy: Optional[str] = None,
+    url_scorer: Optional[str] = None,
+):
     """
-    Create a chat completion using self-consistency strategy.
+    Create a chat completion with TTS strategy.
 
-    This endpoint is OpenAI-compatible. Use the OpenAI Python SDK:
+    Strategy and scorer can be specified in **three ways** (highest priority first):
 
-    ```python
-    from openai import OpenAI
+    1. **URL path** — `base_url="http://host:8001/v1/beam_search/prm"`
+    2. **Request body** — `extra_body={"tts_strategy": "beam_search", "tts_scorer": "prm"}`
+    3. **Defaults** — strategy=self_consistency, scorer=entropy
 
-    client = OpenAI(
-        base_url="http://localhost:8001/v1",
-        api_key="your-openrouter-key"
-    )
-
-    response = client.chat.completions.create(
-        model="openai/gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "Reason step by step, put answer in \\\\boxed{}."},
-            {"role": "user", "content": "What is 15 * 7?"}
-        ],
-        extra_body={
-            "tts_strategy": "self_consistency",
-            "num_paths": 5
-        }
-    )
-
-    print(response.choices[0].message.content)
-    print(response.choices[0].tts_metadata)  # consensus_score, answer_distribution
-    ```
+    URL path segments override body parameters when both are present.
     """
     try:
+        # URL path segments override body params
+        if url_strategy:
+            if url_strategy not in _VALID_STRATEGIES:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": {
+                            "message": f"Unknown strategy in URL: '{url_strategy}'. "
+                            f"Valid: {', '.join(sorted(_VALID_STRATEGIES))}",
+                            "type": "invalid_request_error",
+                            "param": "strategy",
+                        }
+                    },
+                )
+            request.tts_strategy = url_strategy
+
+        if url_scorer:
+            if url_scorer not in _VALID_SCORERS:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": {
+                            "message": f"Unknown scorer in URL: '{url_scorer}'. "
+                            f"Valid: {', '.join(sorted(_VALID_SCORERS))}",
+                            "type": "invalid_request_error",
+                            "param": "scorer",
+                        }
+                    },
+                )
+            request.tts_scorer = url_scorer
+
         log.info(f"Received chat completion request for model: {request.model}")
-        log.info(f"TTS strategy: {request.tts_strategy}")
+        log.info(f"TTS strategy: {request.tts_strategy} (from_url={url_strategy is not None})")
 
         # Validate streaming not yet supported
         if request.stream:

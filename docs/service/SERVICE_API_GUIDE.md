@@ -4,14 +4,27 @@ This document describes how the `service_app/` exposes TTS strategies through an
 
 ## Overview
 
-The service implements the `/v1/chat/completions` endpoint with the same schema as OpenAI's API. Any OpenAI-compatible client can call it by changing only the `base_url`. TTS-specific parameters (strategy, scorer, beam size, etc.) are passed as additional fields in the JSON request body.
+The service implements the `/v1/chat/completions` endpoint with the same schema as OpenAI's API. Any OpenAI-compatible client can call it by changing only the `base_url`.
+
+TTS-specific parameters (strategy, scorer, beam size, etc.) can be specified in two ways:
+
+1. **URL path** — encode strategy and scorer directly in `base_url`
+2. **Request body** — pass via `extra_body` (standard OpenAI SDK pattern)
 
 ```
-┌──────────────────────────┐         POST /v1/chat/completions
-│   OpenAI Python SDK      │ ─────────────────────────────────►  ┌──────────────────┐
-│   or any HTTP client     │                                     │  service_app/    │
-│                          │ ◄─────────────────────────────────  │  (FastAPI)       │
-└──────────────────────────┘    OpenAI-compatible JSON response  └──────────────────┘
+┌──────────────────────────┐
+│   OpenAI Python SDK      │
+│   or any HTTP client     │
+└────────────┬─────────────┘
+             │
+             │  POST /v1/{strategy}/{scorer}/chat/completions
+             │       or /v1/{strategy}/chat/completions
+             │       or /v1/chat/completions
+             ▼
+┌──────────────────────────┐
+│     service_app/         │
+│     (FastAPI)            │
+└──────────────────────────┘
 ```
 
 ## Supported Strategies
@@ -23,15 +36,28 @@ The service implements the `/v1/chat/completions` endpoint with the same schema 
 | `online_bon` | Local vLLM | same as above | Step-level best-of-N candidate selection |
 | `beam_search` | Local vLLM | same as above | Beam search over reasoning steps |
 
-## Usage with OpenAI Python SDK
+## Specifying Strategy and Scorer
 
-### Basic Example (Self-Consistency)
+### Option A: URL Path (Recommended)
+
+The OpenAI SDK concatenates `base_url` with the hardcoded endpoint path `/chat/completions`. We exploit this by accepting strategy and scorer as **URL path segments**:
+
+```
+base_url                                          → SDK sends POST to
+─────────────────────────────────────────────────────────────────────────────────
+http://host:8001/v1                               → /v1/chat/completions
+http://host:8001/v1/self_consistency               → /v1/self_consistency/chat/completions
+http://host:8001/v1/beam_search/prm                → /v1/beam_search/prm/chat/completions
+```
+
+This is the cleanest approach — no `extra_body` needed for the two most common settings:
 
 ```python
 from openai import OpenAI
 
+# Strategy and scorer are in the URL — nothing else needed
 client = OpenAI(
-    base_url="http://localhost:8001/v1",
+    base_url="http://localhost:8001/v1/self_consistency",
     api_key="your-openrouter-key"
 )
 
@@ -40,38 +66,105 @@ response = client.chat.completions.create(
     messages=[
         {"role": "system", "content": "Reason step by step, put answer in \\boxed{}."},
         {"role": "user", "content": "What is 15 * 7?"}
-    ],
-    extra_body={
-        "tts_strategy": "self_consistency",
-        "num_paths": 5
-    }
+    ]
 )
 
 print(response.choices[0].message.content)
 ```
 
-### vLLM Strategy Example (Beam Search with PRM)
-
-Requires `VLLM_MODEL_PATH` and `PRM_MODEL_PATH` environment variables.
+With strategy **and** scorer:
 
 ```python
+# Beam search with PRM scorer — both encoded in the URL
+client = OpenAI(
+    base_url="http://localhost:8001/v1/beam_search/prm",
+    api_key="dummy"
+)
+
 response = client.chat.completions.create(
     model="Qwen/Qwen2.5-7B-Instruct",
     messages=[...],
+    # Fine-grained params still go through extra_body when needed
     extra_body={
-        "tts_strategy": "beam_search",
         "tts_beam_size": 4,
         "tts_candidates_per_step": 4,
-        "tts_scorer": "prm",
-        "tts_score_aggregation": "mean",
-        "tts_max_steps": 100,
+        "tts_max_steps": 50,
     }
 )
 ```
 
-### Accessing TTS Metadata
+Valid URL path values:
 
-The response includes TTS-specific metadata (consensus score, answer distribution, uncertainty scores, etc.) in an extra `tts_metadata` field on each choice. Since this field is not part of the standard OpenAI schema, the SDK's typed response object does not expose it as an attribute. To access it:
+| Segment | Position | Valid values |
+|---|---|---|
+| `{strategy}` | 1st | `self_consistency`, `offline_bon`, `online_bon`, `beam_search` |
+| `{scorer}` | 2nd (optional) | `entropy`, `perplexity`, `sequence_prob`, `prm` |
+
+Invalid values return a `400 Bad Request` with an error message listing valid options.
+
+**How it works internally:** The OpenAI SDK stores `base_url`, appends a trailing slash, and concatenates the endpoint path `/chat/completions` (stripping its leading slash). This is a documented behavior in the SDK's `_prepare_url` method (`openai/_base_client.py`). The server registers three FastAPI routes that all point to the same handler:
+
+```
+POST /v1/{strategy}/{scorer}/chat/completions
+POST /v1/{strategy}/chat/completions
+POST /v1/chat/completions
+```
+
+URL path segments take priority over body parameters when both are present.
+
+### Option B: Request Body (`extra_body`)
+
+The standard OpenAI SDK pattern for vendor extensions. All TTS parameters go into `extra_body`:
+
+```python
+client = OpenAI(
+    base_url="http://localhost:8001/v1",
+    api_key="your-openrouter-key"
+)
+
+response = client.chat.completions.create(
+    model="openai/gpt-4o-mini",
+    messages=[...],
+    extra_body={
+        "tts_strategy": "self_consistency",
+        "num_paths": 5
+    }
+)
+```
+
+This is how all major OpenAI-compatible services pass vendor-specific parameters:
+- **vLLM**: `extra_body={"guided_json": ..., "best_of": 5}`
+- **Together AI**: `extra_body={"repetition_penalty": 1.1}`
+- **OpenRouter**: `extra_body={"transforms": ["middle-out"]}`
+
+### Combining Both
+
+URL path and body parameters can be combined. URL path takes priority for strategy and scorer; fine-grained parameters always come from the body:
+
+```python
+# Strategy from URL, details from body
+client = OpenAI(base_url="http://localhost:8001/v1/offline_bon/prm", api_key="dummy")
+
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[...],
+    extra_body={
+        "tts_num_trajectories": 16,
+        "tts_score_aggregation": "mean",
+    }
+)
+```
+
+### Why Not Query Parameters or Headers?
+
+The OpenAI SDK also supports `extra_query` and `extra_headers`, but these are not appropriate for TTS parameters:
+
+- **`extra_query`** — query parameters on a POST endpoint are unconventional. OpenAI's own API uses no query params on `/v1/chat/completions`, and no other OpenAI-compatible service does either.
+- **`extra_headers`** — headers are for transport-level metadata (auth, content-type, tracing IDs), not application-level parameters. Invisible to API documentation tools.
+
+## Accessing TTS Metadata
+
+The response includes TTS-specific metadata in an extra `tts_metadata` field on each choice. Since this field is not part of the standard OpenAI schema, the SDK's typed response object does not expose it as an attribute. To access it:
 
 ```python
 raw = response.model_dump()
@@ -87,45 +180,6 @@ print(metadata["aggregated_score"])      # scorer's trajectory score
 print(metadata["reasoning_steps"])       # number of steps generated
 ```
 
-## How TTS Parameters Are Passed
-
-### Why `extra_body`?
-
-The OpenAI Python SDK provides three extension points for vendor-specific parameters:
-
-| Mechanism | SDK Parameter | What It Does |
-|---|---|---|
-| **Request body** | `extra_body={...}` | Merges additional fields into the JSON POST body |
-| **Query string** | `extra_query={...}` | Appends `?key=value` query parameters to the URL |
-| **HTTP headers** | `extra_headers={...}` | Adds custom HTTP headers to the request |
-
-All three are supported by the SDK (verified in `openai` v2.8.1). However, **`extra_body` is the correct choice** for TTS parameters because:
-
-1. **Semantic correctness.** TTS parameters (`tts_strategy`, `tts_scorer`, `num_paths`, etc.) are part of the request payload — they describe *what* to generate, not *how* to route the request. The POST body is the standard location for request payload in REST APIs.
-
-2. **Industry convention.** All major OpenAI-compatible services use `extra_body` for vendor extensions:
-   - **vLLM**: `extra_body={"guided_json": ..., "best_of": 5}`
-   - **Together AI**: `extra_body={"repetition_penalty": 1.1}`
-   - **OpenRouter**: `extra_body={"transforms": ["middle-out"]}`
-   - **Fireworks**: `extra_body={"context_length_exceeded_behavior": "truncate"}`
-
-3. **Server-side simplicity.** FastAPI/Pydantic naturally validates extra body fields — we define them in the request model and they are parsed, type-checked, and documented in `/docs` automatically. Query parameters would require separate `Query(...)` declarations and would not appear in the same schema.
-
-4. **Structured data.** Some TTS parameters may be nested or complex (e.g., future strategy configs). JSON body supports any structure; query strings are limited to flat key-value pairs.
-
-### Why Not Query Parameters?
-
-While `extra_query={"tts_strategy": "beam_search"}` would technically reach the server, it is the wrong abstraction:
-
-- Query parameters on a POST endpoint are unconventional — POST body is the payload
-- OpenAI's own API uses no query params on `/v1/chat/completions`
-- No other OpenAI-compatible service uses query params for model/generation config
-- FastAPI would need separate `Query(...)` parameter declarations, duplicating the schema
-
-### Why Not HTTP Headers?
-
-Headers are for transport-level metadata (auth, content-type, tracing IDs), not for application-level parameters. Encoding `tts_strategy` in a header like `X-TTS-Strategy: beam_search` would work but is semantically wrong and invisible to API documentation tools.
-
 ## Full Parameter Reference
 
 ### Standard OpenAI Parameters
@@ -138,14 +192,16 @@ Headers are for transport-level metadata (auth, content-type, tracing IDs), not 
 | `max_tokens` | int | 4096 | Maximum tokens to generate |
 | `stream` | bool | false | Streaming (not yet supported) |
 
-### TTS Parameters (via `extra_body`)
+### TTS Parameters
+
+These can be set via URL path (strategy, scorer) or `extra_body` (all params):
 
 | Parameter | Type | Default | Strategies | Description |
 |---|---|---|---|---|
-| `tts_strategy` | string | `self_consistency` | all | Strategy: `self_consistency`, `offline_bon`, `online_bon`, `beam_search` |
-| `provider` | string | auto | all | API provider: `openrouter`, `openai`, `vllm`. Auto-detected from strategy if not set. |
+| `tts_strategy` | string | `self_consistency` | all | Strategy (or use URL path) |
+| `tts_scorer` | string | `entropy` | vLLM strategies | Scorer (or use URL path) |
+| `provider` | string | auto | all | API provider: `openrouter`, `openai`, `vllm` |
 | `num_paths` | int | 5 | self_consistency | Number of independent reasoning paths |
-| `tts_scorer` | string | `entropy` | vLLM strategies | Scorer: `entropy`, `perplexity`, `sequence_prob`, `prm` |
 | `tts_num_trajectories` | int | 8 | offline_bon | Number of full trajectories to generate |
 | `tts_candidates_per_step` | int | 4 | online_bon, beam_search | Candidates generated per reasoning step |
 | `tts_beam_size` | int | 4 | beam_search | Number of beams to maintain |
@@ -155,7 +211,7 @@ Headers are for transport-level metadata (auth, content-type, tracing IDs), not 
 
 ## Alternative: ChatTTS (LangChain Wrapper)
 
-For LangChain users, we provide `ChatTTS` — a custom `BaseChatModel` that wraps the service and provides first-class access to TTS parameters and metadata. This avoids `extra_body` entirely.
+For LangChain users, we provide `ChatTTS` — a custom `BaseChatModel` that wraps the service and provides first-class access to TTS parameters and metadata:
 
 ```python
 from llm_tts.integrations import ChatTTS
@@ -177,18 +233,18 @@ print(msg.response_metadata["tts_metadata"]["consensus_score"])
 print(msg.response_metadata["tts_metadata"]["uncertainty_score"])
 ```
 
-### Comparison
+### Interface Comparison
 
-| Aspect | OpenAI SDK + `extra_body` | ChatTTS |
-|---|---|---|
-| Dependencies | `openai` (standard) | `langchain-core`, `httpx` |
-| TTS params | via `extra_body={...}` | first-class constructor args |
-| TTS metadata access | `response.model_dump()["choices"][0]["tts_metadata"]` | `msg.response_metadata["tts_metadata"]` |
-| Works with LangChain chains | needs manual extraction | native |
-| Async support | via `AsyncOpenAI` | built-in `ainvoke()` |
-| Who should use it | anyone, any language | Python + LangChain users |
+| Aspect | URL Path | `extra_body` | ChatTTS |
+|---|---|---|---|
+| Dependencies | `openai` | `openai` | `langchain-core`, `httpx` |
+| Strategy/scorer | in `base_url` | in `extra_body` | constructor args |
+| Fine-grained params | `extra_body` | `extra_body` | constructor args |
+| TTS metadata | `response.model_dump()` | `response.model_dump()` | `msg.response_metadata` |
+| LangChain chains | manual | manual | native |
+| Best for | clean config | full control | LangChain users |
 
-Both call the same `/v1/chat/completions` endpoint. Choose based on your stack.
+All three approaches call the same endpoint. Choose based on your stack and use case.
 
 ## Environment Variables
 
