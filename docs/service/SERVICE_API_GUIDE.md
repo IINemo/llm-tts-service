@@ -182,6 +182,34 @@ response = client.chat.completions.create(
 )
 ```
 
+### Custom Model Endpoint (`model_base_url`)
+
+By default, `self_consistency` routes requests to OpenRouter. To point to a different backend — a remote vLLM server, Gemini, or any OpenAI-compatible endpoint — pass `model_base_url`:
+
+```python
+# Remote vLLM server
+response = client.chat.completions.create(
+    model="Qwen/Qwen3-30B-A3B",
+    messages=[...],
+    extra_body={
+        "model_base_url": "http://gpu-server:8000/v1",
+        "tts_strategy": "self_consistency",
+        "num_paths": 8,
+    }
+)
+
+# Google Gemini
+response = client.chat.completions.create(
+    model="gemini-2.5-flash",
+    messages=[...],
+    extra_body={
+        "model_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "tts_strategy": "self_consistency",
+        "num_paths": 8,
+    }
+)
+```
+
 ### Why Not Query Parameters or Headers?
 
 The OpenAI SDK also supports `extra_query` and `extra_headers`, but these are not appropriate for TTS parameters:
@@ -386,6 +414,7 @@ These can be set via URL path (strategy, scorer) or `extra_body` (all params):
 | `tts_strategy` | string | `self_consistency` | all | Strategy (or use URL path) |
 | `tts_scorer` | string | `entropy` | vLLM strategies | Scorer (or use URL path) |
 | `provider` | string | auto | all | API provider: `openrouter`, `openai`, `vllm` |
+| `model_base_url` | string | None | API strategies | Custom model endpoint URL (overrides provider) |
 | `num_paths` | int | 5 | self_consistency | Number of independent reasoning paths |
 | `tts_num_trajectories` | int | 8 | offline_bon | Number of full trajectories to generate |
 | `tts_candidates_per_step` | int | 4 | online_bon, beam_search | Candidates generated per reasoning step |

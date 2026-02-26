@@ -137,6 +137,7 @@ async def create_chat_completion(
         strategy_config = {
             "provider": request.provider
             or ("vllm" if is_vllm_strategy else "openrouter"),
+            "model_base_url": request.model_base_url,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens or 4096,
             "num_paths": request.num_paths or 5,

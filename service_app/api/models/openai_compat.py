@@ -56,6 +56,13 @@ class ChatCompletionRequest(BaseModel):
         "Defaults to 'openrouter' for self_consistency and 'vllm' for offline_bon/online_bon/beam_search.",
     )
 
+    # Custom model endpoint
+    model_base_url: Optional[str] = Field(
+        default=None,
+        description="Custom base URL for the underlying model (e.g. remote vLLM server, "
+        "Gemini API). Overrides the provider's default URL.",
+    )
+
     # vLLM TTS strategy parameters (passed via extra_body)
     tts_scorer: Optional[str] = Field(
         default="entropy",
