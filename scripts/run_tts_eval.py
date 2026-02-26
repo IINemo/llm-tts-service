@@ -1450,6 +1450,40 @@ def _generate_trajectories_batch(
             else:
                 log.info(f"\nFull trajectory:\n{result['trajectory']}")
 
+            # Flush compute metrics to disk before eval (which may hang on sympy)
+            _token_stats = result.get("token_stats") or {}
+            _compute_metrics = {
+                "sample_index": i,
+                "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
+                "total_tokens_this_sample": _token_stats.get(
+                    "total_tokens_this_sample", 0
+                ),
+                "input_tokens_this_sample": _token_stats.get("input_tokens", 0),
+                "output_tokens_this_sample": _token_stats.get("output_tokens", 0),
+                "generations_this_sample": _token_stats.get("generation_count", 0),
+                "tflops_this_sample": _safe_tflops(_token_stats, "tflops"),
+                "prm_tokens_this_sample": _token_stats.get("prm_input_tokens", 0),
+                "prm_tflops_this_sample": _safe_tflops(_token_stats, "prm_tflops"),
+            }
+            for key in (
+                "trajectory_tokens",
+                "answer_tokens",
+                "context_limit_hit",
+                "max_steps_hit",
+                "completion_reason",
+            ):
+                if key in result and result[key]:
+                    _compute_metrics[key] = result[key]
+            if "validity_scores" in result and result["validity_scores"]:
+                valid_scores = [s for s in result["validity_scores"] if s is not None]
+                if valid_scores:
+                    _compute_metrics["confidence"] = float(np.mean(valid_scores))
+            try:
+                with open(sample_metrics_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(_compute_metrics, ensure_ascii=False) + "\n")
+            except Exception as e:
+                log.warning(f"Failed to flush compute metrics: {e}")
+
             # Check correctness with all evaluators
             eval_results = {}
             for eval_name, evaluator in phase1_evaluators.items():
@@ -1612,18 +1646,9 @@ def _generate_trajectories_batch(
                     }
                 )
 
-            # Compute running metrics
-            token_stats = result.get("token_stats")
-            if token_stats is None:
-                log.warning(f"Sample {i}: missing 'token_stats' in result")
-                token_stats = {}
-            all_token_stats = []
-            for r in results:
-                ts = r.get("token_stats")
-                if ts is None:
-                    ts = {}
-                all_token_stats.append(ts)
-
+            # Compute running totals for wandb logging
+            token_stats = result.get("token_stats") or {}
+            all_token_stats = [r.get("token_stats") or {} for r in results]
             running_total_tokens = sum(
                 ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
             )
@@ -1648,62 +1673,24 @@ def _generate_trajectories_batch(
                     f"Running accuracy [{eval_name}]: {correct_count}/{len(results)} = {accuracy:.3f}"
                 )
 
-            sample_metrics = {
-                "sample_index": i,
-                "is_correct": bool(is_correct),
-                "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
-                "samples_completed": len(results),
-                "total_tokens_this_sample": token_stats.get(
-                    "total_tokens_this_sample", 0
-                ),
-                "input_tokens_this_sample": token_stats.get("input_tokens", 0),
-                "output_tokens_this_sample": token_stats.get("output_tokens", 0),
-                "generations_this_sample": token_stats.get("generation_count", 0),
-                "tflops_this_sample": _safe_tflops(token_stats, "tflops"),
-                "prm_tokens_this_sample": token_stats.get("prm_input_tokens", 0),
-                "prm_tflops_this_sample": _safe_tflops(token_stats, "prm_tflops"),
-                "running_avg_tokens_per_sample": (
-                    (running_total_tokens / len(results)) if results else 0.0
-                ),
-                "running_total_tokens": running_total_tokens,
-                "running_total_tflops": running_total_tflops,
-            }
-            # Add per-evaluator running accuracy to metrics
+            # Log full metrics (compute + eval + running totals) to wandb
+            _compute_metrics["is_correct"] = bool(is_correct)
+            _compute_metrics["samples_completed"] = len(results)
+            _compute_metrics["running_avg_tokens_per_sample"] = (
+                (running_total_tokens / len(results)) if results else 0.0
+            )
+            _compute_metrics["running_total_tokens"] = running_total_tokens
+            _compute_metrics["running_total_tflops"] = running_total_tflops
             for eval_name, stats in running_stats.items():
                 safe_name = eval_name.replace("-", "_").replace(".", "_")
-                sample_metrics[f"running_correct_{safe_name}"] = stats["correct"]
-                sample_metrics[f"running_accuracy_{safe_name}"] = stats["accuracy"]
+                _compute_metrics[f"running_correct_{safe_name}"] = stats["correct"]
+                _compute_metrics[f"running_accuracy_{safe_name}"] = stats["accuracy"]
 
-            # Beam search per-sample metrics: token breakdown and context limit
-            if "trajectory_tokens" in result:
-                sample_metrics["trajectory_tokens"] = result["trajectory_tokens"]
-            if "answer_tokens" in result:
-                sample_metrics["answer_tokens"] = result["answer_tokens"]
-            if "context_limit_hit" in result:
-                sample_metrics["context_limit_hit"] = int(result["context_limit_hit"])
-            if "max_steps_hit" in result:
-                sample_metrics["max_steps_hit"] = int(result["max_steps_hit"])
-            if "completion_reason" in result and result["completion_reason"]:
-                sample_metrics["completion_reason"] = result["completion_reason"]
-
-            if "validity_scores" in result and result["validity_scores"]:
-                valid_scores = [s for s in result["validity_scores"] if s is not None]
-                if valid_scores:
-                    sample_metrics["confidence"] = float(np.mean(valid_scores))
-
-            # Append metrics line
-            try:
-                with open(sample_metrics_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(sample_metrics, ensure_ascii=False) + "\n")
-            except Exception as e:
-                log.warning(f"Failed to append sample metrics: {e}")
-
-            # Log to wandb
             try:
                 import wandb
 
                 if wandb.run is not None:
-                    wandb.log(sample_metrics)
+                    wandb.log(_compute_metrics)
             except Exception:
                 pass
 
