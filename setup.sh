@@ -1,6 +1,6 @@
 #!/bin/bash
 # Setup script for llm-tts-service
-# Installs package dependencies and lm-polygraph dev branch
+# Installs package dependencies, lm-polygraph dev branch, and llm-uncertainty-head (luh)
 
 set -e  # Exit on error
 
@@ -12,6 +12,7 @@ NC='\033[0m'
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 LM_POLYGRAPH_DIR="$SCRIPT_DIR/lm-polygraph"
+LUH_DIR="$SCRIPT_DIR/llm-uncertainty-head"
 
 # Parse arguments
 UPDATE_ONLY=false
@@ -41,8 +42,27 @@ install_lm_polygraph() {
     echo -e "${GREEN}✓ lm-polygraph installed${NC}"
 }
 
+install_luh() {
+    echo -e "${YELLOW}Setting up llm-uncertainty-head (luh)...${NC}"
+
+    if [ -d "$LUH_DIR" ]; then
+        echo -e "  Pulling latest changes..."
+        cd "$LUH_DIR"
+        git pull origin main 2>&1 | grep -E "(Already|Updating)" || true
+        cd "$SCRIPT_DIR"
+    else
+        echo -e "  Cloning llm-uncertainty-head..."
+        git clone https://github.com/IINemo/llm-uncertainty-head.git "$LUH_DIR"
+    fi
+
+    echo -e "  Installing luh..."
+    pip install -e "$LUH_DIR" > /dev/null
+    echo -e "${GREEN}✓ luh installed${NC}"
+}
+
 if [ "$UPDATE_ONLY" = true ]; then
     install_lm_polygraph
+    install_luh
     exit 0
 fi
 
@@ -58,6 +78,9 @@ echo -e "${GREEN}✓ Package installed${NC}\n"
 # Install lm-polygraph dev branch
 install_lm_polygraph
 
+# Install llm-uncertainty-head (luh) for UHead scorer
+install_luh
+
 echo -e "\n${GREEN}✅ Setup complete!${NC}"
 echo -e "\nNext: Copy .env.example to .env and add your API keys"
-echo -e "Update lm-polygraph: ${BLUE}./setup.sh --update${NC}"
+echo -e "Update dependencies: ${BLUE}./setup.sh --update${NC}"
