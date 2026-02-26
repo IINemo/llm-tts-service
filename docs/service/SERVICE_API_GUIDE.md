@@ -73,7 +73,7 @@ response = client.chat.completions.create(
             "study both languages, and let M be the largest. Find M - m."
         )}
     ],
-    extra_body={"num_paths": 8}
+    extra_body={"num_paths": 8, "max_tokens": 4096}
 )
 
 print(response.choices[0].message.content)
@@ -99,6 +99,7 @@ response = client.chat.completions.create(
     ],
     # Fine-grained params go through extra_body
     extra_body={
+        "max_tokens": 8192,
         "tts_beam_size": 4,
         "tts_candidates_per_step": 4,
         "tts_max_steps": 50,
@@ -143,7 +144,8 @@ response = client.chat.completions.create(
     ],
     extra_body={
         "tts_strategy": "self_consistency",
-        "num_paths": 16
+        "num_paths": 16,
+        "max_tokens": 4096,
     }
 )
 ```
@@ -171,6 +173,7 @@ response = client.chat.completions.create(
         )}
     ],
     extra_body={
+        "max_tokens": 8192,
         "tts_num_trajectories": 16,
         "tts_score_aggregation": "mean",
     }
