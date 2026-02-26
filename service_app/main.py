@@ -10,13 +10,13 @@ from fastapi.responses import JSONResponse
 
 from service_app.api.routes import chat, models
 from service_app.core.config import settings
+from service_app.core.logging_config import setup_logging
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Configure logging — each run gets logs/<date>/<time>/service.log
+_log_dir = setup_logging()
 
 log = logging.getLogger(__name__)
+log.info(f"Logging to {_log_dir}/service.log")
 
 # Create FastAPI app
 app = FastAPI(
@@ -131,5 +131,6 @@ if __name__ == "__main__":
         host=settings.host,
         port=settings.port,
         reload=True,  # Enable auto-reload for development
+        reload_excludes=["logs/*"],
         log_level="info",
     )
