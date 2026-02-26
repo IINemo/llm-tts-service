@@ -303,9 +303,9 @@ for i, traj in enumerate(meta["all_trajectories"]):
     print(f"    {traj['text'][:100]}...")
 ```
 
-## Example for Paper
+## Example for Paper (main text)
 
-A concise end-to-end example showing request and response extraction:
+Minimal usage example showing the drop-in integration:
 
 ```python
 from openai import OpenAI
@@ -314,42 +314,51 @@ client = OpenAI(
     base_url="<THINKBOOSTER_ENDPOINT>/v1/beam_search/prm",
     api_key="<YOUR_API_KEY>",
 )
-
 response = client.chat.completions.create(
     model="Qwen/Qwen3-30B-A3B",
-    messages=[
-        {"role": "system", "content": "Think step by step. Put your final answer in \\boxed{}."},
-        {"role": "user", "content": (
-            "Find the number of ordered pairs (x, y) of positive integers "
-            "that satisfy x + 2y = 2xy."
-        )}
-    ],
+    messages=[{"role": "user", "content":
+        "Find the number of ordered pairs (x, y) of "
+        "positive integers satisfying x + 2y = 2xy."}],
+    extra_body={"max_tokens": 8192, "tts_beam_size": 4},
+)
+print(response.choices[0].message.content)  # reasoning chain
+```
+
+## Example for Paper (appendix)
+
+Extended example with response extraction:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="<THINKBOOSTER_ENDPOINT>/v1/beam_search/prm",
+    api_key="<YOUR_API_KEY>",
+)
+response = client.chat.completions.create(
+    model="Qwen/Qwen3-30B-A3B",
+    messages=[{"role": "user", "content":
+        "Find the number of ordered pairs (x, y) of "
+        "positive integers satisfying x + 2y = 2xy."}],
     extra_body={
         "max_tokens": 8192,
         "tts_beam_size": 4,
         "tts_candidates_per_step": 4,
         "tts_max_steps": 50,
-    }
+    },
 )
 
-# --- Extract response data ---
-answer = response.choices[0].message.content   # full reasoning trajectory
 meta = response.model_dump()["choices"][0]["tts_metadata"]
 
-# Generated answer
-print(meta["selected_answer"])          # "1"
+print(meta["selected_answer"])        # "1"
+print(meta["reasoning_steps"])        # 6
+print(meta["validity_scores"])        # [0.92, 0.88, 0.95, ...]
+print(meta["completed"])              # True
+print(meta["completion_reason"])      # "thinking_complete"
 
-# Per-step reasoning with PRM scores
 for i, step in enumerate(meta["steps"]):
     print(f"Step {i+1} [score={step['score']:.3f}]: {step['text'][:60]}...")
 
-# Completion info
-print(meta["completed"])                # True
-print(meta["completion_reason"])        # "thinking_complete"
-print(meta["reasoning_steps"])          # 6
-print(meta["validity_scores"])          # [0.92, 0.88, 0.95, ...]
-
-# Compute cost
 print(meta["token_stats"]["input_tokens"])   # 156
 print(meta["token_stats"]["output_tokens"])  # 1024
 print(meta["token_stats"]["tflops"])         # 0.42
