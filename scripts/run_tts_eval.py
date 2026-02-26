@@ -106,7 +106,11 @@ try:
 except ImportError:
     POLYGRAPH_UNCERTAINTY_AVAILABLE = False
     VLLMWithUncertainty = None
-from utils.results import load_results_json, parse_resume_arguments, save_results_json
+from utils.results import (
+    load_results_json,
+    parse_resume_arguments,
+    save_results_json,
+)
 
 from llm_tts.evaluation import (
     EvaluatorAlignScore,
@@ -412,7 +416,7 @@ def create_scorer(config):
             score_aggregation=getattr(config.scorer, "score_aggregation", "min"),
             context_window=getattr(config.scorer, "context_window", 0),
         )
-    elif config.scorer.type == "uncertainty":
+    elif config.scorer.type in ["uncertainty", "uhead"]:
         scorer = StepScorerUncertainty()
     elif config.scorer.type in (
         "perplexity",
@@ -505,6 +509,7 @@ def create_model(config):
 
                 # Select estimator based on scorer config
                 scorer_type = config.scorer.type if config.scorer else "entropy"
+                vllm_with_uncertainty_arguments = {}
                 if scorer_type == "perplexity":
                     stat_calculators = [VLLMLogprobsCalculator()]
                     estimator = Perplexity()
@@ -527,6 +532,36 @@ def create_model(config):
                     # Use entropy wrapper for generation (scores not used for selection)
                     stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                     estimator = MeanTokenEntropy()
+                elif scorer_type == "uhead":
+                    from luh import AutoUncertaintyHead
+                    from luh.calculator_apply_uq_head import CalculatorApplyUQHead
+                    from luh.luh_claim_estimator_dummy import LuhClaimEstimatorDummy
+                    from luh.vllm.vllm_uhead_features import VLLMUncertaintyHeadFeatures
+
+                    uncertainty_head = AutoUncertaintyHead.from_pretrained(
+                        config.scorer.uq_head_path, base_model=llm
+                    )
+                    stat_calculators = [
+                        VLLMUncertaintyHeadFeatures(
+                            uncertainty_head,
+                            model_path=config.model.model_path,
+                            max_model_len=config.scorer.get("max_model_len", 32768),
+                            gpu_memory_utilization=config.scorer.get(
+                                "gpu_memory_utilization", 0.9
+                            ),
+                            tensor_parallel_size=config.scorer.get(
+                                "tensor_parallel_size", 1
+                            ),
+                        ),
+                        CalculatorApplyUQHead(
+                            uncertainty_head,
+                            device=getattr(config.scorer, "device", "cuda"),
+                        ),
+                    ]
+                    estimator = LuhClaimEstimatorDummy()
+                    vllm_with_uncertainty_arguments = stat_calculators[
+                        0
+                    ].vllm_with_uncertainty_arguments()
                 else:
                     raise ValueError(
                         f"Unsupported scorer type for vLLM: {scorer_type}. "
@@ -537,6 +572,7 @@ def create_model(config):
                     llm=llm,
                     stat_calculators=stat_calculators,
                     estimator=estimator,
+                    **vllm_with_uncertainty_arguments,
                 )
                 log.info(
                     f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__}"
