@@ -119,6 +119,71 @@ h1 {
   align-items: end;
 }
 
+.cached-example-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.cached-head {
+  align-items: center;
+}
+
+.cached-controls {
+  margin-top: 0;
+}
+
+.cache-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 40px;
+  cursor: pointer;
+}
+
+.cache-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cache-toggle-track {
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: #c5d4e3;
+  border: 1px solid #adc1d5;
+  position: relative;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.cache-toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 4px rgba(16, 36, 58, 0.25);
+  transition: transform 0.15s ease;
+}
+
+.cache-toggle-label {
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.cache-toggle input:checked + .cache-toggle-track {
+  background: #1aa2a4;
+  border-color: #11898b;
+}
+
+.cache-toggle input:checked + .cache-toggle-track::after {
+  transform: translateX(20px);
+}
+
 .control {
   display: grid;
   gap: 0.35rem;
@@ -212,6 +277,12 @@ button:hover {
   transform: translateY(-1px);
 }
 
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .ghost {
   background: #f0f6fc;
   color: #21537a;
@@ -228,6 +299,118 @@ button:hover {
   gap: 0.7rem;
 }
 
+.advanced-config-toggle {
+  height: auto;
+  min-height: 0;
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  color: #21537a;
+  padding: 0;
+  font-size: 0.86rem;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.advanced-config-toggle:hover {
+  transform: none;
+}
+
+.advanced-config-panel {
+  border: 1px dashed #b7c9dc;
+  border-radius: 12px;
+  background: #fbfdff;
+  padding: 0.7rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.yaml-editor {
+  position: relative;
+  border: 1px solid #b7c6d7;
+  border-radius: 10px;
+  background: #fff;
+  min-height: 220px;
+  overflow: hidden;
+}
+
+.yaml-highlight,
+.yaml-editor textarea {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  min-height: 220px;
+  max-height: 460px;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: auto;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  line-height: 1.45;
+  font-family: "IBM Plex Mono", monospace;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  tab-size: 2;
+  font-size: 0.8rem;
+}
+
+.yaml-highlight {
+  color: #334155;
+  background: transparent;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.yaml-editor textarea {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--ink);
+  resize: none;
+  z-index: 1;
+}
+
+.yaml-editor textarea:focus {
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+}
+
+.yaml-editor textarea::selection {
+  background: rgba(31, 84, 122, 0.26);
+}
+
+.yaml-comment {
+  color: #6b7280;
+}
+
+.yaml-key {
+  color: #0b6f70;
+}
+
+.yaml-punc {
+  color: #526d86;
+}
+
+.yaml-string {
+  color: #9f3d29;
+}
+
+.yaml-number {
+  color: #8a5cf6;
+}
+
+.yaml-bool {
+  color: #2563eb;
+}
+
+.yaml-null {
+  color: #64748b;
+}
+
 .custom-controls {
   display: flex;
   flex-wrap: wrap;
@@ -235,11 +418,15 @@ button:hover {
   align-items: flex-start;
 }
 
+.custom-controls > button {
+  align-self: end;
+}
+
 .custom-mode-section {
   display: grid;
   gap: 0.6rem;
-  grid-template-columns: minmax(0, 1fr) minmax(210px, 260px);
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
 }
 
 .custom-actions {
@@ -280,6 +467,13 @@ button:hover {
   justify-content: space-between;
   align-items: center;
   gap: 1rem;
+}
+
+.embedded-prompt-strip {
+  border: 1px solid #d8e3ef;
+  border-radius: 14px;
+  box-shadow: none;
+  background: #fbfdff;
 }
 
 .prompt-label {
@@ -454,6 +648,43 @@ button:hover {
   color: var(--muted);
 }
 
+.timeline-options {
+  margin-top: 0.5rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.timeline-options-empty {
+  margin: 0.45rem 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.timeline-option {
+  border: 1px solid #d3deea;
+  border-radius: 9px;
+  background: #ffffff;
+  padding: 0.38rem 0.5rem;
+}
+
+.timeline-option.selected {
+  border-color: #f2b078;
+  background: #fff7ef;
+}
+
+.timeline-option-label {
+  margin: 0;
+  font-size: 0.79rem;
+  color: var(--ink);
+}
+
+.timeline-option-meta {
+  margin: 0.16rem 0 0;
+  font-size: 0.73rem;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+}
+
 .details-panel {
   display: grid;
   gap: 0.75rem;
@@ -469,6 +700,19 @@ button:hover {
 
 .decision-box strong {
   color: var(--accent);
+}
+
+.step-content {
+  margin: 0.55rem 0 0;
+  white-space: pre-wrap;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: #28445f;
+  background: #fff;
+  border: 1px dashed #efc7a2;
+  border-radius: 10px;
+  padding: 0.52rem 0.58rem;
 }
 
 .signals {
@@ -632,6 +876,7 @@ button:hover {
   stroke: #4e6a84;
   stroke-width: 1.5;
   fill: #fff;
+  transition: stroke-width 0.12s ease, stroke 0.12s ease, fill 0.12s ease;
 }
 
 .tree-node.selected {
@@ -639,10 +884,24 @@ button:hover {
   stroke: var(--accent);
 }
 
+.tree-node.focused {
+  stroke: #0f8b8d;
+  stroke-width: 2.6;
+}
+
+.tree-node-group {
+  cursor: pointer;
+}
+
+.tree-node-group:hover .tree-node {
+  stroke-width: 2.2;
+}
+
 .tree-label {
   font-family: "IBM Plex Mono", monospace;
   font-size: 10px;
   fill: #23405a;
+  pointer-events: none;
 }
 
 @media (max-width: 1010px) {

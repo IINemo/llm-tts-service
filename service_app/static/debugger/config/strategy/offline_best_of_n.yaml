@@ -1,0 +1,22 @@
+# Standalone strategy config: Offline Best-of-N
+
+type: offline_best_of_n
+num_trajectories: 8
+score_aggregation: min
+batch_generation: true
+min_step_tokens: 50
+stop_token_ids:
+  - 151645
+  - 151643
+use_sequence: true
+use_conclusion: true
+use_thinking: true
+use_verification: true
+use_structure: false
+use_reasoning: true
+use_correction: false
+calculate_entropy_score: false
+calculate_perplexity_score: false
+calculate_sequence_prob_score: false
+calculate_pd_gap_score: false
+calculate_prm_score: false

@@ -1,0 +1,9 @@
+# Standalone scorer config: Entropy
+
+type: entropy
+direction: lower_better
+threshold: 0.34
+uncertainty_model_creator: "config.scorer.uncertainty_entropy"
+uncertainty:
+  test: 1
+batch_size: 1

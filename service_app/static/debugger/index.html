@@ -45,34 +45,47 @@
         <p class="hero-copy">
           Inspect sampled trajectories, tree expansions, verifier reranking, and the confidence signals behind every escalation decision.
         </p>
-        <div class="controls">
+      </section>
+
+      <section class="panel cached-example-panel">
+        <div class="section-head compact cached-head">
+          <div>
+            <h2>Cached Example Explorer</h2>
+            <p>Choose a cached example and case in one place.</p>
+          </div>
+          <label class="cache-toggle" for="useCachedToggle">
+            <input id="useCachedToggle" type="checkbox" />
+            <span class="cache-toggle-track" aria-hidden="true"></span>
+            <span class="cache-toggle-label">Use Cached Example</span>
+          </label>
+        </div>
+        <div id="cachedExplorerControls" class="controls cached-controls hidden">
           <label class="control">
             <span>Scenario</span>
             <select id="scenarioSelect"></select>
           </label>
           <label class="control">
-            <span>Budget</span>
-            <input id="budgetRange" type="range" min="0" max="0" step="1" value="0" />
-            <strong id="budgetValue" class="budget-value">-</strong>
+            <span>Case</span>
+            <select id="caseSelect"></select>
           </label>
-          <button id="refreshButton" type="button">Replay Trace</button>
+        </div>
+        <div id="cachedExplorerPrompt" class="prompt-strip embedded-prompt-strip hidden">
+          <div>
+            <p class="prompt-label">Prompt</p>
+            <p id="promptText" class="prompt-text"></p>
+            <p id="promptMeta" class="prompt-meta"></p>
+          </div>
+          <div class="ground-truth-box">
+            <p>Ground truth</p>
+            <strong id="groundTruth">-</strong>
+          </div>
         </div>
       </section>
 
       <section class="panel custom-input-panel">
         <div class="section-head compact">
           <h2>Custom Input Runner</h2>
-          <p>Run all strategy and scorer combinations on one question.</p>
-        </div>
-        <div class="custom-controls">
-          <label class="control grow">
-            <span>Shared prompt / instruction (optional)</span>
-            <textarea
-              id="globalPromptInput"
-              rows="2"
-              placeholder="Example: Reason step-by-step and put the final answer in \\boxed{}."
-            ></textarea>
-          </label>
+          <p>Validate model capabilities, then run one strategy with optional scorer.</p>
         </div>
         <div class="custom-controls">
           <label class="control">
@@ -87,8 +100,8 @@
             <input
               id="modelIdInput"
               type="text"
-              value="openai/gpt-4o-mini"
-              placeholder="e.g. gpt-4o-mini or openai/gpt-4o-mini"
+              value="gpt-4o-mini"
+              placeholder="e.g. gpt-4o-mini or deepseek/deepseek-r1-0528"
             />
           </label>
           <label class="control grow">
@@ -100,9 +113,73 @@
               autocomplete="off"
             />
           </label>
+          <button id="validateModelButton" type="button">Validate Model</button>
         </div>
+        <p id="modelCapabilityStatus" class="custom-status">
+          Validate a model first to unlock compatible strategy/scorer options.
+        </p>
+
+        <div class="custom-controls">
+          <label class="control">
+            <span>Strategy</span>
+            <select id="strategySelect" disabled>
+              <option value="">Validate model first</option>
+            </select>
+          </label>
+          <label class="control">
+            <span>Scorer</span>
+            <select id="scorerSelect" disabled>
+              <option value="">Validate model first</option>
+            </select>
+          </label>
+        </div>
+
+        <button
+          id="advancedConfigToggle"
+          class="advanced-config-toggle"
+          type="button"
+          aria-expanded="false"
+        >
+          Show Advanced config
+        </button>
+        <div id="advancedConfigPanel" class="advanced-config-panel hidden">
+          <label class="control">
+            <span>System prompt (optional)</span>
+            <textarea
+              id="advancedPromptInput"
+              rows="2"
+              placeholder="Example: Reason step-by-step and put the final answer in \\boxed{}."
+            >Reason step-by-step carefully</textarea>
+          </label>
+          <label class="control">
+            <span>Advanced config (YAML)</span>
+            <div class="yaml-editor">
+              <pre
+                id="advancedConfigHighlight"
+                class="yaml-highlight"
+                aria-hidden="true"
+              ></pre>
+              <textarea
+                id="advancedConfigYamlInput"
+                rows="14"
+                wrap="off"
+                spellcheck="false"
+                placeholder="prompt: \"\"\ngeneration:\n  temperature: 0.7\nstrategy:\n  type: baseline"
+              ></textarea>
+            </div>
+          </label>
+          <div class="custom-actions">
+            <button id="resetAdvancedConfigButton" type="button" class="ghost">
+              Reset Advanced Config
+            </button>
+          </div>
+          <p id="advancedConfigStatus" class="custom-status">
+            YAML template will load after selecting strategy and scorer.
+          </p>
+        </div>
+
         <p id="modelConfigNote" class="custom-note">
-          Note: provider/model/API key capture is ready in the UI. Backend strategy execution still reads API keys from `.env` and is not wired to use these values yet.
+          Note: system prompt is managed in this Advanced config section and synced into YAML `prompt` on run. Model validation uses the entered API key. Full production execution still relies on backend environment wiring.
         </p>
 
         <div class="custom-mode-section">
@@ -114,40 +191,26 @@
               placeholder="Enter one question to evaluate"
             ></textarea>
           </label>
-          <label class="control">
-            <span>Gold answer</span>
-            <input id="singleGoldInput" type="text" placeholder="e.g. 19" />
-          </label>
         </div>
 
         <div class="custom-actions">
-          <button id="runCustomButton" type="button">Run Strategy x Scorer Matrix</button>
+          <button id="runCustomButton" type="button" disabled>
+            Run Selected Strategy
+          </button>
           <button id="resetDemoButton" type="button" class="ghost">
-            Back To Demo Data
+            Clear
           </button>
         </div>
 
         <p id="customStatus" class="custom-status">
-          Enter one question and gold answer, then run the full strategy x scorer matrix.
+          Enter one question and run the selected strategy.
         </p>
-      </section>
-
-      <section class="prompt-strip">
-        <div>
-          <p class="prompt-label">Prompt</p>
-          <p id="promptText" class="prompt-text"></p>
-          <p id="promptMeta" class="prompt-meta"></p>
-        </div>
-        <div class="ground-truth-box">
-          <p>Ground truth</p>
-          <strong id="groundTruth">-</strong>
-        </div>
       </section>
 
       <section>
         <div class="section-head">
           <h2>Strategy Comparison</h2>
-          <p>Same prompt and budget, compared across strategy-scorer runs.</p>
+          <p>Run result overview (confidence and tokens).</p>
         </div>
         <div id="strategyGrid" class="strategy-grid"></div>
       </section>
@@ -156,7 +219,7 @@
         <div class="panel timeline-panel">
           <div class="section-head compact">
             <h2>Reasoning Timeline</h2>
-            <p id="timelineHint">Select a strategy to inspect each decision point.</p>
+            <p id="timelineHint">Select a step to inspect content and scores.</p>
           </div>
           <div id="timeline" class="timeline"></div>
         </div>
@@ -164,7 +227,7 @@
         <div class="panel details-panel">
           <div class="section-head compact">
             <h2>Step Inspector</h2>
-            <p id="stepTitle">Pick a timeline event.</p>
+            <p id="stepTitle">Pick a timeline step.</p>
           </div>
 
           <div id="decisionBox" class="decision-box"></div>
@@ -179,12 +242,15 @@
             <h3>Candidate Detail</h3>
           </div>
           <div id="candidateDetail" class="candidate-detail"></div>
-
-          <div class="subsection-head">
-            <h3>Tree View</h3>
-          </div>
-          <div id="treeContainer" class="tree-container"></div>
         </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head compact">
+          <h2>Trajectory Tree</h2>
+          <p>Global branching view for the selected strategy run.</p>
+        </div>
+        <div id="treeContainer" class="tree-container"></div>
       </section>
     </main>
 

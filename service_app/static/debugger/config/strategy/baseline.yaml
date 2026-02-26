@@ -1,0 +1,15 @@
+# Standalone strategy config: Baseline (Raw CoT)
+
+type: baseline
+min_step_tokens: 0
+stop_token_ids:
+  - 151645
+  - 151643
+max_step_tokens: 32768
+use_sequence: false
+use_conclusion: false
+use_thinking: false
+use_verification: false
+use_structure: false
+use_reasoning: false
+use_correction: false

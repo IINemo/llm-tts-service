@@ -9,8 +9,10 @@ from pydantic import BaseModel, Field
 
 from service_app.core.visual_debugger_demo import (
     build_single_sample_payload,
+    get_advanced_config_template,
     get_demo_scenario,
     list_demo_scenarios,
+    validate_model_capabilities,
 )
 
 router = APIRouter()
@@ -21,18 +23,26 @@ _DEBUGGER_HTML_PATH = (
 
 
 class DebuggerSingleSampleRequest(BaseModel):
-    """Run one custom sample through the debugger strategy/scorer matrix."""
+    """Run one custom sample through one selected strategy and optional scorer."""
 
     question: str = Field(..., min_length=1)
-    gold_answer: str = Field(..., min_length=1)
+    gold_answer: Optional[str] = Field(default=None)
     shared_prompt: str = Field(default="")
     budget: Optional[int] = Field(default=None, ge=1)
     provider: str = Field(default="openrouter")
     model_id: str = Field(default="openai/gpt-4o-mini")
-    api_key: str = Field(
-        default="",
-        pattern=r"^(|sk-[A-Za-z0-9]+|sk-or-v1-[A-Za-z0-9]+)$",
-    )
+    api_key: str = Field(default="")
+    strategy_id: str = Field(..., min_length=1)
+    scorer_id: Optional[str] = Field(default=None)
+    advanced_config_yaml: Optional[str] = Field(default=None)
+
+
+class DebuggerValidateModelRequest(BaseModel):
+    """Validate model capability flags used to gate strategies/scorers."""
+
+    provider: str = Field(default="openrouter")
+    model_id: str = Field(..., min_length=1)
+    api_key: str = Field(..., min_length=1)
 
 
 @router.get("/debugger", include_in_schema=False)
@@ -67,20 +77,55 @@ def get_visual_debugger_scenario(
 
 @router.post("/v1/debugger/demo/run-single")
 def run_visual_debugger_single_sample(request: DebuggerSingleSampleRequest):
-    """Build one strategy-by-scorer debugger payload for a custom sample."""
-    return build_single_sample_payload(
-        question=request.question,
-        gold_answer=request.gold_answer,
-        shared_prompt=request.shared_prompt,
-        budget=request.budget,
-        provider=request.provider,
-        model_id=request.model_id,
-        api_key=request.api_key,
-        scenario_id="custom_1",
-        scenario_title="Single Example",
-        scenario_description=(
-            "Custom single-sample run across baseline, beam search, "
-            "online/offline best-of-n, and self-consistency with all scorers."
-        ),
-        input_source="custom_single",
-    )
+    """Build one debugger payload for the selected strategy and optional scorer."""
+    try:
+        return build_single_sample_payload(
+            question=request.question,
+            gold_answer=request.gold_answer,
+            shared_prompt=request.shared_prompt,
+            budget=request.budget,
+            provider=request.provider,
+            model_id=request.model_id,
+            api_key=request.api_key,
+            strategy_id=request.strategy_id,
+            scorer_id=request.scorer_id,
+            advanced_config_yaml=request.advanced_config_yaml,
+            scenario_id="custom_1",
+            scenario_title="Single Example",
+            scenario_description=(
+                "Custom single-sample run with selected strategy and optional scorer."
+            ),
+            input_source="custom_single",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/v1/debugger/demo/validate-model")
+def validate_visual_debugger_model(request: DebuggerValidateModelRequest):
+    """Validate model capabilities and return available strategies/scorers."""
+    try:
+        return validate_model_capabilities(
+            provider=request.provider,
+            model_id=request.model_id,
+            api_key=request.api_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/v1/debugger/demo/advanced-config/template")
+def get_visual_debugger_advanced_config_template(
+    strategy_id: str = Query(..., min_length=1),
+    scorer_id: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
+    """Return YAML template for generation/strategy/scorer advanced config."""
+    try:
+        return get_advanced_config_template(
+            strategy_id=strategy_id,
+            scorer_id=scorer_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

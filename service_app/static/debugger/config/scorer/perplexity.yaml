@@ -1,0 +1,9 @@
+# Standalone scorer config: Perplexity
+
+type: perplexity
+direction: lower_better
+threshold: 0.36
+uncertainty_model_creator: "config.scorer.uncertainty_perplexity"
+uncertainty:
+  test: 1
+batch_size: 1

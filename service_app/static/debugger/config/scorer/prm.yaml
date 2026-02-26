@@ -1,0 +1,11 @@
+# Standalone scorer config: PRM
+
+type: prm
+direction: higher_better
+threshold: 0.72
+model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+device: "cuda:1"
+batch_size: 1
+use_vllm: true
+gpu_memory_utilization: 0.9
+prm_max_tokens: 4000
