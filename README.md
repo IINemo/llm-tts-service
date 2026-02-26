@@ -376,10 +376,19 @@ python service_app/main.py
 
 ### vLLM engine fails to start
 
-If you see `RuntimeError: Engine core initialization failed` or `Bytes object is corrupted, checksum does not match`, the vLLM torch compile cache is corrupted. Clear it:
+**Corrupted torch compile cache:** If you see `RuntimeError: Engine core initialization failed` or `Bytes object is corrupted, checksum does not match`:
 
 ```bash
 rm -rf ~/.cache/vllm/torch_compile_cache/
+```
+
+**Missing C compiler:** If you see `Failed to find C compiler` in the engine core logs, Triton needs `gcc` for JIT compilation. Install via conda:
+
+```bash
+conda install -c conda-forge gcc_linux-64 gxx_linux-64 -y
+# Conda installs with a prefixed name; symlink so Triton can find it:
+ln -s $CONDA_PREFIX/bin/x86_64-conda-linux-gnu-gcc $CONDA_PREFIX/bin/gcc
+ln -s $CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++ $CONDA_PREFIX/bin/g++
 ```
 
 ---
