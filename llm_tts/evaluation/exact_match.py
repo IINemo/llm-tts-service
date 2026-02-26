@@ -11,7 +11,7 @@ import re
 
 from tqdm import tqdm
 
-from .grader import math_equal
+from .grader import get_timeout_count, math_equal
 from .parser import STRIP_EXCEPTIONS, extract_answer, strip_string
 
 log = logging.getLogger()
@@ -206,6 +206,13 @@ class EvaluatorExactMatch:
                     f"__call__ idx={idx} Math grading error: {e}\n{traceback.format_exc()}"
                 )
                 scores.append(0.0)
+
+        timeouts = get_timeout_count()
+        if timeouts > 0:
+            log.warning(
+                "Symbolic comparison timed out for %d samples during evaluation",
+                timeouts,
+            )
 
         return scores
 

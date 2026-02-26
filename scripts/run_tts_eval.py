@@ -115,6 +115,7 @@ from llm_tts.evaluation import (
     EvaluatorLLMAsAJudge,
     EvaluatorMBPPPlus,
 )
+from llm_tts.evaluation.grader import get_timeout_count
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
@@ -2438,6 +2439,14 @@ def evaluate_results(
             if consensus_scores:
                 metrics[f"{eval_name}/avg_consensus"] = float(np.mean(consensus_scores))
                 metrics[f"{eval_name}/min_consensus"] = float(np.min(consensus_scores))
+
+    # Record symbolic comparison timeouts
+    symbolic_timeouts = get_timeout_count()
+    metrics["eval/symbolic_equal_timeouts"] = symbolic_timeouts
+    if symbolic_timeouts > 0:
+        log.warning(
+            "Total symbolic_equal timeouts during this run: %d", symbolic_timeouts
+        )
 
     # Save metrics locally (so FLOPs metrics aren't only in W&B)
     metrics_path = Path(save_path) / "metrics.json"
