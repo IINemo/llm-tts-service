@@ -55,6 +55,11 @@ install_luh() {
         git clone https://github.com/IINemo/llm-uncertainty-head.git "$LUH_DIR"
     fi
 
+    # vllm-speculators is required for hidden states extraction
+    echo -e "  Installing vllm-speculators (hidden states support)..."
+    pip install "git+https://github.com/vllm-project/speculators.git" > /dev/null
+    echo -e "${GREEN}✓ vllm-speculators installed${NC}"
+
     echo -e "  Installing luh..."
     pip install -e "$LUH_DIR" > /dev/null
     echo -e "${GREEN}✓ luh installed${NC}"
