@@ -182,6 +182,9 @@ outputs/
 wandb/
 workdir/
 
+# Notebook caches
+# notebooks/cache/
+
 # Reference implementations and external repos
 # deepconf/
 # tree-of-thought-llm/
