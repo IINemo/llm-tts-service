@@ -13,7 +13,7 @@ import sys
 
 
 def _pip(*args: str) -> None:
-    cmd = [sys.executable, "-m", "pip", *args]
+    cmd = [sys.executable, "-m", "pip", "--no-cache-dir", *args]
     print("[bootstrap]", " ".join(cmd), flush=True)
     subprocess.check_call(cmd)
 
