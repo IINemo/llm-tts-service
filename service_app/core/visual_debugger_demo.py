@@ -7,6 +7,7 @@ import importlib
 import json
 import math
 import random
+import re
 import time
 from copy import deepcopy
 from dataclasses import dataclass
@@ -1445,9 +1446,46 @@ def _extract_step_entries(raw_steps: Any) -> List[Dict[str, Any]]:
                 token_count = len(token_ids)
 
         if step_text.strip():
-            entries.append({"text": step_text, "tokens": token_count})
+            split_steps = _split_text_by_prompt_step_format(step_text)
+            if len(split_steps) <= 1:
+                entries.append({"text": step_text, "tokens": token_count})
+            else:
+                weighted = _distribute_tokens_by_text_length(split_steps, token_count)
+                for part_text, part_tokens in zip(split_steps, weighted):
+                    entries.append({"text": part_text, "tokens": part_tokens})
 
     return entries
+
+
+def _split_text_by_prompt_step_format(text: str) -> List[str]:
+    content = str(text or "").strip()
+    if not content:
+        return []
+
+    # Split by lines that start with "- Step <index>:" (e.g. "- Step 3: ...").
+    pattern = re.compile(
+        r"(?=^\s*-\s*Step\s+(?:\d+|[A-Za-z]+)\s*:)",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    chunks = [chunk.strip() for chunk in pattern.split(content) if chunk.strip()]
+    return chunks if len(chunks) > 1 else [content]
+
+
+def _distribute_tokens_by_text_length(parts: List[str], total_tokens: int) -> List[int]:
+    if not parts:
+        return []
+    if total_tokens <= 0:
+        return [0] * len(parts)
+
+    lengths = [max(1, len(part)) for part in parts]
+    total_length = sum(lengths)
+    allocated = [
+        max(0, int(total_tokens * length / total_length)) for length in lengths
+    ]
+    remainder = total_tokens - sum(allocated)
+    for index in range(remainder):
+        allocated[index % len(allocated)] += 1
+    return allocated
 
 
 def _event_stage_for_family(family: str, index: int, total: int) -> str:

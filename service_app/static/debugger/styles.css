@@ -283,6 +283,23 @@ button:disabled {
   transform: none;
 }
 
+#runCustomButton.is-loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+}
+
+#runCustomButton.is-loading::after {
+  content: "";
+  width: 0.84rem;
+  height: 0.84rem;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #ffffff;
+  animation: button-spin 0.7s linear infinite;
+}
+
 .ghost {
   background: #f0f6fc;
   color: #21537a;
@@ -965,5 +982,14 @@ button:disabled {
   }
   50% {
     transform: translateY(10px) rotate(6deg);
+  }
+}
+
+@keyframes button-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }

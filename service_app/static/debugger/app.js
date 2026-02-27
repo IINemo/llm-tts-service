@@ -27,6 +27,7 @@ const state = {
   advancedConfigExpanded: false,
   advancedConfigTemplateKey: null,
   advancedConfigDirty: false,
+  isRunInProgress: false,
 };
 
 const elements = {
@@ -1018,9 +1019,29 @@ function updateRunButtonEnabled() {
   const hasScorer = !scorerRequired || Boolean(elements.scorerSelect.value);
 
   elements.runCustomButton.disabled =
+    state.isRunInProgress ||
     !state.modelValidation ||
     !elements.strategySelect.value ||
     !hasScorer;
+}
+
+function setRunButtonLoading(isLoading) {
+  state.isRunInProgress = Boolean(isLoading);
+  if (!elements.runCustomButton.dataset.defaultLabel) {
+    elements.runCustomButton.dataset.defaultLabel =
+      elements.runCustomButton.textContent || "Run Selected Strategy";
+  }
+
+  if (state.isRunInProgress) {
+    elements.runCustomButton.classList.add("is-loading");
+    elements.runCustomButton.textContent = "Running...";
+  } else {
+    elements.runCustomButton.classList.remove("is-loading");
+    elements.runCustomButton.textContent =
+      elements.runCustomButton.dataset.defaultLabel;
+  }
+
+  updateRunButtonEnabled();
 }
 
 function invalidateModelValidation(message = null) {
@@ -1186,119 +1207,129 @@ async function runCustomInput() {
     setStatus("Please validate model and finish required strategy/scorer selection.", true);
     return;
   }
+  if (state.isRunInProgress) {
+    return;
+  }
 
   const budget = getCurrentBudget() ?? 8;
+  setRunButtonLoading(true);
 
-  if (state.useCachedExample) {
-    try {
-      if (!state.cachedSourcePayload) {
-        await loadCachedOptionsForCurrentScenario();
-      }
-      const payload = buildRunPayloadFromCachedSource(
-        state.cachedSourcePayload,
-        strategyId,
-        scorerId || null,
-      );
-      state.payload = payload;
-      state.selectedStrategyId = payload?.strategies?.[0]?.id || null;
-      state.selectedEventIndex = 0;
-      state.selectedCandidateId = null;
-      state.selectedTreeNodeId = null;
-      render();
-      setStatus("Loaded cached example run.", false);
-    } catch (error) {
-      setStatus(`Failed to load cached example run: ${error.message}`, true);
-    }
-    return;
-  }
-
-  const provider = elements.providerSelect.value.trim();
-  const modelId = elements.modelIdInput.value.trim();
-  const apiKey = elements.modelApiKeyInput.value.trim();
-  const question = elements.singleQuestionInput.value.trim();
-  const systemPrompt = String(elements.advancedPromptInput?.value || "").trim();
-  const advancedConfigYaml = upsertPromptInAdvancedYaml(
-    elements.advancedConfigYamlInput.value,
-    systemPrompt,
-  );
-  setAdvancedConfigYamlValue(advancedConfigYaml);
-
-  if (!question) {
-    setStatus("Please input a question.", true);
-    return;
-  }
-  if (!state.modelValidation || state.validatedModelFingerprint !== getModelFingerprint()) {
-    setStatus("Model settings changed. Please validate model again.", true);
-    return;
-  }
-
-  let payload;
   try {
-    payload = await postJson("/v1/debugger/demo/run-single", {
-      question,
-      budget,
-      provider,
-      model_id: modelId,
-      api_key: apiKey,
-      strategy_id: strategyId,
-      scorer_id: scorerRequired ? scorerId : null,
-      advanced_config_yaml: advancedConfigYaml,
-    });
-  } catch (error) {
-    setStatus(
-      `Custom run requires backend endpoint /v1/debugger/demo/run-single (${error.message}).`,
-      true,
+    if (state.useCachedExample) {
+      try {
+        if (!state.cachedSourcePayload) {
+          await loadCachedOptionsForCurrentScenario();
+        }
+        const payload = buildRunPayloadFromCachedSource(
+          state.cachedSourcePayload,
+          strategyId,
+          scorerId || null,
+        );
+        state.payload = payload;
+        state.selectedStrategyId = payload?.strategies?.[0]?.id || null;
+        state.selectedEventIndex = 0;
+        state.selectedCandidateId = null;
+        state.selectedTreeNodeId = null;
+        render();
+        setStatus("Loaded cached example run.", false);
+      } catch (error) {
+        setStatus(`Failed to load cached example run: ${error.message}`, true);
+      }
+      return;
+    }
+
+    const provider = elements.providerSelect.value.trim();
+    const modelId = elements.modelIdInput.value.trim();
+    const apiKey = elements.modelApiKeyInput.value.trim();
+    const question = elements.singleQuestionInput.value.trim();
+    const systemPrompt = String(elements.advancedPromptInput?.value || "").trim();
+    const advancedConfigYaml = upsertPromptInAdvancedYaml(
+      elements.advancedConfigYamlInput.value,
+      systemPrompt,
     );
-    return;
+    setAdvancedConfigYamlValue(advancedConfigYaml);
+
+    if (!question) {
+      setStatus("Please input a question.", true);
+      return;
+    }
+    if (!state.modelValidation || state.validatedModelFingerprint !== getModelFingerprint()) {
+      setStatus("Model settings changed. Please validate model again.", true);
+      return;
+    }
+
+    setStatus("Running selected strategy...", false);
+
+    let payload;
+    try {
+      payload = await postJson("/v1/debugger/demo/run-single", {
+        question,
+        budget,
+        provider,
+        model_id: modelId,
+        api_key: apiKey,
+        strategy_id: strategyId,
+        scorer_id: scorerRequired ? scorerId : null,
+        advanced_config_yaml: advancedConfigYaml,
+      });
+    } catch (error) {
+      setStatus(
+        `Custom run requires backend endpoint /v1/debugger/demo/run-single (${error.message}).`,
+        true,
+      );
+      return;
+    }
+
+    const scenarioId = payload?.scenario?.id || "custom_1";
+    const selectedBudget = Number(payload?.selected_budget || budget);
+    const scenarioTitle =
+      payload?.scenario?.title ||
+      (scorerRequired
+        ? `Single Example · ${strategyId} · ${scorerId}`
+        : `Single Example · ${strategyId}`);
+
+    state.customPayloads = {
+      [scenarioId]: {
+        [String(selectedBudget)]: payload,
+      },
+    };
+
+    state.catalog = [
+      {
+        id: scenarioId,
+        title: scenarioTitle,
+        description: "Custom question loaded by user",
+        available_budgets: [selectedBudget],
+        default_budget: selectedBudget,
+      },
+    ];
+    state.dataMode = "custom";
+    state.scenarioId = scenarioId;
+    state.selectedStrategyId = null;
+    state.selectedEventIndex = 0;
+    state.selectedCandidateId = null;
+    state.selectedTreeNodeId = null;
+
+    populateScenarioSelect();
+    configureCaseSelect(selectedBudget);
+    await loadScenarioPayload();
+
+    const strategyName =
+      elements.strategySelect.options[elements.strategySelect.selectedIndex]?.text ||
+      strategyId;
+    const scorerName =
+      elements.scorerSelect.options[elements.scorerSelect.selectedIndex]?.text ||
+      scorerId;
+
+    setStatus(
+      scorerRequired
+        ? `Ran ${strategyName} with ${scorerName} on selected case.`
+        : `Ran ${strategyName} on selected case.`,
+      false,
+    );
+  } finally {
+    setRunButtonLoading(false);
   }
-
-  const scenarioId = payload?.scenario?.id || "custom_1";
-  const selectedBudget = Number(payload?.selected_budget || budget);
-  const scenarioTitle =
-    payload?.scenario?.title ||
-    (scorerRequired
-      ? `Single Example · ${strategyId} · ${scorerId}`
-      : `Single Example · ${strategyId}`);
-
-  state.customPayloads = {
-    [scenarioId]: {
-      [String(selectedBudget)]: payload,
-    },
-  };
-
-  state.catalog = [
-    {
-      id: scenarioId,
-      title: scenarioTitle,
-      description: "Custom question loaded by user",
-      available_budgets: [selectedBudget],
-      default_budget: selectedBudget,
-    },
-  ];
-  state.dataMode = "custom";
-  state.scenarioId = scenarioId;
-  state.selectedStrategyId = null;
-  state.selectedEventIndex = 0;
-  state.selectedCandidateId = null;
-  state.selectedTreeNodeId = null;
-
-  populateScenarioSelect();
-  configureCaseSelect(selectedBudget);
-  await loadScenarioPayload();
-
-  const strategyName =
-    elements.strategySelect.options[elements.strategySelect.selectedIndex]?.text ||
-    strategyId;
-  const scorerName =
-    elements.scorerSelect.options[elements.scorerSelect.selectedIndex]?.text ||
-    scorerId;
-
-  setStatus(
-    scorerRequired
-      ? `Ran ${strategyName} with ${scorerName} on selected case.`
-      : `Ran ${strategyName} on selected case.`,
-    false,
-  );
 }
 
 async function restoreDemoData() {
