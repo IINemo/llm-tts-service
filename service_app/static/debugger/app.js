@@ -3,6 +3,7 @@ const CACHED_EXAMPLES_PATHS =
     ? ["./cached_examples.json", "/static/debugger/cached_examples.json"]
     : ["/static/debugger/cached_examples.json", "./cached_examples.json"];
 const DEFAULT_SYSTEM_PROMPT = "Reason step-by-step carefully";
+const HIDDEN_SCORER_IDS = new Set(["prm"]);
 
 const state = {
   catalog: [],
@@ -131,7 +132,7 @@ function formatMetric(value) {
   }
 
   if (numericValue >= 1000) {
-    return numericValue.toLocaleString();
+    return numericValue.toLocaleString("en-US");
   }
 
   if (Math.abs(numericValue) < 1) {
@@ -141,6 +142,12 @@ function formatMetric(value) {
   return Number.isInteger(numericValue)
     ? String(numericValue)
     : numericValue.toFixed(2);
+}
+
+function getSignalDisplayName(name) {
+  return String(name || "").toLowerCase() === "confidence"
+    ? "score"
+    : String(name || "");
 }
 
 function getCurrentBudget() {
@@ -565,15 +572,45 @@ function setAdvancedConfigYamlValue(value) {
 
 function upsertPromptInAdvancedYaml(yamlText, prompt) {
   const normalizedPrompt = String(prompt || "").trim();
-  const promptLine = `prompt: ${JSON.stringify(normalizedPrompt)}`;
-  const hasPromptLine = /^prompt\s*:/m.test(yamlText);
-  if (hasPromptLine) {
-    return yamlText.replace(/^prompt\s*:.*$/m, promptLine);
-  }
-  if (!yamlText.trim()) {
+  const promptLine = `prompt: ${yamlScalar(normalizedPrompt)}`;
+  const source = String(yamlText || "");
+  if (!source.trim()) {
     return `${promptLine}\n`;
   }
-  return `${promptLine}\n${yamlText}`;
+
+  const lines = source.split("\n");
+  const output = [];
+  const isTopLevelKey = (line) => /^[A-Za-z_][A-Za-z0-9_-]*\s*:/.test(line);
+  let replacedPrompt = false;
+  let skippingPromptBlock = false;
+
+  for (const line of lines) {
+    if (!skippingPromptBlock && /^prompt\s*:/.test(line)) {
+      output.push(promptLine);
+      replacedPrompt = true;
+      skippingPromptBlock = true;
+      continue;
+    }
+
+    if (skippingPromptBlock) {
+      if (line.trim() === "") {
+        continue;
+      }
+      if (isTopLevelKey(line)) {
+        skippingPromptBlock = false;
+      } else {
+        continue;
+      }
+    }
+
+    output.push(line);
+  }
+
+  if (!replacedPrompt) {
+    output.unshift(promptLine);
+  }
+
+  return `${output.join("\n").trimEnd()}\n`;
 }
 
 function getPreferredSystemPrompt(templatePayload) {
@@ -830,6 +867,9 @@ function deriveOptionsFromPayload(payload) {
     if (!scorer?.id) {
       return;
     }
+    if (HIDDEN_SCORER_IDS.has(scorer.id)) {
+      return;
+    }
     if (!scorerMap.has(scorer.id)) {
       scorerMap.set(scorer.id, scorer);
     }
@@ -1072,6 +1112,9 @@ function invalidateModelValidation(message = null) {
 }
 
 function renderValidationOptions(strategies, scorers) {
+  const visibleScorers = scorers.filter(
+    (scorer) => !HIDDEN_SCORER_IDS.has(String(scorer?.id || "")),
+  );
   elements.strategySelect.innerHTML = strategies
     .map(
       (strategy) =>
@@ -1087,7 +1130,7 @@ function renderValidationOptions(strategies, scorers) {
   state.modelValidation = {
     ...state.modelValidation,
     strategies,
-    scorers,
+    scorers: visibleScorers,
   };
 
   refreshScorerOptionsForSelectedStrategy();
@@ -1505,7 +1548,7 @@ function renderStrategyCards() {
       ${scorerMeta}
       <p class="timeline-decision">${escapeHtml(strategy.summary || "")}</p>
       <div class="strategy-meta">
-        <div><span class="timeline-step">confidence</span><br /><span class="meta-value">${formatMetric(finalResult.confidence ?? 0)}</span></div>
+        <div><span class="timeline-step">score</span><br /><span class="meta-value">${formatMetric(finalResult.confidence ?? 0)}</span></div>
         <div><span class="timeline-step">tokens</span><br /><span class="meta-value">${formatMetric(run.tokens_used ?? 0)}</span></div>
       </div>
     `;
@@ -1542,7 +1585,7 @@ function renderTimelineOptions(eventItem) {
           const statusClass = status === "selected" ? " selected" : "";
           const signalEntry = Object.entries(candidate.signals || {})[0];
           const signalText = signalEntry
-            ? `${signalEntry[0]}: ${formatMetric(signalEntry[1])}`
+            ? `${getSignalDisplayName(signalEntry[0])}: ${formatMetric(signalEntry[1])}`
             : "";
           const meta = [status, signalText].filter(Boolean).join(" · ");
           const shortLabel = `N${stepNumber}.${candidateIndex + 1}`;
@@ -1619,26 +1662,24 @@ function renderTimeline() {
 }
 
 function renderSignals(eventItem) {
-  const signals = eventItem?.signals ?? [];
+  const signals = (eventItem?.signals ?? []).filter(
+    (signal) => String(signal?.name || "").toLowerCase() === "confidence",
+  );
 
   if (!signals.length) {
     elements.signals.innerHTML =
-      '<p class="tree-empty">No signal telemetry for this step.</p>';
+      '<p class="tree-empty">No score telemetry for this step.</p>';
     return;
   }
 
   elements.signals.innerHTML = signals
     .map((signal) => {
       const percent = metricToPercent(signal);
-      const threshold =
-        signal.threshold != null
-          ? `threshold ${formatMetric(signal.threshold)}`
-          : "";
       return `
         <div class="signal-row">
           <header>
-            <span>${escapeHtml(signal.name)}</span>
-            <span>${formatMetric(signal.value)} ${threshold}</span>
+            <span>${escapeHtml(getSignalDisplayName(signal.name))}</span>
+            <span>${formatMetric(signal.value)}</span>
           </header>
           <div class="signal-meter"><span style="width:${percent}%"></span></div>
         </div>
@@ -1702,7 +1743,7 @@ function renderCandidateDetail(eventItem) {
     const nodeMetrics = Object.entries(treeContext.scores || {})
       .map(
         ([key, value]) =>
-          `<span>${escapeHtml(key)}: <strong>${formatMetric(value)}</strong></span>`,
+          `<span>${escapeHtml(getSignalDisplayName(key))}: <strong>${formatMetric(value)}</strong></span>`,
       )
       .join("");
 
@@ -1728,7 +1769,7 @@ function renderCandidateDetail(eventItem) {
   const metrics = Object.entries(candidate.signals || {})
     .map(
       ([key, value]) =>
-        `<span>${escapeHtml(key)}: <strong>${formatMetric(value)}</strong></span>`,
+        `<span>${escapeHtml(getSignalDisplayName(key))}: <strong>${formatMetric(value)}</strong></span>`,
     )
     .join("");
 
@@ -2177,7 +2218,7 @@ function renderStepInspector() {
   const nodeScores = Object.entries(treeContext.scores || {})
     .map(
       ([key, value]) =>
-        `<span>${escapeHtml(key)}: <strong>${formatMetric(value)}</strong></span>`,
+        `<span>${escapeHtml(getSignalDisplayName(key))}: <strong>${formatMetric(value)}</strong></span>`,
     )
     .join("");
   const nodeLabel = activeTreeNode?.label

@@ -313,6 +313,9 @@ class ThinkingMarkerDetector(StepBoundaryDetectorBase):
 
     def _find_marker_positions(self, text: str) -> List[int]:
         """Find all positions where markers occur."""
+        if not self.pattern:
+            return []
+
         positions: Set[int] = set()
 
         for match in self.pattern.finditer(text):

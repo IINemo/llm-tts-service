@@ -43,7 +43,7 @@
         <p class="eyebrow">Demo Interface</p>
         <h1>Visual Debugger for Reasoning</h1>
         <p class="hero-copy">
-          Inspect sampled trajectories, tree expansions, verifier reranking, and the confidence signals behind every escalation decision.
+          Inspect sampled trajectories, tree expansions, verifier reranking, and the score signals behind every escalation decision.
         </p>
       </section>
 
@@ -178,9 +178,9 @@
           </p>
         </div>
 
-        <p id="modelConfigNote" class="custom-note">
+        <!-- <p id="modelConfigNote" class="custom-note">
           Note: system prompt is managed in this Advanced config section and synced into YAML `prompt` on run. Model validation uses the entered API key. Full production execution still relies on backend environment wiring.
-        </p>
+        </p> -->
 
         <div class="custom-mode-section">
           <label class="control grow">
@@ -210,7 +210,7 @@
       <section>
         <div class="section-head">
           <h2>Strategy Comparison</h2>
-          <p>Run result overview (confidence and tokens).</p>
+          <p>Run result overview (score and tokens).</p>
         </div>
         <div id="strategyGrid" class="strategy-grid"></div>
       </section>
