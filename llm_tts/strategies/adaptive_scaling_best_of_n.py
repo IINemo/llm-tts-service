@@ -245,8 +245,17 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 for req, traj in zip(active_reqs, active_trajs)
             ]
 
-        def _select_best(scores: List[float]) -> int:
-            return max(range(len(scores)), key=lambda i: scores[i])
+        def _select_best(scores: List[Optional[float]]) -> int:
+            # Filter out None scores (e.g., PRM skipped steps)
+            valid_indices = [i for i, s in enumerate(scores) if s is not None]
+            if not valid_indices:
+                # Fallback: nothing scored; choose first index and log
+                log.warning(
+                    f"_select_best called with all-None scores: {scores}, "
+                    f"defaulting to index 0"
+                )
+                return 0
+            return max(valid_indices, key=lambda i: scores[i])
 
         def _new_scale_discriminator() -> ScaleDiscriminator:
             return ScaleDiscriminator(
