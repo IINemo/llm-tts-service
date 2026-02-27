@@ -258,6 +258,7 @@
       (() => {
         const assetBase =
           window.location.protocol === "file:" ? "." : "/static/debugger";
+        const cacheToken = `v=${Date.now()}`;
 
         const appendScript = (src, onDone) => {
           const script = document.createElement("script");
@@ -275,7 +276,7 @@
           document.body.appendChild(script);
         };
 
-        appendScript(`${assetBase}/app.js`);
+        appendScript(`${assetBase}/app.js?${cacheToken}`);
       })();
     </script>
   </body>

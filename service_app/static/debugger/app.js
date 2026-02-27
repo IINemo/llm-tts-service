@@ -103,6 +103,12 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function waitForNextPaint() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
 function metricToPercent(signal) {
   const numericValue = Number(signal?.value ?? 0);
   if (Number.isNaN(numericValue)) {
@@ -1040,6 +1046,10 @@ function setRunButtonLoading(isLoading) {
     elements.runCustomButton.textContent =
       elements.runCustomButton.dataset.defaultLabel;
   }
+  elements.runCustomButton.setAttribute(
+    "aria-busy",
+    state.isRunInProgress ? "true" : "false",
+  );
 
   updateRunButtonEnabled();
 }
@@ -1212,7 +1222,38 @@ async function runCustomInput() {
   }
 
   const budget = getCurrentBudget() ?? 8;
+  let provider = "";
+  let modelId = "";
+  let apiKey = "";
+  let question = "";
+  let advancedConfigYaml = "";
+
+  if (!state.useCachedExample) {
+    provider = elements.providerSelect.value.trim();
+    modelId = elements.modelIdInput.value.trim();
+    apiKey = elements.modelApiKeyInput.value.trim();
+    question = elements.singleQuestionInput.value.trim();
+    const systemPrompt = String(elements.advancedPromptInput?.value || "").trim();
+    advancedConfigYaml = upsertPromptInAdvancedYaml(
+      elements.advancedConfigYamlInput.value,
+      systemPrompt,
+    );
+    setAdvancedConfigYamlValue(advancedConfigYaml);
+
+    if (!question) {
+      setStatus("Please input a question.", true);
+      return;
+    }
+    if (!state.modelValidation || state.validatedModelFingerprint !== getModelFingerprint()) {
+      setStatus("Model settings changed. Please validate model again.", true);
+      return;
+    }
+  }
+
   setRunButtonLoading(true);
+  clearRenderedResults();
+  setStatus("Running selected strategy...", false);
+  await waitForNextPaint();
 
   try {
     if (state.useCachedExample) {
@@ -1237,28 +1278,6 @@ async function runCustomInput() {
       }
       return;
     }
-
-    const provider = elements.providerSelect.value.trim();
-    const modelId = elements.modelIdInput.value.trim();
-    const apiKey = elements.modelApiKeyInput.value.trim();
-    const question = elements.singleQuestionInput.value.trim();
-    const systemPrompt = String(elements.advancedPromptInput?.value || "").trim();
-    const advancedConfigYaml = upsertPromptInAdvancedYaml(
-      elements.advancedConfigYamlInput.value,
-      systemPrompt,
-    );
-    setAdvancedConfigYamlValue(advancedConfigYaml);
-
-    if (!question) {
-      setStatus("Please input a question.", true);
-      return;
-    }
-    if (!state.modelValidation || state.validatedModelFingerprint !== getModelFingerprint()) {
-      setStatus("Model settings changed. Please validate model again.", true);
-      return;
-    }
-
-    setStatus("Running selected strategy...", false);
 
     let payload;
     try {
@@ -1514,10 +1533,11 @@ function renderTimelineOptions(eventItem) {
     return '<p class="timeline-options-empty">No options recorded for this step.</p>';
   }
 
+  const stepNumber = Math.max(1, Number(eventItem?.step) || 1);
   return `
     <div class="timeline-options">
       ${candidates
-        .map((candidate) => {
+        .map((candidate, candidateIndex) => {
           const status = candidate.status || "kept";
           const statusClass = status === "selected" ? " selected" : "";
           const signalEntry = Object.entries(candidate.signals || {})[0];
@@ -1525,9 +1545,10 @@ function renderTimelineOptions(eventItem) {
             ? `${signalEntry[0]}: ${formatMetric(signalEntry[1])}`
             : "";
           const meta = [status, signalText].filter(Boolean).join(" · ");
+          const shortLabel = `N${stepNumber}.${candidateIndex + 1}`;
           return `
             <div class="timeline-option${statusClass}">
-              <p class="timeline-option-label">${escapeHtml(candidate.label || candidate.id || "option")}</p>
+              <p class="timeline-option-label">${escapeHtml(shortLabel)}</p>
               <p class="timeline-option-meta">${escapeHtml(meta)}</p>
             </div>
           `;
@@ -1639,15 +1660,17 @@ function renderCandidates(eventItem) {
 
   elements.candidates.innerHTML = "";
 
-  candidates.forEach((candidate) => {
+  const stepNumber = Math.max(1, Number(eventItem?.step) || 1);
+  candidates.forEach((candidate, candidateIndex) => {
     const selected = candidate.id === state.selectedCandidateId;
     const card = document.createElement("article");
     card.className = `candidate-card${selected ? " selected" : ""}`;
     const badgeClass = `badge-${candidate.status || "kept"}`;
+    const shortLabel = `N${stepNumber}.${candidateIndex + 1}`;
 
     card.innerHTML = `
       <div class="candidate-header">
-        <strong>${escapeHtml(candidate.label || candidate.id)}</strong>
+        <strong>${escapeHtml(shortLabel)}</strong>
         <span class="badge ${badgeClass}">${escapeHtml(candidate.status || "kept")}</span>
       </div>
       <p class="candidate-snippet">${escapeHtml(candidate.text || "")}</p>
@@ -1743,10 +1766,6 @@ function buildTreeFromEvents(events) {
   }
 
   const firstEvent = eventList[0] || {};
-  const firstStep = Math.max(1, Number(firstEvent.step) || 1);
-  const firstCandidates = Array.isArray(firstEvent.candidates)
-    ? firstEvent.candidates
-    : [];
   const rootScoreMap = {};
   (firstEvent.signals || []).forEach((signal) => {
     const name = String(signal?.name || "").trim();
@@ -1769,122 +1788,110 @@ function buildTreeFromEvents(events) {
     rootTextParts.push(firstReason.trim());
   }
 
-  const rootId = `step_${firstStep}_root`;
-  const nodes = [
-    {
-      id: rootId,
-      label: "Root",
-      value: rootValue,
-      depth: 0,
-      x: 0.5,
-      y: 0.14,
-      step: firstStep,
-      text: rootTextParts.join(" "),
-      scores: rootScoreMap,
-    },
-  ];
+  const totalLevels = Math.max(1, eventList.length);
+  const yForDepth = (depth) =>
+    totalLevels <= 0 ? 0.5 : 0.1 + (0.8 * depth) / Math.max(totalLevels, 1);
+
+  const nodes = [];
   const edges = [];
-  const selectedPath = [rootId];
-  const nodeIdSet = new Set([rootId]);
+  const selectedPath = [];
+  const nodeIdSet = new Set();
+  const rootId = "root";
 
-  let selectedFirstNodeId = rootId;
-  let selectedFirstNodeX = 0.5;
-  const firstSelectedCandidate =
-    firstCandidates.find((candidate) => candidate?.selected) ||
-    firstCandidates[0] ||
-    null;
-
-  firstCandidates.forEach((candidate, index) => {
-    const total = firstCandidates.length;
-    const x =
-      total <= 1
-        ? 0.5
-        : 0.15 + (0.7 * index) / Math.max(total - 1, 1);
-    const rawNodeId = String(candidate?.id || `${rootId}_c${index + 1}`);
-    const nodeId = nodeIdSet.has(rawNodeId)
-      ? `${rawNodeId}__${index + 1}`
-      : rawNodeId;
-    nodeIdSet.add(nodeId);
-
-    const nodeValue =
-      pickPrimaryNumericScore(candidate?.signals || {}) ?? rootValue;
-    const node = {
-      id: nodeId,
-      label: String(candidate?.label || `Candidate ${index + 1}`),
-      value: nodeValue,
-      depth: 1,
-      x,
-      y: 0.48,
-      step: firstStep,
-      candidate_id: typeof candidate?.id === "string" ? candidate.id : null,
-      text: String(candidate?.text || ""),
-      status: String(candidate?.status || ""),
-      scores:
-        candidate?.signals && typeof candidate.signals === "object"
-          ? candidate.signals
-          : {},
-    };
-    nodes.push(node);
-    edges.push({ source: rootId, target: nodeId });
-
-    if (
-      firstSelectedCandidate &&
-      ((candidate?.id && candidate.id === firstSelectedCandidate.id) ||
-        candidate === firstSelectedCandidate)
-    ) {
-      selectedFirstNodeId = nodeId;
-      selectedFirstNodeX = x;
-    }
+  nodes.push({
+    id: rootId,
+    label: "R",
+    value: rootValue,
+    depth: 0,
+    x: 0.5,
+    y: yForDepth(0),
+    step: Math.max(1, Number(firstEvent.step) || 1),
+    event_index: -1,
+    text: rootTextParts.join(" "),
+    scores: rootScoreMap,
   });
+  nodeIdSet.add(rootId);
+  selectedPath.push(rootId);
 
-  if (selectedFirstNodeId !== rootId) {
-    selectedPath.push(selectedFirstNodeId);
-  }
+  let prevLevelNodes = [nodes[0]];
+  let prevSelectedNode = nodes[0];
 
-  const secondEvent = eventList[1] || null;
-  if (secondEvent) {
-    const secondCandidates = Array.isArray(secondEvent.candidates)
-      ? secondEvent.candidates
+  eventList.forEach((eventItem, eventIndex) => {
+    const stepNumber = Math.max(1, Number(eventItem?.step) || eventIndex + 1);
+    const rawCandidates = Array.isArray(eventItem?.candidates)
+      ? eventItem.candidates
       : [];
-    const secondSelected =
-      secondCandidates.find((candidate) => candidate?.selected) ||
-      secondCandidates[0] ||
-      null;
-    const secondStep = Math.max(1, Number(secondEvent.step) || firstStep + 1);
+    if (!rawCandidates.length) {
+      return;
+    }
 
-    if (secondSelected) {
-      const rawSecondNodeId = String(
-        secondSelected.id || `step_${secondStep}_selected`,
+    const levelNodes = [];
+    rawCandidates.forEach((candidate, candidateIndex) => {
+      const x =
+        rawCandidates.length <= 1
+          ? 0.5
+          : 0.1 + (0.8 * candidateIndex) / Math.max(rawCandidates.length - 1, 1);
+      const baseNodeId = String(
+        candidate?.id || `step_${stepNumber}_candidate_${candidateIndex + 1}`,
       );
-      const secondNodeId = nodeIdSet.has(rawSecondNodeId)
-        ? `${rawSecondNodeId}__step${secondStep}`
-        : rawSecondNodeId;
-      const secondValue =
-        pickPrimaryNumericScore(secondSelected?.signals || {}) ??
-        pickEventSignalValue(secondEvent, "confidence") ??
+      let nodeId = baseNodeId;
+      if (nodeIdSet.has(nodeId)) {
+        nodeId = `${baseNodeId}__${eventIndex + 1}_${candidateIndex + 1}`;
+      }
+      nodeIdSet.add(nodeId);
+
+      const nodeValue =
+        pickPrimaryNumericScore(candidate?.signals || {}) ??
+        pickEventSignalValue(eventItem, "confidence") ??
         rootValue;
 
-      nodes.push({
-        id: secondNodeId,
-        label: String(secondSelected.label || "Selected"),
-        value: secondValue,
-        depth: 2,
-        x: selectedFirstNodeX,
-        y: 0.82,
-        step: secondStep,
-        candidate_id:
-          typeof secondSelected.id === "string" ? secondSelected.id : null,
-        text: String(secondSelected.text || ""),
-        status: String(secondSelected.status || ""),
+      const node = {
+        id: nodeId,
+        label: `N${eventIndex + 1}.${candidateIndex + 1}`,
+        value: nodeValue,
+        depth: eventIndex + 1,
+        x,
+        y: yForDepth(eventIndex + 1),
+        step: stepNumber,
+        event_index: eventIndex,
+        candidate_id: typeof candidate?.id === "string" ? candidate.id : null,
+        candidate_label: String(candidate?.label || ""),
+        text: String(candidate?.text || ""),
+        status: String(candidate?.status || ""),
         scores:
-          secondSelected?.signals && typeof secondSelected.signals === "object"
-            ? secondSelected.signals
+          candidate?.signals && typeof candidate.signals === "object"
+            ? candidate.signals
             : {},
-      });
-      edges.push({ source: selectedFirstNodeId, target: secondNodeId });
-      selectedPath.push(secondNodeId);
+        selected: Boolean(candidate?.selected),
+      };
+      nodes.push(node);
+      levelNodes.push(node);
+    });
+
+    levelNodes.forEach((node) => {
+      let parentNode = null;
+      if (node.candidate_label) {
+        parentNode =
+          prevLevelNodes.find(
+            (prev) =>
+              String(prev.candidate_label || "").trim() ===
+              String(node.candidate_label || "").trim(),
+          ) || null;
+      }
+      if (!parentNode) {
+        parentNode = prevSelectedNode || prevLevelNodes[0] || nodes[0];
+      }
+      edges.push({ source: parentNode.id, target: node.id });
+    });
+
+    const selectedNode =
+      levelNodes.find((node) => node.selected) || levelNodes[0] || null;
+    if (selectedNode) {
+      selectedPath.push(selectedNode.id);
+      prevSelectedNode = selectedNode;
     }
-  }
+    prevLevelNodes = levelNodes;
+  });
 
   return { nodes, edges, selected_path: selectedPath };
 }
@@ -1901,6 +1908,33 @@ function resolveTreeNodeInspectorContext(node, events) {
   const eventList = Array.isArray(events) ? events : [];
   if (!node || !eventList.length) {
     return { eventIndex: null, candidateId: null, text: "", scores: {} };
+  }
+
+  const explicitEventIndex = Number(node.event_index);
+  if (Number.isFinite(explicitEventIndex) && explicitEventIndex >= 0) {
+    const safeEventIndex = Math.min(
+      Math.max(0, explicitEventIndex),
+      eventList.length - 1,
+    );
+    const eventItem = eventList[safeEventIndex];
+    const candidates = eventItem?.candidates ?? [];
+    const directCandidate =
+      (typeof node.candidate_id === "string" &&
+        node.candidate_id &&
+        candidates.find((item) => item.id === node.candidate_id)) ||
+      null;
+    return {
+      eventIndex: safeEventIndex,
+      candidateId: directCandidate?.id || null,
+      text:
+        typeof node.text === "string" && node.text.trim()
+          ? node.text
+          : directCandidate?.text || "",
+      scores:
+        node.scores && typeof node.scores === "object"
+          ? node.scores
+          : directCandidate?.signals || {},
+    };
   }
 
   const explicitStep = Number(node.step);
@@ -2011,7 +2045,11 @@ function renderTree() {
   }
 
   const width = 620;
-  const height = 230;
+  const maxDepth = tree.nodes.reduce(
+    (acc, node) => Math.max(acc, Number(node?.depth) || 0),
+    0,
+  );
+  const height = Math.max(230, 120 + maxDepth * 110);
   const nodeMap = new Map(tree.nodes.map((node) => [node.id, node]));
   const selectedPath = Array.isArray(tree.selected_path) ? tree.selected_path : [];
   const activeNodeId = nodeMap.has(state.selectedTreeNodeId)
@@ -2022,6 +2060,29 @@ function renderTree() {
   for (let index = 0; index < selectedPath.length - 1; index += 1) {
     selectedEdgeSet.add(`${selectedPath[index]}->${selectedPath[index + 1]}`);
   }
+
+  const sortedNodes = [...(tree.nodes || [])].sort((left, right) => {
+    const leftDepth = Number(left?.depth) || 0;
+    const rightDepth = Number(right?.depth) || 0;
+    if (leftDepth !== rightDepth) {
+      return leftDepth - rightDepth;
+    }
+    const leftX = Number(left?.x) || 0;
+    const rightX = Number(right?.x) || 0;
+    return leftX - rightX;
+  });
+  const depthCountMap = new Map();
+  const shortLabelById = new Map();
+  sortedNodes.forEach((node) => {
+    const depth = Math.max(0, Math.round(Number(node?.depth) || 0));
+    if (depth === 0) {
+      shortLabelById.set(node.id, "R");
+      return;
+    }
+    const nextCount = (depthCountMap.get(depth) || 0) + 1;
+    depthCountMap.set(depth, nextCount);
+    shortLabelById.set(node.id, `N${depth}.${nextCount}`);
+  });
 
   const edges = (tree.edges || [])
     .map((edge) => {
@@ -2049,9 +2110,9 @@ function renderTree() {
       const y = node.y * height;
       const isSelected = selectedNodeSet.has(node.id);
       const isActive = node.id === activeNodeId;
-      const radius = 8 + Number(node.value || 0) * 5;
+      const radius = 9;
       const nodeClass = `${isSelected ? "tree-node selected" : "tree-node"}${isActive ? " focused" : ""}`;
-      const label = `${node.label || node.id} (${formatMetric(node.value)})`;
+      const label = shortLabelById.get(node.id) || `${node.id}`;
       const groupClass = `tree-node-group${isActive ? " active" : ""}`;
 
       return `
@@ -2064,7 +2125,7 @@ function renderTree() {
     .join("");
 
   elements.treeContainer.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" class="tree-svg" preserveAspectRatio="xMidYMid meet">
+    <svg viewBox="0 0 ${width} ${height}" class="tree-svg" style="height:${height}px" preserveAspectRatio="xMidYMin meet">
       ${edges}
       ${nodes}
     </svg>

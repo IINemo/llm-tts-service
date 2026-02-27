@@ -1160,8 +1160,28 @@ def _build_events_from_strategy_result(
     all_trajectories = strategy_result.get("all_trajectories")
     all_scores = strategy_result.get("all_scores")
     if isinstance(all_trajectories, list) and all_trajectories:
-        best_idx = _coerce_int(strategy_result.get("best_idx"), default=0, minimum=0)
-        best_idx = min(best_idx, len(all_trajectories) - 1)
+        best_idx_hint = _coerce_int(
+            strategy_result.get("best_idx"), default=0, minimum=0
+        )
+        if best_idx_hint >= len(all_trajectories):
+            best_idx_hint = 0
+        expanded_trajectory_events = _build_events_from_trajectory_pool(
+            strategy=strategy,
+            scorer=scorer,
+            all_trajectories=all_trajectories,
+            all_scores=all_scores if isinstance(all_scores, list) else [],
+            all_step_scores=(
+                strategy_result.get("all_step_scores")
+                if isinstance(strategy_result.get("all_step_scores"), list)
+                else []
+            ),
+            fallback_confidence=confidence,
+            preferred_best_idx=best_idx_hint,
+        )
+        if expanded_trajectory_events:
+            return expanded_trajectory_events
+
+        best_idx = min(best_idx_hint, len(all_trajectories) - 1)
 
         candidates: List[Dict[str, Any]] = []
         for index, trajectory_text in enumerate(all_trajectories):
@@ -1344,13 +1364,14 @@ def _build_events_from_step_candidates(
     fallback_confidence: float,
 ) -> List[Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
+    expanded_pools = _expand_step_candidate_pools(step_candidates)
     scorer_key = scorer["id"] if scorer else "confidence"
     scorer_direction = (
         scorer.get("direction", "higher_better") if scorer else "higher_better"
     )
     scorer_threshold = scorer.get("threshold") if scorer else None
 
-    for index, pool in enumerate(step_candidates):
+    for index, pool in enumerate(expanded_pools):
         raw_candidates = pool.get("candidates")
         if not isinstance(raw_candidates, list) or not raw_candidates:
             continue
@@ -1360,6 +1381,9 @@ def _build_events_from_step_candidates(
 
         for cand_idx, raw_candidate in enumerate(raw_candidates):
             if not isinstance(raw_candidate, dict):
+                continue
+            candidate_text = str(raw_candidate.get("text") or "").strip()
+            if not candidate_text:
                 continue
 
             score_value = _to_float(raw_candidate.get("score"))
@@ -1390,7 +1414,7 @@ def _build_events_from_step_candidates(
                     "label": str(
                         raw_candidate.get("label") or f"Candidate {cand_idx + 1}"
                     ),
-                    "text": str(raw_candidate.get("text") or ""),
+                    "text": candidate_text,
                     "status": status,
                     "selected": is_selected,
                     "signals": signal_map,
@@ -1425,7 +1449,7 @@ def _build_events_from_step_candidates(
         stage = str(pool.get("stage") or "").strip() or _event_stage_for_family(
             strategy.get("family", "single_pass"),
             index=index,
-            total=len(step_candidates),
+            total=len(expanded_pools),
         )
         selected_exists = any(
             candidate.get("selected") for candidate in event_candidates
@@ -1449,6 +1473,228 @@ def _build_events_from_step_candidates(
                 "title": str(pool.get("title") or f"Reasoning step {index + 1}"),
                 "stage": stage,
                 "decision": decision,
+                "signals": signals,
+                "candidates": event_candidates,
+            }
+        )
+
+    return events
+
+
+def _expand_step_candidate_pools(
+    step_candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    expanded: List[Dict[str, Any]] = []
+    for index, pool in enumerate(step_candidates):
+        if not isinstance(pool, dict):
+            continue
+        raw_candidates = pool.get("candidates")
+        if not isinstance(raw_candidates, list) or not raw_candidates:
+            expanded.append(pool)
+            continue
+
+        split_candidates: List[List[str]] = []
+        for candidate in raw_candidates:
+            text = ""
+            if isinstance(candidate, dict):
+                text = str(candidate.get("text") or "")
+            parts = _split_text_by_prompt_step_format(text)
+            split_candidates.append(parts)
+
+        selected_index = _pick_selected_candidate_index(pool, raw_candidates)
+        selected_parts = (
+            split_candidates[selected_index]
+            if 0 <= selected_index < len(split_candidates)
+            else []
+        )
+        target_parts = len([part for part in selected_parts if str(part).strip()])
+        if target_parts <= 0:
+            continue
+
+        if target_parts <= 1:
+            expanded.append(pool)
+            continue
+
+        base_step = _coerce_int(pool.get("step"), default=index + 1, minimum=1)
+        for part_index in range(target_parts):
+            new_pool = deepcopy(pool)
+            new_pool["step"] = base_step + part_index
+            new_pool["title"] = f"Reasoning step {part_index + 1}"
+            new_candidates = []
+            for cand_idx, candidate in enumerate(raw_candidates):
+                if not isinstance(candidate, dict):
+                    continue
+                cand_copy = deepcopy(candidate)
+                candidate_parts = split_candidates[cand_idx]
+                cand_copy["text"] = (
+                    candidate_parts[part_index]
+                    if part_index < len(candidate_parts)
+                    else ""
+                )
+                new_candidates.append(cand_copy)
+            new_pool["candidates"] = new_candidates
+            expanded.append(new_pool)
+
+    return expanded
+
+
+def _pick_selected_candidate_index(pool: Dict[str, Any], candidates: List[Any]) -> int:
+    selected_index = _coerce_optional_int(pool.get("selected_index"))
+    if selected_index is not None and 0 <= selected_index < len(candidates):
+        return selected_index
+
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("selected"):
+            return index
+        if str(candidate.get("status") or "").strip().lower() == "selected":
+            return index
+    return 0
+
+
+def _build_events_from_trajectory_pool(
+    strategy: Dict[str, Any],
+    scorer: Optional[Dict[str, Any]],
+    all_trajectories: List[Any],
+    all_scores: List[Any],
+    all_step_scores: List[Any],
+    fallback_confidence: float,
+    preferred_best_idx: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    trajectory_steps = [
+        _split_text_by_prompt_step_format(str(trajectory or ""))
+        for trajectory in all_trajectories
+    ]
+
+    scorer_direction = (
+        scorer.get("direction", "higher_better") if scorer else "higher_better"
+    )
+    scorer_key = scorer["id"] if scorer else "confidence"
+    scorer_threshold = scorer.get("threshold") if scorer else None
+
+    best_idx = 0
+    if preferred_best_idx is not None and 0 <= preferred_best_idx < len(
+        trajectory_steps
+    ):
+        best_idx = preferred_best_idx
+    else:
+        best_score = None
+        for index, score in enumerate(all_scores):
+            if index >= len(trajectory_steps):
+                break
+            numeric_score = _to_float(score)
+            if numeric_score is None:
+                continue
+            if best_score is None:
+                best_score = numeric_score
+                best_idx = index
+                continue
+            if scorer_direction == "lower_better":
+                if numeric_score < best_score:
+                    best_score = numeric_score
+                    best_idx = index
+            elif numeric_score > best_score:
+                best_score = numeric_score
+                best_idx = index
+
+    if best_idx >= len(trajectory_steps):
+        best_idx = 0
+    best_steps = [
+        str(step_text).strip()
+        for step_text in (trajectory_steps[best_idx] if trajectory_steps else [])
+        if str(step_text).strip()
+    ]
+    max_steps = len(best_steps)
+    if max_steps <= 1:
+        return []
+
+    events: List[Dict[str, Any]] = []
+    for step_index in range(max_steps):
+        event_candidates: List[Dict[str, Any]] = []
+        selected_score: Optional[float] = None
+
+        for traj_index, parts in enumerate(trajectory_steps):
+            if step_index >= len(parts):
+                continue
+            step_text = str(parts[step_index] or "").strip()
+            if not step_text:
+                continue
+
+            score_value = None
+            if traj_index < len(all_step_scores) and isinstance(
+                all_step_scores[traj_index], list
+            ):
+                per_step_scores = all_step_scores[traj_index]
+                if step_index < len(per_step_scores):
+                    score_value = _to_float(per_step_scores[step_index])
+            if score_value is None and traj_index < len(all_scores):
+                score_value = _to_float(all_scores[traj_index])
+
+            confidence_value = _normalize_confidence(
+                score_value if score_value is not None else fallback_confidence
+            )
+            signal_map: Dict[str, float] = {"confidence": confidence_value}
+            if score_value is not None:
+                signal_map[scorer_key] = score_value
+
+            is_selected = traj_index == best_idx
+            if is_selected:
+                selected_score = score_value
+
+            event_candidates.append(
+                {
+                    "id": f"{strategy['id']}_{scorer_key}_traj_{traj_index + 1}_step_{step_index + 1}",
+                    "label": f"Trajectory {traj_index + 1}",
+                    "text": step_text,
+                    "status": "selected" if is_selected else "pruned",
+                    "selected": is_selected,
+                    "signals": signal_map,
+                }
+            )
+
+        if not event_candidates:
+            continue
+
+        signals = [
+            {
+                "name": "confidence",
+                "value": _normalize_confidence(
+                    selected_score
+                    if selected_score is not None
+                    else fallback_confidence
+                ),
+                "direction": "higher_better",
+                "threshold": 0.7,
+            }
+        ]
+        if scorer is not None and selected_score is not None:
+            signals.append(
+                {
+                    "name": scorer_key,
+                    "value": selected_score,
+                    "direction": scorer_direction,
+                    "threshold": scorer_threshold,
+                }
+            )
+
+        events.append(
+            {
+                "step": step_index + 1,
+                "title": f"Reasoning step {step_index + 1}",
+                "stage": (
+                    "reranking"
+                    if step_index == max_steps - 1
+                    else "candidate_generation"
+                ),
+                "decision": {
+                    "action": "select" if step_index == max_steps - 1 else "inspect",
+                    "reason": (
+                        "Selected best trajectory after comparing candidate traces."
+                        if step_index == max_steps - 1
+                        else "Inspect candidate trajectories for this reasoning step."
+                    ),
+                },
                 "signals": signals,
                 "candidates": event_candidates,
             }
@@ -1597,7 +1843,28 @@ def _split_text_by_prompt_step_format(text: str) -> List[str]:
         re.IGNORECASE | re.MULTILINE,
     )
     chunks = [chunk.strip() for chunk in pattern.split(content) if chunk.strip()]
-    return chunks if len(chunks) > 1 else [content]
+    if len(chunks) <= 1:
+        return [content]
+
+    step_line_pattern = re.compile(
+        r"^\s*-\s*Step\s+(?:\d+|[A-Za-z]+)\s*:",
+        re.IGNORECASE,
+    )
+    step_chunks = [chunk for chunk in chunks if step_line_pattern.match(chunk)]
+    if step_chunks:
+        cleaned_chunks = []
+        for chunk in step_chunks:
+            cleaned = re.split(
+                r"^\s*<Answer>\s*:|^\s*<end of response>\s*$",
+                chunk,
+                maxsplit=1,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )[0].strip()
+            if cleaned:
+                cleaned_chunks.append(cleaned)
+        return cleaned_chunks or step_chunks
+
+    return chunks
 
 
 def _distribute_tokens_by_text_length(parts: List[str], total_tokens: int) -> List[int]:
@@ -2295,7 +2562,7 @@ def _build_generic_events(
 
 
 def _signal_list_to_score_map(
-    signals: Optional[List[Dict[str, Any]]]
+    signals: Optional[List[Dict[str, Any]]],
 ) -> Dict[str, float]:
     score_map: Dict[str, float] = {}
     for signal in signals or []:
@@ -2643,7 +2910,33 @@ def _build_advanced_config_template_dict(
         raise ValueError(f"Unsupported strategy_id: {strategy_id}")
 
     config: Dict[str, Any] = {
-        "prompt": "Reason step-by-step carefully",
+        "prompt": """
+You will be presented with a <Question>. Before providing the [Answer], you should first think step-by-step carefully.
+
+Your response format:
+<start of response>
+Reasoning Steps:
+- Step 1: [Your first reasoning step]
+- Step 2: [Your second reasoning step]
+- Step 3: [Next step, and so on...]
+...
+- Step N: [Final reasoning step]
+<Answer>: [Your final answer]
+<end of response>
+
+Strict Requirements:
+- DO NOT include any text outside the specified format.
+- Each reasoning step MUST be written on a **single line only**: NO line breaks, bullet points, or substeps within a step.
+- Each step should express one precise and **self-contained** logical operation, deduction, calculation, or fact application.
+- Steps MUST provide explicit result of the step or concrete reasoning outcomes. Avoid vague explanations or meta-descriptions of the reasoning process.
+    - For example:
+        - Good: "- Step 1: Multiply 5 by 4, which equals 20."
+        - Bad: "- Step 1: Multiply 5 by 4." (no result of the step or concrete reasoning outcome)
+- Continue writing steps until the problem is solved.
+- Violating ANY requirement above is NOT acceptable.
+
+Now answer:
+<Question>: """,
         "generation": _load_yaml_mapping(_DEFAULT_GENERATION_CONFIG_PATH),
         "strategy": _load_yaml_mapping(strategy_path),
     }
