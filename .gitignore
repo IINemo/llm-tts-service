@@ -172,7 +172,7 @@ tmp/
 temp/
 outputs/
 
-*.zip
+# *.zip
 *.bst
 # *.pdf
 *.bib
