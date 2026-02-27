@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
+import math
 import random
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -252,6 +255,63 @@ def get_advanced_config_template(
     }
 
 
+def get_debugger_runtime_health() -> Dict[str, Any]:
+    """Report runtime dependency health for real debugger execution."""
+    checks = [
+        _dependency_check(
+            name="core_runtime",
+            required=[
+                "llm_tts.early_stopping:BoundaryEarlyStopping",
+                "llm_tts.generators.api:StepCandidateGeneratorThroughAPI",
+                "llm_tts.models.blackboxmodel_with_streaming:BlackboxModelWithStreaming",
+                "llm_tts.scorers:ChainMajorityVotingScorer",
+                "llm_tts.scorers:StepScorerConfidence",
+                "llm_tts.step_boundary_detectors:ThinkingMarkerDetector",
+                "llm_tts.strategies:StrategyBaseline",
+                "llm_tts.strategies:StrategyBeamSearch",
+                "llm_tts.strategies:StrategyOfflineBestOfN",
+                "llm_tts.strategies:StrategyOnlineBestOfN",
+                "llm_tts.strategies:StrategySelfConsistency",
+                "lm_polygraph.utils.generation_parameters:GenerationParameters",
+            ],
+        ),
+        _dependency_check(
+            name="logprob_scorers",
+            required=[
+                "lm_polygraph.estimators:Perplexity",
+                "lm_polygraph.estimators:MeanTokenEntropy",
+                "lm_polygraph.estimators:MaximumSequenceProbability",
+                "lm_polygraph.stat_calculators:EntropyCalculator",
+                "lm_polygraph.stat_calculators:VLLMLogprobsCalculator",
+                "lm_polygraph.utils:APIWithUncertainty",
+            ],
+        ),
+        _dependency_check(
+            name="prm_scorer",
+            required=[
+                "llm_tts.scorers:StepScorerPRM",
+            ],
+        ),
+    ]
+
+    missing_dependencies = sorted(
+        {missing for check in checks for missing in check["missing_dependencies"]}
+    )
+    missing_dependency_details = [
+        detail
+        for check in checks
+        for detail in check.get("missing_dependency_details", [])
+    ]
+    can_run = not missing_dependencies
+    return {
+        "status": "ok" if can_run else "degraded",
+        "can_run": can_run,
+        "missing_dependencies": missing_dependencies,
+        "missing_dependency_details": missing_dependency_details,
+        "checks": checks,
+    }
+
+
 def build_single_sample_payload(
     question: str,
     gold_answer: Optional[str] = None,
@@ -306,7 +366,7 @@ def build_single_sample_payload(
     if resolved_shared_prompt.strip():
         prompt = f"{resolved_shared_prompt.strip()}\n\nQuestion: {question.strip()}"
 
-    strategy_entry = _build_strategy_entry(
+    strategy_entry = _run_real_strategy_entry(
         strategy=strategy,
         scorer=scorer,
         question=question,
@@ -314,6 +374,7 @@ def build_single_sample_payload(
         budget=selected_budget,
         shared_prompt=resolved_shared_prompt,
         model_config=model_config,
+        api_key=api_key,
         has_gold_answer=has_gold_answer,
         advanced_config=resolved_advanced_config,
     )
@@ -344,6 +405,1123 @@ def build_single_sample_payload(
         "scorer_catalog": [deepcopy(scorer)] if scorer else [],
         "strategies": [strategy_entry],
     }
+
+
+def _dependency_check(name: str, required: List[str]) -> Dict[str, Any]:
+    missing: List[str] = []
+    missing_details: List[Dict[str, str]] = []
+    for spec in required:
+        module_name, attr_name = _split_dependency_spec(spec)
+        try:
+            module = importlib.import_module(module_name)
+            if attr_name and not hasattr(module, attr_name):
+                missing.append(spec)
+                missing_details.append(
+                    {
+                        "dependency": spec,
+                        "error": f"Attribute '{attr_name}' not found in module '{module_name}'.",
+                    }
+                )
+        except Exception as exc:
+            missing.append(spec)
+            missing_details.append(
+                {
+                    "dependency": spec,
+                    "error": _compact_error(exc),
+                }
+            )
+
+    return {
+        "name": name,
+        "ok": not missing,
+        "missing_dependencies": missing,
+        "missing_dependency_details": missing_details,
+    }
+
+
+def _split_dependency_spec(spec: str) -> Tuple[str, Optional[str]]:
+    if ":" not in spec:
+        return spec, None
+    module_name, attr_name = spec.split(":", 1)
+    module_name = module_name.strip()
+    attr_name = attr_name.strip() or None
+    return module_name, attr_name
+
+
+def _run_real_strategy_entry(
+    strategy: Dict[str, Any],
+    scorer: Optional[Dict[str, Any]],
+    question: str,
+    gold_answer: str,
+    budget: int,
+    shared_prompt: str,
+    model_config: Dict[str, str],
+    api_key: str,
+    has_gold_answer: bool,
+    advanced_config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    generation_config = _safe_mapping((advanced_config or {}).get("generation"))
+    strategy_config = _safe_mapping((advanced_config or {}).get("strategy"))
+    scorer_config = _safe_mapping((advanced_config or {}).get("scorer"))
+    model_overrides = _safe_mapping((advanced_config or {}).get("model"))
+
+    request_messages = _build_request_messages(
+        question=question,
+        shared_prompt=shared_prompt,
+    )
+
+    runtime: Optional[Dict[str, Any]] = None
+    start_time = time.perf_counter()
+
+    try:
+        runtime = _create_runtime_components(
+            strategy=strategy,
+            scorer=scorer,
+            model_config=model_config,
+            api_key=api_key,
+            model_overrides=model_overrides,
+            generation_config=generation_config,
+            strategy_config=strategy_config,
+            scorer_config=scorer_config,
+            budget=budget,
+        )
+        strategy_instance = runtime["strategy_instance"]
+        strategy_result = strategy_instance.generate_trajectory(
+            input_chat=request_messages,
+            sample_idx=0,
+        )
+    except ValueError:
+        raise
+    except ImportError as exc:
+        raise RuntimeError(
+            "Real debugger execution dependencies are missing. "
+            "Install runtime packages for strategy execution (llm_tts + lm_polygraph)."
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to execute strategy '{strategy['id']}'"
+            + (f" with scorer '{scorer['id']}'" if scorer is not None else "")
+            + f": {_compact_error(exc)}"
+        ) from exc
+    finally:
+        if runtime is not None:
+            _cleanup_runtime_components(runtime)
+
+    latency_ms = int((time.perf_counter() - start_time) * 1000)
+    run = _convert_strategy_result_to_debugger_run(
+        strategy=strategy,
+        scorer=scorer,
+        strategy_result=strategy_result,
+        budget=budget,
+        latency_ms=latency_ms,
+        model_config=model_config,
+        generation_config=generation_config,
+        strategy_config=strategy_config,
+        scorer_config=scorer_config if scorer else {},
+        has_gold_answer=has_gold_answer,
+        gold_answer=gold_answer,
+    )
+
+    run_id = strategy["id"] if scorer is None else f"{strategy['id']}__{scorer['id']}"
+    run_name = (
+        strategy["name"] if scorer is None else f"{strategy['name']} · {scorer['name']}"
+    )
+    summary = strategy.get("summary", "")
+    if scorer is not None:
+        summary = f"{summary} Evaluated with {scorer.get('name', scorer['id'])}."
+
+    return {
+        "id": run_id,
+        "strategy_id": strategy["id"],
+        "scorer_id": scorer.get("id") if scorer else None,
+        "name": run_name,
+        "family": strategy.get("family", "unknown"),
+        "summary": summary,
+        "run": run,
+        "comparison_rank": 1,
+    }
+
+
+def _build_request_messages(question: str, shared_prompt: str) -> List[Dict[str, str]]:
+    messages: List[Dict[str, str]] = []
+    prompt_text = str(shared_prompt or "").strip()
+    if prompt_text:
+        messages.append({"role": "system", "content": prompt_text})
+    messages.append({"role": "user", "content": question.strip()})
+    return messages
+
+
+def _create_runtime_components(
+    strategy: Dict[str, Any],
+    scorer: Optional[Dict[str, Any]],
+    model_config: Dict[str, str],
+    api_key: str,
+    model_overrides: Dict[str, Any],
+    generation_config: Dict[str, Any],
+    strategy_config: Dict[str, Any],
+    scorer_config: Dict[str, Any],
+    budget: int,
+) -> Dict[str, Any]:
+    provider = str(model_config.get("provider") or "").strip().lower()
+    model_id = str(model_config.get("model_id") or "").strip()
+    api_key_value = str(api_key or "").strip()
+
+    if provider not in _PROVIDER_BASE_URLS:
+        raise ValueError("Provider must be one of: openai, openrouter.")
+    if not model_id:
+        raise ValueError("Model ID is required to run strategy execution.")
+    if not api_key_value:
+        raise ValueError("API key is required to run strategy execution.")
+
+    try:
+        from lm_polygraph.utils.generation_parameters import GenerationParameters
+
+        from llm_tts.early_stopping import BoundaryEarlyStopping
+        from llm_tts.generators.api import StepCandidateGeneratorThroughAPI
+        from llm_tts.models.blackboxmodel_with_streaming import (
+            BlackboxModelWithStreaming,
+        )
+        from llm_tts.scorers import (
+            ChainMajorityVotingScorer,
+            StepScorerConfidence,
+            StepScorerPRM,
+        )
+        from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
+        from llm_tts.strategies import (
+            StrategyBaseline,
+            StrategyBeamSearch,
+            StrategyOfflineBestOfN,
+            StrategyOnlineBestOfN,
+            StrategySelfConsistency,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "Unable to import runtime dependencies for real strategy execution."
+        ) from exc
+
+    scorer_id = scorer.get("id") if scorer else None
+    requires_logprobs = bool(scorer and scorer.get("requires_logprobs"))
+
+    detector = ThinkingMarkerDetector(
+        min_step_tokens=_coerce_int(
+            strategy_config.get("min_step_tokens"),
+            default=50,
+            minimum=0,
+            maximum=32768,
+        ),
+        max_step_tokens=_coerce_int(
+            strategy_config.get("max_step_tokens"),
+            default=1024,
+            minimum=1,
+            maximum=32768,
+        ),
+        use_sequence=_coerce_bool(strategy_config.get("use_sequence"), default=True),
+        use_conclusion=_coerce_bool(
+            strategy_config.get("use_conclusion"),
+            default=True,
+        ),
+        use_thinking=_coerce_bool(strategy_config.get("use_thinking"), default=True),
+        use_verification=_coerce_bool(
+            strategy_config.get("use_verification"),
+            default=True,
+        ),
+        use_structure=_coerce_bool(strategy_config.get("use_structure"), default=False),
+        use_reasoning=_coerce_bool(strategy_config.get("use_reasoning"), default=True),
+        use_sentence_start=_coerce_bool(
+            strategy_config.get("use_sentence_start"),
+            default=False,
+        ),
+        use_correction=_coerce_bool(
+            strategy_config.get("use_correction"),
+            default=False,
+        ),
+        custom_markers=_coerce_string_list(strategy_config.get("custom_markers")),
+    )
+
+    generation_parameters = GenerationParameters()
+    generation_parameters.temperature = _coerce_float(
+        generation_config.get("temperature"),
+        default=0.7,
+        minimum=0.0,
+        maximum=2.0,
+    )
+    generation_parameters.max_new_tokens = _coerce_int(
+        generation_config.get("max_new_tokens"),
+        default=500,
+        minimum=1,
+        maximum=200000,
+    )
+    generation_parameters.top_p = _coerce_float(
+        generation_config.get("top_p"),
+        default=0.8,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    generation_parameters.top_k = _coerce_int(
+        generation_config.get("top_k"),
+        default=20,
+        minimum=0,
+        maximum=1000,
+    )
+
+    base_model = BlackboxModelWithStreaming(
+        openai_api_key=api_key_value,
+        model_path=model_id,
+        supports_logprobs=requires_logprobs,
+        base_url=_PROVIDER_BASE_URLS.get(provider),
+        early_stopping=BoundaryEarlyStopping(detector=detector),
+        generation_parameters=generation_parameters,
+    )
+
+    model_for_generator: Any = base_model
+    if scorer_id in {"perplexity", "entropy", "sequence_prob"}:
+        try:
+            from lm_polygraph.estimators import (
+                MaximumSequenceProbability,
+                MeanTokenEntropy,
+                Perplexity,
+            )
+            from lm_polygraph.stat_calculators import (
+                EntropyCalculator,
+                VLLMLogprobsCalculator,
+            )
+            from lm_polygraph.utils import APIWithUncertainty
+        except ImportError as exc:
+            raise RuntimeError(
+                "Scorer requires lm_polygraph uncertainty components, but they are unavailable."
+            ) from exc
+
+        if scorer_id == "perplexity":
+            stat_calculators = [VLLMLogprobsCalculator()]
+            estimator = Perplexity()
+        elif scorer_id == "sequence_prob":
+            stat_calculators = [VLLMLogprobsCalculator()]
+            estimator = MaximumSequenceProbability()
+        else:
+            stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+            estimator = MeanTokenEntropy()
+
+        model_for_generator = APIWithUncertainty(
+            model=base_model,
+            stat_calculators=stat_calculators,
+            estimator=estimator,
+        )
+
+    disable_thinking_mode = model_overrides.get("disable_thinking_mode", None)
+    if disable_thinking_mode not in (True, False, None):
+        disable_thinking_mode = _coerce_bool(disable_thinking_mode, default=None)
+    thinking_mode = disable_thinking_mode is False
+
+    answer_patterns = _coerce_string_list(
+        strategy_config.get("detector_answer_patterns"),
+    )
+
+    step_generator = StepCandidateGeneratorThroughAPI(
+        model=model_for_generator,
+        thinking_mode=thinking_mode,
+        detector=detector,
+        answer_patterns=answer_patterns,
+        max_new_tokens=_coerce_int(
+            generation_config.get("max_new_tokens"),
+            default=500,
+            minimum=1,
+            maximum=200000,
+        ),
+        temperature=_coerce_float(
+            generation_config.get("temperature"),
+            default=0.7,
+            minimum=0.0,
+            maximum=2.0,
+        ),
+        top_p=_coerce_float(
+            generation_config.get("top_p"),
+            default=0.8,
+            minimum=0.0,
+            maximum=1.0,
+        ),
+        top_k=_coerce_int(
+            generation_config.get("top_k"),
+            default=20,
+            minimum=0,
+            maximum=1000,
+        ),
+        presence_penalty=_coerce_float(
+            generation_config.get("presence_penalty"),
+            default=0.0,
+            minimum=-2.0,
+            maximum=2.0,
+        ),
+        max_context_budget=_coerce_int(
+            generation_config.get("max_length"),
+            default=8196,
+            minimum=1024,
+            maximum=262144,
+        ),
+        prefill_mode=_coerce_bool(model_overrides.get("prefill_mode"), default=False),
+        disable_thinking_mode=disable_thinking_mode,
+        supports_logprobs=requires_logprobs,
+        max_concurrent_requests=_coerce_int(
+            model_overrides.get("max_concurrent_requests"),
+            default=128,
+            minimum=1,
+            maximum=1024,
+        ),
+    )
+
+    scorer_instance: Optional[Any] = None
+    if strategy["id"] not in {"baseline", "self_consistency"}:
+        if scorer_id == "prm":
+            scorer_instance = StepScorerPRM(
+                prm_model_path=str(
+                    scorer_config.get("model_path") or "Qwen/Qwen2.5-Math-PRM-7B"
+                ),
+                device=str(scorer_config.get("device") or "cuda:0"),
+                batch_size=_coerce_int(
+                    scorer_config.get("batch_size"),
+                    default=1,
+                    minimum=1,
+                    maximum=256,
+                ),
+                torch_dtype="bfloat16",
+                use_vllm=_coerce_bool(scorer_config.get("use_vllm"), default=True),
+                gpu_memory_utilization=_coerce_float(
+                    scorer_config.get("gpu_memory_utilization"),
+                    default=0.9,
+                    minimum=0.1,
+                    maximum=1.0,
+                ),
+                prm_max_tokens=_coerce_int(
+                    scorer_config.get("prm_max_tokens"),
+                    default=4000,
+                    minimum=128,
+                    maximum=65536,
+                ),
+            )
+        elif scorer_id in {"perplexity", "entropy", "sequence_prob"}:
+            scorer_instance = StepScorerConfidence()
+        elif scorer_id is not None:
+            raise ValueError(f"Unsupported scorer_id for real execution: {scorer_id}")
+
+    strategy_id = strategy["id"]
+    if strategy_id == "baseline":
+        strategy_instance = StrategyBaseline(
+            step_generator=step_generator,
+            eos_patterns=_coerce_string_list(
+                strategy_config.get("detector_eos_patterns")
+            )
+            or ["<end of response>"],
+            stop_token_ids=_coerce_int_list(strategy_config.get("stop_token_ids")),
+            batch_generation=_coerce_bool(
+                strategy_config.get("batch_generation"),
+                default=False,
+            ),
+        )
+    elif strategy_id == "beam_search":
+        if scorer_instance is None:
+            raise ValueError("Beam search requires a scorer.")
+        strategy_instance = StrategyBeamSearch(
+            step_generator=step_generator,
+            scorer=scorer_instance,
+            beam_size=_coerce_int(
+                strategy_config.get("beam_size"),
+                default=min(max(2, budget // 2), 6),
+                minimum=1,
+                maximum=64,
+            ),
+            candidates_per_beam=_coerce_int(
+                strategy_config.get("candidates_per_beam"),
+                default=2,
+                minimum=1,
+                maximum=32,
+            ),
+            max_steps=_coerce_int(
+                strategy_config.get("max_steps"),
+                default=max(2, budget),
+                minimum=1,
+                maximum=128,
+            ),
+            aggregation=str(strategy_config.get("aggregation") or "mean"),
+            batch_generation=_coerce_bool(
+                strategy_config.get("batch_generation"),
+                default=True,
+            ),
+            prompt_buffer=_coerce_int(
+                strategy_config.get("prompt_buffer"),
+                default=500,
+                minimum=0,
+                maximum=20000,
+            ),
+            scoring_window=_coerce_optional_int(strategy_config.get("scoring_window")),
+        )
+    elif strategy_id == "online_best_of_n":
+        if scorer_instance is None:
+            raise ValueError("Online best-of-n requires a scorer.")
+        strategy_instance = StrategyOnlineBestOfN(
+            step_generator=step_generator,
+            scorer=scorer_instance,
+            candidates_per_step=_coerce_int(
+                strategy_config.get("candidates_per_step"),
+                default=max(2, budget),
+                minimum=1,
+                maximum=64,
+            ),
+            max_steps=_coerce_int(
+                strategy_config.get("max_steps"),
+                default=max(2, budget),
+                minimum=1,
+                maximum=128,
+            ),
+            batch_generation=_coerce_bool(
+                strategy_config.get("batch_generation"),
+                default=True,
+            ),
+            prompt_buffer=_coerce_int(
+                strategy_config.get("prompt_buffer"),
+                default=500,
+                minimum=0,
+                maximum=20000,
+            ),
+        )
+    elif strategy_id == "offline_best_of_n":
+        if scorer_instance is None:
+            raise ValueError("Offline best-of-n requires a scorer.")
+        strategy_instance = StrategyOfflineBestOfN(
+            scorer=scorer_instance,
+            num_trajectories=_coerce_int(
+                strategy_config.get("num_trajectories"),
+                default=max(4, budget),
+                minimum=1,
+                maximum=128,
+            ),
+            max_steps=_coerce_int(
+                strategy_config.get("max_steps"),
+                default=max(2, budget),
+                minimum=1,
+                maximum=128,
+            ),
+            step_generator=step_generator,
+            score_aggregation=str(strategy_config.get("score_aggregation") or "mean"),
+            batch_generation=_coerce_bool(
+                strategy_config.get("batch_generation"),
+                default=True,
+            ),
+            calculate_entropy_score=_coerce_bool(
+                strategy_config.get("calculate_entropy_score"),
+                default=False,
+            ),
+            calculate_perplexity_score=_coerce_bool(
+                strategy_config.get("calculate_perplexity_score"),
+                default=False,
+            ),
+            calculate_sequence_prob_score=_coerce_bool(
+                strategy_config.get("calculate_sequence_prob_score"),
+                default=False,
+            ),
+            calculate_pd_gap_score=_coerce_bool(
+                strategy_config.get("calculate_pd_gap_score"),
+                default=False,
+            ),
+            calculate_prm_score=_coerce_bool(
+                strategy_config.get("calculate_prm_score"),
+                default=False,
+            ),
+            scoring_window=_coerce_optional_int(strategy_config.get("scoring_window")),
+        )
+    elif strategy_id == "self_consistency":
+        chain_patterns = _coerce_string_list(
+            _safe_mapping(strategy_config.get("scorer")).get(
+                "answer_extraction_patterns"
+            )
+        )
+        chain_scorer = ChainMajorityVotingScorer(
+            answer_extraction_patterns=chain_patterns or None,
+        )
+        strategy_instance = StrategySelfConsistency(
+            step_generator=step_generator,
+            num_paths=_coerce_int(
+                strategy_config.get("num_paths"),
+                default=max(4, budget),
+                minimum=1,
+                maximum=128,
+            ),
+            scorer=chain_scorer,
+            batch_generation=_coerce_bool(
+                strategy_config.get("batch_generation"),
+                default=True,
+            ),
+        )
+    else:
+        raise ValueError(f"Unsupported strategy_id for real execution: {strategy_id}")
+
+    return {
+        "base_model": base_model,
+        "strategy_instance": strategy_instance,
+        "scorer_instance": scorer_instance,
+        "step_generator": step_generator,
+    }
+
+
+def _cleanup_runtime_components(runtime: Dict[str, Any]) -> None:
+    strategy_instance = runtime.get("strategy_instance")
+    scorer_instance = runtime.get("scorer_instance")
+    base_model = runtime.get("base_model")
+
+    if strategy_instance is not None and hasattr(strategy_instance, "cleanup"):
+        try:
+            strategy_instance.cleanup()
+        except Exception:
+            pass
+
+    if (
+        scorer_instance is not None
+        and hasattr(scorer_instance, "cleanup")
+        and scorer_instance is not strategy_instance
+    ):
+        try:
+            scorer_instance.cleanup()
+        except Exception:
+            pass
+
+    if base_model is not None and hasattr(base_model, "shutdown"):
+        try:
+            base_model.shutdown()
+        except Exception:
+            pass
+
+
+def _convert_strategy_result_to_debugger_run(
+    strategy: Dict[str, Any],
+    scorer: Optional[Dict[str, Any]],
+    strategy_result: Dict[str, Any],
+    budget: int,
+    latency_ms: int,
+    model_config: Dict[str, str],
+    generation_config: Dict[str, Any],
+    strategy_config: Dict[str, Any],
+    scorer_config: Dict[str, Any],
+    has_gold_answer: bool,
+    gold_answer: str,
+) -> Dict[str, Any]:
+    confidence = _estimate_result_confidence(
+        strategy_result=strategy_result,
+        scorer=scorer,
+    )
+    events = _build_events_from_strategy_result(
+        strategy=strategy,
+        scorer=scorer,
+        strategy_result=strategy_result,
+        confidence=confidence,
+    )
+    tokens_used = _estimate_result_tokens(strategy_result)
+
+    final: Dict[str, Any] = {
+        "confidence": confidence,
+        "selected_trajectory": strategy_result.get("trajectory") or "",
+        "selection_reason": (
+            "Selected by majority voting across sampled trajectories."
+            if strategy["id"] == "self_consistency"
+            else (
+                f"Selected by {strategy['name']}."
+                if scorer is None
+                else f"Selected by {strategy['name']} using {scorer['name']}."
+            )
+        ),
+    }
+    extracted_answer = str(strategy_result.get("extracted_answer") or "").strip()
+    if has_gold_answer and extracted_answer:
+        final["answer"] = extracted_answer
+        final["is_correct"] = extracted_answer.strip() == gold_answer.strip()
+
+    run: Dict[str, Any] = {
+        "budget": budget,
+        "budget_unit": _budget_unit_for_family(strategy.get("family", "single_pass")),
+        "used_budget": max(1, len(events)) if events else 1,
+        "tokens_used": tokens_used,
+        "latency_ms": max(1, latency_ms),
+        "provider": model_config.get("provider", "openrouter"),
+        "model_id": model_config.get("model_id", ""),
+        "strategy": {
+            "id": strategy["id"],
+            "name": strategy["name"],
+            "family": strategy.get("family", "unknown"),
+        },
+        "scorer": (
+            {
+                "id": scorer["id"],
+                "name": scorer["name"],
+                "direction": scorer["direction"],
+                "summary": scorer.get("summary", ""),
+            }
+            if scorer
+            else None
+        ),
+        "final": final,
+        "config": {
+            "generation": deepcopy(generation_config),
+            "strategy": deepcopy(strategy_config),
+            "scorer": deepcopy(scorer_config) if scorer else None,
+        },
+        "events": events,
+    }
+
+    return run
+
+
+def _estimate_result_confidence(
+    strategy_result: Dict[str, Any],
+    scorer: Optional[Dict[str, Any]],
+) -> float:
+    if not isinstance(strategy_result, dict):
+        return 0.0
+
+    best_idx = _coerce_int(strategy_result.get("best_idx"), default=0, minimum=0)
+    all_scores = strategy_result.get("all_scores")
+    if isinstance(all_scores, list) and all_scores:
+        if best_idx >= len(all_scores):
+            best_idx = len(all_scores) - 1
+        return _normalize_confidence(all_scores[best_idx])
+
+    aggregated_score = _to_float(strategy_result.get("aggregated_score"))
+    if aggregated_score is not None:
+        return _normalize_confidence(aggregated_score)
+
+    validity_scores = [
+        value
+        for value in (
+            _to_float(item) for item in strategy_result.get("validity_scores", [])
+        )
+        if value is not None and math.isfinite(value)
+    ]
+    if validity_scores:
+        return _normalize_confidence(sum(validity_scores) / len(validity_scores))
+
+    metadata = strategy_result.get("metadata")
+    consensus_score = _to_float(
+        metadata.get("consensus_score") if isinstance(metadata, dict) else None
+    )
+    if consensus_score is not None:
+        return _normalize_confidence(consensus_score)
+
+    if scorer and scorer.get("direction") == "lower_better":
+        return 0.0
+    return 0.0
+
+
+def _estimate_result_tokens(strategy_result: Dict[str, Any]) -> int:
+    token_stats = strategy_result.get("token_stats")
+    if isinstance(token_stats, dict):
+        total = _coerce_int(
+            token_stats.get("total_tokens_this_sample"),
+            default=0,
+            minimum=0,
+        )
+        if total > 0:
+            return total
+
+    total_tokens = _coerce_int(
+        strategy_result.get("total_tokens"),
+        default=0,
+        minimum=0,
+    )
+    if total_tokens > 0:
+        return total_tokens
+
+    steps = _extract_step_entries(strategy_result.get("steps"))
+    counted_tokens = sum(item["tokens"] for item in steps)
+    if counted_tokens > 0:
+        return counted_tokens
+
+    trajectory_text = str(strategy_result.get("trajectory") or "")
+    return max(1, len(trajectory_text.split()))
+
+
+def _build_events_from_strategy_result(
+    strategy: Dict[str, Any],
+    scorer: Optional[Dict[str, Any]],
+    strategy_result: Dict[str, Any],
+    confidence: float,
+) -> List[Dict[str, Any]]:
+    scorer_key = scorer["id"] if scorer else "confidence"
+    scorer_direction = (
+        scorer.get("direction", "higher_better") if scorer else "higher_better"
+    )
+    scorer_threshold = scorer.get("threshold") if scorer else None
+
+    all_trajectories = strategy_result.get("all_trajectories")
+    all_scores = strategy_result.get("all_scores")
+    if isinstance(all_trajectories, list) and all_trajectories:
+        best_idx = _coerce_int(strategy_result.get("best_idx"), default=0, minimum=0)
+        best_idx = min(best_idx, len(all_trajectories) - 1)
+
+        candidates: List[Dict[str, Any]] = []
+        for index, trajectory_text in enumerate(all_trajectories):
+            score_value = None
+            if isinstance(all_scores, list) and index < len(all_scores):
+                score_value = _to_float(all_scores[index])
+
+            candidate_signals: Dict[str, float] = {
+                "confidence": _normalize_confidence(
+                    score_value if score_value is not None else confidence
+                )
+            }
+            if scorer and score_value is not None:
+                candidate_signals[scorer_key] = score_value
+
+            candidates.append(
+                {
+                    "id": f"{strategy['id']}_{scorer_key}_traj_{index + 1}",
+                    "label": f"Trajectory {index + 1}",
+                    "text": str(trajectory_text or ""),
+                    "status": "selected" if index == best_idx else "pruned",
+                    "selected": index == best_idx,
+                    "signals": candidate_signals,
+                }
+            )
+
+        selected_score = (
+            _to_float(all_scores[best_idx])
+            if isinstance(all_scores, list) and best_idx < len(all_scores)
+            else None
+        )
+        signals = [
+            {
+                "name": "confidence",
+                "value": confidence,
+                "direction": "higher_better",
+                "threshold": 0.7,
+            }
+        ]
+        if scorer and selected_score is not None:
+            signals.append(
+                {
+                    "name": scorer_key,
+                    "value": selected_score,
+                    "direction": scorer_direction,
+                    "threshold": scorer_threshold,
+                }
+            )
+
+        events = [
+            {
+                "step": 1,
+                "title": "Trajectory reranking",
+                "stage": "reranking",
+                "decision": {
+                    "action": "select",
+                    "reason": "Selected the best complete trajectory score.",
+                },
+                "signals": signals,
+                "candidates": candidates,
+            }
+        ]
+
+        selected_steps = _extract_step_entries(strategy_result.get("steps"))
+        selected_scores = strategy_result.get("validity_scores", [])
+        events.extend(
+            _build_stepwise_events(
+                strategy=strategy,
+                scorer=scorer,
+                step_entries=selected_steps,
+                step_scores=(
+                    selected_scores if isinstance(selected_scores, list) else []
+                ),
+                confidence=confidence,
+                start_step=2,
+            )
+        )
+        return events
+
+    all_traces = strategy_result.get("all_traces")
+    if isinstance(all_traces, list) and all_traces:
+        candidates = []
+        selected_trace_idx = 0
+        for index, trace in enumerate(all_traces):
+            trace_text = str((trace or {}).get("text") or "")
+            trace_score = _to_float((trace or {}).get("score"))
+            is_selected = bool((trace or {}).get("selected"))
+            if is_selected:
+                selected_trace_idx = index
+
+            candidate_signals: Dict[str, float] = {
+                "confidence": _normalize_confidence(
+                    trace_score if trace_score is not None else confidence
+                )
+            }
+            if scorer and trace_score is not None:
+                candidate_signals[scorer_key] = trace_score
+
+            candidates.append(
+                {
+                    "id": f"{strategy['id']}_{scorer_key}_trace_{index + 1}",
+                    "label": f"Path {index + 1}",
+                    "text": trace_text,
+                    "status": "selected" if is_selected else "pruned",
+                    "selected": is_selected,
+                    "signals": candidate_signals,
+                }
+            )
+
+        selected_score = _to_float((all_traces[selected_trace_idx] or {}).get("score"))
+        signals = [
+            {
+                "name": "confidence",
+                "value": confidence,
+                "direction": "higher_better",
+                "threshold": 0.7,
+            }
+        ]
+        if scorer and selected_score is not None:
+            signals.append(
+                {
+                    "name": scorer_key,
+                    "value": selected_score,
+                    "direction": scorer_direction,
+                    "threshold": scorer_threshold,
+                }
+            )
+
+        events = [
+            {
+                "step": 1,
+                "title": "Self-consistency voting",
+                "stage": "vote",
+                "decision": {
+                    "action": "select",
+                    "reason": "Picked the path with the strongest answer consensus.",
+                },
+                "signals": signals,
+                "candidates": candidates,
+            }
+        ]
+
+        selected_steps = _extract_step_entries(strategy_result.get("steps"))
+        events.extend(
+            _build_stepwise_events(
+                strategy=strategy,
+                scorer=scorer,
+                step_entries=selected_steps,
+                step_scores=[],
+                confidence=confidence,
+                start_step=2,
+            )
+        )
+        return events
+
+    step_entries = _extract_step_entries(strategy_result.get("steps"))
+    if not step_entries:
+        trajectory_text = str(strategy_result.get("trajectory") or "").strip()
+        if trajectory_text:
+            step_entries = [{"text": trajectory_text, "tokens": 0}]
+    step_scores = (
+        strategy_result.get("validity_scores")
+        if isinstance(strategy_result.get("validity_scores"), list)
+        else []
+    )
+    return _build_stepwise_events(
+        strategy=strategy,
+        scorer=scorer,
+        step_entries=step_entries,
+        step_scores=step_scores,
+        confidence=confidence,
+        start_step=1,
+    )
+
+
+def _build_stepwise_events(
+    strategy: Dict[str, Any],
+    scorer: Optional[Dict[str, Any]],
+    step_entries: List[Dict[str, Any]],
+    step_scores: List[Any],
+    confidence: float,
+    start_step: int,
+) -> List[Dict[str, Any]]:
+    if not step_entries:
+        return []
+
+    family = strategy.get("family", "single_pass")
+    scorer_key = scorer["id"] if scorer else "confidence"
+    scorer_direction = (
+        scorer.get("direction", "higher_better") if scorer else "higher_better"
+    )
+    scorer_threshold = scorer.get("threshold") if scorer else None
+
+    events: List[Dict[str, Any]] = []
+    total_steps = len(step_entries)
+
+    for index, step_entry in enumerate(step_entries):
+        absolute_step = start_step + index
+        raw_score = _to_float(step_scores[index]) if index < len(step_scores) else None
+        score_for_step = raw_score if raw_score is not None else confidence
+        confidence_for_step = _normalize_confidence(score_for_step)
+        is_last_step = index == total_steps - 1
+
+        stage = _event_stage_for_family(family, index=index, total=total_steps)
+        decision = {
+            "action": "stop" if is_last_step else "escalate",
+            "reason": (
+                "Reached final selected step."
+                if is_last_step
+                else "Continuing to next reasoning step."
+            ),
+        }
+
+        signals = [
+            {
+                "name": "confidence",
+                "value": confidence_for_step,
+                "direction": "higher_better",
+                "threshold": 0.7,
+            }
+        ]
+        if scorer is not None:
+            signals.append(
+                {
+                    "name": scorer_key,
+                    "value": score_for_step,
+                    "direction": scorer_direction,
+                    "threshold": scorer_threshold,
+                }
+            )
+
+        candidate_signals: Dict[str, float] = {"confidence": confidence_for_step}
+        if scorer is not None:
+            candidate_signals[scorer_key] = score_for_step
+
+        candidate_text = str(step_entry.get("text") or "").strip()
+        if not candidate_text:
+            candidate_text = "(empty step)"
+
+        events.append(
+            {
+                "step": absolute_step,
+                "title": (
+                    "Single-pass generation"
+                    if family == "single_pass" and total_steps == 1
+                    else f"Reasoning step {index + 1}"
+                ),
+                "stage": stage,
+                "decision": decision,
+                "signals": signals,
+                "candidates": [
+                    {
+                        "id": (f"{strategy['id']}_{scorer_key}_s{absolute_step}_c1"),
+                        "label": f"Step {index + 1}",
+                        "text": candidate_text,
+                        "status": "selected",
+                        "selected": True,
+                        "signals": candidate_signals,
+                    }
+                ],
+            }
+        )
+
+    return events
+
+
+def _extract_step_entries(raw_steps: Any) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    if not isinstance(raw_steps, list):
+        return entries
+
+    for raw_step in raw_steps:
+        step_text = ""
+        token_count = 0
+
+        if isinstance(raw_step, str):
+            step_text = raw_step
+        elif isinstance(raw_step, dict):
+            step_text = str(raw_step.get("raw_text") or raw_step.get("text") or "")
+            token_ids = raw_step.get("token_ids")
+            if isinstance(token_ids, list):
+                token_count = len(token_ids)
+        else:
+            step_text = str(
+                getattr(raw_step, "raw_text", None)
+                or getattr(raw_step, "text", None)
+                or ""
+            )
+            token_ids = getattr(raw_step, "token_ids", None)
+            if isinstance(token_ids, list):
+                token_count = len(token_ids)
+
+        if step_text.strip():
+            entries.append({"text": step_text, "tokens": token_count})
+
+    return entries
+
+
+def _event_stage_for_family(family: str, index: int, total: int) -> str:
+    if family == "single_pass":
+        return "generation"
+    if family == "tree_search":
+        return "tree_select" if index == total - 1 else "tree_expand"
+    if family == "reranking":
+        return "selection" if index == total - 1 else "candidate_generation"
+    if family == "sample_and_vote":
+        return "selection" if index == total - 1 else "sampling"
+    return "reasoning"
+
+
+def _normalize_confidence(value: Any) -> float:
+    numeric = _to_float(value)
+    if numeric is None or not math.isfinite(numeric):
+        return 0.0
+    if 0.0 <= numeric <= 1.0:
+        return float(numeric)
+    # Convert unconstrained score into a bounded confidence value.
+    stabilized = max(-60.0, min(60.0, numeric))
+    return _clamp(1.0 / (1.0 + math.exp(-stabilized)))
+
+
+def _to_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_bool(value: Any, default: Optional[bool]) -> Optional[bool]:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _coerce_optional_int(value: Any) -> Optional[int]:
+    if value in (None, "", "null"):
+        return None
+    return _coerce_int(value, default=0, minimum=0)
+
+
+def _coerce_int_list(value: Any) -> Optional[List[int]]:
+    if not isinstance(value, list):
+        return None
+    parsed: List[int] = []
+    for item in value:
+        try:
+            parsed.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return parsed or None
+
+
+def _coerce_string_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    output: List[str] = []
+    for item in value:
+        text = str(item).strip()
+        if text:
+            output.append(text)
+    return output
 
 
 def _load_cached_examples_bundle() -> Dict[str, Any]:

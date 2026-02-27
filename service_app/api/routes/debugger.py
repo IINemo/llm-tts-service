@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from service_app.core.visual_debugger_demo import (
     build_single_sample_payload,
     get_advanced_config_template,
+    get_debugger_runtime_health,
     get_demo_scenario,
     list_demo_scenarios,
     validate_model_capabilities,
@@ -99,6 +100,14 @@ def run_visual_debugger_single_sample(request: DebuggerSingleSampleRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/v1/debugger/demo/health")
+def get_visual_debugger_runtime_health() -> Dict[str, Any]:
+    """Report runtime dependency health before running debugger strategies."""
+    return get_debugger_runtime_health()
 
 
 @router.post("/v1/debugger/demo/validate-model")
