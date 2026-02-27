@@ -1148,6 +1148,15 @@ def _build_events_from_strategy_result(
     )
     scorer_threshold = scorer.get("threshold") if scorer else None
 
+    step_candidates = strategy_result.get("step_candidates")
+    if isinstance(step_candidates, list) and step_candidates:
+        return _build_events_from_step_candidates(
+            strategy=strategy,
+            scorer=scorer,
+            step_candidates=step_candidates,
+            fallback_confidence=confidence,
+        )
+
     all_trajectories = strategy_result.get("all_trajectories")
     all_scores = strategy_result.get("all_scores")
     if isinstance(all_trajectories, list) and all_trajectories:
@@ -1326,6 +1335,126 @@ def _build_events_from_strategy_result(
         confidence=confidence,
         start_step=1,
     )
+
+
+def _build_events_from_step_candidates(
+    strategy: Dict[str, Any],
+    scorer: Optional[Dict[str, Any]],
+    step_candidates: List[Dict[str, Any]],
+    fallback_confidence: float,
+) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    scorer_key = scorer["id"] if scorer else "confidence"
+    scorer_direction = (
+        scorer.get("direction", "higher_better") if scorer else "higher_better"
+    )
+    scorer_threshold = scorer.get("threshold") if scorer else None
+
+    for index, pool in enumerate(step_candidates):
+        raw_candidates = pool.get("candidates")
+        if not isinstance(raw_candidates, list) or not raw_candidates:
+            continue
+
+        event_candidates: List[Dict[str, Any]] = []
+        selected_score: Optional[float] = None
+
+        for cand_idx, raw_candidate in enumerate(raw_candidates):
+            if not isinstance(raw_candidate, dict):
+                continue
+
+            score_value = _to_float(raw_candidate.get("score"))
+            if score_value is None:
+                score_value = _extract_first_numeric(raw_candidate.get("signals"))
+            candidate_conf = _normalize_confidence(
+                score_value if score_value is not None else fallback_confidence
+            )
+
+            signal_map: Dict[str, float] = {"confidence": candidate_conf}
+            if score_value is not None:
+                signal_map[scorer_key] = score_value
+
+            status = str(raw_candidate.get("status") or "pruned")
+            is_selected = bool(raw_candidate.get("selected")) or status == "selected"
+            if is_selected:
+                selected_score = score_value
+                status = "selected"
+            elif status not in {"selected", "kept", "pruned"}:
+                status = "pruned"
+
+            event_candidates.append(
+                {
+                    "id": str(
+                        raw_candidate.get("id")
+                        or f"step_{index + 1}_cand_{cand_idx + 1}"
+                    ),
+                    "label": str(
+                        raw_candidate.get("label") or f"Candidate {cand_idx + 1}"
+                    ),
+                    "text": str(raw_candidate.get("text") or ""),
+                    "status": status,
+                    "selected": is_selected,
+                    "signals": signal_map,
+                }
+            )
+
+        if not event_candidates:
+            continue
+
+        signals = [
+            {
+                "name": "confidence",
+                "value": _normalize_confidence(
+                    selected_score
+                    if selected_score is not None
+                    else fallback_confidence
+                ),
+                "direction": "higher_better",
+                "threshold": 0.7,
+            }
+        ]
+        if scorer is not None and selected_score is not None:
+            signals.append(
+                {
+                    "name": scorer_key,
+                    "value": selected_score,
+                    "direction": scorer_direction,
+                    "threshold": scorer_threshold,
+                }
+            )
+
+        stage = str(pool.get("stage") or "").strip() or _event_stage_for_family(
+            strategy.get("family", "single_pass"),
+            index=index,
+            total=len(step_candidates),
+        )
+        selected_exists = any(
+            candidate.get("selected") for candidate in event_candidates
+        )
+        decision = {
+            "action": "select" if selected_exists else "inspect",
+            "reason": (
+                "Selected the top candidate from this generation step."
+                if selected_exists
+                else "Candidate scores are available for inspection."
+            ),
+        }
+
+        events.append(
+            {
+                "step": _coerce_int(
+                    pool.get("step"),
+                    default=index + 1,
+                    minimum=1,
+                ),
+                "title": str(pool.get("title") or f"Reasoning step {index + 1}"),
+                "stage": stage,
+                "decision": decision,
+                "signals": signals,
+                "candidates": event_candidates,
+            }
+        )
+
+    return events
 
 
 def _build_stepwise_events(
@@ -1516,6 +1645,16 @@ def _to_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _extract_first_numeric(value: Any) -> Optional[float]:
+    if not isinstance(value, dict):
+        return None
+    for item in value.values():
+        numeric = _to_float(item)
+        if numeric is not None and math.isfinite(numeric):
+            return numeric
+    return None
 
 
 def _coerce_bool(value: Any, default: Optional[bool]) -> Optional[bool]:

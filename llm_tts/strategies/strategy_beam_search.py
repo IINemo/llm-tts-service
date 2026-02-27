@@ -195,6 +195,9 @@ class StrategyBeamSearch(StrategyBase):
         completed_beams_by_sample: Dict[int, List[Dict[str, Any]]] = {
             i: [] for i in range(M)
         }
+        step_candidate_history_by_sample: Dict[int, List[Dict[str, Any]]] = {
+            i: [] for i in range(M)
+        }
 
         # Context limit for trajectories
         # Calculated as min of:
@@ -449,6 +452,9 @@ class StrategyBeamSearch(StrategyBase):
                         token_stats=self.step_generator.get_sample_stats_for(sample_id),
                         sample_id=sample_id,
                     )
+                    completed_results[sample_id]["step_candidates"] = (
+                        step_candidate_history_by_sample.get(sample_id, [])
+                    )
                     samples_to_remove.append(sample_id)
                     continue
 
@@ -524,6 +530,46 @@ class StrategyBeamSearch(StrategyBase):
                 active = active[: self.beam_size]
                 sample_beams[sample_id] = active
 
+                kept_ids = {beam.get("unique_id") for beam in active}
+                best_id = beams[0].get("unique_id") if beams else None
+                history_step_index = (
+                    len(step_candidate_history_by_sample[sample_id]) + 1
+                )
+                step_candidates = []
+                for idx, beam in enumerate(beams):
+                    last_step = beam["steps"][-1] if beam.get("steps") else None
+                    step_score = beam["scores"][-1] if beam.get("scores") else 0.0
+                    beam_uid = beam.get("unique_id", idx)
+                    if beam_uid == best_id:
+                        status = "selected"
+                    elif beam_uid in kept_ids:
+                        status = "kept"
+                    else:
+                        status = "pruned"
+                    step_candidates.append(
+                        {
+                            "id": f"s{sample_id}_beam{history_step_index}_{idx + 1}",
+                            "label": f"Beam {idx + 1}",
+                            "text": (
+                                (last_step.raw_text or last_step.text)
+                                if last_step is not None
+                                else ""
+                            ),
+                            "score": float(step_score),
+                            "status": status,
+                            "selected": status == "selected",
+                            "beam_unique_id": beam_uid,
+                        }
+                    )
+                step_candidate_history_by_sample[sample_id].append(
+                    {
+                        "step": history_step_index,
+                        "stage": "beam_select",
+                        "selected_index": 0 if step_candidates else None,
+                        "candidates": step_candidates,
+                    }
+                )
+
                 # Log beam search state after selection (before next generation)
                 if active:
                     active_beams_parts = []
@@ -576,6 +622,9 @@ class StrategyBeamSearch(StrategyBase):
                     token_stats=self.step_generator.get_sample_stats_for(sample_id),
                     sample_id=sample_id,
                 )
+                completed_results[sample_id]["step_candidates"] = (
+                    step_candidate_history_by_sample.get(sample_id, [])
+                )
                 # Log chosen trajectory details - show each step separately
                 scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
                 beam_uid = best_beam.get("unique_id", "N/A")
@@ -624,6 +673,9 @@ class StrategyBeamSearch(StrategyBase):
                 best_beam["scores"],
                 token_stats=self.step_generator.get_sample_stats_for(sample_id),
                 sample_id=sample_id,
+            )
+            completed_results[sample_id]["step_candidates"] = (
+                step_candidate_history_by_sample.get(sample_id, [])
             )
             # Log chosen trajectory details - show each step separately
             scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
