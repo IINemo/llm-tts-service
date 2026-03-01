@@ -145,18 +145,24 @@ function formatMetric(value) {
   }
 
   if (Math.abs(numericValue) < 1) {
-    return numericValue.toFixed(2);
+    return numericValue.toFixed(3);
   }
 
   return Number.isInteger(numericValue)
     ? String(numericValue)
-    : numericValue.toFixed(2);
+    : numericValue.toFixed(3);
 }
 
 function getSignalDisplayName(name) {
-  return String(name || "").toLowerCase() === "confidence"
-    ? "score"
-    : String(name || "");
+  const key = String(name || "").toLowerCase();
+  const displayNames = {
+    confidence: "score",
+    consensus: "consensus score",
+    prm: "PRM score",
+    entropy: "entropy score",
+    perplexity: "perplexity score",
+  };
+  return displayNames[key] || String(name || "");
 }
 
 function getCurrentBudget() {
@@ -949,7 +955,8 @@ function refreshScorerOptionsForSelectedStrategy() {
   }
 
   if (strategy.requires_scorer === false) {
-    resetSelectionSelect(elements.scorerSelect, "Not used for baseline");
+    const builtinLabel = strategy.builtin_scorer || `Not used for ${strategy.name || strategy.id}`;
+    resetSelectionSelect(elements.scorerSelect, builtinLabel);
     return;
   }
 
@@ -1459,7 +1466,7 @@ function renderStrategyCards() {
       ${scorerMeta}
       <p class="timeline-decision">${escapeHtml(strategy.summary || "")}</p>
       <div class="strategy-meta">
-        <div><span class="timeline-step">score</span><br /><span class="meta-value">${formatMetric(finalResult.confidence ?? 0)}</span></div>
+        <div><span class="timeline-step">${escapeHtml(getSignalDisplayName(finalResult.score_label || "confidence"))}</span><br /><span class="meta-value">${formatMetric(finalResult.confidence ?? 0)}</span></div>
         <div><span class="timeline-step">tokens</span><br /><span class="meta-value">${formatMetric(run.tokens_used ?? 0)}</span></div>
       </div>
     `;
@@ -1573,9 +1580,13 @@ function renderTimeline() {
 }
 
 function renderSignals(eventItem) {
-  const signals = (eventItem?.signals ?? []).filter(
-    (signal) => String(signal?.name || "").toLowerCase() === "confidence",
+  const allSignals = (eventItem?.signals ?? []).filter(
+    (signal) => signal?.name && signal?.value != null,
   );
+  // Prefer the scorer-specific signal over the derived confidence
+  const signals = allSignals.length > 1
+    ? allSignals.filter((s) => String(s.name || "").toLowerCase() !== "confidence")
+    : allSignals;
 
   if (!signals.length) {
     elements.signals.innerHTML =
@@ -1586,11 +1597,12 @@ function renderSignals(eventItem) {
   elements.signals.innerHTML = signals
     .map((signal) => {
       const percent = metricToPercent(signal);
+      const normalizedScore = percent / 100;
       return `
         <div class="signal-row">
           <header>
-            <span>${escapeHtml(getSignalDisplayName(signal.name))}</span>
-            <span>${formatMetric(signal.value)}</span>
+            <span>score</span>
+            <span>${formatMetric(normalizedScore)}</span>
           </header>
           <div class="signal-meter"><span style="width:${percent}%"></span></div>
         </div>
@@ -1791,6 +1803,16 @@ function buildTreeFromEvents(events) {
       : [];
     if (!rawCandidates.length) {
       return;
+    }
+
+    // Skip single-candidate events that are expanded sub-steps of a
+    // winning trajectory and add no branching info.
+    // Keep them if they have beam lineage (independent branch continuation).
+    if (rawCandidates.length === 1) {
+      const hasBeamLineage = rawCandidates[0]?.beam_uid != null;
+      if (!hasBeamLineage) {
+        return;
+      }
     }
 
     const levelNodes = [];
@@ -2186,7 +2208,9 @@ function renderStepInspector() {
     treeContext.text ||
     highlightedCandidate?.text ||
     "No step content available.";
-  const nodeScores = Object.entries(treeContext.scores || {})
+  const nodeScores = Object.entries(
+    highlightedCandidate?.signals || treeContext.scores || {},
+  )
     .map(
       ([key, value]) =>
         `<span>${escapeHtml(getSignalDisplayName(key))}: <strong>${formatMetric(value)}</strong></span>`,
@@ -2349,7 +2373,17 @@ function bindHandlers() {
 
   elements.advancedConfigYamlInput.addEventListener("input", () => {
     state.advancedConfigDirty = true;
-
+    // Sync prompt field back from YAML so the run handler doesn't overwrite it
+    const yamlText = elements.advancedConfigYamlInput.value || "";
+    const promptMatch = yamlText.match(/^prompt\s*:\s*(.*)$/m);
+    if (promptMatch && elements.advancedPromptInput) {
+      let val = promptMatch[1].trim();
+      // Strip surrounding quotes if present
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      elements.advancedPromptInput.value = val;
+    }
   });
 
 
