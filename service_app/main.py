@@ -3,14 +3,24 @@ LLM Test-Time Scaling Service - OpenAI-compatible API
 """
 
 import logging
+import sys
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from service_app.api.routes import chat, models
+from service_app.api.routes import chat, debugger, models
 from service_app.core.config import settings
 from service_app.core.logging_config import setup_logging
+
+# Allow running this file directly from inside the `service_app` directory:
+# This is useful for development and testing
+current_dir = Path(__file__).resolve().parent
+parent_dir = current_dir.parent
+if str(parent_dir) not in sys.path:
+    sys.path.insert(0, str(parent_dir))
 
 # Configure logging — each run gets logs/<date>/<time>/service.log
 _log_dir = setup_logging()
@@ -80,17 +90,30 @@ app.add_middleware(
 # Include routers
 app.include_router(chat.router, tags=["Chat Completions"])
 app.include_router(models.router, tags=["Models"])
+app.include_router(debugger.router, tags=["Visual Debugger"])
+
+# Serve static assets for the visual debugger demo.
+static_dir = Path(__file__).resolve().parent / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+home_html_path = Path(__file__).resolve().parent / "static" / "home" / "index.html"
 
 
-@app.get("/", tags=["Health"])
+@app.get("/", include_in_schema=False)
 async def root():
     """Root endpoint."""
-    return {
-        "message": "LLM Test-Time Scaling Service",
-        "version": settings.api_version,
-        "docs": "/docs",
-        "openai_compatible": True,
-    }
+    if home_html_path.exists():
+        return FileResponse(home_html_path)
+
+    return JSONResponse(
+        content={
+            "message": "LLM Test-Time Scaling Service",
+            "version": settings.api_version,
+            "docs": "/docs",
+            "openai_compatible": True,
+        }
+    )
 
 
 @app.get("/health", tags=["Health"])

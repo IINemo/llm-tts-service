@@ -158,6 +158,7 @@ Thumbs.db
 # Data files
 *.csv
 *.json
+!service_app/static/debugger/cached_examples.json
 *.jsonl
 *.parquet
 *.h5

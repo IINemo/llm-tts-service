@@ -873,6 +873,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                 "validity_scores": best_result.get("step_scores", []),
                 "aggregated_score": best_result.get("aggregated_score", 0.0),
                 "all_trajectories": [t["full_text"] for t in trajectories],
+                "all_trajectory_steps": [t["steps"] for t in trajectories],
                 "all_scores": aggregated_scores,
                 "all_step_scores": [t["step_scores"] for t in trajectories],
                 "best_idx": best_idx,

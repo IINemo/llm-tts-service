@@ -1,0 +1,229 @@
+:root {
+  --paper: #fff9ef;
+  --ink: #10243a;
+  --muted: #5f6d7c;
+  --line: #d2dae3;
+  --card: #ffffff;
+  --accent: #f27405;
+  --accent-soft: #ffd3ac;
+  --teal: #0f8b8d;
+  --shadow: 0 18px 35px rgba(16, 36, 58, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(1100px 650px at -15% -20%, #feefd7 0%, transparent 55%),
+    radial-gradient(700px 500px at 115% 10%, #e0f8f4 0%, transparent 52%),
+    var(--paper);
+  color: var(--ink);
+  font-family: "Space Grotesk", sans-serif;
+}
+
+.bg-shape {
+  position: fixed;
+  z-index: 0;
+  border-radius: 999px;
+  opacity: 0.26;
+  pointer-events: none;
+  filter: blur(1.5px);
+  animation: drift 16s ease-in-out infinite;
+}
+
+.shape-a {
+  width: 310px;
+  height: 310px;
+  background: linear-gradient(170deg, var(--accent), var(--accent-soft));
+  top: -80px;
+  right: -90px;
+}
+
+.shape-b {
+  width: 230px;
+  height: 230px;
+  background: linear-gradient(170deg, var(--teal), #99e8df);
+  bottom: -65px;
+  left: -75px;
+  animation-delay: -7s;
+}
+
+.page-shell {
+  position: relative;
+  z-index: 1;
+  width: min(1080px, 92vw);
+  margin: 2.2rem auto;
+  display: grid;
+  gap: 1.1rem;
+}
+
+.hero {
+  background: color-mix(in srgb, var(--card), transparent 4%);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+  padding: 2rem;
+  position: relative;
+  overflow: hidden;
+  animation: slideUp 0.6s ease-out;
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  width: 300px;
+  height: 300px;
+  right: -80px;
+  top: -120px;
+  background: radial-gradient(circle, rgba(242, 116, 5, 0.17), transparent 70%);
+}
+
+.eyebrow {
+  margin: 0;
+  font-family: "IBM Plex Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--teal);
+  font-size: 0.74rem;
+}
+
+h1 {
+  margin: 0.35rem 0 0.55rem;
+  font-size: clamp(1.9rem, 4.5vw, 3rem);
+  line-height: 1.08;
+}
+
+.hero-copy {
+  margin: 0;
+  max-width: 740px;
+  color: var(--muted);
+  font-size: clamp(1rem, 2vw, 1.1rem);
+}
+
+.hero-actions {
+  margin-top: 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.btn {
+  border-radius: 12px;
+  border: 1px solid transparent;
+  padding: 0.72rem 1rem;
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.02);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 10px 22px rgba(242, 116, 5, 0.3);
+}
+
+.btn-secondary {
+  background: #ffffff;
+  color: var(--ink);
+  border-color: #b8c7d8;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  text-decoration: none;
+  color: inherit;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--card), transparent 6%);
+  box-shadow: var(--shadow);
+  padding: 1.2rem 1.25rem 1.15rem;
+  display: grid;
+  gap: 0.45rem;
+  animation: slideUp 0.7s ease-out;
+}
+
+.card:nth-child(2) {
+  animation-delay: 0.12s;
+}
+
+.card:hover {
+  border-color: #98acc2;
+  transform: translateY(-2px);
+}
+
+.card-tag {
+  margin: 0;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--teal);
+}
+
+h2 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.card span {
+  margin-top: 0.35rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(6px, -10px);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 820px) {
+  .page-shell {
+    margin: 1.35rem auto 1.6rem;
+  }
+
+  .hero {
+    padding: 1.35rem 1.1rem 1.25rem;
+  }
+
+  .cards {
+    grid-template-columns: 1fr;
+  }
+}

@@ -126,6 +126,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         trajectories: List[List[StepCandidate]] = [[] for _ in range(M)]
         selected_steps: List[List[StepCandidate]] = [[] for _ in range(M)]
         validity_scores: List[List[float]] = [[] for _ in range(M)]
+        step_candidate_history: List[List[Dict[str, Any]]] = [[] for _ in range(M)]
         completed: List[bool] = [False] * M
         needs_final_answer: List[bool] = [False] * M
         answer_steps: List[Optional[str]] = [None] * M
@@ -352,6 +353,27 @@ class StrategyOnlineBestOfN(StrategyBase):
                     f"Sample {sample_indices[sample_id]}: Selected candidate {best_idx} "
                     f"(score={_best_s}), all scores=[{all_scores_str}]"
                 )
+                history_step_index = len(step_candidate_history[sample_id]) + 1
+                step_candidate_history[sample_id].append(
+                    {
+                        "step": history_step_index,
+                        "stage": "candidate_generation",
+                        "selected_index": best_idx,
+                        "candidates": [
+                            {
+                                "id": f"s{sample_id}_step{history_step_index}_c{cand_idx + 1}",
+                                "label": f"Candidate {cand_idx + 1}",
+                                "text": cand.raw_text or cand.text,
+                                "score": float(scores[cand_idx]),
+                                "status": (
+                                    "selected" if cand_idx == best_idx else "pruned"
+                                ),
+                                "selected": cand_idx == best_idx,
+                            }
+                            for cand_idx, cand in enumerate(candidates)
+                        ],
+                    }
+                )
 
                 # Track token count
                 new_tokens = len(selected.token_ids) if selected.token_ids else 0
@@ -490,6 +512,27 @@ class StrategyOnlineBestOfN(StrategyBase):
                     best_idx = 0
                 else:
                     best_idx = max(valid_a_indices, key=lambda i: a_scores[i])
+                history_step_index = len(step_candidate_history[sample_id]) + 1
+                step_candidate_history[sample_id].append(
+                    {
+                        "step": history_step_index,
+                        "stage": "answer_selection",
+                        "selected_index": best_idx,
+                        "candidates": [
+                            {
+                                "id": f"s{sample_id}_answer{history_step_index}_c{cand_idx + 1}",
+                                "label": f"Answer {cand_idx + 1}",
+                                "text": cand.raw_text or cand.text,
+                                "score": float(a_scores[cand_idx]) if a_scores[cand_idx] is not None else 0.0,
+                                "status": (
+                                    "selected" if cand_idx == best_idx else "pruned"
+                                ),
+                                "selected": cand_idx == best_idx,
+                            }
+                            for cand_idx, cand in enumerate(a_cands)
+                        ],
+                    }
+                )
 
                 score_str = (
                     f"{a_scores[best_idx]:.3f}"
@@ -597,6 +640,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                 "answer_step": answer_steps[idx],
                 "reasoning_steps": reasoning_steps,
                 "validity_scores": validity_scores[idx],
+                "step_candidates": step_candidate_history[idx],
                 "completed": bool(selected_steps[idx])
                 and selected_steps[idx][-1].is_trajectory_complete,
                 "token_stats": token_stats,
@@ -680,6 +724,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                         "steps": [],
                         "reasoning_steps": 0,
                         "validity_scores": [],
+                        "step_candidates": [],
                         "completed": False,
                         "token_stats": self.step_generator.get_sample_stats_for(sid),
                         **get_completion_info([]),
@@ -760,6 +805,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         trajectory: List[StepCandidate] = []
         selected_steps: List[StepCandidate] = []
         validity_scores: List[float] = []
+        step_candidate_history: List[Dict[str, Any]] = []
         total_toks = 0
         needs_thinking_answer = False
 
@@ -850,6 +896,25 @@ class StrategyOnlineBestOfN(StrategyBase):
             log.info(
                 f"Sample {sample_idx}: Selected candidate {best_idx} "
                 f"(score={scores[best_idx]:.3f}), all scores=[{all_scores_str}]"
+            )
+            history_step_index = len(step_candidate_history) + 1
+            step_candidate_history.append(
+                {
+                    "step": history_step_index,
+                    "stage": "candidate_generation",
+                    "selected_index": best_idx,
+                    "candidates": [
+                        {
+                            "id": f"s{sample_id}_step{history_step_index}_c{cand_idx + 1}",
+                            "label": f"Candidate {cand_idx + 1}",
+                            "text": cand.raw_text or cand.text,
+                            "score": float(scores[cand_idx]),
+                            "status": "selected" if cand_idx == best_idx else "pruned",
+                            "selected": cand_idx == best_idx,
+                        }
+                        for cand_idx, cand in enumerate(candidates)
+                    ],
+                }
             )
 
             new_tokens = len(selected.token_ids) if selected.token_ids else 0
@@ -962,6 +1027,27 @@ class StrategyOnlineBestOfN(StrategyBase):
                     )
                 else:
                     best_a = max(range(len(a_scores)), key=lambda i: a_scores[i])
+                    history_step_index = len(step_candidate_history) + 1
+                    step_candidate_history.append(
+                        {
+                            "step": history_step_index,
+                            "stage": "answer_selection",
+                            "selected_index": best_a,
+                            "candidates": [
+                                {
+                                    "id": f"s{sample_id}_answer{history_step_index}_c{cand_idx + 1}",
+                                    "label": f"Answer {cand_idx + 1}",
+                                    "text": cand.raw_text or cand.text,
+                                    "score": float(a_scores[cand_idx]),
+                                    "status": (
+                                        "selected" if cand_idx == best_a else "pruned"
+                                    ),
+                                    "selected": cand_idx == best_a,
+                                }
+                                for cand_idx, cand in enumerate(answer_cands)
+                            ],
+                        }
+                    )
 
                     log.info(
                         f"Sample {sample_idx}: Final answer selected "
@@ -989,6 +1075,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             "answer_step": answer_text,
             "reasoning_steps": reasoning_steps,
             "validity_scores": validity_scores,
+            "step_candidates": step_candidate_history,
             "completed": bool(selected_steps)
             and selected_steps[-1].is_trajectory_complete,
             "token_stats": token_stats,

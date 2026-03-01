@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     api_version: str = "1.0.0"
     api_prefix: str = "/api/v1"
     host: str = "0.0.0.0"
-    port: int = 8001
+    port: int = 8080
 
     # CORS Settings
     allow_origins: list[str] = ["*"]

@@ -110,6 +110,36 @@ curl -X POST http://localhost:8001/v1/chat/completions \
 
 ## API Endpoints
 
+### GET /debugger
+
+Interactive visual debugger demo for reasoning trajectories.
+
+- Compare multiple TTS-style strategies under the same prompt and budget
+- Run the full strategy x scorer matrix for a user-provided single sample
+- Inspect per-step decisions (escalate/stop/prune/select)
+- View confidence and uncertainty signals behind each decision
+- Drill into sampled candidates and tree expansions
+- Includes a local prototype example (`prototype_local_demo`) when backend APIs are unavailable
+
+Custom input modes in the UI:
+- `Single example`: enter one question + gold answer
+- Optional shared prompt/instruction can be applied to the custom sample
+- Model configuration inputs are available: `provider` (`openai` or `openrouter`), `model-id`, and `API key`
+- Current limitation: these model credentials are captured in the debugger UI for future backend integration, but backend execution still uses keys from `.env`
+
+Prototype-only usage (no running backend):
+
+```bash
+# Open directly in a browser
+service_app/static/debugger/index.html
+```
+
+Cached prototype scenarios are stored in:
+
+```bash
+service_app/static/debugger/cached_examples.json
+```
+
 ### POST /v1/chat/completions
 
 Create a chat completion with TTS strategy.
@@ -186,6 +216,12 @@ Health check endpoint.
   "version": "1.0.0"
 }
 ```
+
+### Visual Debugger Demo Data Endpoints
+
+- `GET /v1/debugger/demo/scenarios` - list available demo scenarios
+- `GET /v1/debugger/demo/scenarios/{scenario_id}?budget=8` - fetch one scenario payload
+- `POST /v1/debugger/demo/run-single` - run one custom sample across all strategies and scorers
 
 ## TTS Strategy Configuration
 
