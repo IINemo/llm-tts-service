@@ -394,11 +394,12 @@ def analyze(
     return results
 
 
-def analyze_all_windows(
+def analyze_windows(
     candidates_data: List[Dict],
     data_name: str,
     answer_format: str = "numeric",
     correctness_labels: Optional[List[List[bool]]] = None,
+    windows: Optional[List[Optional[int]]] = None,
 ) -> tuple:
     """Run analysis across all scoring windows for one candidates.json.
 
@@ -410,6 +411,8 @@ def analyze_all_windows(
         data_name: Dataset name for exact-match evaluation
         answer_format: Answer format for exact-match evaluation
         correctness_labels: Pre-computed labels; computed if None
+        windows: List of window sizes to evaluate. None entries mean "all steps".
+            Defaults to [None, 1, 3, 5, 10, 15, 20, 30, 50] (capped at max_steps).
 
     Returns:
         (all_results, correctness_labels, oracle_acc, max_steps) where
@@ -431,7 +434,9 @@ def analyze_all_windows(
                 max_steps = max(max_steps, len(scorer_data.get("per_step", [])))
             max_steps = max(max_steps, len(candidate.get("steps", [])))
 
-    windows = [None] + list(range(1, max_steps + 1))
+    if windows is None:
+        _default = [1, 3, 5, 10, 15, 20, 30, 50]
+        windows = [None] + [w for w in _default if w <= max_steps]
     all_results = {}
     for window in windows:
         window_label = f"window={window}" if window is not None else "window=all"
