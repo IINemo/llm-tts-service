@@ -609,7 +609,9 @@ class StrategyBeamSearch(StrategyBase):
                     sample_id=sample_id,
                 )
                 # Log chosen trajectory details - show each step separately
-                scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
+                scores_str = ", ".join(
+                    f"{s:.3f}" if s is not None else "None" for s in best_beam["scores"]
+                )
                 beam_uid = best_beam.get("unique_id", "N/A")
                 ancestors = best_beam.get("ancestors", [])
                 lineage_str = (
@@ -627,7 +629,8 @@ class StrategyBeamSearch(StrategyBase):
                 for step_idx, (step, score) in enumerate(
                     zip(best_beam["steps"], best_beam["scores"])
                 ):
-                    log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
+                    _s = f"{score:.3f}" if score is not None else "None"
+                    log.info(f"  Step {step_idx + 1} (score={_s}):\n{step.text}")
 
             # Remove completed samples from active set
             for sample_id in samples_to_remove:
@@ -658,7 +661,9 @@ class StrategyBeamSearch(StrategyBase):
                 sample_id=sample_id,
             )
             # Log chosen trajectory details - show each step separately
-            scores_str = ", ".join(f"{s:.3f}" for s in best_beam["scores"])
+            scores_str = ", ".join(
+                f"{s:.3f}" if s is not None else "None" for s in best_beam["scores"]
+            )
             beam_uid = best_beam.get("unique_id", "N/A")
             ancestors = best_beam.get("ancestors", [])
             lineage_str = (
@@ -676,7 +681,8 @@ class StrategyBeamSearch(StrategyBase):
             for step_idx, (step, score) in enumerate(
                 zip(best_beam["steps"], best_beam["scores"])
             ):
-                log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
+                _s = f"{score:.3f}" if score is not None else "None"
+                log.info(f"  Step {step_idx + 1} (score={_s}):\n{step.text}")
 
         # Return results in original order
         results = [completed_results[i] for i in range(M)]

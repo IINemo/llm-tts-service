@@ -340,11 +340,17 @@ class StrategyOnlineBestOfN(StrategyBase):
                     )
 
                 all_scores_str = ", ".join(
-                    f"c{i}={s:.3f}" for i, s in enumerate(scores)
+                    f"c{i}={s:.3f}" if s is not None else f"c{i}=None"
+                    for i, s in enumerate(scores)
+                )
+                _best_s = (
+                    f"{scores[best_idx]:.3f}"
+                    if scores[best_idx] is not None
+                    else "None"
                 )
                 log.info(
                     f"Sample {sample_indices[sample_id]}: Selected candidate {best_idx} "
-                    f"(score={scores[best_idx]:.3f}), all scores=[{all_scores_str}]"
+                    f"(score={_best_s}), all scores=[{all_scores_str}]"
                 )
 
                 # Track token count
@@ -564,7 +570,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                     prm_tflops = 0
                 token_stats["tflops"] = gen_tflops + prm_tflops
 
-            scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
+            scores_str = ", ".join(
+                f"{s:.3f}" if s is not None else "None" for s in validity_scores[idx]
+            )
             log.info(
                 f"Sample {sample_indices[idx]}: "
                 f"{len(selected_steps[idx])} steps "
@@ -579,7 +587,8 @@ class StrategyOnlineBestOfN(StrategyBase):
                     if step_idx < len(validity_scores[idx])
                     else 0.0
                 )
-                log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
+                _s = f"{score:.3f}" if score is not None else "None"
+                log.info(f"  Step {step_idx + 1} (score={_s}):\n{step.text}")
 
             result = {
                 "trajectory": final_trajectory,
