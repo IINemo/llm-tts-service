@@ -2500,6 +2500,10 @@ def evaluate_results(
                 wandb_group_url = (
                     f"https://wandb.ai/{entity}/{project_name}/groups/{group}/workspace"
                 )
+                wandb_url = wandb_url.replace(
+                    f"/{project_name}/runs/",
+                    f"/{project_name}/groups/{group}/runs/",
+                )
 
             # Log all output files as artifacts
             save_path_obj = Path(save_path)
@@ -2550,6 +2554,9 @@ def evaluate_results(
     log.info("=" * 60)
 
 
+_experiment_info = {}  # Populated in main(), read by crash handler
+
+
 @hydra.main(
     version_base=None,
     config_path=None,
@@ -2565,6 +2572,20 @@ def main(config):
     ip_addr = socket.gethostbyname(hostname)
     machine_name = os.environ.get("MACHINE_NAME", hostname)
     log.info(f"Host: {machine_name} ({ip_addr})")
+
+    from llm_tts.utils.telegram import TelegramNotifier
+
+    notifier = TelegramNotifier()
+    _experiment_info.update(
+        {
+            "run_name": config.get("run_name", "unknown"),
+            "strategy": config.strategy.type,
+            "model": getattr(config.model, "model_short_name", "unknown"),
+            "dataset": config.dataset.get("data_name", "unknown"),
+            "scorer": config.scorer.type if getattr(config, "scorer", None) else "none",
+            "machine": machine_name,
+        }
+    )
 
     cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
     log.info(f"Command: CUDA_VISIBLE_DEVICES={cuda_devices} {' '.join(sys.argv)}")
@@ -2627,6 +2648,31 @@ def main(config):
             )
             log.info(f"WandB group URL: {group_url}")
         wandb_save_directory(Path(output_dir) / ".hydra")
+
+    # Send Telegram "started" notification
+    try:
+        _wandb_url, _group_url = None, None
+        if getattr(config, "report_to", None) == "wandb":
+            import wandb
+
+            if wandb.run:
+                _wandb_url = wandb.run.get_url()
+                wandb_group = getattr(config, "wandb_group", None)
+                if wandb_group:
+                    entity = wandb.run.entity
+                    project = getattr(config, "wandb_project", None) or os.environ.get(
+                        "WANDB_PROJECT", "llm-tts-eval"
+                    )
+                    _group_url = f"https://wandb.ai/{entity}/{project}/groups/{wandb_group}/workspace"
+                    _wandb_url = _wandb_url.replace(
+                        f"/{project}/runs/",
+                        f"/{project}/groups/{wandb_group}/runs/",
+                    )
+        notifier.notify_started(
+            wandb_url=_wandb_url, wandb_group_url=_group_url, **_experiment_info
+        )
+    except Exception:
+        pass
 
     # Validate API keys early (before spending hours on model loading / generation)
     _validate_api_keys(config)
@@ -2847,6 +2893,38 @@ def main(config):
         log.exception(f"Evaluation failed: {e}")
         raise
 
+    # Send Telegram "finished" notification
+    try:
+        _metrics = {}
+        _metrics_path = Path(output_dir) / "metrics.json"
+        if _metrics_path.exists():
+            _metrics = json.loads(_metrics_path.read_text())
+        _wandb_url, _group_url = None, None
+        if getattr(config, "report_to", None) == "wandb":
+            import wandb
+
+            if wandb.run:
+                _wandb_url = wandb.run.get_url()
+                wandb_group = getattr(config, "wandb_group", None)
+                if wandb_group:
+                    entity = wandb.run.entity
+                    project = getattr(config, "wandb_project", None) or os.environ.get(
+                        "WANDB_PROJECT", "llm-tts-eval"
+                    )
+                    _group_url = f"https://wandb.ai/{entity}/{project}/groups/{wandb_group}/workspace"
+                    _wandb_url = _wandb_url.replace(
+                        f"/{project}/runs/",
+                        f"/{project}/groups/{wandb_group}/runs/",
+                    )
+        notifier.notify_finished(
+            metrics=_metrics,
+            wandb_url=_wandb_url,
+            wandb_group_url=_group_url,
+            **_experiment_info,
+        )
+    except Exception:
+        pass
+
     # Save log files and finish wandb session
     if getattr(config, "report_to", None) == "wandb":
         try:
@@ -2907,6 +2985,30 @@ if __name__ == "__main__":
             error_log.error(f"Job failed due to MemoryError (GPU/CPU OOM): {e}")
         else:
             error_log.exception(f"Job failed with exception: {e}")
+
+        # Send Telegram "crashed" notification
+        try:
+            from llm_tts.utils.telegram import TelegramNotifier
+
+            _notifier = TelegramNotifier()
+            _wandb_url = None
+            try:
+                import wandb
+
+                if wandb.run:
+                    _wandb_url = wandb.run.get_url()
+            except Exception:
+                pass
+            _notifier.notify_crashed(
+                run_name=_experiment_info.get("run_name", "unknown"),
+                strategy=_experiment_info.get("strategy", "unknown"),
+                model=_experiment_info.get("model", "unknown"),
+                dataset=_experiment_info.get("dataset", "unknown"),
+                error=str(e),
+                wandb_url=_wandb_url,
+            )
+        except Exception:
+            pass  # Never crash the crash handler
 
         # Save logs to wandb even on error
         if output_dir:
