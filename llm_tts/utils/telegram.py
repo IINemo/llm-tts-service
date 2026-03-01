@@ -49,8 +49,8 @@ class TelegramNotifier:
         if wandb_group_url:
             parts.append(f'<a href="{wandb_group_url}">W&amp;B Group</a>')
         if parts:
-            return "\n🔗 " + "  |  ".join(parts)
-        return ""
+            return "🔗 " + "  |  ".join(parts)
+        return "🔗 W&amp;B: disabled"
 
     def notify_started(
         self,
@@ -72,9 +72,7 @@ class TelegramNotifier:
             f"Model: {model}  |  Dataset: {dataset}",
             f"Machine: {machine}",
         ]
-        links = self._wandb_links(wandb_url, wandb_group_url)
-        if links:
-            lines.append(links)
+        lines.append(self._wandb_links(wandb_url, wandb_group_url))
         self._send("\n".join(lines))
 
     def notify_finished(
@@ -126,9 +124,7 @@ class TelegramNotifier:
             if samples is not None:
                 lines.append(f"  Samples: {int(samples)}")
 
-        links = self._wandb_links(wandb_url, wandb_group_url)
-        if links:
-            lines.append(links)
+        lines.append(self._wandb_links(wandb_url, wandb_group_url))
         self._send("\n".join(lines))
 
     def notify_crashed(
@@ -154,7 +150,5 @@ class TelegramNotifier:
             "Error:",
             f"<pre>{error}</pre>",
         ]
-        links = self._wandb_links(wandb_url, None)
-        if links:
-            lines.append(links)
+        lines.append(self._wandb_links(wandb_url, None))
         self._send("\n".join(lines))
