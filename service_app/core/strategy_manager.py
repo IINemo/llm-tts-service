@@ -253,12 +253,30 @@ class StrategyManager:
                 self._init_vllm_backend()
             return self._confidence_scorer
 
-    def _get_or_create_client(self, provider: str = "openrouter") -> OpenAI:
-        """Get cached OpenAI client or create new one."""
-        if provider in self._client_cache:
-            return self._client_cache[provider]
+    def _get_or_create_client(
+        self, provider: str = "openrouter", model_base_url: str = None
+    ) -> OpenAI:
+        """Get cached OpenAI client or create new one.
 
-        if provider == "openrouter":
+        Args:
+            provider: Named provider (openrouter, openai) or ignored when
+                      model_base_url is set.
+            model_base_url: Custom base URL for any OpenAI-compatible endpoint
+                           (e.g. remote vLLM server, Gemini API).
+        """
+        cache_key = model_base_url or provider
+        if cache_key in self._client_cache:
+            return self._client_cache[cache_key]
+
+        if model_base_url:
+            # Custom endpoint — use provider's API key or fall back to openrouter key
+            api_key = (
+                settings.openai_api_key
+                if provider == "openai"
+                else settings.openrouter_api_key
+            )
+            base_url = model_base_url
+        elif provider == "openrouter":
             api_key = settings.openrouter_api_key
             base_url = "https://openrouter.ai/api/v1"
         elif provider == "openai":
@@ -271,9 +289,9 @@ class StrategyManager:
             raise ValueError(f"API key not set for provider: {provider}")
 
         client = OpenAI(api_key=api_key, base_url=base_url)
-        self._client_cache[provider] = client
+        self._client_cache[cache_key] = client
 
-        log.info(f"Created OpenAI client for provider: {provider}")
+        log.info(f"Created OpenAI client: provider={provider}, base_url={base_url}")
         return client
 
     def create_strategy(
@@ -359,7 +377,8 @@ class StrategyManager:
     ) -> SelfConsistencyStrategy:
         """Create self-consistency strategy instance."""
         provider = config.get("provider", "openrouter")
-        client = self._get_or_create_client(provider)
+        model_base_url = config.get("model_base_url")
+        client = self._get_or_create_client(provider, model_base_url=model_base_url)
 
         strategy = SelfConsistencyStrategy(
             client=client,
