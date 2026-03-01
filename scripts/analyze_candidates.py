@@ -574,7 +574,9 @@ def main():
     eval_method = (
         "EvalPlus execution" if args.data_name in CODE_DATASETS else "exact match"
     )
-    log.info(f"Pre-computing correctness via {eval_method} and analyzing all windows...")
+    log.info(
+        f"Pre-computing correctness via {eval_method} and analyzing all windows..."
+    )
     all_results, em_labels, oracle_acc, max_steps = analyze_all_windows(
         candidates_data,
         data_name=args.data_name,
