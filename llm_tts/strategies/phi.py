@@ -182,8 +182,16 @@ class PhiDecoding(StrategyBase):
 
     def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
         """Select the best candidate based on scores"""
-        # Higher validity is better
-        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        # Higher validity is better; filter out None scores
+        valid_indices = [i for i, s in enumerate(scores) if s is not None]
+        if not valid_indices:
+            log.warning(
+                f"All scores are None for {len(scores)} candidates, "
+                f"selecting index 0"
+            )
+            best_idx = 0
+        else:
+            best_idx = max(valid_indices, key=lambda i: scores[i])
         return best_idx, candidates[best_idx]
 
     def _generate_final_answer(
@@ -208,7 +216,8 @@ class PhiDecoding(StrategyBase):
 
         log.info(f"Generated {len(answer_candidates)} answer candidates")
         log.info(f"Selected answer {best_idx}")
-        log.info(f"Validity: {answer_validity_scores[best_idx]:.3f}")
+        _v = answer_validity_scores[best_idx]
+        log.info(f"Validity: {_v:.3f}" if _v is not None else "Validity: None")
         log.info(f"Text: {answer_candidates[best_idx].text}")
 
         return answer_candidates[best_idx], answer_validity_scores[best_idx]

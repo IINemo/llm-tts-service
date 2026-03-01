@@ -499,14 +499,20 @@ class StrategyBeamSearch(StrategyBase):
 
                     # Find which step is the aggregated value
                     agg_idx = 0
-                    if self.aggregation == "min":
-                        agg_idx = scores.index(min(scores)) if scores else 0
-                    elif self.aggregation == "max":
-                        agg_idx = scores.index(max(scores)) if scores else 0
+                    valid_scores = [s for s in scores if s is not None]
+                    if valid_scores:
+                        if self.aggregation == "min":
+                            agg_idx = scores.index(min(valid_scores))
+                        elif self.aggregation == "max":
+                            agg_idx = scores.index(max(valid_scores))
 
                     # Mark the aggregated step in the list
                     score_list_with_mark = [
-                        f"{s:.3f}↓" if idx == agg_idx else f"{s:.3f}"
+                        (
+                            (f"{s:.3f}↓" if idx == agg_idx else f"{s:.3f}")
+                            if s is not None
+                            else "None"
+                        )
                         for idx, s in enumerate(scores)
                     ]
                     marked_steps_str = ", ".join(score_list_with_mark)
@@ -790,20 +796,32 @@ class StrategyBeamSearch(StrategyBase):
             )
             # Extract the last step score (the new candidate's score)
             scores = []
-            for traj_scores in all_scores:
-                if traj_scores:
-                    scores.append(traj_scores[-1])  # Last step is the new candidate
-                else:
-                    scores.append(0.0)
+            for i, traj_scores in enumerate(all_scores):
+                score = traj_scores[-1] if traj_scores else None
+                if score is None:
+                    prompt_idx, cand_idx = candidate_map[i]
+                    n_steps = len(traj_scores) if traj_scores else 0
+                    log.warning(
+                        f"PRM returned no valid score for candidate {cand_idx} "
+                        f"(prompt {prompt_idx}): {n_steps} steps, last is None "
+                        f"(likely a very short candidate). "
+                        f"This candidate will be skipped during selection."
+                    )
+                scores.append(score)
         else:
             # Fallback: score one by one (less efficient)
             scores = []
-            for chat, traj in zip(flat_chats, full_trajectories):
+            for i, (chat, traj) in enumerate(zip(flat_chats, full_trajectories)):
                 score_list = self.scorer.score_trajectory(chat, traj)
-                if score_list:
-                    scores.append(score_list[-1])  # Last step score
-                else:
-                    scores.append(0.0)
+                score = score_list[-1] if score_list else None
+                if score is None:
+                    prompt_idx, cand_idx = candidate_map[i]
+                    log.warning(
+                        f"PRM returned no valid score for candidate {cand_idx} "
+                        f"(prompt {prompt_idx}). "
+                        f"This candidate will be skipped during selection."
+                    )
+                scores.append(score)
 
         # Map scores back to candidates
         for (prompt_idx, cand_idx), score in zip(candidate_map, scores):

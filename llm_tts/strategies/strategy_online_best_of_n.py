@@ -209,16 +209,43 @@ class StrategyOnlineBestOfN(StrategyBase):
                         flat_trajectories,
                         sample_ids=flat_sample_ids,
                     )
-                    flat_scores = [
-                        traj_scores[-1] if traj_scores else 0.0
-                        for traj_scores in all_traj_scores
-                    ]
+                    flat_scores = []
+                    for i, traj_scores in enumerate(all_traj_scores):
+                        score = traj_scores[-1] if traj_scores else None
+                        if score is None:
+                            batch_idx, cand_idx = candidate_map[i]
+                            n_steps = len(traj_scores) if traj_scores else 0
+                            n_null = (
+                                sum(1 for s in traj_scores if s is None)
+                                if traj_scores
+                                else 0
+                            )
+                            log.warning(
+                                f"PRM returned no valid score for "
+                                f"candidate {cand_idx} (batch {batch_idx}): "
+                                f"{n_null}/{n_steps} steps are null "
+                                f"(likely a very short candidate). "
+                                f"This candidate will be skipped "
+                                f"during selection."
+                            )
+                        flat_scores.append(score)
                 elif flat_trajectories:
                     # Fallback: score one by one
                     flat_scores = []
-                    for chat, traj in zip(flat_chats, flat_trajectories):
+                    for i, (chat, traj) in enumerate(
+                        zip(flat_chats, flat_trajectories)
+                    ):
                         score_list = self.scorer.score_trajectory(chat, traj)
-                        flat_scores.append(score_list[-1] if score_list else 0.0)
+                        score = score_list[-1] if score_list else None
+                        if score is None:
+                            batch_idx, cand_idx = candidate_map[i]
+                            log.warning(
+                                f"PRM returned no valid score for "
+                                f"candidate {cand_idx} (batch {batch_idx}). "
+                                f"This candidate will be skipped "
+                                f"during selection."
+                            )
+                        flat_scores.append(score)
                 else:
                     flat_scores = []
 
@@ -265,7 +292,15 @@ class StrategyOnlineBestOfN(StrategyBase):
                     needs_final_answer[sample_id] = True
                     continue
 
-                best_idx = max(range(len(scores)), key=lambda i: scores[i])
+                valid_indices = [i for i, s in enumerate(scores) if s is not None]
+                if not valid_indices:
+                    log.warning(
+                        f"Sample {sample_indices[sample_id]}: All scores are None "
+                        f"for {len(candidates)} candidates, selecting index 0"
+                    )
+                    best_idx = 0
+                else:
+                    best_idx = max(valid_indices, key=lambda i: scores[i])
                 selected = candidates[best_idx]
 
                 # Additional completion checks (matching beam search):
@@ -440,11 +475,24 @@ class StrategyOnlineBestOfN(StrategyBase):
                         f"{len(a_cands)} final answer candidates, skipping"
                     )
                     continue
-                best_idx = max(range(len(a_scores)), key=lambda i: a_scores[i])
+                valid_a_indices = [i for i, s in enumerate(a_scores) if s is not None]
+                if not valid_a_indices:
+                    log.warning(
+                        f"Sample {sample_indices[sample_id]}: All final answer "
+                        f"scores are None, selecting index 0"
+                    )
+                    best_idx = 0
+                else:
+                    best_idx = max(valid_a_indices, key=lambda i: a_scores[i])
 
+                score_str = (
+                    f"{a_scores[best_idx]:.3f}"
+                    if a_scores[best_idx] is not None
+                    else "None"
+                )
                 log.info(
                     f"Sample {sample_indices[sample_id]}: Final answer selected "
-                    f"(score={a_scores[best_idx]:.3f})"
+                    f"(score={score_str})"
                 )
 
                 trajectories[sample_id].append(a_cands[best_idx])
