@@ -161,8 +161,9 @@ class AdaptiveScalingBestOfN(StrategyBase):
             batch_trajectories: List[List[StepCandidate]] = None,
             batch_sample_ids: List[int] = None,
             use_prm=False,
-        ) -> List[List[float]]:
-            """Returns list-of-list of scores aligned to active samples."""
+        ) -> List[List[Optional[float]]]:
+            """Returns list-of-list of scores aligned to active samples.
+            PRM-scored candidates may have None when all steps were skipped."""
             if not use_prm:
                 all_scores = []
                 for candidates in batch_results:
@@ -206,16 +207,49 @@ class AdaptiveScalingBestOfN(StrategyBase):
                         flat_trajectories,
                         sample_ids=flat_sample_ids,
                     )
-                    flat_scores = [
-                        traj_scores[-1] if traj_scores else 0.0
-                        for traj_scores in all_traj_scores
-                    ]
+                    flat_scores = []
+                    for i, traj_scores in enumerate(all_traj_scores):
+                        score = traj_scores[-1] if traj_scores else None
+                        if score is None:
+                            batch_idx, cand_idx = candidate_map[i]
+                            n_steps = len(traj_scores) if traj_scores else 0
+                            n_null = (
+                                sum(1 for s in traj_scores if s is None)
+                                if traj_scores
+                                else 0
+                            )
+                            log.warning(
+                                f"PRM returned no valid score for "
+                                f"candidate {cand_idx} (batch {batch_idx}): "
+                                f"{n_null}/{n_steps} steps are null "
+                                f"(likely a very short candidate with no "
+                                f"reasoning). This candidate will be skipped "
+                                f"during selection."
+                            )
+                        flat_scores.append(score)
                 elif flat_trajectories:
                     # Fallback: score one by one
                     flat_scores = []
-                    for chat, traj in zip(flat_chats, flat_trajectories):
+                    for i, (chat, traj) in enumerate(
+                        zip(flat_chats, flat_trajectories)
+                    ):
                         score_list = self.scorer.score_trajectory(chat, traj)
-                        flat_scores.append(score_list[-1] if score_list else 0.0)
+                        score = score_list[-1] if score_list else None
+                        if score is None:
+                            batch_idx, cand_idx = candidate_map[i]
+                            n_steps = len(score_list) if score_list else 0
+                            n_null = (
+                                sum(1 for s in score_list if s is None)
+                                if score_list
+                                else 0
+                            )
+                            log.warning(
+                                f"PRM returned no valid score for "
+                                f"candidate {cand_idx} (batch {batch_idx}): "
+                                f"{n_null}/{n_steps} steps are null. "
+                                f"This candidate will be skipped during selection."
+                            )
+                        flat_scores.append(score)
                 else:
                     flat_scores = []
 
@@ -245,8 +279,17 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 for req, traj in zip(active_reqs, active_trajs)
             ]
 
-        def _select_best(scores: List[float]) -> int:
-            return max(range(len(scores)), key=lambda i: scores[i])
+        def _select_best(scores: List[Optional[float]]) -> int:
+            # Filter out None scores (e.g., PRM skipped steps)
+            valid_indices = [i for i, s in enumerate(scores) if s is not None]
+            if not valid_indices:
+                # Fallback: nothing scored; choose first index and log
+                log.warning(
+                    f"_select_best called with all-None scores: {scores}, "
+                    f"defaulting to index 0"
+                )
+                return 0
+            return max(valid_indices, key=lambda i: scores[i])
 
         def _new_scale_discriminator() -> ScaleDiscriminator:
             return ScaleDiscriminator(
