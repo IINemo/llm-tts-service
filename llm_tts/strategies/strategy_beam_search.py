@@ -578,6 +578,8 @@ class StrategyBeamSearch(StrategyBase):
                         status = "kept"
                     else:
                         status = "pruned"
+                    ancestors = beam.get("ancestors", [])
+                    parent_uid = ancestors[-2] if len(ancestors) >= 2 else None
                     step_candidates.append(
                         {
                             "id": f"s{sample_id}_beam{history_step_index}_{idx + 1}",
@@ -591,6 +593,7 @@ class StrategyBeamSearch(StrategyBase):
                             "status": status,
                             "selected": status == "selected",
                             "beam_unique_id": beam_uid,
+                            "parent_beam_uid": parent_uid,
                         }
                     )
                 step_candidate_history_by_sample[sample_id].append(

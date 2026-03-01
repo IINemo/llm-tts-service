@@ -1740,17 +1740,27 @@ function buildTreeFromEvents(events) {
     rootTextParts.push(firstReason.trim());
   }
 
-  const totalLevels = Math.max(1, eventList.length);
+  // Collect unique step numbers to determine depth mapping
+  const stepNumbers = [
+    ...new Set(
+      eventList
+        .filter((e) => Array.isArray(e?.candidates) && e.candidates.length > 0)
+        .map((e, i) => Math.max(1, Number(e?.step) || i + 1)),
+    ),
+  ].sort((a, b) => a - b);
+  const stepToDepth = new Map(stepNumbers.map((s, i) => [s, i + 1]));
+  const totalLevels = Math.max(1, stepNumbers.length);
   const yForDepth = (depth) =>
-    totalLevels <= 0 ? 0.5 : 0.1 + (0.8 * depth) / Math.max(totalLevels, 1);
+    0.1 + (0.8 * depth) / Math.max(totalLevels, 1);
 
   const nodes = [];
   const edges = [];
   const selectedPath = [];
   const nodeIdSet = new Set();
+  const nodeById = new Map();
   const rootId = "root";
 
-  nodes.push({
+  const rootNode = {
     id: rootId,
     label: "R",
     value: rootValue,
@@ -1761,15 +1771,21 @@ function buildTreeFromEvents(events) {
     event_index: -1,
     text: rootTextParts.join(" "),
     scores: rootScoreMap,
-  });
+  };
+  nodes.push(rootNode);
   nodeIdSet.add(rootId);
-  selectedPath.push(rootId);
+  nodeById.set(rootId, rootNode);
 
-  let prevLevelNodes = [nodes[0]];
-  let prevSelectedNode = nodes[0];
+  // Pass 1: create all nodes and resolve parents
+  let prevSelectedNode = rootNode;
+  const beamUidToNodeId = new Map();
+  // Root beam in beam search has unique_id=0; register so step 1 can find parent
+  beamUidToNodeId.set(0, rootId);
+  const nodeParentId = new Map();
 
   eventList.forEach((eventItem, eventIndex) => {
     const stepNumber = Math.max(1, Number(eventItem?.step) || eventIndex + 1);
+    const depth = stepToDepth.get(stepNumber) || eventIndex + 1;
     const rawCandidates = Array.isArray(eventItem?.candidates)
       ? eventItem.candidates
       : [];
@@ -1779,10 +1795,6 @@ function buildTreeFromEvents(events) {
 
     const levelNodes = [];
     rawCandidates.forEach((candidate, candidateIndex) => {
-      const x =
-        rawCandidates.length <= 1
-          ? 0.5
-          : 0.1 + (0.8 * candidateIndex) / Math.max(rawCandidates.length - 1, 1);
       const baseNodeId = String(
         candidate?.id || `step_${stepNumber}_candidate_${candidateIndex + 1}`,
       );
@@ -1799,11 +1811,11 @@ function buildTreeFromEvents(events) {
 
       const node = {
         id: nodeId,
-        label: `N${eventIndex + 1}.${candidateIndex + 1}`,
+        label: "",
         value: nodeValue,
-        depth: eventIndex + 1,
-        x,
-        y: yForDepth(eventIndex + 1),
+        depth,
+        x: 0,
+        y: yForDepth(depth),
         step: stepNumber,
         event_index: eventIndex,
         candidate_id: typeof candidate?.id === "string" ? candidate.id : null,
@@ -1815,34 +1827,82 @@ function buildTreeFromEvents(events) {
             ? candidate.signals
             : {},
         selected: Boolean(candidate?.selected),
+        beam_uid: candidate?.beam_uid ?? null,
+        parent_beam_uid: candidate?.parent_beam_uid ?? null,
       };
       nodes.push(node);
+      nodeById.set(nodeId, node);
       levelNodes.push(node);
+
+      if (node.beam_uid != null) {
+        beamUidToNodeId.set(node.beam_uid, nodeId);
+      }
     });
 
+    // Resolve parent for each node
     levelNodes.forEach((node) => {
       let parentNode = null;
-      if (node.candidate_label) {
-        parentNode =
-          prevLevelNodes.find(
-            (prev) =>
-              String(prev.candidate_label || "").trim() ===
-              String(node.candidate_label || "").trim(),
-          ) || null;
+      if (node.parent_beam_uid != null) {
+        const pid = beamUidToNodeId.get(node.parent_beam_uid);
+        if (pid) parentNode = nodeById.get(pid) || null;
       }
       if (!parentNode) {
-        parentNode = prevSelectedNode || prevLevelNodes[0] || nodes[0];
+        parentNode = prevSelectedNode || rootNode;
       }
+      nodeParentId.set(node.id, parentNode.id);
       edges.push({ source: parentNode.id, target: node.id });
     });
 
     const selectedNode =
       levelNodes.find((node) => node.selected) || levelNodes[0] || null;
     if (selectedNode) {
-      selectedPath.push(selectedNode.id);
       prevSelectedNode = selectedNode;
     }
-    prevLevelNodes = levelNodes;
+  });
+
+  // Build selected path by tracing from final selected node back to root
+  let traceNode = prevSelectedNode;
+  while (traceNode && traceNode.id !== rootId) {
+    selectedPath.push(traceNode.id);
+    const parentId = nodeParentId.get(traceNode.id);
+    traceNode = parentId ? nodeById.get(parentId) : null;
+  }
+  selectedPath.push(rootId);
+  selectedPath.reverse();
+
+  // Pass 2: assign x positions per depth level, grouping siblings by parent
+  const nodesByDepth = new Map();
+  nodes.forEach((node) => {
+    if (node.id === rootId) return;
+    const d = node.depth;
+    if (!nodesByDepth.has(d)) nodesByDepth.set(d, []);
+    nodesByDepth.get(d).push(node);
+  });
+
+  nodesByDepth.forEach((levelNodes) => {
+    const parentGroups = new Map();
+    levelNodes.forEach((node) => {
+      const pid = nodeParentId.get(node.id) || rootId;
+      if (!parentGroups.has(pid)) parentGroups.set(pid, []);
+      parentGroups.get(pid).push(node);
+    });
+    const sortedGroups = [...parentGroups.entries()].sort((a, b) => {
+      const pa = nodeById.get(a[0]);
+      const pb = nodeById.get(b[0]);
+      return (pa?.x || 0) - (pb?.x || 0);
+    });
+    let flatIndex = 0;
+    const total = levelNodes.length;
+    sortedGroups.forEach(([, group]) => {
+      group.forEach((node) => {
+        node.x =
+          total <= 1
+            ? 0.5
+            : 0.1 + (0.8 * flatIndex) / Math.max(total - 1, 1);
+        node.label = `N${node.depth}.${flatIndex + 1}`;
+        flatIndex += 1;
+      });
+    });
   });
 
   return { nodes, edges, selected_path: selectedPath };

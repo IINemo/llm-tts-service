@@ -1468,21 +1468,25 @@ def _build_events_from_step_candidates(
             elif status not in {"selected", "kept", "pruned"}:
                 status = "pruned"
 
-            event_candidates.append(
-                {
-                    "id": str(
-                        raw_candidate.get("id")
-                        or f"step_{index + 1}_cand_{cand_idx + 1}"
-                    ),
-                    "label": str(
-                        raw_candidate.get("label") or f"Candidate {cand_idx + 1}"
-                    ),
-                    "text": candidate_text,
-                    "status": status,
-                    "selected": is_selected,
-                    "signals": signal_map,
-                }
-            )
+            candidate_entry: Dict[str, Any] = {
+                "id": str(
+                    raw_candidate.get("id")
+                    or f"step_{index + 1}_cand_{cand_idx + 1}"
+                ),
+                "label": str(
+                    raw_candidate.get("label") or f"Candidate {cand_idx + 1}"
+                ),
+                "text": candidate_text,
+                "status": status,
+                "selected": is_selected,
+                "signals": signal_map,
+            }
+            # Propagate beam lineage for tree visualization
+            if raw_candidate.get("beam_unique_id") is not None:
+                candidate_entry["beam_uid"] = raw_candidate["beam_unique_id"]
+            if raw_candidate.get("parent_beam_uid") is not None:
+                candidate_entry["parent_beam_uid"] = raw_candidate["parent_beam_uid"]
+            event_candidates.append(candidate_entry)
 
         if not event_candidates:
             continue
@@ -1524,20 +1528,19 @@ def _build_events_from_step_candidates(
             ),
         }
 
-        events.append(
-            {
-                "step": _coerce_int(
-                    pool.get("step"),
-                    default=index + 1,
-                    minimum=1,
-                ),
-                "title": str(pool.get("title") or f"Reasoning step {index + 1}"),
-                "stage": stage,
-                "decision": decision,
-                "signals": signals,
-                "candidates": event_candidates,
-            }
-        )
+        event_entry: Dict[str, Any] = {
+            "step": _coerce_int(
+                pool.get("step"),
+                default=index + 1,
+                minimum=1,
+            ),
+            "title": str(pool.get("title") or f"Reasoning step {index + 1}"),
+            "stage": stage,
+            "decision": decision,
+            "signals": signals,
+            "candidates": event_candidates,
+        }
+        events.append(event_entry)
 
     return events
 
@@ -1551,6 +1554,15 @@ def _expand_step_candidate_pools(
             continue
         raw_candidates = pool.get("candidates")
         if not isinstance(raw_candidates, list) or not raw_candidates:
+            expanded.append(pool)
+            continue
+
+        # Beam search pools already have one step per pool — skip expansion
+        has_beam_lineage = any(
+            isinstance(c, dict) and c.get("beam_unique_id") is not None
+            for c in raw_candidates
+        )
+        if has_beam_lineage:
             expanded.append(pool)
             continue
 
