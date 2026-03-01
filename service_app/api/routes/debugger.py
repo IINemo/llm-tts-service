@@ -58,7 +58,12 @@ def visual_debugger_page() -> FileResponse:
 @router.get("/v1/debugger/demo/scenarios")
 def list_visual_debugger_scenarios() -> Dict[str, Any]:
     """List available demo scenarios for the visual debugger."""
-    scenarios = list_demo_scenarios()
+    try:
+        scenarios = list_demo_scenarios()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"scenarios": scenarios}
 
 
@@ -70,8 +75,10 @@ def get_visual_debugger_scenario(
     """Get one scenario payload with strategy runs resolved for a target budget."""
     try:
         payload = get_demo_scenario(scenario_id=scenario_id, budget=budget)
-    except KeyError as exc:
+    except (KeyError, FileNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return payload
 

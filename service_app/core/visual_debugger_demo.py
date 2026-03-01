@@ -94,7 +94,7 @@ SUPPORTED_STRATEGIES: List[Dict[str, Any]] = [
         "name": "Self-Consistency",
         "family": "sample_and_vote",
         "summary": "Sample diverse trajectories and select by answer consensus.",
-        "requires_scorer": True,
+        "requires_scorer": False,
         "requires_logprobs": False,
         "requires_prefill": False,
     },
@@ -2314,7 +2314,28 @@ def _is_capability_rejection(error_text: str, tokens: Tuple[str, ...]) -> bool:
 
 
 def _compact_error(exc: Exception) -> str:
-    text = " ".join(str(exc).split())
+    status = getattr(exc, "status_code", None)
+
+    # OpenAI SDK APIStatusError stores parsed body in .body
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        # Standard: {"error": {"message": "..."}} or {"message": "..."}
+        inner = body.get("error", body)
+        if isinstance(inner, dict):
+            msg = inner.get("message") or inner.get("msg")
+            if msg:
+                msg = str(msg).strip()
+                return f"Error {status}: {msg}" if status else msg
+        # Non-standard dict — try "detail" key (FastAPI-style)
+        detail = body.get("detail")
+        if detail:
+            msg = str(detail).strip()
+            return f"Error {status}: {msg}" if status else msg
+    if isinstance(body, str) and body.strip():
+        return f"Error {status}: {body.strip()}" if status else body.strip()
+
+    # Fallback: full error string so users can debug unexpected providers
+    text = " ".join(str(exc).split()).strip()
     return text if text else exc.__class__.__name__
 
 

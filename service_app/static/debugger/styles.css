@@ -347,91 +347,22 @@ button:disabled {
   gap: 0.6rem;
 }
 
-.yaml-editor {
-  position: relative;
-  border: 1px solid #b7c6d7;
-  border-radius: 10px;
-  background: #fff;
-  min-height: 220px;
-  overflow: hidden;
-}
-
-.yaml-highlight,
-.yaml-editor textarea {
-  margin: 0;
-  padding: 0.6rem 0.7rem;
+textarea.yaml-plain {
+  width: 100%;
   min-height: 220px;
   max-height: 460px;
-  width: 100%;
-  overflow-x: auto;
-  overflow-y: auto;
-  white-space: pre;
-  word-break: normal;
-  overflow-wrap: normal;
-  line-height: 1.45;
+  padding: 0.6rem 0.7rem;
   font-family: "IBM Plex Mono", monospace;
-  font-variant-ligatures: none;
-  letter-spacing: 0;
-  tab-size: 2;
   font-size: 0.8rem;
-}
-
-.yaml-highlight {
+  line-height: 1.45;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
   color: #334155;
-  background: transparent;
-  pointer-events: none;
-  overflow: hidden;
 }
 
-.yaml-editor textarea {
-  position: absolute;
-  inset: 0;
-  border: none;
-  background: transparent;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  caret-color: var(--ink);
-  resize: none;
-  z-index: 1;
-}
 
-.yaml-editor textarea:focus {
-  outline: none;
-  box-shadow: none;
-  background: transparent;
-}
-
-.yaml-editor textarea::selection {
-  background: rgba(31, 84, 122, 0.26);
-}
-
-.yaml-comment {
-  color: #6b7280;
-}
-
-.yaml-key {
-  color: #0b6f70;
-}
-
-.yaml-punc {
-  color: #526d86;
-}
-
-.yaml-string {
-  color: #9f3d29;
-}
-
-.yaml-number {
-  color: #8a5cf6;
-}
-
-.yaml-bool {
-  color: #2563eb;
-}
-
-.yaml-null {
-  color: #64748b;
-}
 
 .custom-controls {
   display: flex;

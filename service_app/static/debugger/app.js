@@ -59,7 +59,6 @@ const elements = {
   advancedConfigToggle: document.getElementById("advancedConfigToggle"),
   advancedConfigPanel: document.getElementById("advancedConfigPanel"),
   advancedPromptInput: document.getElementById("advancedPromptInput"),
-  advancedConfigHighlight: document.getElementById("advancedConfigHighlight"),
   advancedConfigYamlInput: document.getElementById("advancedConfigYamlInput"),
   resetAdvancedConfigButton: document.getElementById("resetAdvancedConfigButton"),
   advancedConfigStatus: document.getElementById("advancedConfigStatus"),
@@ -69,11 +68,21 @@ const elements = {
   customStatus: document.getElementById("customStatus"),
 };
 
+function extractResponseError(status, text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed.detail) return parsed.detail;
+  } catch {
+    /* not JSON */
+  }
+  return `HTTP ${status}: ${text}`;
+}
+
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Request failed: ${response.status} - ${errorText}`);
+    throw new Error(extractResponseError(response.status, errorText));
   }
   return response.json();
 }
@@ -86,7 +95,7 @@ async function postJson(url, payload) {
   });
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Request failed: ${response.status} - ${errorText}`);
+    throw new Error(extractResponseError(response.status, errorText));
   }
   return response.json();
 }
@@ -459,115 +468,11 @@ function setAdvancedConfigStatus(message, isError = false) {
     : "var(--muted)";
 }
 
-function splitYamlInlineComment(text) {
-  let inSingle = false;
-  let inDouble = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "'" && !inDouble) {
-      inSingle = !inSingle;
-      continue;
-    }
-    if (char === '"' && !inSingle && text[index - 1] !== "\\") {
-      inDouble = !inDouble;
-      continue;
-    }
-    if (char === "#" && !inSingle && !inDouble) {
-      const prev = text[index - 1];
-      if (index === 0 || /\s/.test(prev || "")) {
-        return [text.slice(0, index), text.slice(index)];
-      }
-    }
-  }
-
-  return [text, ""];
-}
-
-function highlightYamlValueToken(token) {
-  if (!token) {
-    return "";
-  }
-  const leading = token.match(/^\s*/)?.[0] || "";
-  const trailing = token.match(/\s*$/)?.[0] || "";
-  const core = token.slice(leading.length, token.length - trailing.length);
-  const normalized = core.trim();
-  if (!normalized) {
-    return escapeHtml(token);
-  }
-
-  let className = "";
-  if (/^(true|false)$/i.test(normalized)) {
-    className = "yaml-bool";
-  } else if (/^(null|~)$/i.test(normalized)) {
-    className = "yaml-null";
-  } else if (/^-?\d+(\.\d+)?$/.test(normalized)) {
-    className = "yaml-number";
-  } else if (
-    (normalized.startsWith('"') && normalized.endsWith('"')) ||
-    (normalized.startsWith("'") && normalized.endsWith("'"))
-  ) {
-    className = "yaml-string";
-  }
-
-  if (!className) {
-    return escapeHtml(token);
-  }
-
-  return `${escapeHtml(leading)}<span class="${className}">${escapeHtml(core)}</span>${escapeHtml(trailing)}`;
-}
-
-function highlightYamlValue(text) {
-  const [valuePart, commentPart] = splitYamlInlineComment(text);
-  const valueHtml = highlightYamlValueToken(valuePart);
-  if (!commentPart) {
-    return valueHtml;
-  }
-  return `${valueHtml}<span class="yaml-comment">${escapeHtml(commentPart)}</span>`;
-}
-
-function highlightYamlLine(line) {
-  if (!line) {
-    return "";
-  }
-
-  const fullCommentMatch = line.match(/^(\s*)(#.*)$/);
-  if (fullCommentMatch) {
-    return `${escapeHtml(fullCommentMatch[1])}<span class="yaml-comment">${escapeHtml(fullCommentMatch[2])}</span>`;
-  }
-
-  const keyMatch = line.match(/^(\s*)([^:#][^:\n]*?)(\s*:\s*)(.*)$/);
-  if (keyMatch) {
-    return `${escapeHtml(keyMatch[1])}<span class="yaml-key">${escapeHtml(keyMatch[2])}</span><span class="yaml-punc">${escapeHtml(keyMatch[3])}</span>${highlightYamlValue(keyMatch[4])}`;
-  }
-
-  const listMatch = line.match(/^(\s*)(-\s+)(.*)$/);
-  if (listMatch) {
-    return `${escapeHtml(listMatch[1])}<span class="yaml-punc">${escapeHtml(listMatch[2])}</span>${highlightYamlValue(listMatch[3])}`;
-  }
-
-  return escapeHtml(line);
-}
-
-function renderAdvancedConfigHighlight() {
-  if (!elements.advancedConfigHighlight || !elements.advancedConfigYamlInput) {
-    return;
-  }
-  const lines = elements.advancedConfigYamlInput.value.split("\n");
-  const highlighted = lines.map((line) => highlightYamlLine(line)).join("\n");
-  elements.advancedConfigHighlight.innerHTML = highlighted || " ";
-  elements.advancedConfigHighlight.scrollTop =
-    elements.advancedConfigYamlInput.scrollTop;
-  elements.advancedConfigHighlight.scrollLeft =
-    elements.advancedConfigYamlInput.scrollLeft;
-}
-
 function setAdvancedConfigYamlValue(value) {
   if (!elements.advancedConfigYamlInput) {
     return;
   }
   elements.advancedConfigYamlInput.value = value || "";
-  renderAdvancedConfigHighlight();
 }
 
 function upsertPromptInAdvancedYaml(yamlText, prompt) {
@@ -635,7 +540,7 @@ function setAdvancedConfigPanelExpanded(expanded) {
   state.advancedConfigExpanded = Boolean(expanded);
   elements.advancedConfigPanel?.classList.toggle("hidden", !state.advancedConfigExpanded);
   if (state.advancedConfigExpanded) {
-    renderAdvancedConfigHighlight();
+
   }
   if (elements.advancedConfigToggle) {
     elements.advancedConfigToggle.textContent = state.advancedConfigExpanded
@@ -995,6 +900,7 @@ async function loadCachedOptionsForCurrentScenario() {
   const payload = await loadPayloadForScenario(state.scenarioId, budget);
   state.cachedSourcePayload = payload;
   loadCachedScenarioValuesIntoInputs(payload);
+  elements.cachedExplorerPrompt?.classList.remove("hidden");
   const options = deriveOptionsFromPayload(payload);
   state.modelValidation = {
     ...(state.modelValidation || {}),
@@ -1335,8 +1241,13 @@ async function runCustomInput() {
         advanced_config_yaml: advancedConfigYaml,
       });
     } catch (error) {
+      let hint = "";
+      if (/max_tokens is too large/i.test(error.message)) {
+        hint =
+          " Hint: reduce max_step_tokens (or max_new_tokens) in Advanced Config to fit the model's limit.";
+      }
       setStatus(
-        `Custom run requires backend endpoint /v1/debugger/demo/run-single (${error.message}).`,
+        `Run failed: ${error.message}.${hint}`,
         true,
       );
       return;
@@ -1408,7 +1319,7 @@ async function restoreDemoData() {
   state.cachedScenarioPrompt = "";
 
   elements.providerSelect.value = "openai";
-  elements.modelIdInput.value = "openai/gpt-4o-mini";
+  elements.modelIdInput.value = "gpt-4o-mini";
   elements.modelApiKeyInput.value = "";
   elements.singleQuestionInput.value = "";
   if (elements.advancedPromptInput) {
@@ -2316,21 +2227,20 @@ function bindHandlers() {
     updateRunButtonEnabled();
   });
 
-  [
-    elements.providerSelect,
-    elements.modelIdInput,
-    elements.modelApiKeyInput,
-  ].forEach((field) => {
-    field.addEventListener("input", () => {
-      if (
-        state.validatedModelFingerprint &&
-        state.validatedModelFingerprint !== getModelFingerprint()
-      ) {
-        invalidateModelValidation(
-          "Model settings changed. Validate again to refresh supported options.",
-        );
-      }
-    });
+  const onModelSettingsChange = () => {
+    if (
+      state.validatedModelFingerprint &&
+      state.validatedModelFingerprint !== getModelFingerprint()
+    ) {
+      invalidateModelValidation(
+        "Model settings changed. Validate again to refresh supported options.",
+      );
+    }
+  };
+
+  elements.providerSelect.addEventListener("change", onModelSettingsChange);
+  [elements.modelIdInput, elements.modelApiKeyInput].forEach((field) => {
+    field.addEventListener("input", onModelSettingsChange);
   });
 
   elements.strategySelect.addEventListener("change", () => {
@@ -2379,16 +2289,10 @@ function bindHandlers() {
 
   elements.advancedConfigYamlInput.addEventListener("input", () => {
     state.advancedConfigDirty = true;
-    renderAdvancedConfigHighlight();
+
   });
 
-  elements.advancedConfigYamlInput.addEventListener("scroll", () => {
-    renderAdvancedConfigHighlight();
-  });
 
-  elements.advancedConfigYamlInput.addEventListener("focus", () => {
-    renderAdvancedConfigHighlight();
-  });
 
   elements.advancedConfigYamlInput.addEventListener("keydown", (event) => {
     if (event.key !== "Tab") {
@@ -2400,7 +2304,7 @@ function bindHandlers() {
     const end = input.selectionEnd;
     input.setRangeText("  ", start, end, "end");
     state.advancedConfigDirty = true;
-    renderAdvancedConfigHighlight();
+
   });
 
   elements.runCustomButton.addEventListener("click", async () => {
@@ -2415,7 +2319,6 @@ function bindHandlers() {
 async function init() {
   bindHandlers();
   setAdvancedConfigPanelExpanded(false);
-  renderAdvancedConfigHighlight();
   applyCachedModeUi();
   invalidateModelValidation(
     "Validate a model first to unlock compatible strategy/scorer options.",
