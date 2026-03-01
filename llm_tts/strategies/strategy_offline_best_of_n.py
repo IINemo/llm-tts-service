@@ -25,6 +25,7 @@ from llm_tts.generators.base import (
     StepCandidate,
     StepCandidateGeneratorBase,
     convert_trajectory_to_string,
+    get_completion_info,
 )
 from llm_tts.scorers.multi_scorer import (
     compute_logprob_scores,
@@ -147,6 +148,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         token_ids: List[int],
         logprobs: List,
         uncertainty_wrapper,
+        output=None,
     ) -> List[float]:
         """
         Compute uncertainty score for each step independently.
@@ -206,7 +208,10 @@ class StrategyOfflineBestOfN(StrategyBase):
             if step_token_ids and step_logprobs:
                 try:
                     uncertainty = uncertainty_wrapper.score(
-                        step_token_ids, step_logprobs
+                        step_token_ids,
+                        step_logprobs,
+                        output=output,
+                        claim_range=(step_start_idx, current_token_idx),
                     )
                     # Convert to validity score: higher = better (lower uncertainty)
                     validity_score = 1.0 / (1.0 + uncertainty)
@@ -500,11 +505,13 @@ class StrategyOfflineBestOfN(StrategyBase):
                 continue
 
             trajectories = []
+            outputs = []
             for traj_idx, candidate in enumerate(candidates):
                 traj_data = self._split_thinking_candidate(candidate)
                 traj_data["step_scores"] = []
                 traj_data["aggregated_score"] = 0.0
                 trajectories.append(traj_data)
+                outputs.append(candidate.output)
                 all_traj_datas.append(traj_data)
                 all_traj_requests.append(request)
 
@@ -513,6 +520,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                     "sample_idx": sample_idx,
                     "request": request,
                     "trajectories": trajectories,
+                    "outputs": outputs,
                     "failed": False,
                 }
             )
@@ -542,6 +550,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                         token_ids=list(candidate.token_ids),
                         logprobs=candidate.other_data["raw_logprobs"],
                         uncertainty_wrapper=self.step_generator.model,
+                        output=data["outputs"][traj_idx],
                     )
                     aggregated = self._aggregate_scores(step_scores)
                     traj_data["step_scores"] = step_scores
@@ -869,6 +878,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                 "best_idx": best_idx,
                 "completed": best_result.get("is_complete", False),
                 "token_stats": token_stats,
+                **get_completion_info(best_result.get("steps", [])),
             }
 
             # Add candidates_data for multi-scoring analysis
@@ -906,6 +916,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             "best_idx": 0,
             "completed": False,
             "token_stats": {},
+            **get_completion_info([]),
         }
 
     def cleanup(self):

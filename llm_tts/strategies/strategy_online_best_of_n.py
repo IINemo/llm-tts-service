@@ -9,7 +9,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorBase,
     convert_trajectory_to_string,
 )
-from llm_tts.generators.base import CompletionReason
+from llm_tts.generators.base import CompletionReason, get_completion_info
 from llm_tts.utils.answer_extraction import extract_answer
 
 from .strategy_base import StrategyBase
@@ -210,16 +210,43 @@ class StrategyOnlineBestOfN(StrategyBase):
                         flat_trajectories,
                         sample_ids=flat_sample_ids,
                     )
-                    flat_scores = [
-                        traj_scores[-1] if traj_scores else 0.0
-                        for traj_scores in all_traj_scores
-                    ]
+                    flat_scores = []
+                    for i, traj_scores in enumerate(all_traj_scores):
+                        score = traj_scores[-1] if traj_scores else None
+                        if score is None:
+                            batch_idx, cand_idx = candidate_map[i]
+                            n_steps = len(traj_scores) if traj_scores else 0
+                            n_null = (
+                                sum(1 for s in traj_scores if s is None)
+                                if traj_scores
+                                else 0
+                            )
+                            log.warning(
+                                f"PRM returned no valid score for "
+                                f"candidate {cand_idx} (batch {batch_idx}): "
+                                f"{n_null}/{n_steps} steps are null "
+                                f"(likely a very short candidate). "
+                                f"This candidate will be skipped "
+                                f"during selection."
+                            )
+                        flat_scores.append(score)
                 elif flat_trajectories:
                     # Fallback: score one by one
                     flat_scores = []
-                    for chat, traj in zip(flat_chats, flat_trajectories):
+                    for i, (chat, traj) in enumerate(
+                        zip(flat_chats, flat_trajectories)
+                    ):
                         score_list = self.scorer.score_trajectory(chat, traj)
-                        flat_scores.append(score_list[-1] if score_list else 0.0)
+                        score = score_list[-1] if score_list else None
+                        if score is None:
+                            batch_idx, cand_idx = candidate_map[i]
+                            log.warning(
+                                f"PRM returned no valid score for "
+                                f"candidate {cand_idx} (batch {batch_idx}). "
+                                f"This candidate will be skipped "
+                                f"during selection."
+                            )
+                        flat_scores.append(score)
                 else:
                     flat_scores = []
 
@@ -266,7 +293,15 @@ class StrategyOnlineBestOfN(StrategyBase):
                     needs_final_answer[sample_id] = True
                     continue
 
-                best_idx = max(range(len(scores)), key=lambda i: scores[i])
+                valid_indices = [i for i, s in enumerate(scores) if s is not None]
+                if not valid_indices:
+                    log.warning(
+                        f"Sample {sample_indices[sample_id]}: All scores are None "
+                        f"for {len(candidates)} candidates, selecting index 0"
+                    )
+                    best_idx = 0
+                else:
+                    best_idx = max(valid_indices, key=lambda i: scores[i])
                 selected = candidates[best_idx]
 
                 # Additional completion checks (matching beam search):
@@ -306,11 +341,17 @@ class StrategyOnlineBestOfN(StrategyBase):
                     )
 
                 all_scores_str = ", ".join(
-                    f"c{i}={s:.3f}" for i, s in enumerate(scores)
+                    f"c{i}={s:.3f}" if s is not None else f"c{i}=None"
+                    for i, s in enumerate(scores)
+                )
+                _best_s = (
+                    f"{scores[best_idx]:.3f}"
+                    if scores[best_idx] is not None
+                    else "None"
                 )
                 log.info(
                     f"Sample {sample_indices[sample_id]}: Selected candidate {best_idx} "
-                    f"(score={scores[best_idx]:.3f}), all scores=[{all_scores_str}]"
+                    f"(score={_best_s}), all scores=[{all_scores_str}]"
                 )
                 history_step_index = len(step_candidate_history[sample_id]) + 1
                 step_candidate_history[sample_id].append(
@@ -462,7 +503,15 @@ class StrategyOnlineBestOfN(StrategyBase):
                         f"{len(a_cands)} final answer candidates, skipping"
                     )
                     continue
-                best_idx = max(range(len(a_scores)), key=lambda i: a_scores[i])
+                valid_a_indices = [i for i, s in enumerate(a_scores) if s is not None]
+                if not valid_a_indices:
+                    log.warning(
+                        f"Sample {sample_indices[sample_id]}: All final answer "
+                        f"scores are None, selecting index 0"
+                    )
+                    best_idx = 0
+                else:
+                    best_idx = max(valid_a_indices, key=lambda i: a_scores[i])
                 history_step_index = len(step_candidate_history[sample_id]) + 1
                 step_candidate_history[sample_id].append(
                     {
@@ -474,7 +523,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                                 "id": f"s{sample_id}_answer{history_step_index}_c{cand_idx + 1}",
                                 "label": f"Answer {cand_idx + 1}",
                                 "text": cand.raw_text or cand.text,
-                                "score": float(a_scores[cand_idx]),
+                                "score": float(a_scores[cand_idx]) if a_scores[cand_idx] is not None else 0.0,
                                 "status": (
                                     "selected" if cand_idx == best_idx else "pruned"
                                 ),
@@ -485,9 +534,14 @@ class StrategyOnlineBestOfN(StrategyBase):
                     }
                 )
 
+                score_str = (
+                    f"{a_scores[best_idx]:.3f}"
+                    if a_scores[best_idx] is not None
+                    else "None"
+                )
                 log.info(
                     f"Sample {sample_indices[sample_id]}: Final answer selected "
-                    f"(score={a_scores[best_idx]:.3f})"
+                    f"(score={score_str})"
                 )
 
                 trajectories[sample_id].append(a_cands[best_idx])
@@ -559,7 +613,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                     prm_tflops = 0
                 token_stats["tflops"] = gen_tflops + prm_tflops
 
-            scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
+            scores_str = ", ".join(
+                f"{s:.3f}" if s is not None else "None" for s in validity_scores[idx]
+            )
             log.info(
                 f"Sample {sample_indices[idx]}: "
                 f"{len(selected_steps[idx])} steps "
@@ -574,22 +630,23 @@ class StrategyOnlineBestOfN(StrategyBase):
                     if step_idx < len(validity_scores[idx])
                     else 0.0
                 )
-                log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
+                _s = f"{score:.3f}" if score is not None else "None"
+                log.info(f"  Step {step_idx + 1} (score={_s}):\n{step.text}")
 
-            outputs.append(
-                {
-                    "trajectory": final_trajectory,
-                    "extracted_answer": extracted,
-                    "steps": selected_steps[idx],
-                    "answer_step": answer_steps[idx],
-                    "reasoning_steps": reasoning_steps,
-                    "validity_scores": validity_scores[idx],
-                    "step_candidates": step_candidate_history[idx],
-                    "completed": bool(selected_steps[idx])
-                    and selected_steps[idx][-1].is_trajectory_complete,
-                    "token_stats": token_stats,
-                }
-            )
+            result = {
+                "trajectory": final_trajectory,
+                "extracted_answer": extracted,
+                "steps": selected_steps[idx],
+                "answer_step": answer_steps[idx],
+                "reasoning_steps": reasoning_steps,
+                "validity_scores": validity_scores[idx],
+                "step_candidates": step_candidate_history[idx],
+                "completed": bool(selected_steps[idx])
+                and selected_steps[idx][-1].is_trajectory_complete,
+                "token_stats": token_stats,
+            }
+            result.update(get_completion_info(selected_steps[idx]))
+            outputs.append(result)
 
         return outputs
 
@@ -670,6 +727,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                         "step_candidates": [],
                         "completed": False,
                         "token_stats": self.step_generator.get_sample_stats_for(sid),
+                        **get_completion_info([]),
                     }
                 with completed_lock:
                     completed_count[0] += 1
@@ -1010,7 +1068,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         reasoning_steps = len(selected_steps)
         token_stats = self.step_generator.get_sample_stats_for(sample_id)
 
-        return {
+        result = {
             "trajectory": final_trajectory,
             "extracted_answer": extracted,
             "steps": selected_steps,
@@ -1022,6 +1080,8 @@ class StrategyOnlineBestOfN(StrategyBase):
             and selected_steps[-1].is_trajectory_complete,
             "token_stats": token_stats,
         }
+        result.update(get_completion_info(selected_steps))
+        return result
 
     def cleanup(self):
         """Clean up resources"""

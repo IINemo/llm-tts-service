@@ -19,6 +19,9 @@ class CompletionReason(str, Enum):
     EOS_PATTERN = "eos_pattern"  # <end of response> pattern matched
     ANSWER_PATTERN = "answer_pattern"  # <Answer>: or similar pattern matched
     CONTEXT_LIMIT = "context_limit"  # Not enough context for next step + answer
+    REPETITION_DETECTED = "repetition_detected"  # Repetitive output detected
+    GARBAGE_DETECTED = "garbage_detected"  # Garbage/degenerate output detected
+    BOXED_IN_THINK = "boxed_in_think"  # \boxed{} found inside <think> tags
 
 
 @dataclass
@@ -35,6 +38,7 @@ class StepCandidate:
         raw_text: str = None,
         other_data: Dict[str, Any] = None,
         is_thinking_complete: bool = False,
+        output=None,
     ):
         self.text = text
         self.token_ids = token_ids
@@ -44,9 +48,40 @@ class StepCandidate:
         self.generation_scores = generation_scores
         self.raw_text = raw_text or text
         self.other_data = other_data
+        self.output = output
 
     def __str__(self):
         return f"StepCandidate(text='{self.text[:50]}...', complete={self.is_complete})"
+
+
+def get_completion_info(steps: List[StepCandidate]) -> Dict[str, Any]:
+    """Extract completion reason, context_limit_hit, and max_steps_hit from steps.
+
+    Examines the last StepCandidate in the list. Pass only the reasoning steps
+    (exclude answer steps) for correct results in thinking mode.
+
+    Returns:
+        Dict with completion_reason (str|None), context_limit_hit (bool),
+        max_steps_hit (bool).
+    """
+    defaults: Dict[str, Any] = {
+        "completion_reason": None,
+        "context_limit_hit": False,
+        "max_steps_hit": False,
+    }
+    if not steps:
+        return defaults
+    last = steps[-1]
+    if not isinstance(last, StepCandidate):
+        return defaults
+    cr = last.other_data.get("completion_reason") if last.other_data else None
+    return {
+        "completion_reason": cr.value if hasattr(cr, "value") else cr,
+        "context_limit_hit": cr == CompletionReason.CONTEXT_LIMIT,
+        "max_steps_hit": (
+            not last.is_trajectory_complete and not last.is_thinking_complete
+        ),
+    }
 
 
 def convert_trajectory_to_string(trajectory: List[StepCandidate]) -> str:
@@ -290,6 +325,7 @@ class StepCandidateGeneratorBase:
         requests: List[List[Dict[str, str]]],
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
+        sample_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Generate answer candidates for multiple trajectories.
 
@@ -299,6 +335,8 @@ class StepCandidateGeneratorBase:
             requests: Per-trajectory chat messages.
             trajectories: Per-trajectory step lists.
             candidates_per_step: Number of answer candidates per trajectory.
+            sample_ids: Optional list mapping each trajectory to a sample_id
+                for per-sample token tracking.
 
         Returns:
             List of candidate lists, one per trajectory.

@@ -20,7 +20,7 @@ run_name: "online_bon_vllm_nothink_qwen25_7b_minerva_math_prm_seed${system.seed}
 # Main configuration
 verbose: true
 report_to: wandb
-wandb_project: llm-tts-eval-minerva_math
+wandb_project: llm-tts-eval-minerva-math
 wandb_group: "online_bon_qwen25_math_7b_instruct_minerva_math_prm"
 # Model configuration (vLLM backend)
 model:
@@ -69,6 +69,7 @@ scorer:
   model_path: "Qwen/Qwen2.5-Math-PRM-7B"
   device: cuda:1
   batch_size: 1
+  gpu_memory_utilization: 0.9
 
 # Dataset configuration - Minerva Math
 dataset:

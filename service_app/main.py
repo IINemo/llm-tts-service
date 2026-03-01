@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from service_app.api.routes import chat, debugger, models
 from service_app.core.config import settings
+from service_app.core.logging_config import setup_logging
 
 # Allow running this file directly from inside the `service_app` directory:
 # This is useful for development and testing
@@ -21,12 +22,11 @@ parent_dir = current_dir.parent
 if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Configure logging — each run gets logs/<date>/<time>/service.log
+_log_dir = setup_logging()
 
 log = logging.getLogger(__name__)
+log.info(f"Logging to {_log_dir}/service.log")
 
 # Create FastAPI app
 app = FastAPI(
@@ -154,5 +154,6 @@ if __name__ == "__main__":
         host=settings.host,
         port=settings.port,
         reload=True,  # Enable auto-reload for development
+        reload_excludes=["logs/*"],
         log_level="info",
     )

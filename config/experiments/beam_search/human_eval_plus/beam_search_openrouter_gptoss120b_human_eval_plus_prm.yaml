@@ -1,0 +1,86 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/human_eval_plus/beam_search_openrouter_gptoss120b_human_eval_plus_prm
+# Beam Search for HumanEval+ using OpenRouter API with GPT-OSS-120B + PRM scorer
+# GPT-OSS does not support logprobs on OpenRouter, uses prefill_mode for continuation
+#
+# Environment variable required: OPENROUTER_API_KEY
+
+defaults:
+  - /config
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - /strategy/beam_search
+  - /scorer/prm
+  - /evaluation/human_eval_plus/default
+  - _self_
+
+# Run naming
+run_name: "beam_search_openrouter_gptoss120b_human_eval_plus_prm_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-human-eval-plus
+wandb_group: "beam_search_openrouter_gptoss120b_human_eval_plus_prm"
+
+# Model configuration (OpenRouter API)
+model:
+  type: "openai_api"
+  provider: openrouter
+  model_path: "openai/gpt-oss-120b"
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  supports_logprobs: false
+  prefill_mode: true
+  max_context_budget: 200000
+  disable_thinking_mode: false
+
+# System configuration
+system:
+  device: cpu
+  seed: 0
+
+# Generation configuration
+generation:
+  max_new_tokens: 65536
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 65536
+
+# Strategy - Beam Search with linguistic step boundaries
+strategy:
+  beam_size: 3
+  candidates_per_beam: 5
+  max_steps: 100
+  max_step_tokens: 1024
+
+# PRM scorer configuration
+scorer:
+  type: prm
+  model_path: "Qwen/Qwen2.5-Math-PRM-7B"
+  device: cuda:0
+  batch_size: 1
+  gpu_memory_utilization: 0.9
+
+# Dataset configuration - HumanEval+
+dataset:
+  data_name: "human_eval_plus"
+  dataset_path: "evalplus/humanevalplus"
+  dataset_split: "test"  # 164 problems
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "code"
+  prompt_file: null
+  system_prompt: "Do not output any other code except for asked self-contained Python script. Do not provide any guides on how to run it. Code will be parsed from codeblock to check it's correct."
+
+# Evaluation configuration
+evaluation:
+  evaluators:
+    - human_eval_plus
+  human_eval_plus:
+    mode: full
+    timeout: 10

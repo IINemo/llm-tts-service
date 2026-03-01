@@ -1,0 +1,7 @@
+type: uhead
+uq_head_path: "rediska0123/uhead_Qwen2.5-7B-Instruct_prm12k_10epochs"
+max_model_len: 4096
+gpu_memory_utilization: 0.2
+tensor_parallel_size: 2
+device: cuda:1
+batch_size: 1  # unfortunately larger batch sizes are not supported yet

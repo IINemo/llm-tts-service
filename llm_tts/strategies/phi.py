@@ -11,7 +11,7 @@ from llm_tts.generators import (
     StepCandidateGeneratorThroughHuggingface,
     convert_trajectory_to_string,
 )
-from llm_tts.generators.base import CompletionReason
+from llm_tts.generators.base import CompletionReason, get_completion_info
 
 from .strategy_base import StrategyBase
 
@@ -133,12 +133,14 @@ class PhiDecoding(StrategyBase):
             selected_steps.append(final_answer)
             validity_scores.append(final_validity)
 
-        return {
+        result = {
             "trajectory": convert_trajectory_to_string(trajectory),
             "steps": selected_steps,
             "validity_scores": validity_scores,
             "completed": len(selected_steps) > 0,
         }
+        result.update(get_completion_info(selected_steps))
+        return result
 
     # Simulate the future trajectory and rerank the candidates
     def foresight_rerank(
@@ -180,8 +182,16 @@ class PhiDecoding(StrategyBase):
 
     def _select_best_candidate(self, candidates: List, scores: List[float]) -> tuple:
         """Select the best candidate based on scores"""
-        # Higher validity is better
-        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        # Higher validity is better; filter out None scores
+        valid_indices = [i for i, s in enumerate(scores) if s is not None]
+        if not valid_indices:
+            log.warning(
+                f"All scores are None for {len(scores)} candidates, "
+                f"selecting index 0"
+            )
+            best_idx = 0
+        else:
+            best_idx = max(valid_indices, key=lambda i: scores[i])
         return best_idx, candidates[best_idx]
 
     def _generate_final_answer(
@@ -206,7 +216,8 @@ class PhiDecoding(StrategyBase):
 
         log.info(f"Generated {len(answer_candidates)} answer candidates")
         log.info(f"Selected answer {best_idx}")
-        log.info(f"Validity: {answer_validity_scores[best_idx]:.3f}")
+        _v = answer_validity_scores[best_idx]
+        log.info(f"Validity: {_v:.3f}" if _v is not None else "Validity: None")
         log.info(f"Text: {answer_candidates[best_idx].text}")
 
         return answer_candidates[best_idx], answer_validity_scores[best_idx]
