@@ -72,11 +72,7 @@ def main() -> None:
         raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is required")
 
     application = (
-        ApplicationBuilder()
-        .token(token)
-        .connect_timeout(30)
-        .read_timeout(30)
-        .build()
+        ApplicationBuilder().token(token).connect_timeout(30).read_timeout(30).build()
     )
     application.add_handler(CommandHandler("start", start_handler))
     log.info("Bot started — send /start to get your chat ID")

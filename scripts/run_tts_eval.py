@@ -2905,7 +2905,10 @@ def main(config):
                     )
                     _group_url = f"https://wandb.ai/{entity}/{project}/groups/{wandb_group}/workspace"
         notifier.notify_finished(
-            metrics=_metrics, wandb_url=_wandb_url, wandb_group_url=_group_url, **_experiment_info
+            metrics=_metrics,
+            wandb_url=_wandb_url,
+            wandb_group_url=_group_url,
+            **_experiment_info,
         )
     except Exception:
         pass
