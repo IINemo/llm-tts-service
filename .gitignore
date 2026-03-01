@@ -190,3 +190,6 @@ lm-polygraph/
 # External Qwen repositories
 # Qwen2.5-Math/
 Qwen3/
+
+# Telegram bot logs
+telegram_bot_logs/
