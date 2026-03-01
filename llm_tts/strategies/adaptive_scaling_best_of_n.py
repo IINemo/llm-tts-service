@@ -213,7 +213,11 @@ class AdaptiveScalingBestOfN(StrategyBase):
                         if score is None:
                             batch_idx, cand_idx = candidate_map[i]
                             n_steps = len(traj_scores) if traj_scores else 0
-                            n_null = sum(1 for s in traj_scores if s is None) if traj_scores else 0
+                            n_null = (
+                                sum(1 for s in traj_scores if s is None)
+                                if traj_scores
+                                else 0
+                            )
                             log.warning(
                                 f"PRM returned no valid score for "
                                 f"candidate {cand_idx} (batch {batch_idx}): "
@@ -226,13 +230,19 @@ class AdaptiveScalingBestOfN(StrategyBase):
                 elif flat_trajectories:
                     # Fallback: score one by one
                     flat_scores = []
-                    for i, (chat, traj) in enumerate(zip(flat_chats, flat_trajectories)):
+                    for i, (chat, traj) in enumerate(
+                        zip(flat_chats, flat_trajectories)
+                    ):
                         score_list = self.scorer.score_trajectory(chat, traj)
                         score = score_list[-1] if score_list else None
                         if score is None:
                             batch_idx, cand_idx = candidate_map[i]
                             n_steps = len(score_list) if score_list else 0
-                            n_null = sum(1 for s in score_list if s is None) if score_list else 0
+                            n_null = (
+                                sum(1 for s in score_list if s is None)
+                                if score_list
+                                else 0
+                            )
                             log.warning(
                                 f"PRM returned no valid score for "
                                 f"candidate {cand_idx} (batch {batch_idx}): "
