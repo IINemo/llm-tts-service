@@ -37,12 +37,14 @@ If W&B is disabled (`report_to=none`), the last line shows `🔗 W&B: disabled`.
 
 Remove or leave empty `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` in `.env`. Notifications are silently skipped when either is missing.
 
-## Running the Bot Service
+## Running the Bot Service (admin only)
 
-The `/start` handler only works while the bot service is running. To start it:
+> **You do NOT need to run the bot yourself.** It is already hosted on one of our machines. Just send `/start` to [@thinkbooster_bot](https://t.me/thinkbooster_bot) and it will respond.
+
+This section is only relevant if the bot needs to be restarted or moved to a different machine:
 
 ```bash
 python -m llm_tts.utils.telegram_bot
 ```
 
-It reads `TELEGRAM_BOT_TOKEN` from `.env` automatically. Keep it running on a shared machine so new team members can get their chat IDs.
+It reads `TELEGRAM_BOT_TOKEN` from `.env` automatically. Logs are saved to `telegram_bot_logs/<date>/`.
