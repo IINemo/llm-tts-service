@@ -582,7 +582,7 @@ def main():
     log.info(
         f"Pre-computing correctness via {eval_method} and analyzing all windows..."
     )
-    all_results, em_labels, oracle_acc, max_steps = analyze_all_windows(
+    all_results, em_labels, oracle_acc, max_steps = analyze_windows(
         candidates_data,
         data_name=args.data_name,
         answer_format=args.answer_format,
