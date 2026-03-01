@@ -2500,6 +2500,10 @@ def evaluate_results(
                 wandb_group_url = (
                     f"https://wandb.ai/{entity}/{project_name}/groups/{group}/workspace"
                 )
+                wandb_url = wandb_url.replace(
+                    f"/{project_name}/runs/",
+                    f"/{project_name}/groups/{group}/runs/",
+                )
 
             # Log all output files as artifacts
             save_path_obj = Path(save_path)
@@ -2660,6 +2664,10 @@ def main(config):
                         "WANDB_PROJECT", "llm-tts-eval"
                     )
                     _group_url = f"https://wandb.ai/{entity}/{project}/groups/{wandb_group}/workspace"
+                    _wandb_url = _wandb_url.replace(
+                        f"/{project}/runs/",
+                        f"/{project}/groups/{wandb_group}/runs/",
+                    )
         notifier.notify_started(
             wandb_url=_wandb_url, wandb_group_url=_group_url, **_experiment_info
         )
@@ -2904,6 +2912,10 @@ def main(config):
                         "WANDB_PROJECT", "llm-tts-eval"
                     )
                     _group_url = f"https://wandb.ai/{entity}/{project}/groups/{wandb_group}/workspace"
+                    _wandb_url = _wandb_url.replace(
+                        f"/{project}/runs/",
+                        f"/{project}/groups/{wandb_group}/runs/",
+                    )
         notifier.notify_finished(
             metrics=_metrics,
             wandb_url=_wandb_url,
