@@ -157,7 +157,7 @@ Thumbs.db
 
 # Data files
 *.csv
-# *.json
+*.json
 *.jsonl
 *.parquet
 *.h5
@@ -172,7 +172,7 @@ tmp/
 temp/
 outputs/
 
-# *.zip
+*.zip
 *.bst
 # *.pdf
 *.bib
@@ -181,9 +181,6 @@ outputs/
 
 wandb/
 workdir/
-
-# Notebook caches
-# notebooks/cache/
 
 # Reference implementations and external repos
 # deepconf/
