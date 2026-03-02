@@ -3,7 +3,7 @@ const CACHED_EXAMPLES_PATHS =
     ? ["./cached_examples.json", "/static/debugger/cached_examples.json"]
     : ["/static/debugger/cached_examples.json", "./cached_examples.json"];
 const DEFAULT_SYSTEM_PROMPT = "Reason step-by-step carefully";
-const HIDDEN_SCORER_IDS = new Set(["prm"]);
+const HIDDEN_SCORER_IDS = new Set([]);
 
 const state = {
   catalog: [],

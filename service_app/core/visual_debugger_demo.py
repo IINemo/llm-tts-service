@@ -107,7 +107,6 @@ SUPPORTED_SCORERS: List[Dict[str, Any]] = [
         "direction": "higher_better",
         "summary": "Process Reward Model trajectory quality score.",
         "requires_logprobs": False,
-        "hidden": True,
     },
     {
         "id": "sequence_prob",
@@ -2276,12 +2275,25 @@ def _probe_prefill_support(client: Any, model_id: str) -> Tuple[bool, str]:
     if not text:
         return False, "prefill probe: empty response"
 
-    # If the API supports prefill, the response starts with the prefill text
-    # (the API returns prefix + continuation). If not, the model generates
-    # a completely new response that doesn't start with the prefill.
+    # Two valid prefill behaviors:
+    # 1) Full echo: response includes prefix + continuation → starts_with
+    # 2) Continuation only: response is just the new text that continues
+    #    mid-sentence (e.g. "'s particularly good at..." continuing "that")
     if text.startswith(prefill):
-        return True, "response starts with prefill text (continuation confirmed)"
-    return False, "response does not start with prefill text (no continuation)"
+        return True, "response starts with prefill text (full echo)"
+
+    # Check continuation-only: the response should continue mid-sentence,
+    # not start a fresh sentence.  A fresh response would start with a
+    # capital letter or a complete new sentence.
+    first_char = text[0] if text else ""
+    starts_mid_sentence = (
+        first_char in ("'", ",", ".", ";", " ", "-")
+        or (first_char.isalpha() and first_char.islower())
+    )
+    if starts_mid_sentence:
+        return True, f"response continues mid-sentence: {text[:60]!r}"
+
+    return False, f"response starts a new sentence (no continuation): {text[:60]!r}"
 
 
 def _is_capability_rejection(error_text: str, tokens: Tuple[str, ...]) -> bool:
