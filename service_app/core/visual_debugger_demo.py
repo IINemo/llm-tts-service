@@ -1748,8 +1748,6 @@ def _build_events_from_trajectory_pool(
                 per_step_scores = all_step_scores[traj_index]
                 if step_index < len(per_step_scores):
                     score_value = _to_float(per_step_scores[step_index])
-            if score_value is None and traj_index < len(all_scores):
-                score_value = _to_float(all_scores[traj_index])
 
             confidence_value = _confidence_from_score(
                 score_value,
@@ -1764,16 +1762,20 @@ def _build_events_from_trajectory_pool(
             if is_selected:
                 selected_score = score_value
 
-            event_candidates.append(
-                {
-                    "id": f"{strategy['id']}_{scorer_key}_traj_{traj_index + 1}_step_{step_index + 1}",
-                    "label": f"Trajectory {traj_index + 1}",
-                    "text": step_text,
-                    "status": "selected" if is_selected else "pruned",
-                    "selected": is_selected,
-                    "signals": signal_map,
-                }
-            )
+            candidate_entry: Dict[str, Any] = {
+                "id": f"{strategy['id']}_{scorer_key}_traj_{traj_index + 1}_step_{step_index + 1}",
+                "label": f"Trajectory {traj_index + 1}",
+                "text": step_text,
+                "status": "selected" if is_selected else "pruned",
+                "selected": is_selected,
+                "signals": signal_map,
+                "beam_uid": f"traj_{traj_index}_step_{step_index}",
+            }
+            if step_index > 0:
+                candidate_entry["parent_beam_uid"] = (
+                    f"traj_{traj_index}_step_{step_index - 1}"
+                )
+            event_candidates.append(candidate_entry)
 
         if not event_candidates:
             continue
