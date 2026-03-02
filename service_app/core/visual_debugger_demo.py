@@ -59,7 +59,7 @@ SUPPORTED_STRATEGIES: List[Dict[str, Any]] = [
         "summary": "Tree-of-thought expansion with beam pruning.",
         "requires_scorer": True,
         "requires_logprobs": False,
-        "requires_prefill": False,
+        "requires_prefill": True,
     },
     {
         "id": "adaptive",
@@ -68,7 +68,7 @@ SUPPORTED_STRATEGIES: List[Dict[str, Any]] = [
         "summary": "Online best-of-n with adaptive scaling across steps.",
         "requires_scorer": True,
         "requires_logprobs": False,
-        "requires_prefill": False,
+        "requires_prefill": True,
     },
     {
         "id": "online_best_of_n",
@@ -77,7 +77,7 @@ SUPPORTED_STRATEGIES: List[Dict[str, Any]] = [
         "summary": "Iterative candidate generation with stepwise reranking.",
         "requires_scorer": True,
         "requires_logprobs": False,
-        "requires_prefill": False,
+        "requires_prefill": True,
     },
     {
         "id": "offline_best_of_n",
@@ -770,7 +770,12 @@ def _create_runtime_components(
             minimum=1024,
             maximum=262144,
         ),
-        prefill_mode=_coerce_bool(model_overrides.get("prefill_mode"), default=False),
+        prefill_mode=_coerce_bool(
+            model_overrides.get("prefill_mode"),
+            # Step-by-step strategies need prefill so the model continues
+            # from the trajectory prefix rather than starting a new response.
+            default=strategy["id"] in {"online_best_of_n", "beam_search"},
+        ),
         disable_thinking_mode=disable_thinking_mode,
         supports_logprobs=requires_logprobs,
         max_concurrent_requests=_coerce_int(
@@ -2250,17 +2255,15 @@ def _probe_logprobs_support(client: Any, model_id: str) -> Tuple[bool, str]:
 
 
 def _probe_prefill_support(client: Any, model_id: str) -> Tuple[bool, str]:
+    prefill = "A transformer model is a type of neural network that"
     try:
-        client.chat.completions.create(
+        response = client.chat.completions.create(
             model=model_id,
             messages=[
-                {
-                    "role": "user",
-                    "content": "Continue exactly from the assistant turn.",
-                },
-                {"role": "assistant", "content": "The answer is", "prefix": True},
+                {"role": "user", "content": "Explain what a transformer model is in simple terms."},
+                {"role": "assistant", "content": prefill},
             ],
-            max_tokens=2,
+            max_tokens=60,
             temperature=0,
         )
     except Exception as exc:
@@ -2269,7 +2272,16 @@ def _probe_prefill_support(client: Any, model_id: str) -> Tuple[bool, str]:
             return False, error_text
         return False, f"prefill probe failed: {error_text}"
 
-    return True, "assistant prefix prefill probe succeeded."
+    text = (response.choices[0].message.content or "").strip() if response.choices else ""
+    if not text:
+        return False, "prefill probe: empty response"
+
+    # If the API supports prefill, the response starts with the prefill text
+    # (the API returns prefix + continuation). If not, the model generates
+    # a completely new response that doesn't start with the prefill.
+    if text.startswith(prefill):
+        return True, "response starts with prefill text (continuation confirmed)"
+    return False, "response does not start with prefill text (no continuation)"
 
 
 def _is_capability_rejection(error_text: str, tokens: Tuple[str, ...]) -> bool:
