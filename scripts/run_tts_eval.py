@@ -721,6 +721,9 @@ def create_model(config):
         else:
             api_key = config.model.get("api_key") or os.getenv("OPENAI_API_KEY")
             base_url = config.model.get("base_url", None)
+            # Allow OpenRouter-style "openai/gpt-4o-mini" with the openai provider
+            if model_path and model_path.startswith("openai/"):
+                model_path = model_path[len("openai/"):]
 
         # Check if DeepConf strategy
         if config.strategy.type == "deepconf":

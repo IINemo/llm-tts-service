@@ -213,6 +213,10 @@ def validate_model_capabilities(
     model_id_value = str(model_id or "").strip()
     api_key_value = str(api_key or "").strip()
 
+    # Allow OpenRouter-style "openai/gpt-4o-mini" with the openai provider
+    if provider_value == "openai" and model_id_value.startswith("openai/"):
+        model_id_value = model_id_value[len("openai/"):]
+
     if provider_value not in _PROVIDER_BASE_URLS:
         raise ValueError("Provider must be one of: openai, openrouter.")
     if not model_id_value:
@@ -576,6 +580,10 @@ def _create_runtime_components(
     provider = str(model_config.get("provider") or "").strip().lower()
     model_id = str(model_config.get("model_id") or "").strip()
     api_key_value = str(api_key or "").strip()
+
+    # Allow OpenRouter-style "openai/gpt-4o-mini" with the openai provider
+    if provider == "openai" and model_id.startswith("openai/"):
+        model_id = model_id[len("openai/"):]
 
     if provider not in _PROVIDER_BASE_URLS:
         raise ValueError("Provider must be one of: openai, openrouter.")
