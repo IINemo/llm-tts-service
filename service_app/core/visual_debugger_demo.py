@@ -800,7 +800,9 @@ def _create_runtime_components(
                 prm_model_path=str(
                     scorer_config.get("model_path") or "Qwen/Qwen2.5-Math-PRM-7B"
                 ),
-                device=str(scorer_config.get("device") or "cuda:0"),
+                device=_resolve_prm_device(
+                    str(scorer_config.get("device") or "auto")
+                ),
                 batch_size=_coerce_int(
                     scorer_config.get("batch_size"),
                     default=1,
@@ -2030,6 +2032,21 @@ def _coerce_bool(value: Any, default: Optional[bool]) -> Optional[bool]:
     if text in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _resolve_prm_device(device: str) -> str:
+    """Resolve PRM device string. 'auto' picks the last available GPU."""
+    if device != "auto":
+        return device
+    try:
+        import torch
+
+        n = torch.cuda.device_count()
+        if n > 1:
+            return f"cuda:{n - 1}"
+        return "cuda:0"
+    except Exception:
+        return "cuda:0"
 
 
 def _coerce_optional_int(value: Any) -> Optional[int]:
