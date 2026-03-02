@@ -4,6 +4,7 @@
 # LLM Test-Time Scaling Service
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![arXiv](https://img.shields.io/badge/arXiv-b31b1b.svg)]([https://arxiv.org](https://thinkbooster.s3.us-east-1.amazonaws.com/thinkbooster.pdf))
 
 A research framework for implementing and evaluating test-time scaling strategies for large language models. Includes implementations of DeepConf, Best-of-N, Self-Consistency, and Chain-of-Thought strategies.
 
