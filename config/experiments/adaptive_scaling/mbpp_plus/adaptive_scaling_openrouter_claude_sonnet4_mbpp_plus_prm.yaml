@@ -47,7 +47,7 @@ generation:
   batch_size: 1
   max_length: 65536
 
-# Strategy - Adaptive Scaling (MUR) with newline-based step boundaries for code
+# Strategy - Adaptive Scaling (MUR) with linguistic step boundaries
 strategy:
   type: adaptive
   candidates_per_step: 8
@@ -56,26 +56,14 @@ strategy:
   momentum_rate: 0.9
   adaptive_scaling_method: momentum
   detector_type: structured
-  min_step_tokens: 10
   max_step_tokens: 1024
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
 scorer:
   type: prm
   model_path: "Qwen/Qwen2.5-Math-PRM-7B"
   device: cuda:0
   batch_size: 1
+  gpu_memory_utilization: 0.9
 
 dataset:
   data_name: "mbpp_plus"

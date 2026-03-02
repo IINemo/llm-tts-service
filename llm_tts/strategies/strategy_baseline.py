@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List
 
-from llm_tts.generators.base import convert_trajectory_to_string
+from llm_tts.generators.base import convert_trajectory_to_string, get_completion_info
 from llm_tts.utils.answer_extraction import extract_answer
 
 from .strategy_base import StrategyBase, count_reasoning_steps
@@ -97,6 +97,7 @@ class StrategyBaseline(StrategyBase):
                 "uncertainty_scores": [],
                 "completed": False,
                 "token_stats": {},
+                **get_completion_info([]),
             }
 
         # Take the single generated candidate
@@ -133,7 +134,7 @@ class StrategyBaseline(StrategyBase):
                 )
 
                 log.info(f"Response:\n{final_trajectory}")
-                return {
+                result = {
                     "trajectory": final_trajectory,
                     "extracted_answer": extracted,
                     "steps": trajectory,
@@ -148,6 +149,8 @@ class StrategyBaseline(StrategyBase):
                     "completed": True,
                     "token_stats": token_stats,
                 }
+                result.update(get_completion_info([thinking_step]))
+                return result
 
         # Get uncertainty score from candidate
         uncertainty_score = candidate.other_data.get("uncertainty_score")
@@ -201,7 +204,7 @@ class StrategyBaseline(StrategyBase):
             getattr(self.step_generator, "thinking_mode", False),
         )
 
-        return {
+        result = {
             "trajectory": final_trajectory,
             "extracted_answer": extracted,
             "steps": trajectory,
@@ -212,6 +215,8 @@ class StrategyBaseline(StrategyBase):
             "completed": candidate.is_trajectory_complete,
             "token_stats": token_stats,
         }
+        result.update(get_completion_info(trajectory))
+        return result
 
     def generate_trajectories_batch(
         self,
@@ -332,6 +337,7 @@ class StrategyBaseline(StrategyBase):
                         "validity_scores": [],
                         "completed": False,
                         "token_stats": {},
+                        **get_completion_info([]),
                     }
                 )
                 continue
@@ -360,20 +366,19 @@ class StrategyBaseline(StrategyBase):
                 getattr(self.step_generator, "thinking_mode", False),
             )
 
-            results.append(
-                {
-                    "trajectory": final_trajectory,
-                    "extracted_answer": extracted,
-                    "steps": trajectory,
-                    "answer_step": answer_text,
-                    "reasoning_steps": reasoning_steps,
-                    "validity_scores": [
-                        self._get_validity_score(candidate, sample_idx)
-                    ],
-                    "completed": trajectory[-1].is_trajectory_complete,
-                    "token_stats": token_stats,
-                }
-            )
+            batch_result = {
+                "trajectory": final_trajectory,
+                "extracted_answer": extracted,
+                "steps": trajectory,
+                "answer_step": answer_text,
+                "reasoning_steps": reasoning_steps,
+                "validity_scores": [self._get_validity_score(candidate, sample_idx)],
+                "completed": trajectory[-1].is_trajectory_complete,
+                "token_stats": token_stats,
+            }
+            # Pass [candidate] (reasoning step only) for correct attribution
+            batch_result.update(get_completion_info([candidate]))
+            results.append(batch_result)
 
         log.info(f"Baseline batch: completed {len(results)} generations")
         return results

@@ -333,6 +333,9 @@ class StrategyDeepConf(StrategyBase):
             "vote_distribution": result["vote_distribution"],  # Answer -> percentage
             "completed": True,
             "metadata": builder.build(),
+            "completion_reason": None,
+            "context_limit_hit": False,
+            "max_steps_hit": False,
         }
 
     def _generate_online(self, prompt: str) -> Dict[str, Any]:
@@ -519,6 +522,9 @@ class StrategyDeepConf(StrategyBase):
             "vote_distribution": result["vote_distribution"],  # Answer -> percentage
             "completed": True,
             "metadata": builder.build(),
+            "completion_reason": None,
+            "context_limit_hit": False,
+            "max_steps_hit": False,
         }
 
     def _generate_single_trace(self, args: tuple) -> Optional[Dict[str, Any]]:

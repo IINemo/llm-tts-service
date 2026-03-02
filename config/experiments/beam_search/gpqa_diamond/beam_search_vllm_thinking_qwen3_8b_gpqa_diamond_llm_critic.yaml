@@ -1,0 +1,89 @@
+# @package _global_
+# Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/gpqa_diamond/beam_search_vllm_thinking_qwen3_8b_gpqa_diamond_llm_critic
+#
+# Beam Search with LLM Critic scorer on GPQA Diamond
+# Generation: GPT-OSS-120B (OpenRouter), Scoring: GPT-OSS-120B (OpenRouter)
+
+defaults:
+  - /config
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - /strategy/beam_search
+  - /scorer/llm_critic
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "beam_search/openrouter_gpt_oss_120b/gpqa_diamond/llm_critic/seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: wandb
+wandb_project: llm-tts-eval-gpqa-diamond
+wandb_group: "beam_search_gpt_oss_120b_gpqa_diamond_llm_critic"
+
+# Model configuration (OpenRouter API)
+model:
+  type: "openai_api"
+  provider: openrouter
+  model_path: "openai/gpt-oss-120b"
+  model_short_name: "openrouter_gpt_oss_120b"
+  supports_logprobs: true
+  api_key: null
+  top_logprobs: 10
+  prefill_mode: false
+  max_context_budget: 32768
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration (thinking mode settings)
+generation:
+  max_new_tokens: 32768
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  batch_size: 1
+  max_length: 65536
+
+# Strategy - Beam Search
+strategy:
+  beam_size: 3
+  candidates_per_beam: 5
+  max_steps: 250
+  aggregation: mean
+
+# LLM Critic Scorer using GPT-OSS-120B via OpenRouter
+scorer:
+  type: llm_critic
+  method: value
+  n_evaluate_sample: 3
+  score_aggregation: min
+  temperature: 0.1
+  max_tokens: 1024
+  timeout: 120
+  context_window: 5
+  value_prompt_file: "tree-of-thought/llm_critic/value_prompt.txt"
+  model:
+    type: openai_api
+    provider: openrouter
+    model_name: "openai/gpt-oss-120b"
+    api_key: null
+
+# Dataset configuration - GPQA Diamond
+dataset:
+  dataset_path: "test-time-compute/test_gpqa_diamond"
+  dataset_config: null
+  dataset_split: "test"
+  subset: null
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "char"
+  data_name: gpqa_diamond
+  system_prompt: "You are an expert in graduate-level science. Answer the following multiple choice question. Think step by step and provide your final answer as a single letter (A, B, C, or D) within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null

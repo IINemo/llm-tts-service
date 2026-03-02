@@ -106,7 +106,11 @@ try:
 except ImportError:
     POLYGRAPH_UNCERTAINTY_AVAILABLE = False
     VLLMWithUncertainty = None
-from utils.results import load_results_json, parse_resume_arguments, save_results_json
+from utils.results import (
+    load_results_json,
+    parse_resume_arguments,
+    save_results_json,
+)
 
 from llm_tts.evaluation import (
     EvaluatorAlignScore,
@@ -115,12 +119,18 @@ from llm_tts.evaluation import (
     EvaluatorLLMAsAJudge,
     EvaluatorMBPPPlus,
 )
+from llm_tts.evaluation.grader import get_timeout_count
 from llm_tts.generators import (
     StepCandidateGeneratorThroughAPI,
     StepCandidateGeneratorThroughHuggingface,
 )
 from llm_tts.models.blackboxmodel_with_streaming import BlackboxModelWithStreaming
-from llm_tts.scorers import StepScorerConfidence, StepScorerPRM, StepScorerUncertainty
+from llm_tts.scorers import (
+    StepScorerConfidence,
+    StepScorerLLMCritic,
+    StepScorerPRM,
+    StepScorerUncertainty,
+)
 from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 
 # vLLM step generator (optional)
@@ -392,7 +402,21 @@ def create_scorer(config):
             scorer.init_flop_calculator(config.scorer.model_path)
         except Exception as e:
             log.warning(f"Could not init PRM FLOP calculator: {e}")
-    elif config.scorer.type == "uncertainty":
+    elif config.scorer.type == "llm_critic":
+        # LLM Critic Scorer (Tree of Thoughts paper)
+        # Model will be set later in create_tts_strategy() after model is initialized
+        scorer = StepScorerLLMCritic(
+            method=config.scorer.method,
+            n_evaluate_sample=config.scorer.n_evaluate_sample,
+            temperature=config.scorer.temperature,
+            max_tokens=config.scorer.max_tokens,
+            timeout=config.scorer.timeout,
+            value_prompt_file=config.scorer.value_prompt_file,
+            vote_prompt_file=config.scorer.vote_prompt_file,
+            score_aggregation=getattr(config.scorer, "score_aggregation", "min"),
+            context_window=getattr(config.scorer, "context_window", 0),
+        )
+    elif config.scorer.type in ["uncertainty", "uhead"]:
         scorer = StepScorerUncertainty()
     elif config.scorer.type in (
         "perplexity",
@@ -448,7 +472,11 @@ def create_model(config):
         model.is_vllm = True
         model.vllm_engine = llm
 
-        log.info("vLLM model loaded successfully")
+        model_gpu_util = config.model.get("gpu_memory_utilization", 0.9)
+        log.info(
+            f"vLLM model loaded successfully "
+            f"(gpu_memory_utilization={model_gpu_util})"
+        )
 
         # Create step generator for strategies that need it
         # DeepConf has its own generation logic
@@ -460,16 +488,17 @@ def create_model(config):
                     "Ensure llm_tts.step_candidate_generator_through_vllm is installed."
                 )
 
-            # Self-consistency and baseline don't need uncertainty wrapper
-            # (self-consistency uses majority voting, baseline uses raw vLLM batch generation)
-            if config.strategy.type in (
-                "self_consistency",
-                "baseline",
-                "extended_thinking",
+            # Self-consistency, baseline, extended_thinking, and llm_critic don't need uncertainty wrapper
+            scorer_type = config.scorer.type if config.scorer else "entropy"
+            if (
+                config.strategy.type
+                in ("self_consistency", "baseline", "extended_thinking")
+                or scorer_type == "llm_critic"
             ):
                 vllm_model = llm
                 log.info(
-                    f"{config.strategy.type}: using raw vLLM (no uncertainty wrapper)"
+                    f"Strategy={config.strategy.type}, scorer={scorer_type}: "
+                    f"using raw vLLM (no uncertainty wrapper)"
                 )
             else:
                 if not POLYGRAPH_UNCERTAINTY_AVAILABLE:
@@ -480,6 +509,7 @@ def create_model(config):
 
                 # Select estimator based on scorer config
                 scorer_type = config.scorer.type if config.scorer else "entropy"
+                vllm_with_uncertainty_arguments = {}
                 if scorer_type == "perplexity":
                     stat_calculators = [VLLMLogprobsCalculator()]
                     estimator = Perplexity()
@@ -502,6 +532,36 @@ def create_model(config):
                     # Use entropy wrapper for generation (scores not used for selection)
                     stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
                     estimator = MeanTokenEntropy()
+                elif scorer_type == "uhead":
+                    from luh import AutoUncertaintyHead
+                    from luh.calculator_apply_uq_head import CalculatorApplyUQHead
+                    from luh.luh_claim_estimator_dummy import LuhClaimEstimatorDummy
+                    from luh.vllm.vllm_uhead_features import VLLMUncertaintyHeadFeatures
+
+                    uncertainty_head = AutoUncertaintyHead.from_pretrained(
+                        config.scorer.uq_head_path, base_model=llm
+                    )
+                    stat_calculators = [
+                        VLLMUncertaintyHeadFeatures(
+                            uncertainty_head,
+                            model_path=config.model.model_path,
+                            max_model_len=config.scorer.get("max_model_len", 32768),
+                            gpu_memory_utilization=config.scorer.get(
+                                "gpu_memory_utilization", 0.9
+                            ),
+                            tensor_parallel_size=config.scorer.get(
+                                "tensor_parallel_size", 1
+                            ),
+                        ),
+                        CalculatorApplyUQHead(
+                            uncertainty_head,
+                            device=getattr(config.scorer, "device", "cuda"),
+                        ),
+                    ]
+                    estimator = LuhClaimEstimatorDummy()
+                    vllm_with_uncertainty_arguments = stat_calculators[
+                        0
+                    ].vllm_with_uncertainty_arguments()
                 else:
                     raise ValueError(
                         f"Unsupported scorer type for vLLM: {scorer_type}. "
@@ -512,6 +572,7 @@ def create_model(config):
                     llm=llm,
                     stat_calculators=stat_calculators,
                     estimator=estimator,
+                    **vllm_with_uncertainty_arguments,
                 )
                 log.info(
                     f"Created VLLMWithUncertainty wrapper with {type(estimator).__name__}"
@@ -789,9 +850,203 @@ def create_model(config):
     return model, step_generator
 
 
+def _create_api_model_for_scorer(model_cfg):
+    """Create an API-backed model instance for scoring only."""
+    model_path = model_cfg.get("model_name") or model_cfg.get("model_path")
+    log.info(f"LLM critic scorer API model: {model_path}")
+
+    provider = model_cfg.get("provider")
+    base_url = model_cfg.get("base_url")
+    api_key_env = model_cfg.get("api_key_env")
+
+    if api_key_env:
+        api_key = model_cfg.get("api_key") or os.getenv(api_key_env)
+    elif provider == "openrouter":
+        api_key = model_cfg.get("api_key") or os.getenv("OPENROUTER_API_KEY")
+        if base_url is None:
+            base_url = "https://openrouter.ai/api/v1"
+    else:
+        api_key = model_cfg.get("api_key") or os.getenv("OPENAI_API_KEY")
+
+    return BlackboxModelWithStreaming(
+        openai_api_key=api_key,
+        model_path=model_path,
+        supports_logprobs=model_cfg.get("supports_logprobs", False),
+        base_url=base_url,
+    )
+
+
 def create_tts_strategy(
     config, model, step_generator, scorer, output_dir=None, flop_calculator=None
 ):
+    # Set model on scorer if it supports it (e.g., StepScorerLLMCritic)
+    if scorer is not None and hasattr(scorer, "set_model"):
+        scorer_model_cfg = getattr(config.scorer, "model", None)
+        scorer_model_type = (
+            scorer_model_cfg.get("type", "openai_api") if scorer_model_cfg else None
+        )
+
+        if scorer_model_type == "vllm_shared":
+            # Reuse the same vLLM engine that is used for generation
+            vllm_engine = getattr(model, "vllm_engine", None)
+            if vllm_engine is None:
+                raise ValueError(
+                    "scorer.model.type=vllm_shared requires a vLLM generation model"
+                )
+            scorer.set_model(vllm_engine, use_vllm=True)
+            log.info("Scorer: reusing generation vLLM engine for scoring")
+        elif scorer_model_type == "vllm":
+            # Launch a vLLM OpenAI-compatible server as a subprocess on a
+            # dedicated GPU, then connect to it via the API scorer path.
+            import atexit
+            import subprocess
+            import time
+
+            scorer_gpu = str(scorer_model_cfg.get("gpu", "1"))
+            scorer_model_path = scorer_model_cfg.get(
+                "model_path"
+            ) or scorer_model_cfg.get("model_name")
+            scorer_port = int(scorer_model_cfg.get("port", 8711))
+            scorer_gpu_util = scorer_model_cfg.get("gpu_memory_utilization", 0.9)
+            scorer_max_model_len = scorer_model_cfg.get("max_model_len", 4096)
+            scorer_max_num_seqs = scorer_model_cfg.get("max_num_seqs", 8)
+            scorer_max_num_batched_tokens = scorer_model_cfg.get(
+                "max_num_batched_tokens", None
+            )
+
+            log.info(
+                f"Scorer: launching vLLM server for {scorer_model_path} "
+                f"on GPU {scorer_gpu}, port {scorer_port}, "
+                f"gpu_memory_utilization={scorer_gpu_util}, "
+                f"max_num_seqs={scorer_max_num_seqs}"
+            )
+
+            vllm_cmd = [
+                sys.executable,
+                "-m",
+                "vllm.entrypoints.openai.api_server",
+                "--model",
+                scorer_model_path,
+                "--port",
+                str(scorer_port),
+                "--gpu-memory-utilization",
+                str(scorer_gpu_util),
+                "--max-model-len",
+                str(scorer_max_model_len),
+                "--tensor-parallel-size",
+                str(scorer_model_cfg.get("tensor_parallel_size", 1)),
+                "--max-num-seqs",
+                str(scorer_max_num_seqs),
+                "--trust-remote-code",
+                "--seed",
+                str(config.system.seed),
+            ]
+            if scorer_max_num_batched_tokens is not None:
+                vllm_cmd.extend(
+                    [
+                        "--max-num-batched-tokens",
+                        str(scorer_max_num_batched_tokens),
+                    ]
+                )
+
+            scorer_env = os.environ.copy()
+            scorer_env["CUDA_VISIBLE_DEVICES"] = scorer_gpu
+
+            # Redirect stdout/stderr to file to avoid pipe buffer deadlock.
+            scorer_log_dir = output_dir or "."
+            scorer_stdout_path = os.path.join(scorer_log_dir, "scorer_vllm_server.log")
+            scorer_stdout_f = open(scorer_stdout_path, "w")
+            scorer_proc = subprocess.Popen(
+                vllm_cmd,
+                env=scorer_env,
+                stdout=scorer_stdout_f,
+                stderr=subprocess.STDOUT,
+            )
+
+            def _kill_scorer_server():
+                if scorer_proc.poll() is None:
+                    log.info("Shutting down scorer vLLM server...")
+                    scorer_proc.terminate()
+                    try:
+                        scorer_proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        scorer_proc.kill()
+                scorer_stdout_f.close()
+
+            atexit.register(_kill_scorer_server)
+
+            # Wait for the server to be ready
+            import httpx
+
+            base_url = f"http://localhost:{scorer_port}/v1"
+            max_wait = 300  # 5 minutes
+            start_time = time.time()
+            while time.time() - start_time < max_wait:
+                if scorer_proc.poll() is not None:
+                    scorer_stdout_f.flush()
+                    try:
+                        with open(scorer_stdout_path, "r") as f:
+                            log_tail = f.read()[-2000:]
+                    except Exception:
+                        log_tail = "(could not read log)"
+                    raise RuntimeError(
+                        f"Scorer vLLM server exited with code "
+                        f"{scorer_proc.returncode}:\n{log_tail}"
+                    )
+                try:
+                    resp = httpx.get(f"{base_url}/models", timeout=5)
+                    if resp.status_code == 200:
+                        log.info(
+                            f"Scorer vLLM server ready at {base_url} "
+                            f"(waited {time.time() - start_time:.1f}s)"
+                        )
+                        break
+                except Exception:
+                    pass
+                time.sleep(2)
+            else:
+                _kill_scorer_server()
+                raise RuntimeError(
+                    f"Scorer vLLM server did not start within {max_wait}s"
+                )
+
+            scorer_model = _create_api_model_for_scorer(
+                {
+                    "type": "openai_api",
+                    "model_name": scorer_model_path,
+                    "base_url": base_url,
+                    "api_key": "unused",
+                }
+            )
+            scorer.set_model(scorer_model, use_vllm=False)
+            log.info(
+                f"Scorer: using vLLM server on GPU {scorer_gpu} "
+                f"via API at {base_url}"
+            )
+        elif scorer_model_cfg is not None and scorer_model_type == "openai_api":
+            scorer_model = _create_api_model_for_scorer(scorer_model_cfg)
+            scorer.set_model(scorer_model, use_vllm=False)
+            log.info("Scorer: using API model")
+        else:
+            raise ValueError(
+                "scorer.model must be specified for llm_critic scorer. "
+                "Supported types: openai_api, vllm, vllm_shared"
+            )
+
+        # Initialize FLOP calculator for LLM critic token/compute tracking
+        if hasattr(scorer, "init_flop_calculator"):
+            try:
+                scorer_model_name = (
+                    scorer_model_cfg.get("model_name")
+                    or scorer_model_cfg.get("model_path")
+                    if scorer_model_cfg
+                    else getattr(config.model, "model_path", None)
+                )
+                if scorer_model_name:
+                    scorer.init_flop_calculator(scorer_model_name)
+            except Exception as e:
+                log.warning(f"Could not init LLM critic FLOP calculator: {e}")
+
     if config.strategy.type == "baseline":
         # Get eos_patterns from config, default to ["<end of response>"]
         eos_patterns = getattr(config.strategy, "detector_eos_patterns", None)
@@ -1231,6 +1486,40 @@ def _generate_trajectories_batch(
             else:
                 log.info(f"\nFull trajectory:\n{result['trajectory']}")
 
+            # Flush compute metrics to disk before eval (which may hang on sympy)
+            _token_stats = result.get("token_stats") or {}
+            _compute_metrics = {
+                "sample_index": i,
+                "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
+                "total_tokens_this_sample": _token_stats.get(
+                    "total_tokens_this_sample", 0
+                ),
+                "input_tokens_this_sample": _token_stats.get("input_tokens", 0),
+                "output_tokens_this_sample": _token_stats.get("output_tokens", 0),
+                "generations_this_sample": _token_stats.get("generation_count", 0),
+                "tflops_this_sample": _safe_tflops(_token_stats, "tflops"),
+                "prm_tokens_this_sample": _token_stats.get("prm_input_tokens", 0),
+                "prm_tflops_this_sample": _safe_tflops(_token_stats, "prm_tflops"),
+            }
+            for key in (
+                "trajectory_tokens",
+                "answer_tokens",
+                "context_limit_hit",
+                "max_steps_hit",
+                "completion_reason",
+            ):
+                if key in result and result[key]:
+                    _compute_metrics[key] = result[key]
+            if "validity_scores" in result and result["validity_scores"]:
+                valid_scores = [s for s in result["validity_scores"] if s is not None]
+                if valid_scores:
+                    _compute_metrics["confidence"] = float(np.mean(valid_scores))
+            try:
+                with open(sample_metrics_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(_compute_metrics, ensure_ascii=False) + "\n")
+            except Exception as e:
+                log.warning(f"Failed to flush compute metrics: {e}")
+
             # Check correctness with all evaluators
             eval_results = {}
             for eval_name, evaluator in phase1_evaluators.items():
@@ -1357,6 +1646,16 @@ def _generate_trajectories_batch(
             if "token_stats" in result:
                 result_dict["token_stats"] = result["token_stats"]
 
+            # Propagate beam search diagnostics
+            for key in (
+                "trajectory_tokens",
+                "answer_tokens",
+                "context_limit_hit",
+                "max_steps_hit",
+            ):
+                if key in result:
+                    result_dict[key] = result[key]
+
             # Store answer_step for thinking mode strategies
             if "answer_step" in result:
                 result_dict["answer_step"] = result["answer_step"]
@@ -1383,18 +1682,9 @@ def _generate_trajectories_batch(
                     }
                 )
 
-            # Compute running metrics
-            token_stats = result.get("token_stats")
-            if token_stats is None:
-                log.warning(f"Sample {i}: missing 'token_stats' in result")
-                token_stats = {}
-            all_token_stats = []
-            for r in results:
-                ts = r.get("token_stats")
-                if ts is None:
-                    ts = {}
-                all_token_stats.append(ts)
-
+            # Compute running totals for wandb logging
+            token_stats = result.get("token_stats") or {}
+            all_token_stats = [r.get("token_stats") or {} for r in results]
             running_total_tokens = sum(
                 ts.get("total_tokens_this_sample", 0) for ts in all_token_stats
             )
@@ -1419,50 +1709,24 @@ def _generate_trajectories_batch(
                     f"Running accuracy [{eval_name}]: {correct_count}/{len(results)} = {accuracy:.3f}"
                 )
 
-            sample_metrics = {
-                "sample_index": i,
-                "is_correct": bool(is_correct),
-                "reasoning_steps": result.get("reasoning_steps", len(result["steps"])),
-                "samples_completed": len(results),
-                "total_tokens_this_sample": token_stats.get(
-                    "total_tokens_this_sample", 0
-                ),
-                "input_tokens_this_sample": token_stats.get("input_tokens", 0),
-                "output_tokens_this_sample": token_stats.get("output_tokens", 0),
-                "generations_this_sample": token_stats.get("generation_count", 0),
-                "tflops_this_sample": _safe_tflops(token_stats, "tflops"),
-                "prm_tokens_this_sample": token_stats.get("prm_input_tokens", 0),
-                "prm_tflops_this_sample": _safe_tflops(token_stats, "prm_tflops"),
-                "running_avg_tokens_per_sample": (
-                    (running_total_tokens / len(results)) if results else 0.0
-                ),
-                "running_total_tokens": running_total_tokens,
-                "running_total_tflops": running_total_tflops,
-            }
-            # Add per-evaluator running accuracy to metrics
+            # Log full metrics (compute + eval + running totals) to wandb
+            _compute_metrics["is_correct"] = bool(is_correct)
+            _compute_metrics["samples_completed"] = len(results)
+            _compute_metrics["running_avg_tokens_per_sample"] = (
+                (running_total_tokens / len(results)) if results else 0.0
+            )
+            _compute_metrics["running_total_tokens"] = running_total_tokens
+            _compute_metrics["running_total_tflops"] = running_total_tflops
             for eval_name, stats in running_stats.items():
                 safe_name = eval_name.replace("-", "_").replace(".", "_")
-                sample_metrics[f"running_correct_{safe_name}"] = stats["correct"]
-                sample_metrics[f"running_accuracy_{safe_name}"] = stats["accuracy"]
+                _compute_metrics[f"running_correct_{safe_name}"] = stats["correct"]
+                _compute_metrics[f"running_accuracy_{safe_name}"] = stats["accuracy"]
 
-            if "validity_scores" in result and result["validity_scores"]:
-                valid_scores = [s for s in result["validity_scores"] if s is not None]
-                if valid_scores:
-                    sample_metrics["confidence"] = float(np.mean(valid_scores))
-
-            # Append metrics line
-            try:
-                with open(sample_metrics_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(sample_metrics, ensure_ascii=False) + "\n")
-            except Exception as e:
-                log.warning(f"Failed to append sample metrics: {e}")
-
-            # Log to wandb
             try:
                 import wandb
 
                 if wandb.run is not None:
-                    wandb.log(sample_metrics)
+                    wandb.log(_compute_metrics)
             except Exception:
                 pass
 
@@ -2123,6 +2387,47 @@ def evaluate_results(
         metrics["compute/prm_input_tokens"] = int(total_prm_tokens)
         metrics["compute/prm_tflops"] = float(total_prm_tflops)
 
+    # Beam search token breakdown and termination diagnostics
+    all_trajectory_tokens = [
+        r["trajectory_tokens"] for r in results if "trajectory_tokens" in r
+    ]
+    all_answer_tokens = [r["answer_tokens"] for r in results if "answer_tokens" in r]
+    context_limit_hits = sum(1 for r in results if r.get("context_limit_hit", False))
+    max_steps_hits = sum(1 for r in results if r.get("max_steps_hit", False))
+    no_answer_count = sum(1 for r in results if not r.get("extracted_answer"))
+    if all_trajectory_tokens:
+        metrics["compute/avg_trajectory_tokens"] = float(np.mean(all_trajectory_tokens))
+        metrics["compute/avg_answer_tokens"] = float(np.mean(all_answer_tokens))
+        metrics["context_limit_hit_count"] = context_limit_hits
+        metrics["context_limit_hit_rate"] = (
+            context_limit_hits / len(results) if results else 0.0
+        )
+        metrics["max_steps_hit_count"] = max_steps_hits
+        metrics["max_steps_hit_rate"] = (
+            max_steps_hits / len(results) if results else 0.0
+        )
+        log.info(
+            f"Token breakdown: avg trajectory={np.mean(all_trajectory_tokens):.0f}, "
+            f"avg answer={np.mean(all_answer_tokens):.0f}"
+        )
+        log.info(
+            f"Context limit hits: {context_limit_hits}/{len(results)} "
+            f"({context_limit_hits / len(results):.1%})"
+        )
+        log.info(
+            f"Max steps hits: {max_steps_hits}/{len(results)} "
+            f"({max_steps_hits / len(results):.1%})"
+        )
+    # No-answer rate (applies to all strategies)
+    if results:
+        metrics["no_answer_count"] = no_answer_count
+        metrics["no_answer_rate"] = no_answer_count / len(results)
+        if no_answer_count > 0:
+            log.warning(
+                f"No answer extracted: {no_answer_count}/{len(results)} "
+                f"({no_answer_count / len(results):.1%})"
+            )
+
     # Add LLM judge statistics (if available)
     if llm_judge_stats:
         metrics.update(llm_judge_stats)
@@ -2158,6 +2463,14 @@ def evaluate_results(
                 metrics[f"{eval_name}/avg_consensus"] = float(np.mean(consensus_scores))
                 metrics[f"{eval_name}/min_consensus"] = float(np.min(consensus_scores))
 
+    # Record symbolic comparison timeouts
+    symbolic_timeouts = get_timeout_count()
+    metrics["eval/symbolic_equal_timeouts"] = symbolic_timeouts
+    if symbolic_timeouts > 0:
+        log.warning(
+            "Total symbolic_equal timeouts during this run: %d", symbolic_timeouts
+        )
+
     # Save metrics locally (so FLOPs metrics aren't only in W&B)
     metrics_path = Path(save_path) / "metrics.json"
     try:
@@ -2186,6 +2499,10 @@ def evaluate_results(
                 project_name = wandb.run.project
                 wandb_group_url = (
                     f"https://wandb.ai/{entity}/{project_name}/groups/{group}/workspace"
+                )
+                wandb_url = wandb_url.replace(
+                    f"/{project_name}/runs/",
+                    f"/{project_name}/groups/{group}/runs/",
                 )
 
             # Log all output files as artifacts
@@ -2237,6 +2554,9 @@ def evaluate_results(
     log.info("=" * 60)
 
 
+_experiment_info = {}  # Populated in main(), read by crash handler
+
+
 @hydra.main(
     version_base=None,
     config_path=None,
@@ -2252,6 +2572,20 @@ def main(config):
     ip_addr = socket.gethostbyname(hostname)
     machine_name = os.environ.get("MACHINE_NAME", hostname)
     log.info(f"Host: {machine_name} ({ip_addr})")
+
+    from llm_tts.utils.telegram import TelegramNotifier
+
+    notifier = TelegramNotifier()
+    _experiment_info.update(
+        {
+            "run_name": config.get("run_name", "unknown"),
+            "strategy": config.strategy.type,
+            "model": getattr(config.model, "model_short_name", "unknown"),
+            "dataset": config.dataset.get("data_name", "unknown"),
+            "scorer": config.scorer.type if getattr(config, "scorer", None) else "none",
+            "machine": machine_name,
+        }
+    )
 
     cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
     log.info(f"Command: CUDA_VISIBLE_DEVICES={cuda_devices} {' '.join(sys.argv)}")
@@ -2314,6 +2648,31 @@ def main(config):
             )
             log.info(f"WandB group URL: {group_url}")
         wandb_save_directory(Path(output_dir) / ".hydra")
+
+    # Send Telegram "started" notification
+    try:
+        _wandb_url, _group_url = None, None
+        if getattr(config, "report_to", None) == "wandb":
+            import wandb
+
+            if wandb.run:
+                _wandb_url = wandb.run.get_url()
+                wandb_group = getattr(config, "wandb_group", None)
+                if wandb_group:
+                    entity = wandb.run.entity
+                    project = getattr(config, "wandb_project", None) or os.environ.get(
+                        "WANDB_PROJECT", "llm-tts-eval"
+                    )
+                    _group_url = f"https://wandb.ai/{entity}/{project}/groups/{wandb_group}/workspace"
+                    _wandb_url = _wandb_url.replace(
+                        f"/{project}/runs/",
+                        f"/{project}/groups/{wandb_group}/runs/",
+                    )
+        notifier.notify_started(
+            wandb_url=_wandb_url, wandb_group_url=_group_url, **_experiment_info
+        )
+    except Exception:
+        pass
 
     # Validate API keys early (before spending hours on model loading / generation)
     _validate_api_keys(config)
@@ -2534,6 +2893,38 @@ def main(config):
         log.exception(f"Evaluation failed: {e}")
         raise
 
+    # Send Telegram "finished" notification
+    try:
+        _metrics = {}
+        _metrics_path = Path(output_dir) / "metrics.json"
+        if _metrics_path.exists():
+            _metrics = json.loads(_metrics_path.read_text())
+        _wandb_url, _group_url = None, None
+        if getattr(config, "report_to", None) == "wandb":
+            import wandb
+
+            if wandb.run:
+                _wandb_url = wandb.run.get_url()
+                wandb_group = getattr(config, "wandb_group", None)
+                if wandb_group:
+                    entity = wandb.run.entity
+                    project = getattr(config, "wandb_project", None) or os.environ.get(
+                        "WANDB_PROJECT", "llm-tts-eval"
+                    )
+                    _group_url = f"https://wandb.ai/{entity}/{project}/groups/{wandb_group}/workspace"
+                    _wandb_url = _wandb_url.replace(
+                        f"/{project}/runs/",
+                        f"/{project}/groups/{wandb_group}/runs/",
+                    )
+        notifier.notify_finished(
+            metrics=_metrics,
+            wandb_url=_wandb_url,
+            wandb_group_url=_group_url,
+            **_experiment_info,
+        )
+    except Exception:
+        pass
+
     # Save log files and finish wandb session
     if getattr(config, "report_to", None) == "wandb":
         try:
@@ -2594,6 +2985,30 @@ if __name__ == "__main__":
             error_log.error(f"Job failed due to MemoryError (GPU/CPU OOM): {e}")
         else:
             error_log.exception(f"Job failed with exception: {e}")
+
+        # Send Telegram "crashed" notification
+        try:
+            from llm_tts.utils.telegram import TelegramNotifier
+
+            _notifier = TelegramNotifier()
+            _wandb_url = None
+            try:
+                import wandb
+
+                if wandb.run:
+                    _wandb_url = wandb.run.get_url()
+            except Exception:
+                pass
+            _notifier.notify_crashed(
+                run_name=_experiment_info.get("run_name", "unknown"),
+                strategy=_experiment_info.get("strategy", "unknown"),
+                model=_experiment_info.get("model", "unknown"),
+                dataset=_experiment_info.get("dataset", "unknown"),
+                error=str(e),
+                wandb_url=_wandb_url,
+            )
+        except Exception:
+            pass  # Never crash the crash handler
 
         # Save logs to wandb even on error
         if output_dir:

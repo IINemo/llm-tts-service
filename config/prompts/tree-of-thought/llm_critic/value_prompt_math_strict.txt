@@ -1,0 +1,8 @@
+Problem: {problem}
+Reasoning so far: {trajectory}
+Step: {step}
+
+Evaluate the correctness of the given math reasoning step. Respond with ONLY ONE WORD: sure, likely, or impossible.
+- sure: step is correct
+- likely: step is reasonable but incomplete or unverifiable
+- impossible: step contains an error

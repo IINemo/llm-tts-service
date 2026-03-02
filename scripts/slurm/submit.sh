@@ -52,7 +52,7 @@ Required:
 
 Optional:
   --model <name>         Model: qwen25_7b (default), qwen3_8b_thinking, qwen3_8b, qwen25_math_7b, qwen25_math_15b
-  --scorers <list>       Scorers: all, prm, entropy, perplexity, sequence_prob (default: none for baseline)
+  --scorers <list>       Scorers: all, prm, entropy, perplexity, sequence_prob, pd_gap (default: none for baseline)
   --seeds <n>            Number of seeds to run (default: 1)
   --seed <n>             Single seed to use (default: 42)
   --mode <mode>          Execution mode: parallel (default) or sequential
@@ -187,6 +187,7 @@ SCORER_CONFIGS[entropy]="entropy"
 SCORER_CONFIGS[perplexity]="perplexity"
 SCORER_CONFIGS[sequence_prob]="sequence_prob"
 SCORER_CONFIGS[prm]="prm"
+SCORER_CONFIGS[pd_gap]="pd_gap"
 
 declare -A MODEL_CONFIGS
 MODEL_CONFIGS[qwen25_7b]="vllm_qwen25_math_7b"
@@ -825,13 +826,13 @@ if [[ "$STRATEGY" == "baseline" || "$STRATEGY" == "self_consistency" ]]; then
     # These don't use scorers
     scorer_list=("none")
 elif [[ "$SCORERS" == "all" ]]; then
-    scorer_list=("entropy" "perplexity" "sequence_prob" "prm")
+    scorer_list=("entropy" "perplexity" "sequence_prob" "pd_gap" "prm")
 elif [[ -n "$SCORERS" ]]; then
     IFS=',' read -ra scorer_list <<< "$SCORERS"
     scorer_list=("${scorer_list[@]}")
 else
     echo "Error: --scorers required for $STRATEGY strategy"
-    echo "Options: all, prm, entropy, perplexity, sequence_prob"
+    echo "Options: all, prm, entropy, perplexity, sequence_prob, pd_gap"
     exit 1
 fi
 

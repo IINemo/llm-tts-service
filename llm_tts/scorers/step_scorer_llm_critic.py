@@ -1,0 +1,947 @@
+"""
+LLM Critic Scorer based on Tree of Thoughts paper.
+
+Implements the State Evaluator from "Tree of Thoughts: Deliberate Problem Solving
+with Large Language Models" (Yao et al., 2023).
+
+Two evaluation strategies:
+1. Value: Evaluates each step independently, returns sure/likely/unlikely/impossible
+2. Vote: Presents multiple candidates and asks which is most promising
+
+Paper: https://arxiv.org/abs/2305.10601
+
+Supports both:
+- vLLM backend (for local GPU inference)
+- OpenAI-compatible API (OpenRouter, OpenAI, etc.)
+"""
+
+import logging
+import os
+import re
+import threading
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from llm_tts.utils.flops import FLOPCalculator
+
+from .step_scorer_base import CandidateScore, StepScorerBase
+
+log = logging.getLogger(__name__)
+
+# Default prompt file paths (relative to project root config/prompts/)
+DEFAULT_VALUE_PROMPT_FILE = "tree-of-thought/llm_critic/value_prompt_math.txt"
+DEFAULT_VOTE_PROMPT_FILE = "tree-of-thought/llm_critic/vote_prompt.txt"
+
+
+def _load_prompt_from_file(prompt_path: str) -> Optional[str]:
+    """Load prompt from file. Returns None if file not found."""
+    if os.path.isabs(prompt_path) and os.path.exists(prompt_path):
+        with open(prompt_path, "r") as f:
+            return f.read()
+
+    project_root = Path(__file__).parent.parent.parent
+    config_prompts_path = project_root / "config" / "prompts" / prompt_path
+    if config_prompts_path.exists():
+        with open(config_prompts_path, "r") as f:
+            return f.read()
+
+    cwd_path = Path.cwd() / "config" / "prompts" / prompt_path
+    if cwd_path.exists():
+        with open(cwd_path, "r") as f:
+            return f.read()
+
+    return None
+
+
+class StepScorerLLMCritic(StepScorerBase):
+    """
+    LLM Critic Scorer from Tree of Thoughts paper.
+
+    Uses the LLM itself to evaluate reasoning steps, implementing
+    the "State Evaluator V(pθ, S)" from the ToT framework.
+
+    Args:
+        model: Language model for evaluation. Can be:
+            - vLLM LLM instance (for local GPU inference)
+            - BlackboxModelWithStreaming (for API-based inference)
+            - None (will be set later via set_model())
+        method: Evaluation method - "value" or "vote"
+        n_evaluate_sample: Number of evaluation samples per step (for aggregation)
+        temperature: Sampling temperature for evaluation
+        max_tokens: Maximum tokens for evaluation response
+        timeout: Timeout in seconds for API calls
+        value_prompt: Custom value evaluation prompt template
+        vote_prompt: Custom vote evaluation prompt template
+        use_vllm: If True, use vLLM backend; if False, use API
+    """
+
+    def __init__(
+        self,
+        model=None,
+        method: str = "value",
+        n_evaluate_sample: int = 3,
+        temperature: float = 0.7,
+        max_tokens: int = 100,
+        timeout: int = 60,
+        value_prompt: str = None,
+        value_prompt_file: str = None,
+        vote_prompt: str = None,
+        vote_prompt_file: str = None,
+        use_vllm: bool = False,
+        score_aggregation: str = "min",
+        context_window: int = 0,
+        name: str = "llm_critic",
+    ):
+        super().__init__(name=name)
+
+        self.model = model
+        self.method = method
+        self.n_evaluate_sample = n_evaluate_sample
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.timeout = timeout
+        self.use_vllm = use_vllm
+        self.use_local = False
+        self.score_aggregation = score_aggregation
+        self.context_window = context_window
+
+        # Load prompts: priority is direct string > custom file > default file
+        self.value_prompt = self._load_prompt(
+            value_prompt, value_prompt_file, DEFAULT_VALUE_PROMPT_FILE, "value"
+        )
+        self.vote_prompt = self._load_prompt(
+            vote_prompt, vote_prompt_file, DEFAULT_VOTE_PROMPT_FILE, "vote"
+        )
+
+        # Value mapping aligned to ToT labels: sure/likely/impossible.
+        self.value_map = {
+            "sure": 3.0,
+            "likely": 1.0,
+            "impossible": 0.1,
+        }
+
+        # Extended synonyms that map to the base labels above
+        # Note: paper says "sure/maybe/impossible", code uses "sure/likely/impossible"
+        self.value_synonyms = {
+            "maybe": 1.0,  # paper uses "maybe" as equivalent to "likely"
+            "correct": 3.0,
+            "definitely": 3.0,
+            "unlikely": 0.1,
+            "incorrect": 0.1,
+            "wrong": 0.1,
+        }
+
+        # Statistics
+        self.total_evaluations = 0
+        self.cache: Dict[str, float] = {}
+
+        # FLOP/token tracking for LLM critic evaluations
+        self.flop_calculator: Optional[FLOPCalculator] = None
+        self._total_input_tokens: int = 0
+        self._total_output_tokens: int = 0
+        self._per_sample_input_tokens: Dict[Any, int] = {}
+        self._per_sample_output_tokens: Dict[Any, int] = {}
+        self._current_sample_id: Any = None
+        self._tokens_lock = threading.Lock()
+
+        log.info(
+            f"StepScorerLLMCritic initialized: method={method}, "
+            f"n_evaluate_sample={n_evaluate_sample}, use_vllm={use_vllm}, "
+            f"score_aggregation={score_aggregation}"
+        )
+
+    def _aggregate_scores(self, scores: List[float]) -> float:
+        """Aggregate multiple evaluation scores using the configured method."""
+        if not scores:
+            return 0.0
+        if self.score_aggregation == "min":
+            return float(min(scores))
+        elif self.score_aggregation == "mean":
+            return float(sum(scores) / len(scores))
+        elif self.score_aggregation == "max":
+            return float(max(scores))
+        else:  # "sum" (default, as in original ToT paper)
+            return float(sum(scores))
+
+    def _load_prompt(
+        self,
+        prompt_str: Optional[str],
+        prompt_file: Optional[str],
+        default_file: str,
+        prompt_name: str,
+    ) -> str:
+        """Load prompt from string, file, or default file."""
+        # Direct string has highest priority
+        if prompt_str:
+            return prompt_str
+
+        # Custom file path
+        if prompt_file:
+            loaded = _load_prompt_from_file(prompt_file)
+            if loaded:
+                log.debug(f"Loaded {prompt_name} prompt from: {prompt_file}")
+                return loaded
+            log.warning(f"Could not load {prompt_name} prompt from: {prompt_file}")
+
+        # Default file
+        loaded = _load_prompt_from_file(default_file)
+        if loaded:
+            log.debug(f"Loaded {prompt_name} prompt from default: {default_file}")
+            return loaded
+
+        raise FileNotFoundError(
+            f"Could not load {prompt_name} prompt. "
+            f"Expected at: config/prompts/{default_file}"
+        )
+
+    def set_model(self, model, use_vllm: bool = None, use_local: bool = False):
+        """Set or update the model for evaluation."""
+        self.model = model
+        if use_vllm is not None:
+            self.use_vllm = use_vllm
+        self.use_local = use_local
+
+    # -------------------------------------------------------------------------
+    # FLOP/Token Tracking Methods
+    # -------------------------------------------------------------------------
+
+    def init_flop_calculator(self, model_name: str):
+        """Initialize FLOP calculator for LLM critic token/compute tracking."""
+        self.flop_calculator = FLOPCalculator(model_name, method="simple")
+        log.info(
+            f"LLM critic FLOP calculator initialized: "
+            f"{self.flop_calculator.tflops_per_1k_tokens:.3f} TFLOPs/1k tokens"
+        )
+
+    def _record_tokens(
+        self, input_tokens: int, output_tokens: int, sample_id: Any = None
+    ):
+        """Record input and output tokens for tracking (thread-safe)."""
+        with self._tokens_lock:
+            self._total_input_tokens += input_tokens
+            self._total_output_tokens += output_tokens
+
+            sid = sample_id if sample_id is not None else self._current_sample_id
+            if sid is not None:
+                self._per_sample_input_tokens[sid] = (
+                    self._per_sample_input_tokens.get(sid, 0) + input_tokens
+                )
+                self._per_sample_output_tokens[sid] = (
+                    self._per_sample_output_tokens.get(sid, 0) + output_tokens
+                )
+
+    def set_current_sample_id(self, sample_id: Any):
+        """Set the current sample ID for token tracking."""
+        self._current_sample_id = sample_id
+
+    def reset_stats(self):
+        """Clear per-sample stats and cache (call before each batch)."""
+        self._per_sample_input_tokens.clear()
+        self._per_sample_output_tokens.clear()
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._current_sample_id = None
+        self.cache.clear()
+
+    def get_stats_for(self, sample_id: Any) -> Dict[str, Any]:
+        """Get LLM critic stats for a specific sample."""
+        input_tokens = self._per_sample_input_tokens.get(sample_id, 0)
+        output_tokens = self._per_sample_output_tokens.get(sample_id, 0)
+        total_tokens = input_tokens + output_tokens
+
+        tflops = (
+            self.flop_calculator.compute_tflops(total_tokens)
+            if self.flop_calculator
+            else None
+        )
+        return {
+            "llm_critic_input_tokens": input_tokens,
+            "llm_critic_output_tokens": output_tokens,
+            "llm_critic_total_tokens": total_tokens,
+            "llm_critic_tflops": tflops,
+        }
+
+    def get_total_stats(self) -> Dict[str, Any]:
+        """Get aggregate LLM critic stats across all samples."""
+        total_tokens = self._total_input_tokens + self._total_output_tokens
+        tflops = (
+            self.flop_calculator.compute_tflops(total_tokens)
+            if self.flop_calculator
+            else None
+        )
+        return {
+            "llm_critic_input_tokens": self._total_input_tokens,
+            "llm_critic_output_tokens": self._total_output_tokens,
+            "llm_critic_total_tokens": total_tokens,
+            "llm_critic_tflops": tflops,
+        }
+
+    def score_candidates_detailed(
+        self,
+        chat: List[Dict[str, str]],
+        candidates: List[Any],
+        trajectory: List[Any] = None,
+        **kwargs,
+    ) -> List[CandidateScore]:
+        """
+        Score candidates with detailed information.
+
+        Delegates to score_candidates_batch with a single group and wraps
+        the raw scores into CandidateScore objects.
+        """
+        if not candidates:
+            return []
+
+        # Delegate to batch method with a single group
+        scores_list = self.score_candidates_batch(
+            chats=[chat],
+            candidates_list=[candidates],
+            trajectories=[trajectory],
+        )
+        scores = scores_list[0]
+
+        # Wrap raw scores into CandidateScore objects
+        score_key = "votes" if self.method == "vote" else "value"
+        total_votes = sum(scores) if self.method == "vote" else None
+        results = []
+        for cand_idx, candidate in enumerate(candidates):
+            step_text = self._get_step_text(candidate)
+            score = scores[cand_idx] if cand_idx < len(scores) else 0.0
+            metadata = {"scorer_type": "llm_critic", "method": self.method}
+            if total_votes is not None:
+                metadata["total_votes"] = total_votes
+            results.append(
+                CandidateScore(
+                    candidate_text=step_text,
+                    claim_scores=[score],
+                    aggregate_scores={score_key: score},
+                    metadata=metadata,
+                )
+            )
+            log.info(f"Candidate {cand_idx}: {score_key}={score:.3f}")
+
+        return results
+
+    def score_candidates_batch(
+        self,
+        chats: List[List[Dict[str, str]]],
+        candidates_list: List[List[Any]],
+        trajectories: Optional[List[List[Any]]] = None,
+        sample_ids: Optional[List[Any]] = None,
+        **kwargs,
+    ) -> List[List[float]]:
+        """
+        Batch score candidates across multiple prompts (vLLM only).
+
+        Args:
+            chats: List of chat histories (one per prompt group)
+            candidates_list: List of candidate lists (one per prompt group)
+            trajectories: Optional trajectory context for each group
+            sample_ids: Optional sample IDs for per-sample token tracking
+
+        Returns aggregated scores aligned with candidates_list.
+        """
+        if trajectories is None:
+            trajectories = [None] * len(candidates_list)
+
+        if len(chats) != len(candidates_list):
+            raise ValueError("chats and candidates_list must have same length")
+
+        if self.method == "vote":
+            return self._score_vote_method_batch(
+                chats, candidates_list, trajectories, sample_ids=sample_ids
+            )
+
+        # Value method (default)
+        return self._score_value_method_batch(
+            chats, candidates_list, trajectories, sample_ids=sample_ids
+        )
+
+    def _get_batch_call_fn(self):
+        """Return the appropriate batch call function for the current backend.
+
+        Returns None for local backend (which requires sequential calls).
+        """
+        if self.use_vllm:
+            return self._call_vllm_batch
+        elif not self.use_local:
+            return self._call_api_batch
+        return None
+
+    def _score_value_method_batch(
+        self,
+        chats: List[List[Dict[str, str]]],
+        candidates_list: List[List[Any]],
+        trajectories: List[List[Any]],
+        sample_ids: Optional[List[Any]] = None,
+    ) -> List[List[float]]:
+        """Batch score value method across multiple prompt groups."""
+        results: List[List[float]] = [[] for _ in candidates_list]
+        pending: List[Dict[str, Any]] = []
+        score_map: Dict[tuple, float] = {}
+        # Deferred duplicates: maps (group_idx, cand_idx) -> (group_idx, first_cand_idx)
+        # Resolved after batch scoring when the first occurrence has a score.
+        deferred_duplicates: List[tuple] = []
+
+        for group_idx, (chat, candidates, trajectory) in enumerate(
+            zip(chats, candidates_list, trajectories)
+        ):
+            if not candidates:
+                continue
+
+            problem = self._extract_problem(chat)
+            trajectory_text = self._trajectory_to_text(trajectory)
+            # Maps step_text -> (group_idx, cand_idx) of the first occurrence
+            local_seen_texts: Dict[str, tuple] = {}
+
+            for cand_idx, candidate in enumerate(candidates):
+                step_text = self._get_step_text(candidate)
+                cache_key = f"{problem}|||{trajectory_text}|||{step_text}"
+
+                if step_text in local_seen_texts:
+                    # Defer: copy score from first occurrence after scoring
+                    first_key = local_seen_texts[step_text]
+                    deferred_duplicates.append(((group_idx, cand_idx), first_key))
+                elif cache_key in self.cache:
+                    score_map[(group_idx, cand_idx)] = self.cache[cache_key]
+                    local_seen_texts[step_text] = (group_idx, cand_idx)
+                else:
+                    prompt = (
+                        self.value_prompt.replace("{problem}", problem)
+                        .replace(
+                            "{trajectory}",
+                            trajectory_text if trajectory_text else "(empty)",
+                        )
+                        .replace("{step}", step_text)
+                    )
+                    pending.append(
+                        {
+                            "group_idx": group_idx,
+                            "cand_idx": cand_idx,
+                            "prompt": prompt,
+                            "cache_key": cache_key,
+                        }
+                    )
+                    local_seen_texts[step_text] = (group_idx, cand_idx)
+
+        # Build per-pending-item sample_ids for token attribution
+        pending_sample_ids = (
+            [sample_ids[item["group_idx"]] for item in pending] if sample_ids else None
+        )
+
+        batch_fn = self._get_batch_call_fn()
+        if pending and batch_fn is not None:
+            eval_scores: Dict[tuple, List[float]] = {
+                (p["group_idx"], p["cand_idx"]): [] for p in pending
+            }
+
+            for i in range(self.n_evaluate_sample):
+                prompts = [item["prompt"] for item in pending]
+                outputs: List[str] = []
+                try:
+                    outputs = batch_fn(prompts, sample_ids=pending_sample_ids)
+                except Exception as e:
+                    log.warning(f"Batch evaluation {i+1} failed: {e}")
+
+                for item_idx, item in enumerate(pending):
+                    output = outputs[item_idx] if item_idx < len(outputs) else ""
+                    try:
+                        score = self._parse_value_output(output)
+                    except Exception as e:
+                        log.warning(
+                            f"Evaluation {i+1} failed for candidate "
+                            f"{item['group_idx']}/{item['cand_idx']}: {e}"
+                        )
+                        score = 0.0
+                    eval_scores[(item["group_idx"], item["cand_idx"])].append(score)
+
+            for item in pending:
+                key = (item["group_idx"], item["cand_idx"])
+                score = self._aggregate_scores(eval_scores[key])
+                score_map[key] = score
+                self.cache[item["cache_key"]] = score
+            self.total_evaluations += len(pending)
+        elif pending:
+            for item in pending:
+                # Set current sample_id for per-sample token tracking in local path
+                if sample_ids:
+                    self._current_sample_id = sample_ids[item["group_idx"]]
+                score = self._evaluate_single_step(
+                    self._extract_problem(chats[item["group_idx"]]),
+                    self._trajectory_to_text(trajectories[item["group_idx"]]),
+                    self._get_step_text(
+                        candidates_list[item["group_idx"]][item["cand_idx"]]
+                    ),
+                )
+                score_map[(item["group_idx"], item["cand_idx"])] = score
+                self.cache[item["cache_key"]] = score
+                self.total_evaluations += 1
+
+        # Resolve deferred duplicates: copy score from first occurrence
+        for dup_key, first_key in deferred_duplicates:
+            score_map[dup_key] = score_map.get(first_key, 0.0)
+
+        for group_idx, candidates in enumerate(candidates_list):
+            group_scores: List[float] = []
+            for cand_idx in range(len(candidates)):
+                group_scores.append(score_map.get((group_idx, cand_idx), 0.0))
+            results[group_idx] = group_scores
+
+        return results
+
+    def _score_vote_method_batch(
+        self,
+        chats: List[List[Dict[str, str]]],
+        candidates_list: List[List[Any]],
+        trajectories: List[List[Any]],
+        sample_ids: Optional[List[Any]] = None,
+    ) -> List[List[float]]:
+        """Batch score vote method across multiple prompt groups."""
+        results: List[List[float]] = [[] for _ in candidates_list]
+
+        prompts = []
+        group_sizes = []
+        for chat, candidates, trajectory in zip(chats, candidates_list, trajectories):
+            if not candidates:
+                prompts.append("")
+                group_sizes.append(0)
+                continue
+            problem = self._extract_problem(chat)
+            trajectory_text = self._trajectory_to_text(trajectory)
+            candidate_texts = [self._get_step_text(c) for c in candidates]
+            candidates_str = "\n".join(
+                f"{i+1}. {text}" for i, text in enumerate(candidate_texts)
+            )
+            prompt = (
+                self.vote_prompt.replace("{problem}", problem)
+                .replace(
+                    "{trajectory}", trajectory_text if trajectory_text else "(empty)"
+                )
+                .replace("{candidates}", candidates_str)
+                .replace("{n_candidates}", str(len(candidate_texts)))
+            )
+            prompts.append(prompt)
+            group_sizes.append(len(candidate_texts))
+
+        votes_by_group = [[0.0] * n for n in group_sizes]
+
+        # Build sample_ids for non-empty prompts (matching batch_prompts filtering)
+        batch_sample_ids = None
+        if sample_ids:
+            batch_sample_ids = [sample_ids[gidx] for gidx, p in enumerate(prompts) if p]
+
+        batch_fn = self._get_batch_call_fn()
+        if batch_fn is not None:
+            for i in range(self.n_evaluate_sample):
+                batch_prompts = [p for p in prompts if p]
+                outputs: List[str] = []
+                try:
+                    outputs = batch_fn(batch_prompts, sample_ids=batch_sample_ids)
+                except Exception as e:
+                    log.warning(f"Vote batch {i+1} failed: {e}")
+                    outputs = []
+
+                out_idx = 0
+                for group_idx, prompt in enumerate(prompts):
+                    if not prompt:
+                        continue
+                    output = outputs[out_idx] if out_idx < len(outputs) else ""
+                    out_idx += 1
+                    vote_idx = self._parse_vote_output(output, group_sizes[group_idx])
+                    if vote_idx is not None:
+                        votes_by_group[group_idx][vote_idx] += 1.0
+        else:
+            # Local backend: sequential calls
+            for group_idx, prompt in enumerate(prompts):
+                if not prompt:
+                    continue
+                if sample_ids:
+                    self._current_sample_id = sample_ids[group_idx]
+                for i in range(self.n_evaluate_sample):
+                    try:
+                        output = self._call_model(prompt)
+                        vote_idx = self._parse_vote_output(
+                            output, group_sizes[group_idx]
+                        )
+                        if vote_idx is not None:
+                            votes_by_group[group_idx][vote_idx] += 1.0
+                    except Exception as e:
+                        log.warning(f"Vote {i+1} failed: {e}")
+
+        for group_idx, votes in enumerate(votes_by_group):
+            results[group_idx] = votes
+
+        self.total_evaluations += len([p for p in prompts if p])
+        return results
+
+    def _evaluate_single_step(
+        self,
+        problem: str,
+        trajectory_text: str,
+        step_text: str,
+    ) -> float:
+        """
+        Evaluate a single step using value method.
+
+        Calls the LLM n_evaluate_sample times and aggregates scores.
+        """
+        # Build prompt
+        prompt = (
+            self.value_prompt.replace("{problem}", problem)
+            .replace("{trajectory}", trajectory_text if trajectory_text else "(empty)")
+            .replace("{step}", step_text)
+        )
+
+        # Get evaluations
+        scores = []
+        for i in range(self.n_evaluate_sample):
+            try:
+                output = self._call_model(prompt)
+                score = self._parse_value_output(output)
+                scores.append(score)
+                log.debug(
+                    f"Evaluation {i+1}/{self.n_evaluate_sample}: output='{output[:50]}...', score={score:.3f}"
+                )
+            except Exception as e:
+                log.warning(f"Evaluation {i+1} failed: {e}")
+                scores.append(0.0)
+
+        return self._aggregate_scores(scores)
+
+    def _call_model(self, prompt: str) -> str:
+        """
+        Call the model with the given prompt.
+
+        Supports both vLLM and API backends.
+        """
+        if self.model is None:
+            raise ValueError("Model not set. Call set_model() first.")
+
+        if self.use_vllm:
+            return self._call_vllm(prompt)
+        elif self.use_local:
+            return self._call_local(prompt)
+        else:
+            return self._call_api(prompt)
+
+    def _format_prompt_for_vllm(self, prompt: str) -> str:
+        """Wrap prompt in chat template if the vLLM model has a tokenizer."""
+        try:
+            tokenizer = self.model.get_tokenizer()
+            messages = [{"role": "user", "content": prompt}]
+            formatted = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            return formatted
+        except Exception:
+            # Fallback to raw prompt if tokenizer/chat template not available
+            return prompt
+
+    def _call_vllm(self, prompt: str) -> str:
+        """Call vLLM model for evaluation."""
+        try:
+            from vllm import SamplingParams
+        except ImportError:
+            raise ImportError("vLLM not installed. Run: pip install vllm")
+
+        sampling_params = SamplingParams(
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+        )
+
+        formatted_prompt = self._format_prompt_for_vllm(prompt)
+        outputs = self.model.generate([formatted_prompt], sampling_params)
+
+        if outputs and outputs[0].outputs:
+            output = outputs[0]
+            # Track tokens: prompt tokens + generated tokens
+            input_tokens = (
+                len(output.prompt_token_ids) if output.prompt_token_ids else 0
+            )
+            output_tokens = (
+                len(output.outputs[0].token_ids) if output.outputs[0].token_ids else 0
+            )
+            self._record_tokens(input_tokens, output_tokens)
+            return output.outputs[0].text
+        return ""
+
+    def _call_vllm_batch(
+        self, prompts: List[str], sample_ids: Optional[List[Any]] = None
+    ) -> List[str]:
+        """Call vLLM model for evaluation with batched prompts."""
+        try:
+            from vllm import SamplingParams
+        except ImportError:
+            raise ImportError("vLLM not installed. Run: pip install vllm")
+
+        sampling_params = SamplingParams(
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+        )
+
+        formatted_prompts = [self._format_prompt_for_vllm(p) for p in prompts]
+        outputs = self.model.generate(formatted_prompts, sampling_params)
+        texts: List[str] = []
+
+        for idx, output in enumerate(outputs or []):
+            if output and output.outputs:
+                input_tokens = (
+                    len(output.prompt_token_ids) if output.prompt_token_ids else 0
+                )
+                output_tokens = (
+                    len(output.outputs[0].token_ids)
+                    if output.outputs[0].token_ids
+                    else 0
+                )
+                sid = sample_ids[idx] if sample_ids and idx < len(sample_ids) else None
+                self._record_tokens(input_tokens, output_tokens, sample_id=sid)
+                texts.append(output.outputs[0].text)
+            else:
+                texts.append("")
+
+        return texts
+
+    def _call_local(self, prompt: str) -> str:
+        """Call local WhiteboxModel (lm_polygraph) for evaluation."""
+        messages = [{"role": "user", "content": prompt}]
+        formatted = self.model.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
+        # Count input tokens before generation
+        input_tokens = len(self.model.tokenizer.encode(formatted))
+
+        results = self.model.generate_texts(
+            input_texts=[formatted],
+            max_new_tokens=self.max_tokens,
+            temperature=self.temperature,
+        )
+        if results and results[0]:
+            # Count output tokens
+            output_tokens = len(self.model.tokenizer.encode(results[0]))
+            self._record_tokens(input_tokens, output_tokens)
+            return results[0]
+        return ""
+
+    def _call_api(self, prompt: str, sample_id: Any = None) -> str:
+        """Call API-based model for evaluation with retry logic."""
+        import openai
+
+        messages = [{"role": "user", "content": prompt}]
+
+        max_retries = 3
+        base_delay = 2.0
+
+        for attempt in range(max_retries):
+            try:
+                results = self.model.generate_texts(
+                    chats=[messages],
+                    n=1,
+                    max_new_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    timeout=self.timeout,
+                )
+
+                if results and results[0]:
+                    result = results[0]
+                    text = result.get("text", "")
+
+                    # Track tokens from API response if available
+                    input_tokens = result.get("prompt_tokens", 0)
+                    output_tokens = result.get("completion_tokens", 0)
+
+                    if input_tokens == 0 and output_tokens == 0:
+                        log.warning(
+                            "API response missing token counts "
+                            "(prompt_tokens/completion_tokens not returned). "
+                            "Token tracking will be inaccurate for this call."
+                        )
+
+                    self._record_tokens(
+                        input_tokens, output_tokens, sample_id=sample_id
+                    )
+                    return text
+                return ""
+
+            except (openai.APITimeoutError, openai.APIConnectionError) as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2**attempt)
+                    log.warning(
+                        f"API error on attempt {attempt + 1}: {e}. Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    log.error(f"API call failed after {max_retries} attempts: {e}")
+                    raise
+
+            except openai.RateLimitError as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2**attempt) * 3
+                    log.warning(
+                        f"Rate limit on attempt {attempt + 1}: {e}. Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    log.error(f"Rate limit persists after {max_retries} attempts: {e}")
+                    raise
+
+        return ""
+
+    def _call_api_batch(
+        self, prompts: List[str], sample_ids: Optional[List[Any]] = None
+    ) -> List[str]:
+        """Call API for each prompt concurrently with per-prompt retry.
+
+        Each prompt runs independently via _call_api (which has its own retry).
+        A failure on one prompt doesn't affect others.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        results: List[Optional[str]] = [None] * len(prompts)
+
+        def _call_single(idx: int, prompt: str) -> tuple:
+            sid = sample_ids[idx] if sample_ids and idx < len(sample_ids) else None
+            try:
+                return idx, self._call_api(prompt, sample_id=sid)
+            except Exception as e:
+                log.warning(f"API call failed for prompt {idx}: {e}")
+                return idx, ""
+
+        with ThreadPoolExecutor(max_workers=min(len(prompts), 16)) as pool:
+            futures = [
+                pool.submit(_call_single, idx, prompt)
+                for idx, prompt in enumerate(prompts)
+            ]
+            for future in as_completed(futures):
+                idx, text = future.result()
+                results[idx] = text
+
+        return [t if t is not None else "" for t in results]
+
+    def _parse_value_output(self, output: str) -> float:
+        """
+        Parse value evaluation output into numerical score.
+
+        Matching priority (following original ToT paper):
+        1. Exact match on last line (primary ToT labels)
+        2. Token search on last line (primary + synonym labels)
+        3. Prefix match (keyword at start of token, e.g. "likelyMK" -> "likely")
+        4. Regex word boundary search on full output
+        5. Loose keyword search on full normalized output
+        6. Default to 0.0 (unmatched = no contribution, as in original ToT)
+        """
+        output_lower = output.lower().strip()
+        all_keywords = {**self.value_map, **self.value_synonyms}
+
+        # 1. Prefer exact label matching on the last non-empty line (ToT behavior).
+        lines = [line.strip() for line in output_lower.splitlines() if line.strip()]
+        if lines:
+            last_line = lines[-1]
+            normalized = re.sub(r"[^a-z]+", " ", last_line).strip()
+            if normalized in self.value_map:
+                return self.value_map[normalized]
+            # 2. Token search on last line (primary + synonyms)
+            for token in normalized.split():
+                if token in all_keywords:
+                    return all_keywords[token]
+
+        # 3. Prefix match: check if output starts with a keyword
+        #    (handles garbage glued to keyword, e.g. "likelyMK", "surelyABC")
+        # Sort by length descending so "impossible" matches before "imp..."
+        for keyword in sorted(all_keywords.keys(), key=len, reverse=True):
+            if output_lower.startswith(keyword):
+                return all_keywords[keyword]
+
+        # 4. Regex search on full output for keyword as a word or at start of token
+        for keyword in sorted(all_keywords.keys(), key=len, reverse=True):
+            if re.search(r"\b" + re.escape(keyword) + r"\b", output_lower):
+                return all_keywords[keyword]
+
+        # 5. Search full output for any keyword (loose fallback)
+        full_normalized = re.sub(r"[^a-z\s]+", " ", output_lower)
+        for token in full_normalized.split():
+            if token in all_keywords:
+                return all_keywords[token]
+
+        # 6. Default to 0.0 — unmatched outputs contribute nothing
+        #    (matches original ToT where unrecognized labels are not counted)
+        log.debug(f"No rating found in output: '{output[:100]}', defaulting to 0.0")
+        return 0.0
+
+    def _parse_vote_output(self, output: str, n_candidates: int) -> Optional[int]:
+        """
+        Parse vote output to get selected candidate index (0-based).
+
+        Priority:
+        1. "The best choice is X" pattern (original ToT paper format)
+        2. First valid number in output
+        """
+        # 1. Try "best choice is X" pattern (as in original ToT paper)
+        match = re.search(r"best choice is\s*(\d+)", output, re.IGNORECASE)
+        if match:
+            num = int(match.group(1))
+            if 1 <= num <= n_candidates:
+                return num - 1
+
+        # 2. Fallback: find any valid candidate number in output
+        numbers = re.findall(r"\d+", output)
+        for num_str in numbers:
+            num = int(num_str)
+            if 1 <= num <= n_candidates:
+                return num - 1
+
+        log.debug(f"No valid vote found in output: '{output[:100]}'")
+        return None
+
+    def _extract_problem(self, chat: List[Dict[str, str]]) -> str:
+        """Extract problem/question from chat messages."""
+        for msg in chat:
+            if msg.get("role") == "user":
+                return msg.get("content", "")
+        return chat[-1].get("content", "") if chat else ""
+
+    def _trajectory_to_text(self, trajectory: Optional[List[Any]]) -> str:
+        """Convert trajectory to text representation.
+
+        If context_window > 0, only the last N steps are included in the prompt.
+        0 means all steps (default).
+        """
+        if not trajectory:
+            return ""
+
+        steps = []
+        for step in trajectory:
+            if hasattr(step, "text"):
+                steps.append(step.text)
+            else:
+                steps.append(str(step))
+
+        if self.context_window > 0 and len(steps) > self.context_window:
+            steps = steps[-self.context_window :]
+
+        return "\n".join(steps)
+
+    def _get_step_text(self, candidate: Any) -> str:
+        """Extract text from a candidate step."""
+        if hasattr(candidate, "text"):
+            return candidate.text
+        return str(candidate)
+
+    def cleanup(self):
+        """Clean up resources."""
+        # Log final stats before cleanup
+        total_stats = self.get_total_stats()
+        log.info(
+            f"LLMCritic scorer cleanup: "
+            f"total_tokens={total_stats['llm_critic_total_tokens']}, "
+            f"tflops={total_stats['llm_critic_tflops']}"
+        )
+
+        cache_size = len(self.cache)
+        self.cache.clear()
+        self.reset_stats()
+        log.info(f"LLMCritic scorer: cleared {cache_size} cached entries")
+
+    def __str__(self):
+        return f"StepScorerLLMCritic(method={self.method}, n_samples={self.n_evaluate_sample})"

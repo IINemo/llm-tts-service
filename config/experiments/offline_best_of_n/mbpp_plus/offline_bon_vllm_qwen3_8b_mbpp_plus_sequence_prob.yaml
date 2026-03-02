@@ -1,6 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/offline_best_of_n/mbpp_plus/offline_bon_vllm_qwen3_8b_mbpp_plus_entropy
-# Offline Best-of-N for MBPP+ using vLLM with Qwen3-8B and newline-based step boundaries
+# Offline Best-of-N for MBPP+ using vLLM with Qwen3-8B and linguistic step boundaries
 # Uses sequence_prob scorer for step evaluation
 
 defaults:
@@ -46,24 +46,11 @@ generation:
   top_k: 20
   batch_size: 1
 
-# Strategy - Offline Best-of-N with newline-based step boundaries for code
+# Strategy - Offline Best-of-N with linguistic step boundaries
 strategy:
   type: offline_best_of_n
-  min_step_tokens: 10
   max_step_tokens: 500
   max_steps: 100
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
 # Entropy scorer configuration
 scorer:

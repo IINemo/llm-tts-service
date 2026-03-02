@@ -49,23 +49,12 @@ generation:
   batch_size: 1
   max_length: 65536
 
-# Strategy - Offline Best-of-N with newline-based step boundaries for code
+# Strategy - Offline Best-of-N with linguistic step boundaries
 strategy:
   type: offline_best_of_n
   batch_generation: true
   max_steps: 100
-  min_step_tokens: 10
   max_step_tokens: 1024
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
 # Perplexity scorer configuration
 scorer:

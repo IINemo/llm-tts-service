@@ -5,7 +5,9 @@ Uses direct imports (no subprocess). ANTLR version mismatch warnings may appear
 but functionality is correct.
 """
 
+import logging
 import re
+import signal
 from math import isclose
 from typing import Union
 
@@ -14,6 +16,33 @@ from latex2sympy2 import latex2sympy
 from sympy import N, simplify
 from sympy.parsing.latex import parse_latex
 from sympy.parsing.sympy_parser import parse_expr
+
+log = logging.getLogger(__name__)
+
+# Timeout for symbolic comparison (seconds)
+SYMBOLIC_EQUAL_TIMEOUT = 30
+
+# Counter for timed-out comparisons
+_timeout_count = 0
+
+
+def get_timeout_count() -> int:
+    """Return the number of symbolic comparisons that timed out."""
+    return _timeout_count
+
+
+def reset_timeout_count():
+    """Reset the timeout counter."""
+    global _timeout_count
+    _timeout_count = 0
+
+
+class _SymbolicTimeoutError(Exception):
+    pass
+
+
+def _symbolic_timeout_handler(signum, frame):
+    raise _SymbolicTimeoutError()
 
 
 def choice_answer_clean(pred: str):
@@ -81,7 +110,9 @@ def numeric_equal(prediction: float, reference: float):
     return isclose(reference, prediction, rel_tol=1e-4)
 
 
-def symbolic_equal(a, b):
+def _symbolic_equal_impl(a, b):
+    """Inner implementation of symbolic equality (no timeout)."""
+
     def _parse(s):
         for f in [parse_latex, parse_expr, latex2sympy]:
             try:
@@ -134,6 +165,31 @@ def symbolic_equal(a, b):
         pass
 
     return False
+
+
+def symbolic_equal(a, b):
+    """Symbolic equality with timeout protection."""
+    global _timeout_count
+    old_handler = signal.signal(signal.SIGALRM, _symbolic_timeout_handler)
+    signal.alarm(SYMBOLIC_EQUAL_TIMEOUT)
+    try:
+        result = _symbolic_equal_impl(a, b)
+        signal.alarm(0)
+        return result
+    except _SymbolicTimeoutError:
+        _timeout_count += 1
+        log.warning(
+            "symbolic_equal timed out after %ds comparing %r vs %r "
+            "(total timeouts: %d)",
+            SYMBOLIC_EQUAL_TIMEOUT,
+            str(a)[:100],
+            str(b)[:100],
+            _timeout_count,
+        )
+        return False
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 def math_equal(

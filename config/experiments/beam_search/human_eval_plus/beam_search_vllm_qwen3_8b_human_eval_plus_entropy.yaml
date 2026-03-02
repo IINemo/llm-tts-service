@@ -1,6 +1,6 @@
 # @package _global_
 # Run: CUDA_VISIBLE_DEVICES=0 python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/human_eval_plus/beam_search_vllm_qwen3_8b_human_eval_plus_entropy
-# Beam Search for HumanEval+ using vLLM with Qwen3-8B and newline-based step boundaries
+# Beam Search for HumanEval+ using vLLM with Qwen3-8B and linguistic step boundaries
 # Uses Entropy scorer for step evaluation
 
 defaults:
@@ -48,26 +48,12 @@ generation:
   batch_size: 1
   max_length: 65536
 
-# Strategy - Beam Search with newline-based step boundaries for code
+# Strategy - Beam Search with linguistic step boundaries
 strategy:
   beam_size: 3
   candidates_per_beam: 5
   max_steps: 250
-  # Stop tokens for Qwen models
-  min_step_tokens: 10
   max_step_tokens: 500
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
 # Entropy scorer configuration
 scorer:

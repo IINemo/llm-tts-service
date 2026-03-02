@@ -42,6 +42,31 @@ class Settings(BaseSettings):
     deepconf_filter_method: str = "top5"
     deepconf_temperature: float = 0.7
 
+    # vLLM backend config
+    vllm_model_path: Optional[str] = None  # e.g. "Qwen/Qwen2.5-Coder-7B-Instruct"
+    vllm_max_model_len: int = 32000
+    vllm_gpu_memory_utilization: float = 0.9
+    vllm_tensor_parallel_size: int = 1
+    vllm_seed: int = 42
+
+    # Default TTS params
+    default_scorer: str = "entropy"
+    default_temperature: float = 0.6
+    default_max_tokens: int = 16000
+    default_thinking_mode: bool = False
+
+    # PRM Scorer config (Qwen/Qwen2.5-Math-PRM-7B)
+    prm_model_path: Optional[str] = None  # e.g. "Qwen/Qwen2.5-Math-PRM-7B"
+    prm_device: str = "cuda:0"
+    prm_batch_size: int = 8
+    prm_torch_dtype: str = "bfloat16"
+    prm_use_vllm: bool = True
+    prm_gpu_memory_utilization: float = 0.3  # Lower default to fit alongside main model
+
+    # Logging
+    log_dir: str = "logs"
+    log_level: str = "INFO"
+
     # Service Limits
     max_concurrent_requests: int = 10
     request_timeout: int = 300  # seconds

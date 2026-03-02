@@ -1,6 +1,6 @@
 # @package _global_
 # Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/beam_search/human_eval_plus/beam_search_openrouter_gpt4o_mini_human_eval_plus_entropy
-# Beam Search for HumanEval+ using OpenRouter API with newline-based step boundaries
+# Beam Search for HumanEval+ using OpenRouter API with linguistic step boundaries
 # Uses Entropy scorer for step evaluation
 #
 # Environment variable required: OPENROUTER_API_KEY
@@ -51,25 +51,13 @@ generation:
   top_k: 50
   batch_size: 1
 
-# Strategy - Beam Search with newline-based step boundaries for code
+# Strategy - Beam Search with linguistic step boundaries
 strategy:
   beam_size: 3
   candidates_per_beam: 5
   max_steps: 20
   min_step_tokens: 5
   max_step_tokens: 128
-  # Disable linguistic markers (not useful for code)
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
-  # Use newlines as step separators for code
-  custom_markers:
-    - "\n"
-    - "\n\n"
 
 # Entropy scorer configuration
 scorer:

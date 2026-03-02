@@ -54,13 +54,6 @@ strategy:
   min_step_tokens: 0
   max_step_tokens: 32768
   # Disable semantic markers for baseline
-  use_sequence: false
-  use_conclusion: false
-  use_thinking: false
-  use_verification: false
-  use_structure: false
-  use_reasoning: false
-  use_correction: false
 
 # Dataset configuration - MBPP+
 # Uses EvalPlus API loader which provides correct prompt format with function name

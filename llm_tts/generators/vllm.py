@@ -519,6 +519,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         best_prefix_len: int,
         is_trajectory_complete: bool,
         raw_text: str,
+        output=None,
     ) -> StepCandidate:
         """Create a StepCandidate with uncertainty scoring.
 
@@ -543,6 +544,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 uncertainty_score = self.model.score(
                     token_ids[:best_prefix_len],
                     logprobs[:best_prefix_len],
+                    output=output,
+                    claim_range=(0, best_prefix_len),
                 )
                 validity_score = 1.0 / (1.0 + uncertainty_score)
             except Exception as e:
@@ -571,6 +574,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 "original_token_count": original_token_count,
             },
             raw_text=raw_text,
+            output=output,
         )
 
     def _process_generation_output(
@@ -634,6 +638,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             best_prefix_len=best_prefix_len,
             is_trajectory_complete=is_trajectory_complete,
             raw_text=raw_text,
+            output=output,
         )
 
     def _generate_step_candidates_impl(
@@ -836,7 +841,15 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                     # Stopped at EOS token ID (stop_reason=None but didn't hit max)
                     stopped_at_eos = stop_reason is None and len(token_ids) < max_tokens
 
-                    is_trajectory_complete = repetition_detected or stopped_at_eos
+                    # When thinking is complete, the trajectory is NOT done —
+                    # the answer phase still needs to run.  Without this guard
+                    # min_step_tokens can cause vLLM to generate past </think>
+                    # until an EOS token, setting stopped_at_eos=True and
+                    # making all downstream strategies skip answer generation.
+                    if thinking_complete:
+                        is_trajectory_complete = False
+                    else:
+                        is_trajectory_complete = repetition_detected or stopped_at_eos
                     step_text = text.strip()
                     target_text = text.strip()
 
@@ -896,7 +909,12 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
                 if is_thinking_complete:
                     completion_reason = CompletionReason.THINKING_COMPLETE
                 elif is_trajectory_complete:
-                    if not self.thinking_mode:
+                    if self.thinking_mode:
+                        if repetition_detected:
+                            completion_reason = CompletionReason.REPETITION_DETECTED
+                        elif stopped_at_eos:
+                            completion_reason = CompletionReason.EOS_PATTERN
+                    else:
                         if stopped_at_eos:
                             completion_reason = CompletionReason.EOS_PATTERN
                         elif stopped_at_answer:
@@ -1301,6 +1319,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         requests: List[List[Dict[str, str]]],
         trajectories: List[List[StepCandidate]],
         candidates_per_step: int = 1,
+        sample_ids: Optional[List] = None,
     ) -> List[List[StepCandidate]]:
         """Generate answer candidates for multiple trajectories in one call."""
         if len(requests) != len(trajectories):
@@ -1341,6 +1360,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             candidates_per_step=candidates_per_step,
             stop_tokens_override=self.response_stop_tokens,
             max_tokens=answer_max_tokens,
+            sample_ids=sample_ids,
         )
 
         # Post-process: mark complete and append answer patterns for thinking mode

@@ -3,7 +3,7 @@ const CACHED_EXAMPLES_PATHS =
     ? ["./cached_examples.json", "/static/debugger/cached_examples.json"]
     : ["/static/debugger/cached_examples.json", "./cached_examples.json"];
 const DEFAULT_SYSTEM_PROMPT = "Reason step-by-step carefully";
-const HIDDEN_SCORER_IDS = new Set(["prm"]);
+const HIDDEN_SCORER_IDS = new Set([]);
 
 const state = {
   catalog: [],
@@ -59,7 +59,6 @@ const elements = {
   advancedConfigToggle: document.getElementById("advancedConfigToggle"),
   advancedConfigPanel: document.getElementById("advancedConfigPanel"),
   advancedPromptInput: document.getElementById("advancedPromptInput"),
-  advancedConfigHighlight: document.getElementById("advancedConfigHighlight"),
   advancedConfigYamlInput: document.getElementById("advancedConfigYamlInput"),
   resetAdvancedConfigButton: document.getElementById("resetAdvancedConfigButton"),
   advancedConfigStatus: document.getElementById("advancedConfigStatus"),
@@ -69,11 +68,21 @@ const elements = {
   customStatus: document.getElementById("customStatus"),
 };
 
+function extractResponseError(status, text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed.detail) return parsed.detail;
+  } catch {
+    /* not JSON */
+  }
+  return `HTTP ${status}: ${text}`;
+}
+
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Request failed: ${response.status} - ${errorText}`);
+    throw new Error(extractResponseError(response.status, errorText));
   }
   return response.json();
 }
@@ -86,7 +95,7 @@ async function postJson(url, payload) {
   });
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Request failed: ${response.status} - ${errorText}`);
+    throw new Error(extractResponseError(response.status, errorText));
   }
   return response.json();
 }
@@ -136,18 +145,24 @@ function formatMetric(value) {
   }
 
   if (Math.abs(numericValue) < 1) {
-    return numericValue.toFixed(2);
+    return numericValue.toFixed(3);
   }
 
   return Number.isInteger(numericValue)
     ? String(numericValue)
-    : numericValue.toFixed(2);
+    : numericValue.toFixed(3);
 }
 
 function getSignalDisplayName(name) {
-  return String(name || "").toLowerCase() === "confidence"
-    ? "score"
-    : String(name || "");
+  const key = String(name || "").toLowerCase();
+  const displayNames = {
+    confidence: "score",
+    consensus: "consensus score",
+    prm: "PRM score",
+    entropy: "entropy score",
+    perplexity: "perplexity score",
+  };
+  return displayNames[key] || String(name || "");
 }
 
 function getCurrentBudget() {
@@ -459,115 +474,11 @@ function setAdvancedConfigStatus(message, isError = false) {
     : "var(--muted)";
 }
 
-function splitYamlInlineComment(text) {
-  let inSingle = false;
-  let inDouble = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "'" && !inDouble) {
-      inSingle = !inSingle;
-      continue;
-    }
-    if (char === '"' && !inSingle && text[index - 1] !== "\\") {
-      inDouble = !inDouble;
-      continue;
-    }
-    if (char === "#" && !inSingle && !inDouble) {
-      const prev = text[index - 1];
-      if (index === 0 || /\s/.test(prev || "")) {
-        return [text.slice(0, index), text.slice(index)];
-      }
-    }
-  }
-
-  return [text, ""];
-}
-
-function highlightYamlValueToken(token) {
-  if (!token) {
-    return "";
-  }
-  const leading = token.match(/^\s*/)?.[0] || "";
-  const trailing = token.match(/\s*$/)?.[0] || "";
-  const core = token.slice(leading.length, token.length - trailing.length);
-  const normalized = core.trim();
-  if (!normalized) {
-    return escapeHtml(token);
-  }
-
-  let className = "";
-  if (/^(true|false)$/i.test(normalized)) {
-    className = "yaml-bool";
-  } else if (/^(null|~)$/i.test(normalized)) {
-    className = "yaml-null";
-  } else if (/^-?\d+(\.\d+)?$/.test(normalized)) {
-    className = "yaml-number";
-  } else if (
-    (normalized.startsWith('"') && normalized.endsWith('"')) ||
-    (normalized.startsWith("'") && normalized.endsWith("'"))
-  ) {
-    className = "yaml-string";
-  }
-
-  if (!className) {
-    return escapeHtml(token);
-  }
-
-  return `${escapeHtml(leading)}<span class="${className}">${escapeHtml(core)}</span>${escapeHtml(trailing)}`;
-}
-
-function highlightYamlValue(text) {
-  const [valuePart, commentPart] = splitYamlInlineComment(text);
-  const valueHtml = highlightYamlValueToken(valuePart);
-  if (!commentPart) {
-    return valueHtml;
-  }
-  return `${valueHtml}<span class="yaml-comment">${escapeHtml(commentPart)}</span>`;
-}
-
-function highlightYamlLine(line) {
-  if (!line) {
-    return "";
-  }
-
-  const fullCommentMatch = line.match(/^(\s*)(#.*)$/);
-  if (fullCommentMatch) {
-    return `${escapeHtml(fullCommentMatch[1])}<span class="yaml-comment">${escapeHtml(fullCommentMatch[2])}</span>`;
-  }
-
-  const keyMatch = line.match(/^(\s*)([^:#][^:\n]*?)(\s*:\s*)(.*)$/);
-  if (keyMatch) {
-    return `${escapeHtml(keyMatch[1])}<span class="yaml-key">${escapeHtml(keyMatch[2])}</span><span class="yaml-punc">${escapeHtml(keyMatch[3])}</span>${highlightYamlValue(keyMatch[4])}`;
-  }
-
-  const listMatch = line.match(/^(\s*)(-\s+)(.*)$/);
-  if (listMatch) {
-    return `${escapeHtml(listMatch[1])}<span class="yaml-punc">${escapeHtml(listMatch[2])}</span>${highlightYamlValue(listMatch[3])}`;
-  }
-
-  return escapeHtml(line);
-}
-
-function renderAdvancedConfigHighlight() {
-  if (!elements.advancedConfigHighlight || !elements.advancedConfigYamlInput) {
-    return;
-  }
-  const lines = elements.advancedConfigYamlInput.value.split("\n");
-  const highlighted = lines.map((line) => highlightYamlLine(line)).join("\n");
-  elements.advancedConfigHighlight.innerHTML = highlighted || " ";
-  elements.advancedConfigHighlight.scrollTop =
-    elements.advancedConfigYamlInput.scrollTop;
-  elements.advancedConfigHighlight.scrollLeft =
-    elements.advancedConfigYamlInput.scrollLeft;
-}
-
 function setAdvancedConfigYamlValue(value) {
   if (!elements.advancedConfigYamlInput) {
     return;
   }
   elements.advancedConfigYamlInput.value = value || "";
-  renderAdvancedConfigHighlight();
 }
 
 function upsertPromptInAdvancedYaml(yamlText, prompt) {
@@ -635,7 +546,7 @@ function setAdvancedConfigPanelExpanded(expanded) {
   state.advancedConfigExpanded = Boolean(expanded);
   elements.advancedConfigPanel?.classList.toggle("hidden", !state.advancedConfigExpanded);
   if (state.advancedConfigExpanded) {
-    renderAdvancedConfigHighlight();
+
   }
   if (elements.advancedConfigToggle) {
     elements.advancedConfigToggle.textContent = state.advancedConfigExpanded
@@ -995,6 +906,7 @@ async function loadCachedOptionsForCurrentScenario() {
   const payload = await loadPayloadForScenario(state.scenarioId, budget);
   state.cachedSourcePayload = payload;
   loadCachedScenarioValuesIntoInputs(payload);
+  elements.cachedExplorerPrompt?.classList.remove("hidden");
   const options = deriveOptionsFromPayload(payload);
   state.modelValidation = {
     ...(state.modelValidation || {}),
@@ -1043,7 +955,8 @@ function refreshScorerOptionsForSelectedStrategy() {
   }
 
   if (strategy.requires_scorer === false) {
-    resetSelectionSelect(elements.scorerSelect, "Not used for baseline");
+    const builtinLabel = strategy.builtin_scorer || `Not used for ${strategy.name || strategy.id}`;
+    resetSelectionSelect(elements.scorerSelect, builtinLabel);
     return;
   }
 
@@ -1335,8 +1248,13 @@ async function runCustomInput() {
         advanced_config_yaml: advancedConfigYaml,
       });
     } catch (error) {
+      let hint = "";
+      if (/max_tokens is too large/i.test(error.message)) {
+        hint =
+          " Hint: reduce max_step_tokens (or max_new_tokens) in Advanced Config to fit the model's limit.";
+      }
       setStatus(
-        `Custom run requires backend endpoint /v1/debugger/demo/run-single (${error.message}).`,
+        `Run failed: ${error.message}.${hint}`,
         true,
       );
       return;
@@ -1408,7 +1326,7 @@ async function restoreDemoData() {
   state.cachedScenarioPrompt = "";
 
   elements.providerSelect.value = "openai";
-  elements.modelIdInput.value = "openai/gpt-4o-mini";
+  elements.modelIdInput.value = "gpt-4o-mini";
   elements.modelApiKeyInput.value = "";
   elements.singleQuestionInput.value = "";
   if (elements.advancedPromptInput) {
@@ -1548,7 +1466,7 @@ function renderStrategyCards() {
       ${scorerMeta}
       <p class="timeline-decision">${escapeHtml(strategy.summary || "")}</p>
       <div class="strategy-meta">
-        <div><span class="timeline-step">score</span><br /><span class="meta-value">${formatMetric(finalResult.confidence ?? 0)}</span></div>
+        <div><span class="timeline-step">${escapeHtml(getSignalDisplayName(finalResult.score_label || "confidence"))}</span><br /><span class="meta-value">${formatMetric(finalResult.confidence ?? 0)}</span></div>
         <div><span class="timeline-step">tokens</span><br /><span class="meta-value">${formatMetric(run.tokens_used ?? 0)}</span></div>
       </div>
     `;
@@ -1662,9 +1580,13 @@ function renderTimeline() {
 }
 
 function renderSignals(eventItem) {
-  const signals = (eventItem?.signals ?? []).filter(
-    (signal) => String(signal?.name || "").toLowerCase() === "confidence",
+  const allSignals = (eventItem?.signals ?? []).filter(
+    (signal) => signal?.name && signal?.value != null,
   );
+  // Prefer the scorer-specific signal over the derived confidence
+  const signals = allSignals.length > 1
+    ? allSignals.filter((s) => String(s.name || "").toLowerCase() !== "confidence")
+    : allSignals;
 
   if (!signals.length) {
     elements.signals.innerHTML =
@@ -1675,11 +1597,12 @@ function renderSignals(eventItem) {
   elements.signals.innerHTML = signals
     .map((signal) => {
       const percent = metricToPercent(signal);
+      const normalizedScore = percent / 100;
       return `
         <div class="signal-row">
           <header>
-            <span>${escapeHtml(getSignalDisplayName(signal.name))}</span>
-            <span>${formatMetric(signal.value)}</span>
+            <span>score</span>
+            <span>${formatMetric(normalizedScore)}</span>
           </header>
           <div class="signal-meter"><span style="width:${percent}%"></span></div>
         </div>
@@ -1829,17 +1752,27 @@ function buildTreeFromEvents(events) {
     rootTextParts.push(firstReason.trim());
   }
 
-  const totalLevels = Math.max(1, eventList.length);
+  // Collect unique step numbers to determine depth mapping
+  const stepNumbers = [
+    ...new Set(
+      eventList
+        .filter((e) => Array.isArray(e?.candidates) && e.candidates.length > 0)
+        .map((e, i) => Math.max(1, Number(e?.step) || i + 1)),
+    ),
+  ].sort((a, b) => a - b);
+  const stepToDepth = new Map(stepNumbers.map((s, i) => [s, i + 1]));
+  const totalLevels = Math.max(1, stepNumbers.length);
   const yForDepth = (depth) =>
-    totalLevels <= 0 ? 0.5 : 0.1 + (0.8 * depth) / Math.max(totalLevels, 1);
+    0.1 + (0.8 * depth) / Math.max(totalLevels, 1);
 
   const nodes = [];
   const edges = [];
   const selectedPath = [];
   const nodeIdSet = new Set();
+  const nodeById = new Map();
   const rootId = "root";
 
-  nodes.push({
+  const rootNode = {
     id: rootId,
     label: "R",
     value: rootValue,
@@ -1850,15 +1783,21 @@ function buildTreeFromEvents(events) {
     event_index: -1,
     text: rootTextParts.join(" "),
     scores: rootScoreMap,
-  });
+  };
+  nodes.push(rootNode);
   nodeIdSet.add(rootId);
-  selectedPath.push(rootId);
+  nodeById.set(rootId, rootNode);
 
-  let prevLevelNodes = [nodes[0]];
-  let prevSelectedNode = nodes[0];
+  // Pass 1: create all nodes and resolve parents
+  let prevSelectedNode = rootNode;
+  const beamUidToNodeId = new Map();
+  // Root beam in beam search has unique_id=0; register so step 1 can find parent
+  beamUidToNodeId.set(0, rootId);
+  const nodeParentId = new Map();
 
   eventList.forEach((eventItem, eventIndex) => {
     const stepNumber = Math.max(1, Number(eventItem?.step) || eventIndex + 1);
+    const depth = stepToDepth.get(stepNumber) || eventIndex + 1;
     const rawCandidates = Array.isArray(eventItem?.candidates)
       ? eventItem.candidates
       : [];
@@ -1866,12 +1805,18 @@ function buildTreeFromEvents(events) {
       return;
     }
 
+    // Skip single-candidate events that are expanded sub-steps of a
+    // winning trajectory and add no branching info.
+    // Keep them if they have beam lineage (independent branch continuation).
+    if (rawCandidates.length === 1) {
+      const hasBeamLineage = rawCandidates[0]?.beam_uid != null;
+      if (!hasBeamLineage) {
+        return;
+      }
+    }
+
     const levelNodes = [];
     rawCandidates.forEach((candidate, candidateIndex) => {
-      const x =
-        rawCandidates.length <= 1
-          ? 0.5
-          : 0.1 + (0.8 * candidateIndex) / Math.max(rawCandidates.length - 1, 1);
       const baseNodeId = String(
         candidate?.id || `step_${stepNumber}_candidate_${candidateIndex + 1}`,
       );
@@ -1888,11 +1833,11 @@ function buildTreeFromEvents(events) {
 
       const node = {
         id: nodeId,
-        label: `N${eventIndex + 1}.${candidateIndex + 1}`,
+        label: "",
         value: nodeValue,
-        depth: eventIndex + 1,
-        x,
-        y: yForDepth(eventIndex + 1),
+        depth,
+        x: 0,
+        y: yForDepth(depth),
         step: stepNumber,
         event_index: eventIndex,
         candidate_id: typeof candidate?.id === "string" ? candidate.id : null,
@@ -1904,34 +1849,82 @@ function buildTreeFromEvents(events) {
             ? candidate.signals
             : {},
         selected: Boolean(candidate?.selected),
+        beam_uid: candidate?.beam_uid ?? null,
+        parent_beam_uid: candidate?.parent_beam_uid ?? null,
       };
       nodes.push(node);
+      nodeById.set(nodeId, node);
       levelNodes.push(node);
+
+      if (node.beam_uid != null) {
+        beamUidToNodeId.set(node.beam_uid, nodeId);
+      }
     });
 
+    // Resolve parent for each node
     levelNodes.forEach((node) => {
       let parentNode = null;
-      if (node.candidate_label) {
-        parentNode =
-          prevLevelNodes.find(
-            (prev) =>
-              String(prev.candidate_label || "").trim() ===
-              String(node.candidate_label || "").trim(),
-          ) || null;
+      if (node.parent_beam_uid != null) {
+        const pid = beamUidToNodeId.get(node.parent_beam_uid);
+        if (pid) parentNode = nodeById.get(pid) || null;
       }
       if (!parentNode) {
-        parentNode = prevSelectedNode || prevLevelNodes[0] || nodes[0];
+        parentNode = prevSelectedNode || rootNode;
       }
+      nodeParentId.set(node.id, parentNode.id);
       edges.push({ source: parentNode.id, target: node.id });
     });
 
     const selectedNode =
       levelNodes.find((node) => node.selected) || levelNodes[0] || null;
     if (selectedNode) {
-      selectedPath.push(selectedNode.id);
       prevSelectedNode = selectedNode;
     }
-    prevLevelNodes = levelNodes;
+  });
+
+  // Build selected path by tracing from final selected node back to root
+  let traceNode = prevSelectedNode;
+  while (traceNode && traceNode.id !== rootId) {
+    selectedPath.push(traceNode.id);
+    const parentId = nodeParentId.get(traceNode.id);
+    traceNode = parentId ? nodeById.get(parentId) : null;
+  }
+  selectedPath.push(rootId);
+  selectedPath.reverse();
+
+  // Pass 2: assign x positions per depth level, grouping siblings by parent
+  const nodesByDepth = new Map();
+  nodes.forEach((node) => {
+    if (node.id === rootId) return;
+    const d = node.depth;
+    if (!nodesByDepth.has(d)) nodesByDepth.set(d, []);
+    nodesByDepth.get(d).push(node);
+  });
+
+  nodesByDepth.forEach((levelNodes) => {
+    const parentGroups = new Map();
+    levelNodes.forEach((node) => {
+      const pid = nodeParentId.get(node.id) || rootId;
+      if (!parentGroups.has(pid)) parentGroups.set(pid, []);
+      parentGroups.get(pid).push(node);
+    });
+    const sortedGroups = [...parentGroups.entries()].sort((a, b) => {
+      const pa = nodeById.get(a[0]);
+      const pb = nodeById.get(b[0]);
+      return (pa?.x || 0) - (pb?.x || 0);
+    });
+    let flatIndex = 0;
+    const total = levelNodes.length;
+    sortedGroups.forEach(([, group]) => {
+      group.forEach((node) => {
+        node.x =
+          total <= 1
+            ? 0.5
+            : 0.1 + (0.8 * flatIndex) / Math.max(total - 1, 1);
+        node.label = `N${node.depth}.${flatIndex + 1}`;
+        flatIndex += 1;
+      });
+    });
   });
 
   return { nodes, edges, selected_path: selectedPath };
@@ -2215,7 +2208,9 @@ function renderStepInspector() {
     treeContext.text ||
     highlightedCandidate?.text ||
     "No step content available.";
-  const nodeScores = Object.entries(treeContext.scores || {})
+  const nodeScores = Object.entries(
+    highlightedCandidate?.signals || treeContext.scores || {},
+  )
     .map(
       ([key, value]) =>
         `<span>${escapeHtml(getSignalDisplayName(key))}: <strong>${formatMetric(value)}</strong></span>`,
@@ -2316,21 +2311,20 @@ function bindHandlers() {
     updateRunButtonEnabled();
   });
 
-  [
-    elements.providerSelect,
-    elements.modelIdInput,
-    elements.modelApiKeyInput,
-  ].forEach((field) => {
-    field.addEventListener("input", () => {
-      if (
-        state.validatedModelFingerprint &&
-        state.validatedModelFingerprint !== getModelFingerprint()
-      ) {
-        invalidateModelValidation(
-          "Model settings changed. Validate again to refresh supported options.",
-        );
-      }
-    });
+  const onModelSettingsChange = () => {
+    if (
+      state.validatedModelFingerprint &&
+      state.validatedModelFingerprint !== getModelFingerprint()
+    ) {
+      invalidateModelValidation(
+        "Model settings changed. Validate again to refresh supported options.",
+      );
+    }
+  };
+
+  elements.providerSelect.addEventListener("change", onModelSettingsChange);
+  [elements.modelIdInput, elements.modelApiKeyInput].forEach((field) => {
+    field.addEventListener("input", onModelSettingsChange);
   });
 
   elements.strategySelect.addEventListener("change", () => {
@@ -2379,16 +2373,20 @@ function bindHandlers() {
 
   elements.advancedConfigYamlInput.addEventListener("input", () => {
     state.advancedConfigDirty = true;
-    renderAdvancedConfigHighlight();
+    // Sync prompt field back from YAML so the run handler doesn't overwrite it
+    const yamlText = elements.advancedConfigYamlInput.value || "";
+    const promptMatch = yamlText.match(/^prompt\s*:\s*(.*)$/m);
+    if (promptMatch && elements.advancedPromptInput) {
+      let val = promptMatch[1].trim();
+      // Strip surrounding quotes if present
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      elements.advancedPromptInput.value = val;
+    }
   });
 
-  elements.advancedConfigYamlInput.addEventListener("scroll", () => {
-    renderAdvancedConfigHighlight();
-  });
 
-  elements.advancedConfigYamlInput.addEventListener("focus", () => {
-    renderAdvancedConfigHighlight();
-  });
 
   elements.advancedConfigYamlInput.addEventListener("keydown", (event) => {
     if (event.key !== "Tab") {
@@ -2400,7 +2398,7 @@ function bindHandlers() {
     const end = input.selectionEnd;
     input.setRangeText("  ", start, end, "end");
     state.advancedConfigDirty = true;
-    renderAdvancedConfigHighlight();
+
   });
 
   elements.runCustomButton.addEventListener("click", async () => {
@@ -2415,7 +2413,6 @@ function bindHandlers() {
 async function init() {
   bindHandlers();
   setAdvancedConfigPanelExpanded(false);
-  renderAdvancedConfigHighlight();
   applyCachedModeUi();
   invalidateModelValidation(
     "Validate a model first to unlock compatible strategy/scorer options.",

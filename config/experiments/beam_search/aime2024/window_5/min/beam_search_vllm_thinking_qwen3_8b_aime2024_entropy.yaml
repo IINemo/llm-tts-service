@@ -50,6 +50,7 @@ generation:
   top_k: 20
   batch_size: 1
   max_length: 65536
+  checkpoint_batch_size: 15
 
 # Strategy - Beam Search
 strategy:

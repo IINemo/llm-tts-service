@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 
-from llm_tts.generators.base import convert_trajectory_to_string
+from llm_tts.generators.base import convert_trajectory_to_string, get_completion_info
 from llm_tts.scorers.majority_voting import ChainMajorityVotingScorer
 from llm_tts.utils import extract_answer
 
@@ -148,26 +148,46 @@ class StrategySelfConsistency(StrategyBase):
                     trajectory,
                     getattr(self.step_generator, "thinking_mode", False),
                 )
+
+                # Split thinking text into steps via detector
+                thinking_text = candidate.text
+                if hasattr(self.step_generator, "detector"):
+                    thinking_steps = self.step_generator.detector.detect_steps(
+                        thinking_text, use_stop_tokens=True
+                    )
+                else:
+                    thinking_steps = [thinking_text]
+                # Append answer step
+                answer_text = answer_step.raw_text or answer_step.text
+                steps = thinking_steps + [answer_text]
+
                 paths.append(
                     {
                         "text": full_text,
                         "num_tokens": num_tokens,
-                        "steps": [candidate.text, answer_step.text],
+                        "steps": steps,
                         "is_complete": True,
                         "reasoning_steps": reasoning_steps,
                         "validity_scores": [],
                         "avg_validity": 0.0,
-                        "answer_step": answer_step.raw_text or answer_step.text,
+                        "answer_step": answer_text,
                     }
                 )
                 continue
 
-            # Non-thinking or no </think>: single-step path
+            # Non-thinking or no </think>: split via detector
+            if hasattr(self.step_generator, "detector"):
+                steps = self.step_generator.detector.detect_steps(
+                    text, use_stop_tokens=True
+                )
+            else:
+                steps = [text]
+
             paths.append(
                 {
                     "text": text,
                     "num_tokens": num_tokens,
-                    "steps": [text],
+                    "steps": steps,
                     "is_complete": candidate.is_trajectory_complete,
                     "reasoning_steps": count_reasoning_steps(
                         [candidate],
@@ -326,6 +346,7 @@ class StrategySelfConsistency(StrategyBase):
             all_traces.append(
                 {
                     "text": path_data["text"],
+                    "steps": path_data.get("steps", []),
                     "num_tokens": path_data["num_tokens"],
                     "num_steps": len(path_data.get("steps", [])),
                     "reasoning_steps": path_data.get("reasoning_steps", 0),
@@ -439,24 +460,25 @@ class StrategySelfConsistency(StrategyBase):
                 t.get("reasoning_steps", 0) for t in result.get("all_traces", [])
             ) / max(len(result.get("all_traces", [])), 1)
 
-            results.append(
-                {
-                    "trajectory": result["best_path"],
-                    "steps": result["best_steps"],
-                    "validity_scores": [result["consensus_score"]],
-                    "completed": bool(paths),
-                    "strategy": "self_consistency",
-                    "extracted_answer": result["best_answer"],
-                    "metadata": builder.build(),
-                    "all_traces": result.get("all_traces", []),
-                    "total_tokens": result.get("total_tokens", 0),
-                    "token_stats": token_stats,
-                    "reasoning_steps": avg_reasoning_steps,
-                    "answer_step": _get_answer_step_from_traces(
-                        result.get("all_traces", [])
-                    ),
-                }
-            )
+            res = {
+                "trajectory": result["best_path"],
+                "steps": result["best_steps"],
+                "validity_scores": [result["consensus_score"]],
+                "completed": bool(paths),
+                "strategy": "self_consistency",
+                "extracted_answer": result["best_answer"],
+                "metadata": builder.build(),
+                "all_traces": result.get("all_traces", []),
+                "total_tokens": result.get("total_tokens", 0),
+                "token_stats": token_stats,
+                "reasoning_steps": avg_reasoning_steps,
+                "answer_step": _get_answer_step_from_traces(
+                    result.get("all_traces", [])
+                ),
+            }
+            best_steps = result["best_steps"]
+            res.update(get_completion_info(best_steps if best_steps else []))
+            results.append(res)
 
         log.info(
             f"Self-consistency batch: completed {len(results)} samples, "
@@ -479,6 +501,7 @@ class StrategySelfConsistency(StrategyBase):
             "token_stats": {},
             "reasoning_steps": 0,
             "answer_step": None,
+            **get_completion_info([]),
         }
 
     def cleanup(self):

@@ -62,6 +62,7 @@ scorer:
   type: prm
   model_path: "Qwen/Qwen2.5-Math-PRM-7B"
   device: cuda:1
+  gpu_memory_utilization: 0.9
 
 # Dataset configuration - AIME 2024
 dataset:

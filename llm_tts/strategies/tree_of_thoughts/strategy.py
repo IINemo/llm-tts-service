@@ -1189,6 +1189,9 @@ Continue with concrete steps and numbers (show your work):
             "completed": bool(states and best_answer != "no_answer"),
             "strategy": "tree_of_thoughts",
             "metadata": builder.build(),
+            "completion_reason": None,
+            "context_limit_hit": False,
+            "max_steps_hit": False,
         }
 
     def cleanup(self):

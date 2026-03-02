@@ -34,16 +34,17 @@ system:
 
 # Generation configuration
 generation:
-  max_new_tokens: 1024
+  max_new_tokens: 4096
   temperature: 0.7
   top_p: 0.8
   top_k: 20
-  batch_size: 512
-  max_length: 4096
+  batch_size: 4
+  max_length: 8192
 
 # Strategy - Adaptive Scaling
 strategy:
-  max_steps: 40
+  max_steps: 50
+  use_structure: true
   # Detector settings
 
   # detector_answer_patterns:
@@ -72,5 +73,5 @@ dataset:
   prompt_template: "{question}"
   prompt_file: null
 report_to: wandb
-wandb_project: llm-tts-eval-minerva_math
+wandb_project: llm-tts-eval-minerva-math
 wandb_group: "adaptive_scaling_qwen25_math_7b_instruct_minerva_math_perplexity"
