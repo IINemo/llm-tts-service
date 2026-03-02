@@ -1,12 +1,12 @@
 <img width="130" height="130" alt="LLM_booster" src="https://github.com/user-attachments/assets/66e10a67-78a5-4854-87d9-e1acc88e8636" />
 
 
-# LLM Test-Time Scaling Service
+# LLM Test-Time Compute Scaling Framework
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![arXiv](https://img.shields.io/badge/arXiv-b31b1b.svg)]([https://arxiv.org](https://thinkbooster.s3.us-east-1.amazonaws.com/thinkbooster.pdf))
 
-A research framework for implementing and evaluating test-time scaling strategies for large language models. Includes implementations of DeepConf, Best-of-N, Self-Consistency, and Chain-of-Thought strategies.
+A research framework for implementing and evaluating test-time compute (TTC) scaling strategies for large language models. Includes implementations of DeepConf, Best-of-N, Self-Consistency, Tree-of-Thought, and many other TTC scaling strategies and reasoning step scorers.
 
 ---
 
