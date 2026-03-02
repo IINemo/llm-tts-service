@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from llm_tts.step_boundary_detectors.thinking.marker import ThinkingMarkerDetector
+
 DEFAULT_BUDGET = 8
 DEBUGGER_BUDGETS = [4, 8, 12]
 
@@ -29,6 +31,7 @@ _DEFAULT_GENERATION_CONFIG_PATH = _DEBUGGER_CONFIG_ROOT / "generation" / "defaul
 _STRATEGY_CONFIG_PATHS = {
     "baseline": _DEBUGGER_CONFIG_ROOT / "strategy" / "baseline.yaml",
     "beam_search": _DEBUGGER_CONFIG_ROOT / "strategy" / "beam_search.yaml",
+    "adaptive": _DEBUGGER_CONFIG_ROOT / "strategy" / "adaptive.yaml",
     "online_best_of_n": _DEBUGGER_CONFIG_ROOT / "strategy" / "online_best_of_n.yaml",
     "offline_best_of_n": _DEBUGGER_CONFIG_ROOT / "strategy" / "offline_best_of_n.yaml",
     "self_consistency": _DEBUGGER_CONFIG_ROOT / "strategy" / "self_consistency.yaml",
@@ -55,6 +58,15 @@ SUPPORTED_STRATEGIES: List[Dict[str, Any]] = [
         "name": "Beam Search (ToT)",
         "family": "tree_search",
         "summary": "Tree-of-thought expansion with beam pruning.",
+        "requires_scorer": True,
+        "requires_logprobs": False,
+        "requires_prefill": False,
+    },
+    {
+        "id": "adaptive",
+        "name": "Adaptive Best-of-N",
+        "family": "reranking",
+        "summary": "Online best-of-n with adaptive scaling across steps.",
         "requires_scorer": True,
         "requires_logprobs": False,
         "requires_prefill": False,
@@ -93,15 +105,14 @@ SUPPORTED_SCORERS: List[Dict[str, Any]] = [
         "id": "prm",
         "name": "PRM",
         "direction": "higher_better",
-        "threshold": 0.72,
         "summary": "Process Reward Model trajectory quality score.",
         "requires_logprobs": False,
+        "hidden": True,
     },
     {
         "id": "sequence_prob",
         "name": "Sequence Prob",
         "direction": "higher_better",
-        "threshold": 0.65,
         "summary": "Cumulative sequence probability from token logprobs.",
         "requires_logprobs": True,
     },
@@ -109,7 +120,6 @@ SUPPORTED_SCORERS: List[Dict[str, Any]] = [
         "id": "perplexity",
         "name": "Perplexity",
         "direction": "lower_better",
-        "threshold": 0.36,
         "summary": "Per-token perplexity estimated from generation logprobs.",
         "requires_logprobs": True,
     },
@@ -117,7 +127,6 @@ SUPPORTED_SCORERS: List[Dict[str, Any]] = [
         "id": "entropy",
         "name": "Entropy",
         "direction": "lower_better",
-        "threshold": 0.34,
         "summary": "Mean token entropy of decoded reasoning steps.",
         "requires_logprobs": True,
     },
@@ -127,6 +136,8 @@ _PROVIDER_BASE_URLS = {
     "openai": None,
     "openrouter": "https://openrouter.ai/api/v1",
 }
+
+_THINKING_STEP_DETECTOR: Optional[ThinkingMarkerDetector] = None
 
 
 @dataclass
@@ -186,7 +197,8 @@ def get_available_strategy_and_scorer_options(
     scorers = [
         item
         for item in SUPPORTED_SCORERS
-        if not item.get("requires_logprobs") or supports_logprobs
+        if not item.get("hidden")
+        and (not item.get("requires_logprobs") or supports_logprobs)
     ]
     return {
         "strategies": deepcopy(strategies),
@@ -270,6 +282,7 @@ def get_debugger_runtime_health() -> Dict[str, Any]:
                 "llm_tts.step_boundary_detectors:ThinkingMarkerDetector",
                 "llm_tts.strategies:StrategyBaseline",
                 "llm_tts.strategies:StrategyBeamSearch",
+                "llm_tts.strategies:AdaptiveScalingBestOfN",
                 "llm_tts.strategies:StrategyOfflineBestOfN",
                 "llm_tts.strategies:StrategyOnlineBestOfN",
                 "llm_tts.strategies:StrategySelfConsistency",
@@ -589,6 +602,7 @@ def _create_runtime_components(
         )
         from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
         from llm_tts.strategies import (
+            AdaptiveScalingBestOfN,
             StrategyBaseline,
             StrategyBeamSearch,
             StrategyOfflineBestOfN,
@@ -854,6 +868,46 @@ def _create_runtime_components(
             ),
             scoring_window=_coerce_optional_int(strategy_config.get("scoring_window")),
         )
+    elif strategy_id == "adaptive":
+        if scorer_instance is None:
+            raise ValueError("Adaptive best-of-n requires a scorer.")
+        strategy_instance = AdaptiveScalingBestOfN(
+            step_generator=step_generator,
+            scorer=scorer_instance,
+            candidates_per_step=_coerce_int(
+                strategy_config.get("candidates_per_step"),
+                default=max(2, budget),
+                minimum=1,
+                maximum=64,
+            ),
+            max_steps=_coerce_int(
+                strategy_config.get("max_steps"),
+                default=max(2, budget),
+                minimum=1,
+                maximum=128,
+            ),
+            scaling_rate=_coerce_float(
+                strategy_config.get("scaling_rate"),
+                default=0.9,
+                minimum=0.0,
+                maximum=1.0,
+            ),
+            momentum_rate=_coerce_float(
+                strategy_config.get("momentum_rate"),
+                default=0.9,
+                minimum=0.0,
+                maximum=1.0,
+            ),
+            adaptive_scaling_method=str(
+                strategy_config.get("adaptive_scaling_method") or "momentum"
+            ),
+            batch_size=_coerce_int(
+                strategy_config.get("batch_size"),
+                default=1000,
+                minimum=1,
+                maximum=100000,
+            ),
+        )
     elif strategy_id == "online_best_of_n":
         if scorer_instance is None:
             raise ValueError("Online best-of-n requires a scorer.")
@@ -1080,11 +1134,11 @@ def _estimate_result_confidence(
     if isinstance(all_scores, list) and all_scores:
         if best_idx >= len(all_scores):
             best_idx = len(all_scores) - 1
-        return _normalize_confidence(all_scores[best_idx])
+        return _confidence_from_score(all_scores[best_idx], scorer=scorer)
 
     aggregated_score = _to_float(strategy_result.get("aggregated_score"))
     if aggregated_score is not None:
-        return _normalize_confidence(aggregated_score)
+        return _confidence_from_score(aggregated_score, scorer=scorer)
 
     validity_scores = [
         value
@@ -1094,17 +1148,18 @@ def _estimate_result_confidence(
         if value is not None and math.isfinite(value)
     ]
     if validity_scores:
-        return _normalize_confidence(sum(validity_scores) / len(validity_scores))
+        return _confidence_from_score(
+            sum(validity_scores) / len(validity_scores),
+            scorer=scorer,
+        )
 
     metadata = strategy_result.get("metadata")
     consensus_score = _to_float(
         metadata.get("consensus_score") if isinstance(metadata, dict) else None
     )
     if consensus_score is not None:
-        return _normalize_confidence(consensus_score)
+        return _confidence_from_score(consensus_score, scorer=scorer)
 
-    if scorer and scorer.get("direction") == "lower_better":
-        return 0.0
     return 0.0
 
 
@@ -1146,7 +1201,6 @@ def _build_events_from_strategy_result(
     scorer_direction = (
         scorer.get("direction", "higher_better") if scorer else "higher_better"
     )
-    scorer_threshold = scorer.get("threshold") if scorer else None
 
     step_candidates = strategy_result.get("step_candidates")
     if isinstance(step_candidates, list) and step_candidates:
@@ -1160,8 +1214,28 @@ def _build_events_from_strategy_result(
     all_trajectories = strategy_result.get("all_trajectories")
     all_scores = strategy_result.get("all_scores")
     if isinstance(all_trajectories, list) and all_trajectories:
-        best_idx = _coerce_int(strategy_result.get("best_idx"), default=0, minimum=0)
-        best_idx = min(best_idx, len(all_trajectories) - 1)
+        best_idx_hint = _coerce_int(
+            strategy_result.get("best_idx"), default=0, minimum=0
+        )
+        if best_idx_hint >= len(all_trajectories):
+            best_idx_hint = 0
+        expanded_trajectory_events = _build_events_from_trajectory_pool(
+            strategy=strategy,
+            scorer=scorer,
+            all_trajectories=all_trajectories,
+            all_scores=all_scores if isinstance(all_scores, list) else [],
+            all_step_scores=(
+                strategy_result.get("all_step_scores")
+                if isinstance(strategy_result.get("all_step_scores"), list)
+                else []
+            ),
+            fallback_confidence=confidence,
+            preferred_best_idx=best_idx_hint,
+        )
+        if expanded_trajectory_events:
+            return expanded_trajectory_events
+
+        best_idx = min(best_idx_hint, len(all_trajectories) - 1)
 
         candidates: List[Dict[str, Any]] = []
         for index, trajectory_text in enumerate(all_trajectories):
@@ -1170,8 +1244,10 @@ def _build_events_from_strategy_result(
                 score_value = _to_float(all_scores[index])
 
             candidate_signals: Dict[str, float] = {
-                "confidence": _normalize_confidence(
-                    score_value if score_value is not None else confidence
+                "confidence": _confidence_from_score(
+                    score_value,
+                    scorer=scorer,
+                    fallback=confidence,
                 )
             }
             if scorer and score_value is not None:
@@ -1196,9 +1272,12 @@ def _build_events_from_strategy_result(
         signals = [
             {
                 "name": "confidence",
-                "value": confidence,
+                "value": _confidence_from_score(
+                    selected_score,
+                    scorer=scorer,
+                    fallback=confidence,
+                ),
                 "direction": "higher_better",
-                "threshold": 0.7,
             }
         ]
         if scorer and selected_score is not None:
@@ -1207,7 +1286,6 @@ def _build_events_from_strategy_result(
                     "name": scorer_key,
                     "value": selected_score,
                     "direction": scorer_direction,
-                    "threshold": scorer_threshold,
                 }
             )
 
@@ -1253,8 +1331,10 @@ def _build_events_from_strategy_result(
                 selected_trace_idx = index
 
             candidate_signals: Dict[str, float] = {
-                "confidence": _normalize_confidence(
-                    trace_score if trace_score is not None else confidence
+                "confidence": _confidence_from_score(
+                    trace_score,
+                    scorer=scorer,
+                    fallback=confidence,
                 )
             }
             if scorer and trace_score is not None:
@@ -1275,9 +1355,12 @@ def _build_events_from_strategy_result(
         signals = [
             {
                 "name": "confidence",
-                "value": confidence,
+                "value": _confidence_from_score(
+                    selected_score,
+                    scorer=scorer,
+                    fallback=confidence,
+                ),
                 "direction": "higher_better",
-                "threshold": 0.7,
             }
         ]
         if scorer and selected_score is not None:
@@ -1286,7 +1369,6 @@ def _build_events_from_strategy_result(
                     "name": scorer_key,
                     "value": selected_score,
                     "direction": scorer_direction,
-                    "threshold": scorer_threshold,
                 }
             )
 
@@ -1344,13 +1426,13 @@ def _build_events_from_step_candidates(
     fallback_confidence: float,
 ) -> List[Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
+    expanded_pools = _expand_step_candidate_pools(step_candidates)
     scorer_key = scorer["id"] if scorer else "confidence"
     scorer_direction = (
         scorer.get("direction", "higher_better") if scorer else "higher_better"
     )
-    scorer_threshold = scorer.get("threshold") if scorer else None
 
-    for index, pool in enumerate(step_candidates):
+    for index, pool in enumerate(expanded_pools):
         raw_candidates = pool.get("candidates")
         if not isinstance(raw_candidates, list) or not raw_candidates:
             continue
@@ -1361,12 +1443,17 @@ def _build_events_from_step_candidates(
         for cand_idx, raw_candidate in enumerate(raw_candidates):
             if not isinstance(raw_candidate, dict):
                 continue
+            candidate_text = str(raw_candidate.get("text") or "").strip()
+            if not candidate_text:
+                continue
 
             score_value = _to_float(raw_candidate.get("score"))
             if score_value is None:
                 score_value = _extract_first_numeric(raw_candidate.get("signals"))
-            candidate_conf = _normalize_confidence(
-                score_value if score_value is not None else fallback_confidence
+            candidate_conf = _confidence_from_score(
+                score_value,
+                scorer=scorer,
+                fallback=fallback_confidence,
             )
 
             signal_map: Dict[str, float] = {"confidence": candidate_conf}
@@ -1390,7 +1477,7 @@ def _build_events_from_step_candidates(
                     "label": str(
                         raw_candidate.get("label") or f"Candidate {cand_idx + 1}"
                     ),
-                    "text": str(raw_candidate.get("text") or ""),
+                    "text": candidate_text,
                     "status": status,
                     "selected": is_selected,
                     "signals": signal_map,
@@ -1403,13 +1490,12 @@ def _build_events_from_step_candidates(
         signals = [
             {
                 "name": "confidence",
-                "value": _normalize_confidence(
-                    selected_score
-                    if selected_score is not None
-                    else fallback_confidence
+                "value": _confidence_from_score(
+                    selected_score,
+                    scorer=scorer,
+                    fallback=fallback_confidence,
                 ),
                 "direction": "higher_better",
-                "threshold": 0.7,
             }
         ]
         if scorer is not None and selected_score is not None:
@@ -1418,14 +1504,13 @@ def _build_events_from_step_candidates(
                     "name": scorer_key,
                     "value": selected_score,
                     "direction": scorer_direction,
-                    "threshold": scorer_threshold,
                 }
             )
 
         stage = str(pool.get("stage") or "").strip() or _event_stage_for_family(
             strategy.get("family", "single_pass"),
             index=index,
-            total=len(step_candidates),
+            total=len(expanded_pools),
         )
         selected_exists = any(
             candidate.get("selected") for candidate in event_candidates
@@ -1457,6 +1542,227 @@ def _build_events_from_step_candidates(
     return events
 
 
+def _expand_step_candidate_pools(
+    step_candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    expanded: List[Dict[str, Any]] = []
+    for index, pool in enumerate(step_candidates):
+        if not isinstance(pool, dict):
+            continue
+        raw_candidates = pool.get("candidates")
+        if not isinstance(raw_candidates, list) or not raw_candidates:
+            expanded.append(pool)
+            continue
+
+        split_candidates: List[List[str]] = []
+        for candidate in raw_candidates:
+            text = ""
+            if isinstance(candidate, dict):
+                text = str(candidate.get("text") or "")
+            parts = _split_text_by_prompt_step_format(text)
+            split_candidates.append(parts)
+
+        selected_index = _pick_selected_candidate_index(pool, raw_candidates)
+        selected_parts = (
+            split_candidates[selected_index]
+            if 0 <= selected_index < len(split_candidates)
+            else []
+        )
+        target_parts = len([part for part in selected_parts if str(part).strip()])
+        if target_parts <= 0:
+            continue
+
+        if target_parts <= 1:
+            expanded.append(pool)
+            continue
+
+        base_step = _coerce_int(pool.get("step"), default=index + 1, minimum=1)
+        for part_index in range(target_parts):
+            new_pool = deepcopy(pool)
+            new_pool["step"] = base_step + part_index
+            new_pool["title"] = f"Reasoning step {part_index + 1}"
+            new_candidates = []
+            for cand_idx, candidate in enumerate(raw_candidates):
+                if not isinstance(candidate, dict):
+                    continue
+                cand_copy = deepcopy(candidate)
+                candidate_parts = split_candidates[cand_idx]
+                cand_copy["text"] = (
+                    candidate_parts[part_index]
+                    if part_index < len(candidate_parts)
+                    else ""
+                )
+                new_candidates.append(cand_copy)
+            new_pool["candidates"] = new_candidates
+            expanded.append(new_pool)
+
+    return expanded
+
+
+def _pick_selected_candidate_index(pool: Dict[str, Any], candidates: List[Any]) -> int:
+    selected_index = _coerce_optional_int(pool.get("selected_index"))
+    if selected_index is not None and 0 <= selected_index < len(candidates):
+        return selected_index
+
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("selected"):
+            return index
+        if str(candidate.get("status") or "").strip().lower() == "selected":
+            return index
+    return 0
+
+
+def _build_events_from_trajectory_pool(
+    strategy: Dict[str, Any],
+    scorer: Optional[Dict[str, Any]],
+    all_trajectories: List[Any],
+    all_scores: List[Any],
+    all_step_scores: List[Any],
+    fallback_confidence: float,
+    preferred_best_idx: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    trajectory_steps = [
+        _split_text_by_prompt_step_format(str(trajectory or ""))
+        for trajectory in all_trajectories
+    ]
+
+    scorer_direction = (
+        scorer.get("direction", "higher_better") if scorer else "higher_better"
+    )
+    scorer_key = scorer["id"] if scorer else "confidence"
+
+    best_idx = 0
+    if preferred_best_idx is not None and 0 <= preferred_best_idx < len(
+        trajectory_steps
+    ):
+        best_idx = preferred_best_idx
+    else:
+        best_score = None
+        for index, score in enumerate(all_scores):
+            if index >= len(trajectory_steps):
+                break
+            numeric_score = _to_float(score)
+            if numeric_score is None:
+                continue
+            if best_score is None:
+                best_score = numeric_score
+                best_idx = index
+                continue
+            if scorer_direction == "lower_better":
+                if numeric_score < best_score:
+                    best_score = numeric_score
+                    best_idx = index
+            elif numeric_score > best_score:
+                best_score = numeric_score
+                best_idx = index
+
+    if best_idx >= len(trajectory_steps):
+        best_idx = 0
+    best_steps = [
+        str(step_text).strip()
+        for step_text in (trajectory_steps[best_idx] if trajectory_steps else [])
+        if str(step_text).strip()
+    ]
+    max_steps = len(best_steps)
+    if max_steps <= 1:
+        return []
+
+    events: List[Dict[str, Any]] = []
+    for step_index in range(max_steps):
+        event_candidates: List[Dict[str, Any]] = []
+        selected_score: Optional[float] = None
+
+        for traj_index, parts in enumerate(trajectory_steps):
+            if step_index >= len(parts):
+                continue
+            step_text = str(parts[step_index] or "").strip()
+            if not step_text:
+                continue
+
+            score_value = None
+            if traj_index < len(all_step_scores) and isinstance(
+                all_step_scores[traj_index], list
+            ):
+                per_step_scores = all_step_scores[traj_index]
+                if step_index < len(per_step_scores):
+                    score_value = _to_float(per_step_scores[step_index])
+            if score_value is None and traj_index < len(all_scores):
+                score_value = _to_float(all_scores[traj_index])
+
+            confidence_value = _confidence_from_score(
+                score_value,
+                scorer=scorer,
+                fallback=fallback_confidence,
+            )
+            signal_map: Dict[str, float] = {"confidence": confidence_value}
+            if score_value is not None:
+                signal_map[scorer_key] = score_value
+
+            is_selected = traj_index == best_idx
+            if is_selected:
+                selected_score = score_value
+
+            event_candidates.append(
+                {
+                    "id": f"{strategy['id']}_{scorer_key}_traj_{traj_index + 1}_step_{step_index + 1}",
+                    "label": f"Trajectory {traj_index + 1}",
+                    "text": step_text,
+                    "status": "selected" if is_selected else "pruned",
+                    "selected": is_selected,
+                    "signals": signal_map,
+                }
+            )
+
+        if not event_candidates:
+            continue
+
+        signals = [
+            {
+                "name": "confidence",
+                "value": _confidence_from_score(
+                    selected_score,
+                    scorer=scorer,
+                    fallback=fallback_confidence,
+                ),
+                "direction": "higher_better",
+            }
+        ]
+        if scorer is not None and selected_score is not None:
+            signals.append(
+                {
+                    "name": scorer_key,
+                    "value": selected_score,
+                    "direction": scorer_direction,
+                }
+            )
+
+        events.append(
+            {
+                "step": step_index + 1,
+                "title": f"Reasoning step {step_index + 1}",
+                "stage": (
+                    "reranking"
+                    if step_index == max_steps - 1
+                    else "candidate_generation"
+                ),
+                "decision": {
+                    "action": "select" if step_index == max_steps - 1 else "inspect",
+                    "reason": (
+                        "Selected best trajectory after comparing candidate traces."
+                        if step_index == max_steps - 1
+                        else "Inspect candidate trajectories for this reasoning step."
+                    ),
+                },
+                "signals": signals,
+                "candidates": event_candidates,
+            }
+        )
+
+    return events
+
+
 def _build_stepwise_events(
     strategy: Dict[str, Any],
     scorer: Optional[Dict[str, Any]],
@@ -1473,7 +1779,6 @@ def _build_stepwise_events(
     scorer_direction = (
         scorer.get("direction", "higher_better") if scorer else "higher_better"
     )
-    scorer_threshold = scorer.get("threshold") if scorer else None
 
     events: List[Dict[str, Any]] = []
     total_steps = len(step_entries)
@@ -1482,7 +1787,11 @@ def _build_stepwise_events(
         absolute_step = start_step + index
         raw_score = _to_float(step_scores[index]) if index < len(step_scores) else None
         score_for_step = raw_score if raw_score is not None else confidence
-        confidence_for_step = _normalize_confidence(score_for_step)
+        confidence_for_step = _confidence_from_score(
+            raw_score,
+            scorer=scorer,
+            fallback=confidence,
+        )
         is_last_step = index == total_steps - 1
 
         stage = _event_stage_for_family(family, index=index, total=total_steps)
@@ -1500,7 +1809,6 @@ def _build_stepwise_events(
                 "name": "confidence",
                 "value": confidence_for_step,
                 "direction": "higher_better",
-                "threshold": 0.7,
             }
         ]
         if scorer is not None:
@@ -1509,7 +1817,6 @@ def _build_stepwise_events(
                     "name": scorer_key,
                     "value": score_for_step,
                     "direction": scorer_direction,
-                    "threshold": scorer_threshold,
                 }
             )
 
@@ -1591,13 +1898,64 @@ def _split_text_by_prompt_step_format(text: str) -> List[str]:
     if not content:
         return []
 
-    # Split by lines that start with "- Step <index>:" (e.g. "- Step 3: ...").
-    pattern = re.compile(
-        r"(?=^\s*-\s*Step\s+(?:\d+|[A-Za-z]+)\s*:)",
-        re.IGNORECASE | re.MULTILINE,
+    detector = _get_thinking_step_detector()
+    raw_steps = detector.detect_steps(
+        content,
+        normalize=False,
+        use_stop_tokens=False,
     )
-    chunks = [chunk.strip() for chunk in pattern.split(content) if chunk.strip()]
-    return chunks if len(chunks) > 1 else [content]
+    if not isinstance(raw_steps, list):
+        return [content]
+
+    cleaned_steps: List[str] = []
+    for raw_step in raw_steps:
+        cleaned_step = _sanitize_detected_step_text(str(raw_step or ""))
+        if cleaned_step:
+            cleaned_steps.append(cleaned_step)
+
+    return cleaned_steps or [content]
+
+
+def _get_thinking_step_detector() -> ThinkingMarkerDetector:
+    global _THINKING_STEP_DETECTOR
+    if _THINKING_STEP_DETECTOR is None:
+        _THINKING_STEP_DETECTOR = ThinkingMarkerDetector()
+    return _THINKING_STEP_DETECTOR
+
+
+def _sanitize_detected_step_text(text: str) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return ""
+
+    cleaned = re.sub(
+        r"^\s*<start of response>\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    cleaned = re.sub(
+        r"^\s*Reasoning Steps\s*:\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    lower_cleaned = cleaned.lower()
+    cut_markers = [
+        "<answer>:",
+        "</think>",
+        "<end of response>",
+    ]
+    cut_positions = [
+        lower_cleaned.find(marker)
+        for marker in cut_markers
+        if lower_cleaned.find(marker) >= 0
+    ]
+    if cut_positions:
+        cleaned = cleaned[: min(cut_positions)].strip()
+
+    return cleaned
 
 
 def _distribute_tokens_by_text_length(parts: List[str], total_tokens: int) -> List[int]:
@@ -1638,6 +1996,21 @@ def _normalize_confidence(value: Any) -> float:
     # Convert unconstrained score into a bounded confidence value.
     stabilized = max(-60.0, min(60.0, numeric))
     return _clamp(1.0 / (1.0 + math.exp(-stabilized)))
+
+
+def _confidence_from_score(
+    value: Any,
+    scorer: Optional[Dict[str, Any]],
+    fallback: float = 0.0,
+) -> float:
+    numeric = _to_float(value)
+    if numeric is None or not math.isfinite(numeric):
+        return _normalize_confidence(fallback)
+
+    confidence = _normalize_confidence(numeric)
+    if scorer and scorer.get("direction") == "lower_better":
+        return _clamp(1.0 - confidence)
+    return confidence
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -1986,14 +2359,6 @@ def _build_strategy_scorer_run(
         maximum=2.0,
     )
 
-    if scorer and "threshold" in scorer_config:
-        scorer["threshold"] = _coerce_float(
-            scorer_config.get("threshold"),
-            default=float(scorer.get("threshold", 0.5)),
-            minimum=0.0,
-            maximum=1.0,
-        )
-
     rng = _make_rng(
         strategy["id"],
         scorer_id,
@@ -2138,7 +2503,6 @@ def _build_generic_events(
                 "name": "confidence",
                 "value": confidence,
                 "direction": "higher_better",
-                "threshold": 0.70,
             }
         ]
         if scorer_signal:
@@ -2195,7 +2559,6 @@ def _build_generic_events(
             "name": "confidence",
             "value": _clamp(confidence - 0.12),
             "direction": "higher_better",
-            "threshold": 0.70,
         }
     ]
     if warmup_signal:
@@ -2256,7 +2619,6 @@ def _build_generic_events(
             "name": "confidence",
             "value": confidence,
             "direction": "higher_better",
-            "threshold": 0.70,
         }
     ]
     if scorer_signal:
@@ -2295,7 +2657,7 @@ def _build_generic_events(
 
 
 def _signal_list_to_score_map(
-    signals: Optional[List[Dict[str, Any]]]
+    signals: Optional[List[Dict[str, Any]]],
 ) -> Dict[str, float]:
     score_map: Dict[str, float] = {}
     for signal in signals or []:
@@ -2513,7 +2875,6 @@ def _scorer_signal(scorer: Dict[str, Any], value: float) -> Dict[str, Any]:
         "name": scorer["id"],
         "value": value,
         "direction": scorer["direction"],
-        "threshold": scorer.get("threshold"),
     }
 
 
@@ -2532,6 +2893,7 @@ def _strategy_quality_base(strategy_id: str, family: str) -> float:
     by_strategy = {
         "baseline": 0.55,
         "beam_search": 0.67,
+        "adaptive": 0.67,
         "online_best_of_n": 0.66,
         "offline_best_of_n": 0.64,
         "self_consistency": 0.65,
@@ -2643,7 +3005,33 @@ def _build_advanced_config_template_dict(
         raise ValueError(f"Unsupported strategy_id: {strategy_id}")
 
     config: Dict[str, Any] = {
-        "prompt": "Reason step-by-step carefully",
+        "prompt": """
+You will be presented with a <Question>. Before providing the [Answer], you should first think step-by-step carefully.
+
+Your response format:
+<start of response>
+Reasoning Steps:
+- Step 1: [Your first reasoning step]
+- Step 2: [Your second reasoning step]
+- Step 3: [Next step, and so on...]
+...
+- Step N: [Final reasoning step]
+<Answer>: [Your final answer]
+<end of response>
+
+Strict Requirements:
+- DO NOT include any text outside the specified format.
+- Each reasoning step MUST be written on a **single line only**: NO line breaks, bullet points, or substeps within a step.
+- Each step should express one precise and **self-contained** logical operation, deduction, calculation, or fact application.
+- Steps MUST provide explicit result of the step or concrete reasoning outcomes. Avoid vague explanations or meta-descriptions of the reasoning process.
+    - For example:
+        - Good: "- Step 1: Multiply 5 by 4, which equals 20."
+        - Bad: "- Step 1: Multiply 5 by 4." (no result of the step or concrete reasoning outcome)
+- Continue writing steps until the problem is solved.
+- Violating ANY requirement above is NOT acceptable.
+
+Now answer:
+<Question>: """,
         "generation": _load_yaml_mapping(_DEFAULT_GENERATION_CONFIG_PATH),
         "strategy": _load_yaml_mapping(strategy_path),
     }

@@ -178,9 +178,9 @@
           </p>
         </div>
 
-        <p id="modelConfigNote" class="custom-note">
+        <!-- <p id="modelConfigNote" class="custom-note">
           Note: system prompt is managed in this Advanced config section and synced into YAML `prompt` on run. Model validation uses the entered API key. Full production execution still relies on backend environment wiring.
-        </p>
+        </p> -->
 
         <div class="custom-mode-section">
           <label class="control grow">
@@ -258,6 +258,7 @@
       (() => {
         const assetBase =
           window.location.protocol === "file:" ? "." : "/static/debugger";
+        const cacheToken = `v=${Date.now()}`;
 
         const appendScript = (src, onDone) => {
           const script = document.createElement("script");
@@ -275,7 +276,7 @@
           document.body.appendChild(script);
         };
 
-        appendScript(`${assetBase}/app.js`);
+        appendScript(`${assetBase}/app.js?${cacheToken}`);
       })();
     </script>
   </body>

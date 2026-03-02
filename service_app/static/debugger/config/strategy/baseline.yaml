@@ -5,7 +5,7 @@ min_step_tokens: 0
 stop_token_ids:
   - 151645
   - 151643
-max_step_tokens: 32768
+max_step_tokens: 10000
 use_sequence: false
 use_conclusion: false
 use_thinking: false

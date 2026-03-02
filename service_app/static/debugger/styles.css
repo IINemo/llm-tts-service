@@ -300,6 +300,11 @@ button:disabled {
   animation: button-spin 0.7s linear infinite;
 }
 
+#runCustomButton.is-loading:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
 .ghost {
   background: #f0f6fc;
   color: #21537a;
