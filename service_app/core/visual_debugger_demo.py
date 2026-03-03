@@ -774,7 +774,7 @@ def _create_runtime_components(
         ),
         max_context_budget=_coerce_int(
             generation_config.get("max_length"),
-            default=8196,
+            default=8192,
             minimum=1024,
             maximum=262144,
         ),
