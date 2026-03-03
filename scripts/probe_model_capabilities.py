@@ -3,28 +3,28 @@
 
 Usage:
     # Test all models (keys from env OPENAI_API_KEY / OPENROUTER_API_KEY):
-    python scripts/probe_top_logprobs.py
+    python scripts/probe_model_capabilities.py
 
     # Test specific provider:
-    python scripts/probe_top_logprobs.py --provider openrouter
+    python scripts/probe_model_capabilities.py --provider openrouter
 
     # Test a specific model:
-    python scripts/probe_top_logprobs.py --provider openrouter --model anthropic/claude-sonnet-4
+    python scripts/probe_model_capabilities.py --provider openrouter --model anthropic/claude-sonnet-4
 
     # Override API key:
-    python scripts/probe_top_logprobs.py --provider openai --api-key sk-...
+    python scripts/probe_model_capabilities.py --provider openai --api-key sk-...
 
     # Skip prefill test (faster):
-    python scripts/probe_top_logprobs.py --skip-prefill
+    python scripts/probe_model_capabilities.py --skip-prefill
 
     # Skip logprobs test:
-    python scripts/probe_top_logprobs.py --skip-logprobs
+    python scripts/probe_model_capabilities.py --skip-logprobs
 
     # Disable cache:
-    python scripts/probe_top_logprobs.py --no-cache
+    python scripts/probe_model_capabilities.py --no-cache
 
     # Custom cache path:
-    python scripts/probe_top_logprobs.py --cache /tmp/probe_cache.json
+    python scripts/probe_model_capabilities.py --cache /tmp/probe_cache.json
 """
 
 import argparse
