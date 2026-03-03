@@ -19,9 +19,16 @@ Usage:
 
     # Skip logprobs test:
     python scripts/probe_top_logprobs.py --skip-logprobs
+
+    # Disable cache:
+    python scripts/probe_top_logprobs.py --no-cache
+
+    # Custom cache path:
+    python scripts/probe_top_logprobs.py --cache /tmp/probe_cache.json
 """
 
 import argparse
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,6 +68,7 @@ MODELS_BY_PROVIDER = {
         "deepseek/deepseek-r1",
         "deepseek/deepseek-chat-v3-0324",
         # Qwen
+        "qwen/qwen3.5-27b",
         "qwen/qwen3-235b-a22b",
         "qwen/qwen3-30b-a3b",
         # Google
@@ -72,7 +80,7 @@ MODELS_BY_PROVIDER = {
 }
 
 # top_logprobs values to test (descending); we find the highest that works
-LOGPROBS_PROBE_VALUES = [20, 10, 5, 3, 1]
+LOGPROBS_PROBE_VALUES = [20, 10, 5, 4, 3, 2, 1]
 
 PREFILL_TEXT = "A transformer model is a type of neural network that"
 
@@ -102,8 +110,45 @@ def make_client(provider: str, api_key: str) -> OpenAI:
     return OpenAI(**kwargs)
 
 
-def check_reachable(client: OpenAI, model: str) -> Optional[str]:
-    """Quick check that the model responds at all. Returns error string or None."""
+# ---------------------------------------------------------------------------
+# Cache helpers
+# ---------------------------------------------------------------------------
+
+
+def load_cache(cache_path: str) -> dict:
+    """Load probe cache from JSON file."""
+    try:
+        with open(cache_path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_cache(cache: dict, cache_path: str):
+    """Save probe cache to JSON file."""
+    Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(cache_path, "w") as f:
+        json.dump(cache, f, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Probing functions
+# ---------------------------------------------------------------------------
+
+
+def check_reachable(
+    client: OpenAI, model: str, model_cache: Optional[dict] = None
+) -> tuple[Optional[str], bool]:
+    """Quick check that the model responds at all.
+
+    Returns (error_string_or_none, from_cache).
+    """
+    if model_cache is not None and "reachable" in model_cache:
+        cached = model_cache["reachable"]
+        if cached is True:
+            return None, True
+        return cached, True
+
     try:
         client.chat.completions.create(
             model=model,
@@ -111,9 +156,14 @@ def check_reachable(client: OpenAI, model: str) -> Optional[str]:
             max_tokens=4,
             temperature=0,
         )
-        return None
+        err = None
     except Exception as e:
-        return _compact_error(e)
+        err = _compact_error(e)
+
+    if model_cache is not None:
+        model_cache["reachable"] = True if err is None else err
+
+    return err, False
 
 
 # ---------------------------------------------------------------------------
@@ -147,40 +197,59 @@ def _try_logprobs(
 
 
 def probe_logprobs(
-    client: OpenAI, model: str
-) -> tuple[Optional[bool], Optional[int], int, str]:
+    client: OpenAI, model: str, model_cache: Optional[dict] = None
+) -> tuple[Optional[bool], Optional[int], int, str, bool]:
     """Probe logprobs support and max returned count.
 
-    Returns: (supported, max_accepted, max_returned, note)
-    """
-    # Try each value from highest to lowest
-    for value in LOGPROBS_PROBE_VALUES:
-        accepted, returned, err = _try_logprobs(client, model, value)
-        if accepted:
-            if returned > 0:
-                return True, value, returned, f"accepted={value}, returned={returned}"
-            else:
-                # Accepted but returned nothing — try lower values too
-                # to confirm it's truly zero, not a fluke
-                _, returned_1, _ = _try_logprobs(client, model, 1)
-                if returned_1 > 0:
-                    return (
-                        True,
-                        value,
-                        returned_1,
-                        f"accepted={value} but only returned {returned_1}",
-                    )
-                return (
-                    False,
-                    value,
-                    0,
-                    f"accepted top_logprobs={value} but returned 0 logprobs",
-                )
-        # If rejected, try next lower value
-        continue
+    Tests every value in LOGPROBS_PROBE_VALUES and reports the best one
+    that actually returns logprobs (some models only work with specific values).
 
-    # Nothing worked
-    return False, None, 0, "logprobs rejected for all values"
+    Returns: (supported, max_accepted, max_returned, note, all_from_cache)
+    """
+    best_value = None
+    best_returned = 0
+    any_accepted = False
+    max_accepted = None
+    all_from_cache = True
+
+    logprobs_cache: dict = {}
+    if model_cache is not None:
+        logprobs_cache = model_cache.setdefault("logprobs", {})
+
+    for value in LOGPROBS_PROBE_VALUES:
+        key = str(value)
+        if key in logprobs_cache:
+            accepted, returned = logprobs_cache[key]
+        else:
+            all_from_cache = False
+            accepted, returned, _err = _try_logprobs(client, model, value)
+            logprobs_cache[key] = [accepted, returned]
+
+        if accepted:
+            any_accepted = True
+            if max_accepted is None:
+                max_accepted = value
+            if returned > best_returned:
+                best_value = value
+                best_returned = returned
+
+    if best_returned > 0:
+        return (
+            True,
+            best_value,
+            best_returned,
+            f"best={best_value}, returned={best_returned}",
+            all_from_cache,
+        )
+    if any_accepted:
+        return (
+            False,
+            max_accepted,
+            0,
+            f"accepted top_logprobs={max_accepted} but returned 0 logprobs",
+            all_from_cache,
+        )
+    return False, None, 0, "logprobs rejected for all values", all_from_cache
 
 
 # ---------------------------------------------------------------------------
@@ -188,11 +257,17 @@ def probe_logprobs(
 # ---------------------------------------------------------------------------
 
 
-def probe_prefill(client: OpenAI, model: str) -> tuple[bool, str]:
+def probe_prefill(
+    client: OpenAI, model: str, model_cache: Optional[dict] = None
+) -> tuple[bool, str, bool]:
     """Probe prefill (assistant message continuation) support.
 
-    Returns: (supported, note)
+    Returns: (supported, note, from_cache)
     """
+    if model_cache is not None and "prefill" in model_cache:
+        supported, note = model_cache["prefill"]
+        return supported, note, True
+
     try:
         response = client.chat.completions.create(
             model=model,
@@ -213,27 +288,32 @@ def probe_prefill(client: OpenAI, model: str) -> tuple[bool, str]:
             kw in lowered
             for kw in ("prefix", "prefill", "not supported", "not allowed", "invalid")
         ):
-            return False, f"rejected: {err[:100]}"
-        return False, f"error: {err[:100]}"
+            result = (False, f"rejected: {err[:100]}")
+        else:
+            result = (False, f"error: {err[:100]}")
+        if model_cache is not None:
+            model_cache["prefill"] = list(result)
+        return result[0], result[1], False
 
     text = (
         (response.choices[0].message.content or "").strip() if response.choices else ""
     )
     if not text:
-        return False, "empty response"
+        result = (False, "empty response")
+    elif text.startswith(PREFILL_TEXT):
+        result = (True, "full echo (response starts with prefill)")
+    else:
+        first_char = text[0]
+        if first_char in ("'", ",", ".", ";", " ", "-") or (
+            first_char.isalpha() and first_char.islower()
+        ):
+            result = (True, f"continuation: {text[:50]!r}")
+        else:
+            result = (False, f"no continuation: {text[:50]!r}")
 
-    # Check full echo: response includes prefix + continuation
-    if text.startswith(PREFILL_TEXT):
-        return True, "full echo (response starts with prefill)"
-
-    # Check continuation-only: response continues mid-sentence
-    first_char = text[0]
-    if first_char in ("'", ",", ".", ";", " ", "-") or (
-        first_char.isalpha() and first_char.islower()
-    ):
-        return True, f"continuation: {text[:50]!r}"
-
-    return False, f"no continuation: {text[:50]!r}"
+    if model_cache is not None:
+        model_cache["prefill"] = list(result)
+    return result[0], result[1], False
 
 
 # ---------------------------------------------------------------------------
@@ -247,24 +327,41 @@ def probe_model(
     model: str,
     skip_logprobs: bool = False,
     skip_prefill: bool = False,
+    cache: Optional[dict] = None,
+    cache_path: Optional[str] = None,
 ) -> ProbeResult:
     result = ProbeResult(provider=provider, model=model)
+    cache_key = f"{provider}/{model}"
+    model_cache = None
+    if cache is not None:
+        model_cache = cache.setdefault(cache_key, {})
+
+    all_cached = True
 
     print(f"  {model} ... ", end="", flush=True)
 
     # Reachability check
-    err = check_reachable(client, model)
+    err, from_cache = check_reachable(client, model, model_cache)
+    if not from_cache:
+        all_cached = False
     if err:
         result.reachable = False
         result.error = err
-        print(f"UNREACHABLE ({err[:60]})")
+        suffix = " (cached)" if from_cache else ""
+        print(f"UNREACHABLE ({err[:60]}){suffix}")
+        if cache is not None and cache_path:
+            save_cache(cache, cache_path)
         return result
 
     parts = []
 
     # Logprobs
     if not skip_logprobs:
-        supported, max_accepted, max_returned, note = probe_logprobs(client, model)
+        supported, max_accepted, max_returned, note, lp_cached = probe_logprobs(
+            client, model, model_cache
+        )
+        if not lp_cached:
+            all_cached = False
         result.logprobs_supported = supported
         result.logprobs_max_accepted = max_accepted
         result.logprobs_max_returned = max_returned
@@ -272,16 +369,23 @@ def probe_model(
         if supported:
             parts.append(f"logprobs={max_returned}/{max_accepted}")
         else:
-            parts.append(f"logprobs=NO")
+            parts.append("logprobs=NO")
 
     # Prefill
     if not skip_prefill:
-        supported, note = probe_prefill(client, model)
+        supported, note, pf_cached = probe_prefill(client, model, model_cache)
+        if not pf_cached:
+            all_cached = False
         result.prefill_supported = supported
         result.prefill_note = note
         parts.append(f"prefill={'YES' if supported else 'NO'}")
 
-    print(", ".join(parts))
+    suffix = " (cached)" if all_cached else ""
+    print(f"{', '.join(parts)}{suffix}")
+
+    if cache is not None and cache_path:
+        save_cache(cache, cache_path)
+
     return result
 
 
@@ -378,7 +482,24 @@ def main():
     parser.add_argument(
         "--skip-prefill", action="store_true", help="Skip prefill probing"
     )
+    parser.add_argument(
+        "--cache",
+        type=str,
+        default="reports/probe_cache.json",
+        help="Path to cache file (default: reports/probe_cache.json)",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Ignore cache, re-probe everything",
+    )
     args = parser.parse_args()
+
+    cache = None
+    cache_path = None
+    if not args.no_cache:
+        cache_path = args.cache
+        cache = load_cache(cache_path)
 
     if args.provider and args.model:
         test_plan = {args.provider: args.model}
@@ -405,7 +526,13 @@ def main():
 
         for model in models:
             result = probe_model(
-                client, provider, model, args.skip_logprobs, args.skip_prefill
+                client,
+                provider,
+                model,
+                args.skip_logprobs,
+                args.skip_prefill,
+                cache=cache,
+                cache_path=cache_path,
             )
             results.append(result)
 

@@ -5,8 +5,8 @@
 
 ## Summary
 
-- **Logprobs:** Only OpenAI models (gpt-4o, gpt-4.1-*) return actual logprobs. All non-OpenAI models via OpenRouter silently accept `top_logprobs` but return 0 logprobs.
-- **Prefill:** Supported by Claude, DeepSeek Chat, Qwen3-30b, Gemini. Not supported by OpenAI, DeepSeek R1, Qwen3-235b, Llama 4.
+- **Logprobs:** OpenAI models (gpt-4o, gpt-4.1-*) return up to 20 logprobs. Qwen3.5-27b returns up to 5. All other models via OpenRouter silently accept `top_logprobs` but return 0.
+- **Prefill:** Supported by Claude, Qwen3-30b, Gemini. Not supported by OpenAI, DeepSeek, Qwen3.5-27b, Qwen3-235b, Llama 4.
 - **Reasoning models** (o3-mini, o4-mini) don't support `max_tokens` parameter and are unreachable with current probe.
 
 ## Results
@@ -27,7 +27,8 @@
 | openrouter | anthropic/claude-3.5-sonnet | silent NO | 20 | 0 | YES |
 | openrouter | anthropic/claude-3.5-haiku | silent NO | 20 | 0 | YES |
 | openrouter | deepseek/deepseek-r1 | silent NO | 20 | 0 | NO |
-| openrouter | deepseek/deepseek-chat-v3-0324 | silent NO | 20 | 0 | YES |
+| openrouter | deepseek/deepseek-chat-v3-0324 | silent NO | 20 | 0 | NO |
+| openrouter | qwen/qwen3.5-27b | YES | 5 | 5 | NO |
 | openrouter | qwen/qwen3-235b-a22b | silent NO | 20 | 0 | NO |
 | openrouter | qwen/qwen3-30b-a3b | silent NO | 20 | 0 | YES |
 | openrouter | google/gemini-2.5-flash | silent NO | 20 | 0 | YES |
@@ -36,7 +37,7 @@
 
 ## Key Takeaways
 
-1. **Logprob-based scorers** (entropy, perplexity, sequence_prob) only work with OpenAI models.
-2. **OpenRouter silently ignores** `logprobs=True` for non-OpenAI models — no error, just empty data.
-3. **Prefill-dependent strategies** (online best-of-n, beam search, adaptive) work with Claude, DeepSeek Chat, Gemini, Qwen3-30b — but not with OpenAI, DeepSeek R1, Qwen3-235b, or Llama 4.
-4. **No model supports both** logprobs and prefill via these providers.
+1. **Logprob-based scorers** (entropy, perplexity, sequence_prob) work with OpenAI models and Qwen3.5-27b (up to 5).
+2. **OpenRouter silently ignores** `logprobs=True` for most non-OpenAI models — no error, just empty data.
+3. **Prefill-dependent strategies** (online best-of-n, beam search, adaptive) work with Claude, Gemini, Qwen3-30b — but not with OpenAI, DeepSeek, Qwen3.5-27b, Qwen3-235b, or Llama 4.
+4. **No model supports both** logprobs and prefill via these providers (Qwen3.5-27b has logprobs but no prefill).
