@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import math
+import re
 import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -57,15 +59,16 @@ SUPPORTED_STRATEGIES: List[Dict[str, Any]] = [
         "requires_logprobs": False,
         "requires_prefill": True,
     },
-    {
-        "id": "adaptive",
-        "name": "Adaptive Best-of-N",
-        "family": "reranking",
-        "summary": "Online best-of-n with adaptive scaling across steps.",
-        "requires_scorer": True,
-        "requires_logprobs": False,
-        "requires_prefill": True,
-    },
+    # TODO: re-enable once adaptive visualization is fixed
+    # {
+    #     "id": "adaptive",
+    #     "name": "Adaptive Best-of-N",
+    #     "family": "reranking",
+    #     "summary": "Online best-of-n with adaptive scaling across steps.",
+    #     "requires_scorer": True,
+    #     "requires_logprobs": False,
+    #     "requires_prefill": True,
+    # },
     {
         "id": "online_best_of_n",
         "name": "Online Best-of-N",
@@ -211,7 +214,7 @@ def validate_model_capabilities(
 
     # Allow OpenRouter-style "openai/gpt-4o-mini" with the openai provider
     if provider_value == "openai" and model_id_value.startswith("openai/"):
-        model_id_value = model_id_value[len("openai/"):]
+        model_id_value = model_id_value[len("openai/") :]
 
     if provider_value not in _PROVIDER_BASE_URLS:
         raise ValueError("Provider must be one of: openai, openrouter.")
@@ -553,6 +556,36 @@ def _run_real_strategy_entry(
     }
 
 
+# ---------------------------------------------------------------------------
+# Progress-reporting wrapper (used by the SSE streaming endpoint)
+# ---------------------------------------------------------------------------
+
+_STEP_PATTERNS = [
+    # beam_search: "Beam Search Step 3: 4 active samples"
+    (re.compile(r"Beam Search Step (\d+)"), lambda m: f"Step {m.group(1)}"),
+    # online_best_of_n: "Online BoN Step 3: 1 active samples"
+    (re.compile(r"Online BoN Step (\d+)"), lambda m: f"Step {m.group(1)}"),
+    # adaptive: "=== Step 3 === (1/1 active samples)"
+    (re.compile(r"=== Step (\d+) ==="), lambda m: f"Step {m.group(1)}"),
+]
+
+
+class StrategyProgressHandler(logging.Handler):
+    """Logging handler that intercepts strategy log lines and fires a callback."""
+
+    def __init__(self, callback: Callable[[str], None]) -> None:
+        super().__init__(level=logging.INFO)
+        self._callback = callback
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = record.getMessage()
+        for pattern, formatter in _STEP_PATTERNS:
+            m = pattern.search(msg)
+            if m:
+                self._callback(formatter(m))
+                return
+
+
 def _build_request_messages(question: str, shared_prompt: str) -> List[Dict[str, str]]:
     messages: List[Dict[str, str]] = []
     prompt_text = str(shared_prompt or "").strip()
@@ -579,7 +612,7 @@ def _create_runtime_components(
 
     # Allow OpenRouter-style "openai/gpt-4o-mini" with the openai provider
     if provider == "openai" and model_id.startswith("openai/"):
-        model_id = model_id[len("openai/"):]
+        model_id = model_id[len("openai/") :]
 
     if provider not in _PROVIDER_BASE_URLS:
         raise ValueError("Provider must be one of: openai, openrouter.")
@@ -796,9 +829,7 @@ def _create_runtime_components(
                 prm_model_path=str(
                     scorer_config.get("model_path") or "Qwen/Qwen2.5-Math-PRM-7B"
                 ),
-                device=_resolve_prm_device(
-                    str(scorer_config.get("device") or "auto")
-                ),
+                device=_resolve_prm_device(str(scorer_config.get("device") or "auto")),
                 batch_size=_coerce_int(
                     scorer_config.get("batch_size"),
                     default=1,
