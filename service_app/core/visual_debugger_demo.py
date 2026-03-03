@@ -124,7 +124,6 @@ SUPPORTED_SCORERS: List[Dict[str, Any]] = [
         "direction": "higher_better",
         "summary": "Process Reward Model trajectory quality score.",
         "requires_logprobs": False,
-        "hidden": True,
     },
     {
         "id": "sequence_prob",

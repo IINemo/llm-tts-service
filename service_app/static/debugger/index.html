@@ -120,12 +120,21 @@
           </label>
           <label class="control grow">
             <span>Model ID</span>
-            <input
-              id="modelIdInput"
-              type="text"
-              value="gpt-4o-mini"
-              placeholder="e.g. gpt-4o-mini or deepseek/deepseek-r1-0528"
-            />
+            <div class="combobox" id="modelCombobox">
+              <input
+                id="modelIdInput"
+                type="text"
+                value="gpt-4o-mini"
+                placeholder="e.g. gpt-4o-mini"
+                autocomplete="off"
+              />
+              <button type="button" class="combobox-toggle" tabindex="-1" aria-label="Show models">
+                <svg width="10" height="6" viewBox="0 0 10 6" aria-hidden="true">
+                  <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <ul class="combobox-list" id="modelSuggestions" role="listbox"></ul>
+            </div>
           </label>
           <label class="control grow">
             <span>API Key</span>

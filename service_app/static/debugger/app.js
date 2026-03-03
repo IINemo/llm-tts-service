@@ -5,6 +5,16 @@ const CACHED_EXAMPLES_PATHS =
 const DEFAULT_SYSTEM_PROMPT = "Reason step-by-step carefully";
 const HIDDEN_SCORER_IDS = new Set([]);
 
+const POPULAR_MODELS = {
+  openai: ["gpt-4o-mini", "gpt-4o", "o4-mini", "gpt-4.1-mini", "gpt-4.1-nano"],
+  openrouter: [
+    "anthropic/claude-sonnet-4",
+    "deepseek/deepseek-r1",
+    "deepseek/deepseek-chat",
+    "openai/gpt-4o-mini",
+  ],
+};
+
 const state = {
   catalog: [],
   payload: null,
@@ -66,7 +76,90 @@ const elements = {
   runCustomButton: document.getElementById("runCustomButton"),
   resetDemoButton: document.getElementById("resetDemoButton"),
   customStatus: document.getElementById("customStatus"),
+  modelSuggestions: document.getElementById("modelSuggestions"),
 };
+
+function updateModelSuggestions() {
+  const provider = elements.providerSelect.value;
+  const models = POPULAR_MODELS[provider] || [];
+  const ul = elements.modelSuggestions;
+  if (!ul) return;
+  ul.innerHTML = "";
+  const current = elements.modelIdInput.value;
+  for (const m of models) {
+    const li = document.createElement("li");
+    li.textContent = m;
+    li.dataset.value = m;
+    li.setAttribute("role", "option");
+    if (m === current) li.classList.add("active");
+    ul.appendChild(li);
+  }
+  elements.modelIdInput.placeholder = models.length
+    ? `e.g. ${models[0]}`
+    : "Enter model ID";
+}
+
+function initModelCombobox() {
+  const input = elements.modelIdInput;
+  const list = elements.modelSuggestions;
+  const toggle = document.querySelector("#modelCombobox .combobox-toggle");
+  if (!input || !list) return;
+
+  const open = () => list.classList.add("open");
+  const close = () => list.classList.remove("open");
+  const isOpen = () => list.classList.contains("open");
+
+  toggle?.addEventListener("click", () => {
+    if (isOpen()) { close(); } else { open(); input.focus(); }
+  });
+
+  input.addEventListener("focus", open);
+
+  list.addEventListener("mousedown", (e) => {
+    e.preventDefault();            // keep focus on input
+    const li = e.target.closest("li");
+    if (!li) return;
+    input.value = li.dataset.value;
+    close();
+    updateModelSuggestions();
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  document.addEventListener("mousedown", (e) => {
+    if (!e.target.closest("#modelCombobox")) close();
+  });
+
+  input.addEventListener("keydown", (e) => {
+    const items = [...list.querySelectorAll("li")];
+    if (!items.length) return;
+    const cur = list.querySelector("li.highlighted");
+    let idx = cur ? items.indexOf(cur) : -1;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      open();
+      if (cur) cur.classList.remove("highlighted");
+      idx = (idx + 1) % items.length;
+      items[idx].classList.add("highlighted");
+      items[idx].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      open();
+      if (cur) cur.classList.remove("highlighted");
+      idx = (idx - 1 + items.length) % items.length;
+      items[idx].classList.add("highlighted");
+      items[idx].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter" && isOpen() && cur) {
+      e.preventDefault();
+      input.value = cur.dataset.value;
+      close();
+      updateModelSuggestions();
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    } else if (e.key === "Escape") {
+      close();
+    }
+  });
+}
 
 function extractResponseError(status, text) {
   try {
@@ -1333,6 +1426,7 @@ async function restoreDemoData() {
     elements.advancedPromptInput.value = DEFAULT_SYSTEM_PROMPT;
   }
   setAdvancedConfigYamlValue("");
+  updateModelSuggestions();
 
   try {
     state.catalog = await loadCatalog();
@@ -2322,7 +2416,15 @@ function bindHandlers() {
     }
   };
 
-  elements.providerSelect.addEventListener("change", onModelSettingsChange);
+  elements.providerSelect.addEventListener("change", () => {
+    const provider = elements.providerSelect.value;
+    const models = POPULAR_MODELS[provider] || [];
+    if (models.length) {
+      elements.modelIdInput.value = models[0];
+    }
+    onModelSettingsChange();
+    updateModelSuggestions();
+  });
   [elements.modelIdInput, elements.modelApiKeyInput].forEach((field) => {
     field.addEventListener("input", onModelSettingsChange);
   });
@@ -2414,6 +2516,8 @@ async function init() {
   bindHandlers();
   setAdvancedConfigPanelExpanded(false);
   applyCachedModeUi();
+  initModelCombobox();
+  updateModelSuggestions();
   invalidateModelValidation(
     "Validate a model first to unlock compatible strategy/scorer options.",
   );

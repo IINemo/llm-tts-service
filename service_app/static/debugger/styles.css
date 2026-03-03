@@ -229,7 +229,8 @@ h1 {
 
 .control > select,
 .control > input,
-.control > textarea {
+.control > textarea,
+.control > .combobox {
   width: 100%;
 }
 
@@ -296,6 +297,66 @@ select:focus {
 input[type="range"] {
   width: 220px;
   accent-color: var(--accent);
+}
+
+/* Combobox (editable select) */
+.combobox {
+  position: relative;
+  width: 100%;
+}
+.combobox > input {
+  width: 100%;
+  padding-right: 2.2rem;
+}
+.combobox-toggle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 40px;
+  width: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+.combobox-toggle:hover { color: var(--ink); }
+.combobox-list {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #b7c6d7;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.1);
+  z-index: 100;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.combobox-list.open { display: block; }
+.combobox-list li {
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+  font-size: 0.92rem;
+  color: var(--ink);
+  border-radius: 6px;
+  margin: 0 4px;
+}
+.combobox-list li:hover,
+.combobox-list li.highlighted {
+  background: color-mix(in srgb, var(--teal), transparent 88%);
+}
+.combobox-list li.active {
+  font-weight: 500;
+  color: var(--teal);
 }
 
 button {
