@@ -638,9 +638,6 @@ function getPreferredSystemPrompt(templatePayload) {
 function setAdvancedConfigPanelExpanded(expanded) {
   state.advancedConfigExpanded = Boolean(expanded);
   elements.advancedConfigPanel?.classList.toggle("hidden", !state.advancedConfigExpanded);
-  if (state.advancedConfigExpanded) {
-
-  }
   if (elements.advancedConfigToggle) {
     elements.advancedConfigToggle.textContent = state.advancedConfigExpanded
       ? "Hide Advanced config"
