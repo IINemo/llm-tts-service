@@ -135,8 +135,6 @@ _PROVIDER_BASE_URLS = {
     "openrouter": "https://openrouter.ai/api/v1",
 }
 
-_THINKING_STEP_DETECTOR: Optional[ThinkingMarkerDetector] = None
-
 
 @dataclass
 class ModelValidationResult:
