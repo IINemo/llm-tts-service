@@ -1036,7 +1036,7 @@ class StepCandidateGeneratorThroughAPI(StepCandidateGeneratorBase):
                         "raw_logprobs": scoring_data["raw_logprobs"],
                         "original_token_count": scoring_data["original_token_count"],
                     },
-                    raw_text=raw_text,
+                    raw_text=text,
                 )
 
                 if completion_reason:
