@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 import json
 import math
-import re
 import time
 from copy import deepcopy
 from dataclasses import dataclass
