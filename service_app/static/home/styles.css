@@ -119,6 +119,7 @@ h1 {
   text-decoration: none;
   display: inline-flex;
   align-items: center;
+  gap: 0.45rem;
   justify-content: center;
   transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
 }
@@ -138,6 +139,18 @@ h1 {
   background: #ffffff;
   color: var(--ink);
   border-color: #b8c7d8;
+}
+
+.btn-github {
+  background: #1f2f40;
+  color: #ffffff;
+  box-shadow: 0 10px 22px rgba(16, 36, 58, 0.28);
+}
+
+.btn-icon {
+  width: 1rem;
+  height: 1rem;
+  fill: currentColor;
 }
 
 .cards {

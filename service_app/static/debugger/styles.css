@@ -80,6 +80,42 @@ body {
   overflow: hidden;
 }
 
+.hero-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  position: relative;
+  z-index: 1;
+}
+
+.github-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 999px;
+  border: 1px solid #b7c6d7;
+  background: #fff;
+  color: #1f2f40;
+  text-decoration: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.35rem 0.62rem;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.github-link:hover {
+  transform: translateY(-1px);
+  border-color: #8fa5bc;
+  box-shadow: 0 6px 14px rgba(16, 36, 58, 0.12);
+}
+
+.github-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  fill: currentColor;
+}
+
 .hero::before {
   content: "";
   position: absolute;
@@ -88,6 +124,7 @@ body {
   width: 260px;
   height: 240px;
   background: radial-gradient(circle, rgba(255, 184, 111, 0.35), transparent 72%);
+  pointer-events: none;
 }
 
 .eyebrow {
@@ -868,6 +905,11 @@ textarea.yaml-plain {
 }
 
 @media (max-width: 700px) {
+  .hero-top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .prompt-strip {
     flex-direction: column;
     align-items: flex-start;
