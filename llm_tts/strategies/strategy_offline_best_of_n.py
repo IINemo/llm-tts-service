@@ -361,6 +361,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                 "num_tokens": num_tokens,
                 "reasoning_steps": len(thinking_steps),
                 "needs_answer": True,
+                "completion_info": get_completion_info([candidate]),
                 "candidate": candidate,
             }
 
@@ -380,6 +381,7 @@ class StrategyOfflineBestOfN(StrategyBase):
             "num_tokens": num_tokens,
             "reasoning_steps": len(steps),
             "needs_answer": False,
+            "completion_info": get_completion_info([candidate]),
             "candidate": candidate,
         }
 
@@ -920,7 +922,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                 "best_idx": best_idx,
                 "completed": best_result.get("is_complete", False),
                 "token_stats": token_stats,
-                **get_completion_info(best_result.get("steps", [])),
+                **best_result.get("completion_info", get_completion_info([])),
             }
 
             # Add candidates_data for multi-scoring analysis

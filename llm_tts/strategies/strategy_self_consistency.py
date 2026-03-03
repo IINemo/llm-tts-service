@@ -171,6 +171,7 @@ class StrategySelfConsistency(StrategyBase):
                         "validity_scores": [],
                         "avg_validity": 0.0,
                         "answer_step": answer_text,
+                        "completion_info": get_completion_info([candidate]),
                     }
                 )
                 continue
@@ -196,6 +197,7 @@ class StrategySelfConsistency(StrategyBase):
                     "validity_scores": [],
                     "avg_validity": 0.0,
                     "answer_step": None,
+                    "completion_info": get_completion_info([candidate]),
                 }
             )
 
@@ -310,6 +312,7 @@ class StrategySelfConsistency(StrategyBase):
                 "answer_distribution": {},
                 "all_traces": [],
                 "total_tokens": 0,
+                "completion_info": get_completion_info([]),
             }
 
         # Extract texts and tokens from path dicts
@@ -374,6 +377,7 @@ class StrategySelfConsistency(StrategyBase):
             "all_scores": [float(s) for s in scores],
             "all_traces": all_traces,
             "total_tokens": total_tokens,
+            "completion_info": reasoning_paths[best_idx].get("completion_info", {}),
         }
 
     def generate_trajectories_batch(
@@ -477,7 +481,7 @@ class StrategySelfConsistency(StrategyBase):
                 ),
             }
             best_steps = result["best_steps"]
-            res.update(get_completion_info(best_steps if best_steps else []))
+            res.update(result.get("completion_info", get_completion_info([])))
             results.append(res)
 
         log.info(
