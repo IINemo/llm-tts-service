@@ -2,7 +2,6 @@
 
 type: prm
 direction: higher_better
-threshold: 0.72
 model_path: "Qwen/Qwen2.5-Math-PRM-7B"
 device: "auto"
 batch_size: 1
