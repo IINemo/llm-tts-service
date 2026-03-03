@@ -59,15 +59,16 @@ SUPPORTED_STRATEGIES: List[Dict[str, Any]] = [
         "requires_logprobs": False,
         "requires_prefill": True,
     },
-    {
-        "id": "adaptive",
-        "name": "Adaptive Best-of-N",
-        "family": "reranking",
-        "summary": "Online best-of-n with adaptive scaling across steps.",
-        "requires_scorer": True,
-        "requires_logprobs": False,
-        "requires_prefill": True,
-    },
+    # TODO: re-enable once adaptive visualization is fixed
+    # {
+    #     "id": "adaptive",
+    #     "name": "Adaptive Best-of-N",
+    #     "family": "reranking",
+    #     "summary": "Online best-of-n with adaptive scaling across steps.",
+    #     "requires_scorer": True,
+    #     "requires_logprobs": False,
+    #     "requires_prefill": True,
+    # },
     {
         "id": "online_best_of_n",
         "name": "Online Best-of-N",
