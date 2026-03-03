@@ -49,6 +49,7 @@ generation:
 strategy:
   max_steps: 250
   detector_type: thinking_marker
+  use_structure: true
   detector_answer_patterns:
     - "<end of response>"
 
