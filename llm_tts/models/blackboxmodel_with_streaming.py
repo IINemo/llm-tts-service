@@ -226,7 +226,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
                     n=n,
                     stream=False,
                     logprobs=needs_logprobs,
-                    top_logprobs=4 if needs_logprobs else None,
+                    top_logprobs=20 if needs_logprobs else None,
                     stop=stop,
                 )
                 chat_results = []
@@ -267,7 +267,7 @@ class BlackboxModelWithStreaming(BlackboxModel):
                 temperature=temperature,
                 stream=True,
                 logprobs=needs_logprobs,
-                top_logprobs=4 if needs_logprobs else None,
+                top_logprobs=20 if needs_logprobs else None,
                 stop=stop,
             )
 
