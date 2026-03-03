@@ -1038,7 +1038,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                                     "id": f"s{sample_id}_answer{history_step_index}_c{cand_idx + 1}",
                                     "label": f"Answer {cand_idx + 1}",
                                     "text": cand.raw_text or cand.text,
-                                    "score": float(a_scores[cand_idx]),
+                                    "score": float(a_scores[cand_idx]) if a_scores[cand_idx] is not None else 0.0,
                                     "status": (
                                         "selected" if cand_idx == best_a else "pruned"
                                     ),
