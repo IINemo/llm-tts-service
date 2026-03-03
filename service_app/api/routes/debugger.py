@@ -130,6 +130,7 @@ async def run_visual_debugger_single_sample_stream(
 
     def _run() -> None:
         logger = logging.getLogger("llm_tts.strategies")
+        prev_level = logger.level
         logger.setLevel(logging.DEBUG)
         handler = StrategyProgressHandler(_progress_callback)
         logger.addHandler(handler)
@@ -157,18 +158,20 @@ async def run_visual_debugger_single_sample_stream(
             result_q.put({"type": "error", "message": str(exc)})
         finally:
             logger.removeHandler(handler)
+            logger.setLevel(prev_level)
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
 
     async def _event_stream():
         last_sent: Optional[str] = None
-        while True:
+        deadline = asyncio.get_event_loop().time() + 300  # 5 min max
+        while asyncio.get_event_loop().time() < deadline:
             # Check for terminal event (complete / error)
             try:
                 event = result_q.get_nowait()
                 yield f"data: {json.dumps(event)}\n\n"
-                break
+                return
             except queue.Empty:
                 pass
             # Poll progress state every 250ms
@@ -177,6 +180,7 @@ async def run_visual_debugger_single_sample_stream(
                 last_sent = current
                 yield f"data: {json.dumps({'type': 'progress', 'message': current})}\n\n"
             await asyncio.sleep(0.25)
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Strategy execution timed out (5 min)'})}\n\n"
 
     return StreamingResponse(
         _event_stream(),

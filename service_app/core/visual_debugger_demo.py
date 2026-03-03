@@ -214,7 +214,7 @@ def validate_model_capabilities(
 
     # Allow OpenRouter-style "openai/gpt-4o-mini" with the openai provider
     if provider_value == "openai" and model_id_value.startswith("openai/"):
-        model_id_value = model_id_value[len("openai/"):]
+        model_id_value = model_id_value[len("openai/") :]
 
     if provider_value not in _PROVIDER_BASE_URLS:
         raise ValueError("Provider must be one of: openai, openrouter.")
@@ -586,25 +586,6 @@ class StrategyProgressHandler(logging.Handler):
                 return
 
 
-def run_real_strategy_entry_with_progress(
-    progress_callback: Callable[[str], None],
-    **kwargs,
-) -> Dict[str, Any]:
-    """Run ``_run_real_strategy_entry`` while forwarding progress to *callback*.
-
-    A custom logging handler is temporarily attached to the
-    ``llm_tts.strategies`` logger so that strategy log lines are intercepted
-    without modifying any strategy code.
-    """
-    logger = logging.getLogger("llm_tts.strategies")
-    handler = StrategyProgressHandler(progress_callback)
-    logger.addHandler(handler)
-    try:
-        return _run_real_strategy_entry(**kwargs)
-    finally:
-        logger.removeHandler(handler)
-
-
 def _build_request_messages(question: str, shared_prompt: str) -> List[Dict[str, str]]:
     messages: List[Dict[str, str]] = []
     prompt_text = str(shared_prompt or "").strip()
@@ -631,7 +612,7 @@ def _create_runtime_components(
 
     # Allow OpenRouter-style "openai/gpt-4o-mini" with the openai provider
     if provider == "openai" and model_id.startswith("openai/"):
-        model_id = model_id[len("openai/"):]
+        model_id = model_id[len("openai/") :]
 
     if provider not in _PROVIDER_BASE_URLS:
         raise ValueError("Provider must be one of: openai, openrouter.")
@@ -848,9 +829,7 @@ def _create_runtime_components(
                 prm_model_path=str(
                     scorer_config.get("model_path") or "Qwen/Qwen2.5-Math-PRM-7B"
                 ),
-                device=_resolve_prm_device(
-                    str(scorer_config.get("device") or "auto")
-                ),
+                device=_resolve_prm_device(str(scorer_config.get("device") or "auto")),
                 batch_size=_coerce_int(
                     scorer_config.get("batch_size"),
                     default=1,
