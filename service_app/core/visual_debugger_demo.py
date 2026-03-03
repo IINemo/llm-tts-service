@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import math
+import re
 import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -551,6 +553,53 @@ def _run_real_strategy_entry(
         "run": run,
         "comparison_rank": 1,
     }
+
+
+# ---------------------------------------------------------------------------
+# Progress-reporting wrapper (used by the SSE streaming endpoint)
+# ---------------------------------------------------------------------------
+
+_STEP_PATTERNS = [
+    # beam_search: "Beam Search Step 3: 4 active samples"
+    (re.compile(r"Beam Search Step (\d+)"), lambda m: f"Step {m.group(1)}"),
+    # online_best_of_n: "Sample 0: Step 3 (trajectory tokens: 128)"
+    (re.compile(r"Sample \d+: Step (\d+)"), lambda m: f"Step {m.group(1)}"),
+]
+
+
+class StrategyProgressHandler(logging.Handler):
+    """Logging handler that intercepts strategy log lines and fires a callback."""
+
+    def __init__(self, callback: Callable[[str], None]) -> None:
+        super().__init__(level=logging.INFO)
+        self._callback = callback
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = record.getMessage()
+        for pattern, formatter in _STEP_PATTERNS:
+            m = pattern.search(msg)
+            if m:
+                self._callback(formatter(m))
+                return
+
+
+def run_real_strategy_entry_with_progress(
+    progress_callback: Callable[[str], None],
+    **kwargs,
+) -> Dict[str, Any]:
+    """Run ``_run_real_strategy_entry`` while forwarding progress to *callback*.
+
+    A custom logging handler is temporarily attached to the
+    ``llm_tts.strategies`` logger so that strategy log lines are intercepted
+    without modifying any strategy code.
+    """
+    logger = logging.getLogger("llm_tts.strategies")
+    handler = StrategyProgressHandler(progress_callback)
+    logger.addHandler(handler)
+    try:
+        return _run_real_strategy_entry(**kwargs)
+    finally:
+        logger.removeHandler(handler)
 
 
 def _build_request_messages(question: str, shared_prompt: str) -> List[Dict[str, str]]:

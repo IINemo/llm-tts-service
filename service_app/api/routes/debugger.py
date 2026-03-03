@@ -1,13 +1,19 @@
 """Routes for the Visual Debugger demo."""
 
+import asyncio
+import json
+import logging
+import queue
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from service_app.core.visual_debugger_demo import (
+    StrategyProgressHandler,
     build_single_sample_payload,
     get_advanced_config_template,
     get_debugger_runtime_health,
@@ -109,6 +115,77 @@ def run_visual_debugger_single_sample(request: DebuggerSingleSampleRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/v1/debugger/demo/run-single-stream")
+async def run_visual_debugger_single_sample_stream(
+    request: DebuggerSingleSampleRequest,
+):
+    """SSE stream for strategy execution with real-time progress updates."""
+    result_q: queue.Queue = queue.Queue()
+    progress_state: Dict[str, Any] = {"message": None}
+
+    def _progress_callback(message: str) -> None:
+        progress_state["message"] = message
+
+    def _run() -> None:
+        logger = logging.getLogger("llm_tts.strategies")
+        logger.setLevel(logging.DEBUG)
+        handler = StrategyProgressHandler(_progress_callback)
+        logger.addHandler(handler)
+        try:
+            result = build_single_sample_payload(
+                question=request.question,
+                gold_answer=request.gold_answer,
+                shared_prompt=request.shared_prompt,
+                budget=request.budget,
+                provider=request.provider,
+                model_id=request.model_id,
+                api_key=request.api_key,
+                strategy_id=request.strategy_id,
+                scorer_id=request.scorer_id,
+                advanced_config_yaml=request.advanced_config_yaml,
+                scenario_id="custom_1",
+                scenario_title="Single Example",
+                scenario_description=(
+                    "Custom single-sample run with selected strategy and optional scorer."
+                ),
+                input_source="custom_single",
+            )
+            result_q.put({"type": "complete", "payload": result})
+        except Exception as exc:
+            result_q.put({"type": "error", "message": str(exc)})
+        finally:
+            logger.removeHandler(handler)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    async def _event_stream():
+        last_sent: Optional[str] = None
+        while True:
+            # Check for terminal event (complete / error)
+            try:
+                event = result_q.get_nowait()
+                yield f"data: {json.dumps(event)}\n\n"
+                break
+            except queue.Empty:
+                pass
+            # Poll progress state every 250ms
+            current = progress_state["message"]
+            if current and current != last_sent:
+                last_sent = current
+                yield f"data: {json.dumps({'type': 'progress', 'message': current})}\n\n"
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/v1/debugger/demo/health")

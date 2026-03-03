@@ -1074,7 +1074,7 @@ function updateRunButtonEnabled() {
     !hasScorer;
 }
 
-function setRunButtonLoading(isLoading) {
+function setRunButtonLoading(isLoading, progressMessage) {
   state.isRunInProgress = Boolean(isLoading);
   if (!elements.runCustomButton.dataset.defaultLabel) {
     elements.runCustomButton.dataset.defaultLabel =
@@ -1083,7 +1083,9 @@ function setRunButtonLoading(isLoading) {
 
   if (state.isRunInProgress) {
     elements.runCustomButton.classList.add("is-loading");
-    elements.runCustomButton.textContent = "Running...";
+    elements.runCustomButton.textContent = progressMessage
+      ? `Running... (${progressMessage})`
+      : "Running...";
   } else {
     elements.runCustomButton.classList.remove("is-loading");
     elements.runCustomButton.textContent =
@@ -1327,16 +1329,48 @@ async function runCustomInput() {
 
     let payload;
     try {
-      payload = await postJson("/v1/debugger/demo/run-single", {
-        question,
-        budget,
-        provider,
-        model_id: modelId,
-        api_key: apiKey,
-        strategy_id: strategyId,
-        scorer_id: scorerRequired ? scorerId : null,
-        advanced_config_yaml: advancedConfigYaml,
+      const response = await fetch("/v1/debugger/demo/run-single-stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question,
+          budget,
+          provider,
+          model_id: modelId,
+          api_key: apiKey,
+          strategy_id: strategyId,
+          scorer_id: scorerRequired ? scorerId : null,
+          advanced_config_yaml: advancedConfigYaml,
+        }),
       });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(extractResponseError(response.status, errorText));
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamError = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const event = JSON.parse(line.slice(6));
+          if (event.type === "progress") {
+            setRunButtonLoading(true, event.message);
+          } else if (event.type === "complete") {
+            payload = event.payload;
+          } else if (event.type === "error") {
+            streamError = event.message;
+          }
+        }
+      }
+      if (streamError) throw new Error(streamError);
+      if (!payload) throw new Error("Stream ended without result");
     } catch (error) {
       let hint = "";
       if (/max_tokens is too large/i.test(error.message)) {
