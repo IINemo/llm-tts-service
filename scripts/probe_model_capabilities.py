@@ -120,12 +120,17 @@ def check_reachable(client: OpenAI, model: str) -> Optional[str]:
 # Logprobs probing
 # ---------------------------------------------------------------------------
 
-def _try_logprobs(client: OpenAI, model: str, top_logprobs: int) -> tuple[bool, int, Optional[str]]:
+
+def _try_logprobs(
+    client: OpenAI, model: str, top_logprobs: int
+) -> tuple[bool, int, Optional[str]]:
     """Returns (accepted, actual_returned_count, error_or_none)."""
     try:
         resp = client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": "What is 2+2? Answer with one word."}],
+            messages=[
+                {"role": "user", "content": "What is 2+2? Answer with one word."}
+            ],
             max_tokens=5,
             temperature=0.7,
             logprobs=True,
@@ -141,7 +146,9 @@ def _try_logprobs(client: OpenAI, model: str, top_logprobs: int) -> tuple[bool, 
         return False, 0, _compact_error(e)
 
 
-def probe_logprobs(client: OpenAI, model: str) -> tuple[Optional[bool], Optional[int], int, str]:
+def probe_logprobs(
+    client: OpenAI, model: str
+) -> tuple[Optional[bool], Optional[int], int, str]:
     """Probe logprobs support and max returned count.
 
     Returns: (supported, max_accepted, max_returned, note)
@@ -157,8 +164,18 @@ def probe_logprobs(client: OpenAI, model: str) -> tuple[Optional[bool], Optional
                 # to confirm it's truly zero, not a fluke
                 _, returned_1, _ = _try_logprobs(client, model, 1)
                 if returned_1 > 0:
-                    return True, value, returned_1, f"accepted={value} but only returned {returned_1}"
-                return False, value, 0, f"accepted top_logprobs={value} but returned 0 logprobs"
+                    return (
+                        True,
+                        value,
+                        returned_1,
+                        f"accepted={value} but only returned {returned_1}",
+                    )
+                return (
+                    False,
+                    value,
+                    0,
+                    f"accepted top_logprobs={value} but returned 0 logprobs",
+                )
         # If rejected, try next lower value
         continue
 
@@ -170,6 +187,7 @@ def probe_logprobs(client: OpenAI, model: str) -> tuple[Optional[bool], Optional
 # Prefill probing
 # ---------------------------------------------------------------------------
 
+
 def probe_prefill(client: OpenAI, model: str) -> tuple[bool, str]:
     """Probe prefill (assistant message continuation) support.
 
@@ -179,7 +197,10 @@ def probe_prefill(client: OpenAI, model: str) -> tuple[bool, str]:
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "user", "content": "Explain what a transformer model is in simple terms."},
+                {
+                    "role": "user",
+                    "content": "Explain what a transformer model is in simple terms.",
+                },
                 {"role": "assistant", "content": PREFILL_TEXT},
             ],
             max_tokens=60,
@@ -188,11 +209,16 @@ def probe_prefill(client: OpenAI, model: str) -> tuple[bool, str]:
     except Exception as e:
         err = _compact_error(e)
         lowered = err.lower()
-        if any(kw in lowered for kw in ("prefix", "prefill", "not supported", "not allowed", "invalid")):
+        if any(
+            kw in lowered
+            for kw in ("prefix", "prefill", "not supported", "not allowed", "invalid")
+        ):
             return False, f"rejected: {err[:100]}"
         return False, f"error: {err[:100]}"
 
-    text = ((response.choices[0].message.content or "").strip() if response.choices else "")
+    text = (
+        (response.choices[0].message.content or "").strip() if response.choices else ""
+    )
     if not text:
         return False, "empty response"
 
@@ -202,7 +228,9 @@ def probe_prefill(client: OpenAI, model: str) -> tuple[bool, str]:
 
     # Check continuation-only: response continues mid-sentence
     first_char = text[0]
-    if first_char in ("'", ",", ".", ";", " ", "-") or (first_char.isalpha() and first_char.islower()):
+    if first_char in ("'", ",", ".", ";", " ", "-") or (
+        first_char.isalpha() and first_char.islower()
+    ):
         return True, f"continuation: {text[:50]!r}"
 
     return False, f"no continuation: {text[:50]!r}"
@@ -211,6 +239,7 @@ def probe_prefill(client: OpenAI, model: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def probe_model(
     client: OpenAI,
@@ -265,7 +294,10 @@ def print_summary(results: list[ProbeResult], skip_logprobs: bool, skip_prefill:
         cols += [("Prefill", 10)]
 
     width = sum(w for _, w in cols) + len(cols) - 1
-    header = " ".join(f"{name:<{w}}" if i == 0 or i == 1 else f"{name:>{w}}" for i, (name, w) in enumerate(cols))
+    header = " ".join(
+        f"{name:<{w}}" if i == 0 or i == 1 else f"{name:>{w}}"
+        for i, (name, w) in enumerate(cols)
+    )
 
     print(f"\n{'=' * width}")
     print(header)
@@ -323,12 +355,29 @@ def _compact_error(exc: Exception) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Probe model capabilities: logprobs and prefill support")
-    parser.add_argument("--provider", type=str, choices=["openai", "openrouter"], help="Test only this provider")
-    parser.add_argument("--model", type=str, action="append", help="Test specific model(s) (repeatable)")
-    parser.add_argument("--api-key", type=str, help="API key (or set OPENAI_API_KEY / OPENROUTER_API_KEY env vars)")
-    parser.add_argument("--skip-logprobs", action="store_true", help="Skip logprobs probing")
-    parser.add_argument("--skip-prefill", action="store_true", help="Skip prefill probing")
+    parser = argparse.ArgumentParser(
+        description="Probe model capabilities: logprobs and prefill support"
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        choices=["openai", "openrouter"],
+        help="Test only this provider",
+    )
+    parser.add_argument(
+        "--model", type=str, action="append", help="Test specific model(s) (repeatable)"
+    )
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        help="API key (or set OPENAI_API_KEY / OPENROUTER_API_KEY env vars)",
+    )
+    parser.add_argument(
+        "--skip-logprobs", action="store_true", help="Skip logprobs probing"
+    )
+    parser.add_argument(
+        "--skip-prefill", action="store_true", help="Skip prefill probing"
+    )
     args = parser.parse_args()
 
     if args.provider and args.model:
@@ -355,7 +404,9 @@ def main():
         client = make_client(provider, api_key)
 
         for model in models:
-            result = probe_model(client, provider, model, args.skip_logprobs, args.skip_prefill)
+            result = probe_model(
+                client, provider, model, args.skip_logprobs, args.skip_prefill
+            )
             results.append(result)
 
     print_summary(results, args.skip_logprobs, args.skip_prefill)

@@ -723,7 +723,7 @@ def create_model(config):
             base_url = config.model.get("base_url", None)
             # Allow OpenRouter-style "openai/gpt-4o-mini" with the openai provider
             if model_path and model_path.startswith("openai/"):
-                model_path = model_path[len("openai/"):]
+                model_path = model_path[len("openai/") :]
 
         # Check if DeepConf strategy
         if config.strategy.type == "deepconf":

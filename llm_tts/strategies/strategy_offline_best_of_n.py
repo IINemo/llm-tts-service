@@ -222,9 +222,15 @@ class StrategyOfflineBestOfN(StrategyBase):
                     # APIWithUncertainty.score() only accepts (token_ids, logprobs);
                     # VLLMWithUncertainty also accepts output= and claim_range=.
                     score_kwargs: Dict[str, Any] = {}
-                    if output is not None and "output" in uncertainty_wrapper.score.__code__.co_varnames:
+                    if (
+                        output is not None
+                        and "output" in uncertainty_wrapper.score.__code__.co_varnames
+                    ):
                         score_kwargs["output"] = output
-                        score_kwargs["claim_range"] = (step_start_idx, current_token_idx)
+                        score_kwargs["claim_range"] = (
+                            step_start_idx,
+                            current_token_idx,
+                        )
                     uncertainty = uncertainty_wrapper.score(
                         step_token_ids,
                         step_logprobs,
