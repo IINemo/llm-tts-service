@@ -167,9 +167,21 @@ class StrategyOfflineBestOfN(StrategyBase):
             List of validity scores (1/(1+uncertainty)) for each step
         """
         if not steps or not token_ids or not logprobs:
+            log.warning(
+                f"_compute_per_step_uncertainty: empty input — "
+                f"steps={len(steps) if steps else 0}, "
+                f"token_ids={len(token_ids) if token_ids else 0}, "
+                f"logprobs={len(logprobs) if logprobs else 0}"
+            )
             return [0.0] * len(steps) if steps else []
 
         tokenizer = uncertainty_wrapper.get_tokenizer()
+        log.debug(
+            f"_compute_per_step_uncertainty: {len(steps)} steps, "
+            f"{len(token_ids)} tokens, {len(logprobs)} logprob entries, "
+            f"tokenizer={type(tokenizer).__name__}, "
+            f"wrapper={type(uncertainty_wrapper).__name__}"
+        )
 
         # For API pseudo-tokenizer, set the trajectory context for positional lookup
         if hasattr(tokenizer, "set_context"):
@@ -207,22 +219,51 @@ class StrategyOfflineBestOfN(StrategyBase):
             # Score this step's tokens
             if step_token_ids and step_logprobs:
                 try:
+                    # APIWithUncertainty.score() only accepts (token_ids, logprobs);
+                    # VLLMWithUncertainty also accepts output= and claim_range=.
+                    score_kwargs: Dict[str, Any] = {}
+                    if (
+                        output is not None
+                        and "output" in uncertainty_wrapper.score.__code__.co_varnames
+                    ):
+                        score_kwargs["output"] = output
+                        score_kwargs["claim_range"] = (
+                            step_start_idx,
+                            current_token_idx,
+                        )
                     uncertainty = uncertainty_wrapper.score(
                         step_token_ids,
                         step_logprobs,
-                        output=output,
-                        claim_range=(step_start_idx, current_token_idx),
+                        **score_kwargs,
                     )
                     # Convert to validity score: higher = better (lower uncertainty)
                     validity_score = 1.0 / (1.0 + uncertainty)
+                    log.debug(
+                        f"  Step {step_idx}: tokens [{step_start_idx}:{current_token_idx}] "
+                        f"({len(step_token_ids)} tokens), "
+                        f"uncertainty={uncertainty:.4f}, validity={validity_score:.4f}"
+                    )
                 except Exception as e:
-                    log.warning(f"Failed to score step {step_idx}: {e}")
+                    log.warning(
+                        f"Failed to score step {step_idx}/{len(steps)}: {e} "
+                        f"(token_ids={len(step_token_ids)}, logprobs={len(step_logprobs)}, "
+                        f"wrapper={type(uncertainty_wrapper).__name__})",
+                        exc_info=True,
+                    )
                     validity_score = 0.5  # Neutral score on error
             else:
+                log.warning(
+                    f"  Step {step_idx}: EMPTY — token_ids={len(step_token_ids)}, "
+                    f"logprobs={len(step_logprobs)}, text_len={len(step_text)}"
+                )
                 validity_score = 0.5  # Neutral score for empty steps
 
             step_scores.append(validity_score)
 
+        log.info(
+            f"_compute_per_step_uncertainty: {len(steps)} steps scored — "
+            f"scores={[f'{s:.3f}' for s in step_scores]}"
+        )
         return step_scores
 
     def _aggregate_scores(self, step_scores: List[float]) -> float:
@@ -873,6 +914,7 @@ class StrategyOfflineBestOfN(StrategyBase):
                 "validity_scores": best_result.get("step_scores", []),
                 "aggregated_score": best_result.get("aggregated_score", 0.0),
                 "all_trajectories": [t["full_text"] for t in trajectories],
+                "all_trajectory_steps": [t["steps"] for t in trajectories],
                 "all_scores": aggregated_scores,
                 "all_step_scores": [t["step_scores"] for t in trajectories],
                 "best_idx": best_idx,

@@ -371,6 +371,17 @@ python service_app/main.py
 
 **See `service_app/README.md` for API documentation.**
 
+### Visual Debugger Demo
+
+After the service starts, open:
+
+```text
+http://localhost:8001/debugger
+```
+
+The demo visualizes reasoning trajectories, escalation decisions, and confidence signals
+for multiple TTS-style strategies under shared prompts and budgets.
+
 ---
 
 ## 🔧 Troubleshooting

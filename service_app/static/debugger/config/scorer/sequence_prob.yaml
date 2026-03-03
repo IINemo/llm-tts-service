@@ -1,0 +1,8 @@
+# Standalone scorer config: Sequence Prob
+
+type: sequence_prob
+direction: higher_better
+uncertainty_model_creator: "config.scorer.uncertainty_sequence_prob"
+uncertainty:
+  test: 1
+batch_size: 1
