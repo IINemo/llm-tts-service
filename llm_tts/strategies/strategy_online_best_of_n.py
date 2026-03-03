@@ -364,7 +364,11 @@ class StrategyOnlineBestOfN(StrategyBase):
                                 "id": f"s{sample_id}_step{history_step_index}_c{cand_idx + 1}",
                                 "label": f"Candidate {cand_idx + 1}",
                                 "text": cand.raw_text or cand.text,
-                                "score": float(scores[cand_idx]),
+                                "score": (
+                                    float(scores[cand_idx])
+                                    if scores[cand_idx] is not None
+                                    else 0.0
+                                ),
                                 "status": (
                                     "selected" if cand_idx == best_idx else "pruned"
                                 ),
