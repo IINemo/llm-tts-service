@@ -2480,8 +2480,10 @@ function bindHandlers() {
     const promptMatch = yamlText.match(/^prompt\s*:\s*(.*)$/m);
     if (promptMatch && elements.advancedPromptInput) {
       let val = promptMatch[1].trim();
-      // Strip surrounding quotes if present
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      // Strip surrounding quotes and unescape JSON escape sequences
+      if (val.startsWith('"') && val.endsWith('"')) {
+        try { val = JSON.parse(val); } catch { val = val.slice(1, -1); }
+      } else if (val.startsWith("'") && val.endsWith("'")) {
         val = val.slice(1, -1);
       }
       elements.advancedPromptInput.value = val;
