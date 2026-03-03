@@ -778,7 +778,7 @@ def _create_runtime_components(
             model_overrides.get("prefill_mode"),
             # Step-by-step strategies need prefill so the model continues
             # from the trajectory prefix rather than starting a new response.
-            default=strategy["id"] in {"online_best_of_n", "beam_search"},
+            default=strategy["id"] in {"online_best_of_n", "beam_search", "adaptive"},
         ),
         disable_thinking_mode=disable_thinking_mode,
         supports_logprobs=requires_logprobs,
