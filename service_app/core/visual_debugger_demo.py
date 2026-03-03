@@ -562,8 +562,10 @@ def _run_real_strategy_entry(
 _STEP_PATTERNS = [
     # beam_search: "Beam Search Step 3: 4 active samples"
     (re.compile(r"Beam Search Step (\d+)"), lambda m: f"Step {m.group(1)}"),
-    # online_best_of_n: "Sample 0: Step 3 (trajectory tokens: 128)"
-    (re.compile(r"Sample \d+: Step (\d+)"), lambda m: f"Step {m.group(1)}"),
+    # online_best_of_n: "Online BoN Step 3: 1 active samples"
+    (re.compile(r"Online BoN Step (\d+)"), lambda m: f"Step {m.group(1)}"),
+    # adaptive: "=== Step 3 === (1/1 active samples)"
+    (re.compile(r"=== Step (\d+) ==="), lambda m: f"Step {m.group(1)}"),
 ]
 
 
