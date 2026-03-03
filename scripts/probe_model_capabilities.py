@@ -30,7 +30,7 @@ Usage:
 import argparse
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -149,6 +149,8 @@ def check_reachable(
             return None, True
         return cached, True
 
+    # TODO: reasoning models (o3-mini, o4-mini) require max_completion_tokens
+    #       instead of max_tokens — use try/fallback to support them.
     try:
         client.chat.completions.create(
             model=model,
