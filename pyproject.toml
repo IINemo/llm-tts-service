@@ -47,6 +47,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
     "black>=24.0.0",
     "isort==7.0.0",
     "flake8>=7.0.0",
@@ -150,13 +151,14 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--cov=llm_tts",
+    "--cov=service_app",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
 ]
 
 [tool.coverage.run]
-source = ["llm_tts"]
+source = ["llm_tts", "service_app"]
 omit = [
     "*/tests/*",
     "*/test_*",
