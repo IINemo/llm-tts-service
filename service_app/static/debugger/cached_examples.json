@@ -31,18 +31,7 @@
             8
           ],
           "selected_budget": 8,
-          "strategy_catalog": [
-            {
-              "id": "self_consistency",
-              "name": "Self-Consistency",
-              "family": "sample_and_vote",
-              "summary": "Sample diverse trajectories and select by answer consensus.",
-              "requires_scorer": false,
-              "builtin_scorer": "Consensus score",
-              "requires_logprobs": false,
-              "requires_prefill": false
-            }
-          ],
+          "strategy_catalog": [],
           "scorer_catalog": [
             {
               "id": "prm",
@@ -6700,18 +6689,7 @@
             8
           ],
           "selected_budget": 8,
-          "strategy_catalog": [
-            {
-              "id": "self_consistency",
-              "name": "Self-Consistency",
-              "family": "sample_and_vote",
-              "summary": "Sample diverse trajectories and select by answer consensus.",
-              "requires_scorer": false,
-              "builtin_scorer": "Consensus score",
-              "requires_logprobs": false,
-              "requires_prefill": false
-            }
-          ],
+          "strategy_catalog": [],
           "scorer_catalog": [
             {
               "id": "prm",
