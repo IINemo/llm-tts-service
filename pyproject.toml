@@ -147,9 +147,13 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "integration: tests requiring real API calls and keys",
+]
 addopts = [
     "--strict-markers",
     "--strict-config",
+    "-m", "not integration",
     "--cov=llm_tts",
     "--cov=service_app",
     "--cov-report=term-missing",
