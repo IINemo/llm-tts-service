@@ -154,9 +154,9 @@ class StrategyManager:
         """
         try:
             from lm_polygraph.estimators import (
+                MaximumSequenceProbability,
                 MeanTokenEntropy,
                 Perplexity,
-                MaximumSequenceProbability,
             )
             from lm_polygraph.stat_calculators import (
                 EntropyCalculator,

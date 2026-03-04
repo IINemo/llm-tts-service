@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from llm_tts.strategies.strategy_base import StrategyCancelled
 from service_app.api.models.openai_compat import (
     ChatCompletionChoice,
     ChatCompletionRequest,
@@ -31,7 +32,6 @@ from service_app.core.debugger_events import (
     StrategyProgressHandler,
     convert_strategy_result_to_debugger_run,
 )
-from llm_tts.strategies.strategy_base import StrategyCancelled
 from service_app.core.strategy_manager import strategy_manager
 from service_app.core.visual_debugger_demo import (
     SUPPORTED_SCORERS,
