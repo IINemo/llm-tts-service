@@ -1,14 +1,14 @@
 """
 Strategy Manager - Handles TTS strategy initialization and execution.
 
-Simplified for self-consistency strategy with external APIs (OpenAI/OpenRouter).
+Supports two backends:
+  1. API backend  — uses BlackboxModelWithStreaming + StepCandidateGeneratorThroughAPI
+                    (for any OpenAI-compatible endpoint, including the debugger).
+  2. vLLM backend — uses a locally loaded vLLM model (for offline_bon/online_bon/beam_search).
 """
 
 import logging
-import re
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from openai import OpenAI
 
@@ -17,147 +17,10 @@ from .prm_scorer_factory import prm_scorer_factory
 
 log = logging.getLogger(__name__)
 
-
-class SelfConsistencyStrategy:
-    """
-    Self-consistency strategy using external APIs.
-
-    Generates multiple reasoning paths and selects the most consistent answer
-    via majority voting.
-    """
-
-    def __init__(
-        self,
-        client: OpenAI,
-        model: str,
-        num_paths: int = 5,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-    ):
-        self.client = client
-        self.model = model
-        self.num_paths = num_paths
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-
-    def _extract_answer(self, text: str) -> str:
-        """Extract answer from \\boxed{} format."""
-        # Try to find \boxed{...}
-        pattern = r"\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}"
-        matches = re.findall(pattern, text)
-        if matches:
-            return matches[-1].strip()
-
-        # Fallback: look for "answer is X" pattern
-        pattern = r"(?:answer|result)\s*(?:is|=|:)\s*([^\n.,]+)"
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
-
-        return "no_answer"
-
-    def _generate_single_path(
-        self,
-        messages: List[Dict[str, str]],
-        path_idx: int,
-    ) -> Dict[str, Any]:
-        """Generate a single reasoning path."""
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-            )
-
-            content = response.choices[0].message.content or ""
-            answer = self._extract_answer(content)
-            tokens = response.usage.completion_tokens if response.usage else 0
-
-            log.info(f"  Path {path_idx + 1}: answer={answer}, tokens={tokens}")
-
-            return {
-                "text": content,
-                "answer": answer,
-                "tokens": tokens,
-                "path_idx": path_idx,
-            }
-        except Exception as e:
-            log.error(f"  Path {path_idx + 1}: Error - {e}")
-            return {
-                "text": "",
-                "answer": "error",
-                "tokens": 0,
-                "path_idx": path_idx,
-                "error": str(e),
-            }
-
-    def generate_trajectory(
-        self,
-        messages: List[Dict[str, str]],
-        sample_idx: int = 0,
-    ) -> Dict[str, Any]:
-        """
-        Generate multiple reasoning paths and select best via majority voting.
-        """
-        log.info(f"Generating {self.num_paths} reasoning paths...")
-
-        # Generate paths in parallel
-        paths = []
-        with ThreadPoolExecutor(max_workers=min(self.num_paths, 10)) as executor:
-            futures = {
-                executor.submit(self._generate_single_path, messages, i): i
-                for i in range(self.num_paths)
-            }
-            for future in as_completed(futures):
-                paths.append(future.result())
-
-        # Sort by path index
-        paths.sort(key=lambda x: x["path_idx"])
-
-        # Extract answers and do majority voting
-        answers = [p["answer"] for p in paths]
-        answer_counts = Counter(answers)
-
-        # Find most common answer
-        most_common = answer_counts.most_common(1)
-        if most_common:
-            best_answer, count = most_common[0]
-            consensus_score = count / len(answers)
-        else:
-            best_answer = "no_answer"
-            consensus_score = 0.0
-
-        # Find the best path (first one with the winning answer)
-        best_path = next(
-            (p for p in paths if p["answer"] == best_answer),
-            paths[0] if paths else {"text": "", "tokens": 0},
-        )
-
-        total_tokens = sum(p["tokens"] for p in paths)
-
-        uncertainty_score = 1.0 - consensus_score
-
-        log.info(
-            f"Selected answer: {best_answer} (consensus: {consensus_score:.2f}, uncertainty: {uncertainty_score:.2f})"
-        )
-        log.info(f"Answer distribution: {dict(answer_counts)}")
-        log.info(f"Total tokens: {total_tokens}")
-
-        return {
-            "trajectory": best_path["text"],
-            "extracted_answer": best_answer,
-            "completed": True,
-            "metadata": {
-                "strategy": "self_consistency",
-                "num_paths": self.num_paths,
-                "consensus_score": consensus_score,
-                "uncertainty_score": uncertainty_score,
-                "answer_distribution": dict(answer_counts),
-                "all_answers": answers,
-                "total_tokens": total_tokens,
-            },
-        }
+_PROVIDER_BASE_URLS = {
+    "openai": None,
+    "openrouter": "https://openrouter.ai/api/v1",
+}
 
 
 class StrategyManager:
@@ -168,6 +31,10 @@ class StrategyManager:
         self._vllm_model = None
         self._step_generator = None
         self._confidence_scorer = None  # For entropy/perplexity/sequence_prob
+
+    # ------------------------------------------------------------------
+    # vLLM backend
+    # ------------------------------------------------------------------
 
     def _init_vllm_backend(self):
         """Load vLLM model, wrap with uncertainty, create step generator.
@@ -228,18 +95,6 @@ class StrategyManager:
     _VALID_SCORER_TYPES = {"entropy", "perplexity", "sequence_prob", "prm"}
 
     def _get_scorer(self, scorer_type: str):
-        """
-        Get scorer instance based on scorer type.
-
-        Args:
-            scorer_type: One of 'entropy', 'perplexity', 'sequence_prob', 'prm'
-
-        Returns:
-            Scorer instance (StepScorerConfidence or StepScorerPRM)
-
-        Raises:
-            ValueError: If scorer_type is not recognised
-        """
         if scorer_type not in self._VALID_SCORER_TYPES:
             raise ValueError(
                 f"Unknown scorer type: {scorer_type!r}. "
@@ -248,51 +103,65 @@ class StrategyManager:
         if scorer_type == "prm":
             return prm_scorer_factory.get_scorer()
         else:
-            # For entropy, perplexity, sequence_prob - use confidence scorer
             if self._confidence_scorer is None:
                 self._init_vllm_backend()
             return self._confidence_scorer
 
+    # ------------------------------------------------------------------
+    # Client helpers
+    # ------------------------------------------------------------------
+
     def _get_or_create_client(
-        self, provider: str = "openrouter", model_base_url: str = None
+        self, provider: str = "openrouter", model_base_url: str = None,
+        api_key: str = None,
     ) -> OpenAI:
         """Get cached OpenAI client or create new one.
 
         Args:
             provider: Named provider (openrouter, openai) or ignored when
                       model_base_url is set.
-            model_base_url: Custom base URL for any OpenAI-compatible endpoint
-                           (e.g. remote vLLM server, Gemini API).
+            model_base_url: Custom base URL for any OpenAI-compatible endpoint.
+            api_key: Per-request API key. When provided the client is NOT cached.
         """
+        # Per-request key → ephemeral client, no caching
+        if api_key:
+            base_url = model_base_url or _PROVIDER_BASE_URLS.get(provider)
+            client = OpenAI(api_key=api_key, base_url=base_url)
+            log.info(f"Created ephemeral OpenAI client: base_url={base_url}")
+            return client
+
         cache_key = model_base_url or provider
         if cache_key in self._client_cache:
             return self._client_cache[cache_key]
 
         if model_base_url:
-            # Custom endpoint — use provider's API key or fall back to openrouter key
-            api_key = (
+            resolved_key = (
                 settings.openai_api_key
                 if provider == "openai"
                 else settings.openrouter_api_key
             )
             base_url = model_base_url
         elif provider == "openrouter":
-            api_key = settings.openrouter_api_key
+            resolved_key = settings.openrouter_api_key
             base_url = "https://openrouter.ai/api/v1"
         elif provider == "openai":
-            api_key = settings.openai_api_key
+            resolved_key = settings.openai_api_key
             base_url = None
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
-        if not api_key:
+        if not resolved_key:
             raise ValueError(f"API key not set for provider: {provider}")
 
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        client = OpenAI(api_key=resolved_key, base_url=base_url)
         self._client_cache[cache_key] = client
 
         log.info(f"Created OpenAI client: provider={provider}, base_url={base_url}")
         return client
+
+    # ------------------------------------------------------------------
+    # Strategy factory
+    # ------------------------------------------------------------------
 
     def create_strategy(
         self,
@@ -303,25 +172,233 @@ class StrategyManager:
         """
         Create a TTS strategy instance.
 
-        Args:
-            strategy_type: Type of strategy
-            model_name: Model name
-            strategy_config: Optional strategy-specific configuration
-
-        Returns:
-            Strategy instance ready for trajectory generation
+        When ``tts_api_key`` or ``model_base_url`` is present in
+        *strategy_config* the API backend is used (all strategies).
+        Otherwise, self_consistency uses the simple OpenAI client and
+        everything else uses the vLLM backend.
         """
         strategy_config = strategy_config or {}
 
+        use_api_backend = bool(
+            strategy_config.get("tts_api_key")
+            or strategy_config.get("model_base_url")
+        )
+
+        if use_api_backend:
+            return self._create_api_strategy(strategy_type, model_name, strategy_config)
+
         if strategy_type == "self_consistency":
-            return self._create_self_consistency_strategy(model_name, strategy_config)
+            return self._create_self_consistency_simple(model_name, strategy_config)
         elif strategy_type in ("offline_bon", "online_bon", "beam_search"):
             return self._create_vllm_strategy(strategy_type, strategy_config)
         else:
             raise ValueError(
                 f"Unknown strategy type: {strategy_type}. "
-                f"Available strategies: self_consistency, offline_bon, online_bon, beam_search"
+                f"Available strategies: self_consistency, offline_bon, "
+                f"online_bon, beam_search"
             )
+
+    # ------------------------------------------------------------------
+    # API-based strategies (library classes via BlackboxModelWithStreaming)
+    # ------------------------------------------------------------------
+
+    def _create_api_strategy(
+        self,
+        strategy_type: str,
+        model_name: str,
+        config: Dict[str, Any],
+    ):
+        """Create a strategy backed by an OpenAI-compatible HTTP API.
+
+        Uses llm_tts library classes: BlackboxModelWithStreaming,
+        StepCandidateGeneratorThroughAPI, and the matching strategy class.
+        """
+        from lm_polygraph.utils.generation_parameters import GenerationParameters
+
+        from llm_tts.early_stopping import BoundaryEarlyStopping
+        from llm_tts.generators.api import StepCandidateGeneratorThroughAPI
+        from llm_tts.models.blackboxmodel_with_streaming import (
+            BlackboxModelWithStreaming,
+        )
+        from llm_tts.scorers import ChainMajorityVotingScorer
+        from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
+
+        provider = config.get("provider", "openrouter")
+        model_base_url = config.get("model_base_url")
+        api_key = config.get("tts_api_key") or ""
+        temperature = config.get("temperature", 0.7)
+        max_tokens = config.get("max_tokens", 4096)
+        budget = config.get("budget", 8)
+
+        # Resolve API key: per-request → server-side setting
+        if not api_key:
+            if provider == "openai":
+                api_key = settings.openai_api_key or ""
+            else:
+                api_key = settings.openrouter_api_key or ""
+        if not api_key:
+            raise ValueError(
+                "API key required: set tts_api_key in request or configure "
+                "server-side OPENROUTER_API_KEY / OPENAI_API_KEY."
+            )
+
+        base_url = model_base_url or _PROVIDER_BASE_URLS.get(provider)
+
+        detector = ThinkingMarkerDetector(
+            min_step_tokens=50,
+            max_step_tokens=1024,
+            use_sequence=True,
+            use_conclusion=True,
+            use_thinking=True,
+            use_verification=True,
+            use_reasoning=True,
+        )
+
+        generation_parameters = GenerationParameters()
+        generation_parameters.temperature = temperature
+        generation_parameters.max_new_tokens = max_tokens
+        generation_parameters.top_p = 0.8
+        generation_parameters.top_k = 20
+
+        base_model = BlackboxModelWithStreaming(
+            openai_api_key=api_key,
+            model_path=model_name,
+            supports_logprobs=False,
+            base_url=base_url,
+            early_stopping=BoundaryEarlyStopping(detector=detector),
+            generation_parameters=generation_parameters,
+        )
+
+        needs_prefill = strategy_type in (
+            "online_bon", "beam_search", "adaptive",
+        )
+        step_generator = StepCandidateGeneratorThroughAPI(
+            model=base_model,
+            thinking_mode=False,
+            detector=detector,
+            max_new_tokens=max_tokens,
+            temperature=temperature,
+            top_p=0.8,
+            top_k=20,
+            max_context_budget=8192,
+            prefill_mode=needs_prefill,
+            supports_logprobs=False,
+            max_concurrent_requests=128,
+        )
+
+        if strategy_type == "self_consistency":
+            strategy = self._build_self_consistency(
+                step_generator, config, budget,
+            )
+        elif strategy_type == "offline_bon":
+            strategy = self._build_offline_bon(
+                step_generator, config, budget,
+            )
+        elif strategy_type == "online_bon":
+            strategy = self._build_online_bon(
+                step_generator, config, budget,
+            )
+        elif strategy_type == "beam_search":
+            strategy = self._build_beam_search(
+                step_generator, config, budget,
+            )
+        else:
+            raise ValueError(f"Unknown strategy type: {strategy_type}")
+
+        # Attach base_model so callers can clean up
+        strategy._api_base_model = base_model
+        strategy._api_step_generator = step_generator
+
+        log.info(
+            f"Created API strategy: {strategy_type}, "
+            f"model={model_name}, base_url={base_url}"
+        )
+        return strategy
+
+    # ------------------------------------------------------------------
+    # Strategy builders (shared between API and future uses)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_self_consistency(step_generator, config, budget):
+        from llm_tts.scorers import ChainMajorityVotingScorer
+        from llm_tts.strategies import StrategySelfConsistency
+
+        chain_scorer = ChainMajorityVotingScorer()
+        return StrategySelfConsistency(
+            step_generator=step_generator,
+            num_paths=config.get("num_paths", max(4, budget)),
+            scorer=chain_scorer,
+            batch_generation=True,
+        )
+
+    @staticmethod
+    def _build_offline_bon(step_generator, config, budget):
+        from llm_tts.scorers import StepScorerConfidence
+        from llm_tts.strategies import StrategyOfflineBestOfN
+
+        scorer = StepScorerConfidence()
+        return StrategyOfflineBestOfN(
+            scorer=scorer,
+            num_trajectories=config.get("num_trajectories", max(4, budget)),
+            max_steps=config.get("max_steps", max(2, budget)),
+            step_generator=step_generator,
+            score_aggregation=config.get("score_aggregation", "mean"),
+            batch_generation=True,
+        )
+
+    @staticmethod
+    def _build_online_bon(step_generator, config, budget):
+        from llm_tts.scorers import StepScorerConfidence
+        from llm_tts.strategies import StrategyOnlineBestOfN
+
+        scorer = StepScorerConfidence()
+        return StrategyOnlineBestOfN(
+            step_generator=step_generator,
+            scorer=scorer,
+            candidates_per_step=config.get("candidates_per_step", max(2, budget)),
+            max_steps=config.get("max_steps", max(2, budget)),
+            batch_generation=True,
+        )
+
+    @staticmethod
+    def _build_beam_search(step_generator, config, budget):
+        from llm_tts.scorers import StepScorerConfidence
+        from llm_tts.strategies import StrategyBeamSearch
+
+        scorer = StepScorerConfidence()
+        return StrategyBeamSearch(
+            step_generator=step_generator,
+            scorer=scorer,
+            beam_size=config.get("beam_size", min(max(2, budget // 2), 6)),
+            candidates_per_beam=config.get("candidates_per_step", 2),
+            max_steps=config.get("max_steps", max(2, budget)),
+            aggregation=config.get("score_aggregation", "mean"),
+            batch_generation=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Simple self-consistency (no library deps, plain OpenAI client)
+    # ------------------------------------------------------------------
+
+    def _create_self_consistency_simple(
+        self, model_name: str, config: Dict[str, Any],
+    ):
+        """Fallback: use library StrategySelfConsistency when llm_tts is
+        available, otherwise raise."""
+        try:
+            return self._create_api_strategy(
+                "self_consistency", model_name, config,
+            )
+        except ImportError:
+            raise ValueError(
+                "llm_tts library is required for self-consistency. "
+                "Provide tts_api_key to use the API backend."
+            )
+
+    # ------------------------------------------------------------------
+    # vLLM-backed strategies
+    # ------------------------------------------------------------------
 
     def _create_vllm_strategy(self, strategy_type: str, config: Dict[str, Any]):
         """Create a vLLM-backed TTS strategy instance."""
@@ -372,28 +449,9 @@ class StrategyManager:
         log.info(f"Created vLLM strategy: {strategy_type} with scorer: {scorer_type}")
         return strategy
 
-    def _create_self_consistency_strategy(
-        self, model_name: str, config: Dict[str, Any]
-    ) -> SelfConsistencyStrategy:
-        """Create self-consistency strategy instance."""
-        provider = config.get("provider", "openrouter")
-        model_base_url = config.get("model_base_url")
-        client = self._get_or_create_client(provider, model_base_url=model_base_url)
-
-        strategy = SelfConsistencyStrategy(
-            client=client,
-            model=model_name,
-            num_paths=config.get("num_paths", 5),
-            temperature=config.get("temperature", 0.7),
-            max_tokens=config.get("max_tokens", 4096),
-        )
-
-        log.info(
-            f"Created self-consistency strategy: "
-            f"model={model_name}, num_paths={config.get('num_paths', 5)}"
-        )
-
-        return strategy
+    # ------------------------------------------------------------------
+    # Cleanup
+    # ------------------------------------------------------------------
 
     def clear_cache(self):
         """Clear client cache and vLLM resources."""

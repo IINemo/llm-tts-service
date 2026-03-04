@@ -91,6 +91,16 @@ class ChatCompletionRequest(BaseModel):
         default=None, description="Window size for scoring (1-N steps)", ge=1, le=50
     )
 
+    # Debugger / verbose mode
+    tts_verbose: Optional[bool] = Field(
+        default=False,
+        description="Return debugger-level events/tree in tts_metadata",
+    )
+    tts_api_key: Optional[str] = Field(
+        default=None,
+        description="Per-request API key for remote model (overrides server-side key)",
+    )
+
     class Config:
         json_schema_extra = {
             "example": {
