@@ -311,7 +311,6 @@ class StrategyManager:
         from llm_tts.models.blackboxmodel_with_streaming import (
             BlackboxModelWithStreaming,
         )
-        from llm_tts.scorers import ChainMajorityVotingScorer
         from llm_tts.step_boundary_detectors import ThinkingMarkerDetector
 
         provider = config.get("provider", "openrouter")

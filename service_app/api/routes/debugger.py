@@ -1,6 +1,5 @@
 """Routes for the Visual Debugger demo."""
 
-import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
