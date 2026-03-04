@@ -213,7 +213,7 @@ def main():
                     )
                     all_strategy_runs.append(run_entry)
                 else:
-                    print(f"    WARNING: no strategy runs in payload")
+                    print("    WARNING: no strategy runs in payload")
 
             except Exception as e:
                 print(f"    FAILED: {e}")
