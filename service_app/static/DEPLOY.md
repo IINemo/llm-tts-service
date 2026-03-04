@@ -2,7 +2,17 @@
 
 This guide is for running the demo on a remote Linux machine.
 
-## 1. Clone the repository and enter it
+## 1. Expose HTTP port (RunPod / cloud providers)
+
+If you are using RunPod, expose port `8080` **before** creating the pod:
+
+1. In the pod creation form, find **"Expose HTTP Ports"**
+2. Add `8080` (comma-separated if you need multiple, e.g. `8080, 8888`)
+3. Create the pod
+
+If the pod already exists, stop it, edit the configuration to add port `8080`, then restart.
+
+## 2. Clone the repository and enter it
 
 ```bash
 git clone https://github.com/IINemo/thinkbooster.git
@@ -11,23 +21,31 @@ cd thinkbooster
 
 Then follow environment basics from [README.md](README.md) (create/activate Python env, copy `.env`, add API keys).
 
-## 2. Remove Ubuntu's `python3-blinker` package
+## 3. Remove Ubuntu's `python3-blinker` package
 
 ```bash
-sudo apt remove python3-blinker
+apt remove python3-blinker
 ```
 
 Why: distro-level `python3-blinker` can shadow the `pip` version inside your Python environment and cause dependency/runtime conflicts. Removing it avoids that package resolution clash.
 
-## 3. Run project setup
+## 4. Install missing system-level dependencies
+
+```bash
+pip install latex2sympy2 "vllm>=0.12.0,<0.13.0"
+pip install torchvision spacy thinc --upgrade
+```
+
+## 5. Run project setup
 
 ```bash
 ./setup.sh
 ```
 
-## 4. Start a persistent terminal session
+## 6. Start a persistent terminal session
 
 ```bash
+apt update && apt install -y tmux
 tmux new -t thinkbooster
 ```
 
@@ -84,7 +102,7 @@ Service URLs (default):
 - API docs: `http://<server-ip>:8080/docs`
 - Deploy guide route: `http://<server-ip>:8080/deploy`
 
-## 5. Logs
+## 7. Logs
 
 Each service run creates a timestamped log directory:
 
@@ -101,6 +119,20 @@ tail -f logs/$(ls -t logs/ | head -1)/$(ls -t logs/$(ls -t logs/ | head -1) | he
 **Note:** You can change it to port 80/443 if you want user to access it directly through HTTP/HTTPS.
 
 ## Common Problems
+
+### `ModuleNotFoundError: No module named 'latex2sympy2'`
+
+```bash
+pip install latex2sympy2
+```
+
+### `operator torchvision::nms does not exist`
+
+Caused by a `torchvision` / `torch` version mismatch. Upgrade torchvision to match your torch:
+
+```bash
+pip install torchvision --upgrade
+```
 
 ### CUDA init error fallback
 
