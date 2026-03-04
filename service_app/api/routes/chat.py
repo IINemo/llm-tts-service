@@ -151,7 +151,9 @@ async def create_chat_completion(
             request.tts_scorer = url_scorer
 
         log.info(f"Received chat completion request for model: {request.model}")
-        log.info(f"TTS strategy: {request.tts_strategy} (from_url={url_strategy is not None})")
+        log.info(
+            f"TTS strategy: {request.tts_strategy} (from_url={url_strategy is not None})"
+        )
 
         # SSE streaming path
         if request.stream:
@@ -186,7 +188,9 @@ async def cancel_chat_completion(request_id: str):
     """Cancel an in-progress streaming chat completion."""
     event = _active_requests.get(request_id)
     if event is None:
-        raise HTTPException(status_code=404, detail="Request not found or already finished")
+        raise HTTPException(
+            status_code=404, detail="Request not found or already finished"
+        )
     event.set()
     log.info(f"Cancel requested for {request_id}")
     return {"status": "cancelled", "request_id": request_id}
@@ -198,9 +202,7 @@ async def cancel_chat_completion(request_id: str):
 
 
 def _handle_sync(request: ChatCompletionRequest) -> ChatCompletionResponse:
-    messages = [
-        {"role": msg.role, "content": msg.content} for msg in request.messages
-    ]
+    messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
 
     strategy_type = request.tts_strategy or "self_consistency"
     is_vllm_strategy = strategy_type in ("offline_bon", "online_bon", "beam_search")
@@ -229,7 +231,9 @@ def _handle_sync(request: ChatCompletionRequest) -> ChatCompletionResponse:
     elapsed_time = time.time() - start_time
     log.info(f"Trajectory generated in {elapsed_time:.2f}s")
 
-    return _build_response(request, result, elapsed_time, strategy_type, is_vllm_strategy)
+    return _build_response(
+        request, result, elapsed_time, strategy_type, is_vllm_strategy
+    )
 
 
 # ------------------------------------------------------------------
@@ -249,9 +253,7 @@ def _handle_streaming(request: ChatCompletionRequest) -> StreamingResponse:
     def _progress_callback(message: str) -> None:
         progress_state["message"] = message
 
-    messages = [
-        {"role": msg.role, "content": msg.content} for msg in request.messages
-    ]
+    messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
     strategy_type = request.tts_strategy or "self_consistency"
     is_vllm_strategy = strategy_type in ("offline_bon", "online_bon", "beam_search")
     strategy_config = _build_strategy_config(request)
@@ -288,12 +290,18 @@ def _handle_streaming(request: ChatCompletionRequest) -> StreamingResponse:
 
             elapsed_time = time.time() - start_time
             response = _build_response(
-                request, result, elapsed_time, strategy_type, is_vllm_strategy,
+                request,
+                result,
+                elapsed_time,
+                strategy_type,
+                is_vllm_strategy,
             )
-            result_q.put({
-                "type": "complete",
-                "data": response.model_dump(mode="json"),
-            })
+            result_q.put(
+                {
+                    "type": "complete",
+                    "data": response.model_dump(mode="json"),
+                }
+            )
         except StrategyCancelled:
             log.info(f"Strategy cancelled for request {request_id}")
             result_q.put({"type": "cancelled"})
@@ -439,9 +447,7 @@ def _build_response(
         strategy_meta_id = _STRATEGY_TYPE_TO_ID.get(strategy_type, strategy_type)
         strategy_meta = _find_strategy_meta(strategy_meta_id)
         scorer_meta = (
-            _find_scorer_meta(request.tts_scorer)
-            if request.tts_scorer
-            else None
+            _find_scorer_meta(request.tts_scorer) if request.tts_scorer else None
         )
 
         messages = [
@@ -471,9 +477,7 @@ def _build_response(
         metadata["debugger_run"] = run
 
     # Estimate token usage
-    messages = [
-        {"role": msg.role, "content": msg.content} for msg in request.messages
-    ]
+    messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
     prompt_text = " ".join(msg["content"] for msg in messages)
     prompt_tokens = estimate_tokens(prompt_text)
     completion_tokens = metadata.get("total_tokens", estimate_tokens(trajectory))

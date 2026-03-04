@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 
 class StrategyCancelled(Exception):
     """Raised when a strategy execution is cancelled via cancel_event."""
+
     pass
 
 

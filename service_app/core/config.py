@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     prm_batch_size: int = 8
     prm_torch_dtype: str = "bfloat16"
     prm_use_vllm: bool = True
-    prm_gpu_memory_utilization: float = 0.3  # Lower default to fit alongside main model
+    prm_gpu_memory_utilization: float = 0.8
 
     # Logging
     log_dir: str = "logs"

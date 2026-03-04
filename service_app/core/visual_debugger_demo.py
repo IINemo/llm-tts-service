@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-
 DEFAULT_BUDGET = 8
 DEBUGGER_BUDGETS = [4, 8, 12]
 

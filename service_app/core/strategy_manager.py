@@ -153,8 +153,15 @@ class StrategyManager:
         instead of calling ``score_trajectory`` afterwards.
         """
         try:
-            from lm_polygraph.estimators import MeanTokenEntropy, Perplexity, MaximumSequenceProbability
-            from lm_polygraph.stat_calculators import EntropyCalculator, VLLMLogprobsCalculator
+            from lm_polygraph.estimators import (
+                MeanTokenEntropy,
+                Perplexity,
+                MaximumSequenceProbability,
+            )
+            from lm_polygraph.stat_calculators import (
+                EntropyCalculator,
+                VLLMLogprobsCalculator,
+            )
             from lm_polygraph.utils import APIWithUncertainty
         except ImportError:
             log.warning(
@@ -188,7 +195,9 @@ class StrategyManager:
     # ------------------------------------------------------------------
 
     def _get_or_create_client(
-        self, provider: str = "openrouter", model_base_url: str = None,
+        self,
+        provider: str = "openrouter",
+        model_base_url: str = None,
         api_key: str = None,
     ) -> OpenAI:
         """Get cached OpenAI client or create new one.
@@ -257,12 +266,13 @@ class StrategyManager:
         strategy_config = strategy_config or {}
 
         use_api_backend = bool(
-            strategy_config.get("tts_api_key")
-            or strategy_config.get("model_base_url")
+            strategy_config.get("tts_api_key") or strategy_config.get("model_base_url")
         )
 
         if use_api_backend:
-            strategy = self._create_api_strategy(strategy_type, model_name, strategy_config)
+            strategy = self._create_api_strategy(
+                strategy_type, model_name, strategy_config
+            )
         elif strategy_type == "self_consistency":
             strategy = self._create_self_consistency_simple(model_name, strategy_config)
         elif strategy_type in ("offline_bon", "online_bon", "beam_search"):
@@ -363,7 +373,9 @@ class StrategyManager:
             model_for_gen = base_model
 
         needs_prefill = strategy_type in (
-            "online_bon", "beam_search", "adaptive",
+            "online_bon",
+            "beam_search",
+            "adaptive",
         )
         step_generator = StepCandidateGeneratorThroughAPI(
             model=model_for_gen,
@@ -384,19 +396,30 @@ class StrategyManager:
 
         if strategy_type == "self_consistency":
             strategy = self._build_self_consistency(
-                step_generator, config, budget,
+                step_generator,
+                config,
+                budget,
             )
         elif strategy_type == "offline_bon":
             strategy = self._build_offline_bon(
-                step_generator, config, budget, scorer=scorer,
+                step_generator,
+                config,
+                budget,
+                scorer=scorer,
             )
         elif strategy_type == "online_bon":
             strategy = self._build_online_bon(
-                step_generator, config, budget, scorer=scorer,
+                step_generator,
+                config,
+                budget,
+                scorer=scorer,
             )
         elif strategy_type == "beam_search":
             strategy = self._build_beam_search(
-                step_generator, config, budget, scorer=scorer,
+                step_generator,
+                config,
+                budget,
+                scorer=scorer,
             )
         else:
             raise ValueError(f"Unknown strategy type: {strategy_type}")
@@ -434,6 +457,7 @@ class StrategyManager:
 
         if scorer is None:
             from llm_tts.scorers import StepScorerConfidence
+
             scorer = StepScorerConfidence()
         return StrategyOfflineBestOfN(
             scorer=scorer,
@@ -450,6 +474,7 @@ class StrategyManager:
 
         if scorer is None:
             from llm_tts.scorers import StepScorerConfidence
+
             scorer = StepScorerConfidence()
         return StrategyOnlineBestOfN(
             step_generator=step_generator,
@@ -465,6 +490,7 @@ class StrategyManager:
 
         if scorer is None:
             from llm_tts.scorers import StepScorerConfidence
+
             scorer = StepScorerConfidence()
         return StrategyBeamSearch(
             step_generator=step_generator,
@@ -481,13 +507,17 @@ class StrategyManager:
     # ------------------------------------------------------------------
 
     def _create_self_consistency_simple(
-        self, model_name: str, config: Dict[str, Any],
+        self,
+        model_name: str,
+        config: Dict[str, Any],
     ):
         """Fallback: use library StrategySelfConsistency when llm_tts is
         available, otherwise raise."""
         try:
             return self._create_api_strategy(
-                "self_consistency", model_name, config,
+                "self_consistency",
+                model_name,
+                config,
             )
         except ImportError as exc:
             raise ValueError(

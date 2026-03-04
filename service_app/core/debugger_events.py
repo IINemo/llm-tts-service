@@ -19,6 +19,9 @@ _STEP_PATTERNS = [
     (re.compile(r"Online BoN Step (\d+)"), lambda m: f"Step {m.group(1)}"),
     # adaptive: "=== Step 3 === (1/1 active samples)"
     (re.compile(r"=== Step (\d+) ==="), lambda m: f"Step {m.group(1)}"),
+    # PRM scorer initialization
+    (re.compile(r"Initializing PRM scorer"), lambda m: "Initializing PRM scorer"),
+    (re.compile(r"PRM scorer initialized"), lambda m: "PRM scorer ready"),
 ]
 
 
