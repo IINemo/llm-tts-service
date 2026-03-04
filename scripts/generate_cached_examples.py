@@ -17,25 +17,18 @@ OUTPUT_PATH = Path("service_app/static/debugger/cached_examples.json")
 
 QUESTIONS = [
     {
-        "id": "modular_arithmetic",
-        "title": "Modular Arithmetic",
-        "description": "Find the remainder when 7^100 is divided by 13 — requires Fermat's Little Theorem.",
-        "question": "Find the remainder when $7^{100}$ is divided by 13.",
-        "ground_truth": "9",
-    },
-    {
-        "id": "lattice_paths",
-        "title": "Lattice Path Counting",
-        "description": "Count shortest lattice paths through an intermediate point — requires combinatorics.",
-        "question": "How many shortest lattice paths are there from (0,0) to (5,5) that pass through (2,2)?",
-        "ground_truth": "120",
-    },
-    {
         "id": "conditional_probability",
         "title": "Conditional Probability",
         "description": "Conditional probability with combinatorics — requires Bayes' theorem and counting.",
         "question": "A box contains 5 red, 4 blue, and 3 green balls. Three balls are drawn without replacement. Given that at least one ball is red, what is the probability that all three balls are different colors? Express your answer as a fraction.",
         "ground_truth": "12/37",
+    },
+    {
+        "id": "chinese_remainder_theorem",
+        "title": "Chinese Remainder Theorem",
+        "description": "Solve a system of three modular congruences using the Chinese Remainder Theorem.",
+        "question": "Find the smallest positive integer n such that n ≡ 3 (mod 5), n ≡ 4 (mod 7), and n ≡ 2 (mod 9).",
+        "ground_truth": "263",
     },
 ]
 
