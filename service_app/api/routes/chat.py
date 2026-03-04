@@ -327,6 +327,7 @@ def _handle_streaming(request: ChatCompletionRequest) -> StreamingResponse:
                 last_sent = current
                 yield f"data: {json.dumps({'type': 'progress', 'message': current})}\n\n"
             await asyncio.sleep(0.25)
+        cancel_event.set()  # signal background thread to stop and clean up
         yield f"data: {json.dumps({'type': 'error', 'message': 'Strategy execution timed out (5 min)'})}\n\n"
 
     return StreamingResponse(
@@ -366,7 +367,7 @@ def _build_strategy_config(request: ChatCompletionRequest) -> Dict[str, Any]:
         "temperature": request.temperature,
         "max_tokens": request.max_tokens or 4096,
         "num_paths": request.num_paths or 5,
-        "budget": request.num_paths or 8,
+        "budget": request.num_paths or 5,
         # vLLM TTS params
         "scorer_type": request.tts_scorer or "entropy",
         "num_trajectories": request.tts_num_trajectories,

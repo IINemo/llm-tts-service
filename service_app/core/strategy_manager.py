@@ -23,6 +23,17 @@ _PROVIDER_BASE_URLS = {
     "openrouter": "https://openrouter.ai/api/v1",
 }
 
+# Models known to return logprobs via API (from scripts/probe_model_capabilities.py).
+_LOGPROB_MODEL_PATTERNS = ("gpt-4o", "gpt-4.1", "qwen3.5-27b")
+
+
+def _model_supports_logprobs(model_name: str) -> bool:
+    """Check if a model is known to support logprobs via API."""
+    name = model_name.lower()
+    if "/" in name:
+        name = name.rsplit("/", 1)[1]
+    return any(p in name for p in _LOGPROB_MODEL_PATTERNS)
+
 
 class StrategyManager:
     """Manages TTS strategy instances and model loading."""
@@ -109,19 +120,68 @@ class StrategyManager:
                 self._init_vllm_backend()
             return self._confidence_scorer
 
-    def _get_api_scorer(self, scorer_type: str):
+    def _get_api_scorer(self, scorer_type: str, supports_logprobs: bool = False):
         """Get scorer for API-backed strategies.
 
         PRM works standalone (separate model). Other scorers (entropy etc.)
-        need logprobs from vLLM, so fall back to StepScorerConfidence when
-        running via external API.
+        use StepScorerConfidence — which reads validity_score computed from
+        logprobs by the generator. When the model doesn't support logprobs
+        scores fall back to a neutral 0.5.
         """
         if scorer_type == "prm":
             return prm_scorer_factory.get_scorer()
 
         from llm_tts.scorers.step_scorer_confidence import StepScorerConfidence
 
+        if not supports_logprobs:
+            log.warning(
+                f"Scorer '{scorer_type}' requires logprobs but the current model "
+                f"does not support them — scores will be neutral (0.5)."
+            )
         return StepScorerConfidence()
+
+    # ------------------------------------------------------------------
+    # Uncertainty wrapper (mirrors run_tts_eval.py logic)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _wrap_with_uncertainty(base_model, scorer_type: str):
+        """Wrap a BlackboxModelWithStreaming with APIWithUncertainty.
+
+        This gives the model an ``estimator`` attribute so that strategies
+        like offline_bon compute per-step uncertainty during generation
+        instead of calling ``score_trajectory`` afterwards.
+        """
+        try:
+            from lm_polygraph.estimators import MeanTokenEntropy, Perplexity, MaximumSequenceProbability
+            from lm_polygraph.stat_calculators import EntropyCalculator, VLLMLogprobsCalculator
+            from lm_polygraph.utils import APIWithUncertainty
+        except ImportError:
+            log.warning(
+                "lm-polygraph uncertainty components not available, "
+                "skipping APIWithUncertainty wrapper."
+            )
+            return base_model
+
+        if scorer_type == "perplexity":
+            stat_calculators = [VLLMLogprobsCalculator()]
+            estimator = Perplexity()
+        elif scorer_type == "sequence_prob":
+            stat_calculators = [VLLMLogprobsCalculator()]
+            estimator = MaximumSequenceProbability()
+        elif scorer_type in ("entropy", "uncertainty"):
+            stat_calculators = [VLLMLogprobsCalculator(), EntropyCalculator()]
+            estimator = MeanTokenEntropy()
+        else:
+            return base_model
+
+        wrapped = APIWithUncertainty(
+            model=base_model,
+            stat_calculators=stat_calculators,
+            estimator=estimator,
+        )
+        log.info(f"Wrapped model with APIWithUncertainty({type(estimator).__name__})")
+        return wrapped
 
     # ------------------------------------------------------------------
     # Client helpers
@@ -281,20 +341,32 @@ class StrategyManager:
         generation_parameters.top_p = 0.8
         generation_parameters.top_k = 20
 
+        logprobs_supported = _model_supports_logprobs(model_name)
+
         base_model = BlackboxModelWithStreaming(
             openai_api_key=api_key,
             model_path=model_name,
-            supports_logprobs=False,
+            supports_logprobs=logprobs_supported,
             base_url=base_url,
             early_stopping=BoundaryEarlyStopping(detector=detector),
             generation_parameters=generation_parameters,
         )
 
+        # Wrap with APIWithUncertainty when logprobs are available so that
+        # uncertainty scores are computed during generation.  This mirrors
+        # what run_tts_eval.py does (lines 786-820) and is required for
+        # offline_bon which checks `hasattr(model, "estimator")`.
+        scorer_type = config.get("scorer_type", "entropy")
+        if logprobs_supported and scorer_type != "prm":
+            model_for_gen = self._wrap_with_uncertainty(base_model, scorer_type)
+        else:
+            model_for_gen = base_model
+
         needs_prefill = strategy_type in (
             "online_bon", "beam_search", "adaptive",
         )
         step_generator = StepCandidateGeneratorThroughAPI(
-            model=base_model,
+            model=model_for_gen,
             thinking_mode=False,
             detector=detector,
             max_new_tokens=max_tokens,
@@ -303,12 +375,12 @@ class StrategyManager:
             top_k=20,
             max_context_budget=8192,
             prefill_mode=needs_prefill,
-            supports_logprobs=False,
+            supports_logprobs=logprobs_supported,
             max_concurrent_requests=128,
         )
 
         # Resolve scorer for API-backed strategies
-        scorer = self._get_api_scorer(config.get("scorer_type", "entropy"))
+        scorer = self._get_api_scorer(scorer_type, logprobs_supported)
 
         if strategy_type == "self_consistency":
             strategy = self._build_self_consistency(
@@ -417,11 +489,11 @@ class StrategyManager:
             return self._create_api_strategy(
                 "self_consistency", model_name, config,
             )
-        except ImportError:
+        except ImportError as exc:
             raise ValueError(
-                "llm_tts library is required for self-consistency. "
-                "Provide tts_api_key to use the API backend."
-            )
+                "llm_tts library is required for self-consistency but could not be imported. "
+                "Install with: pip install -e '.[service]'"
+            ) from exc
 
     # ------------------------------------------------------------------
     # vLLM-backed strategies
