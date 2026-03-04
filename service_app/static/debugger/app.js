@@ -1100,6 +1100,7 @@ function setRunButtonLoading(isLoading, progressMessage) {
   );
 
   elements.stopRunButton.style.display = state.isRunInProgress ? "" : "none";
+  elements.resetDemoButton.style.display = state.isRunInProgress ? "none" : "";
 
   updateRunButtonEnabled();
 }
