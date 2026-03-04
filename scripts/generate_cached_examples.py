@@ -45,8 +45,14 @@ BUDGET = 8
 SYSTEM_PROMPT = "Reason step-by-step. Return the final answer in \\boxed{}."
 
 
-def run_single(provider: str, model_id: str, api_key: str,
-               question: str, strategy_id: str, scorer_id: str | None) -> dict:
+def run_single(
+    provider: str,
+    model_id: str,
+    api_key: str,
+    question: str,
+    strategy_id: str,
+    scorer_id: str | None,
+) -> dict:
     """Run a single strategy via the streaming endpoint and return the payload."""
     body = {
         "question": question,
@@ -56,7 +62,7 @@ def run_single(provider: str, model_id: str, api_key: str,
         "api_key": api_key,
         "strategy_id": strategy_id,
         "scorer_id": scorer_id,
-        "advanced_config_yaml": f"prompt: \"{SYSTEM_PROMPT}\"\n",
+        "advanced_config_yaml": f'prompt: "{SYSTEM_PROMPT}"\n',
     }
 
     resp = requests.post(
@@ -100,13 +106,17 @@ def save_progress(examples, adv_templates):
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(OUTPUT_PATH, "w") as f:
         json.dump(output, f, indent=2)
-    print(f"    [saved {OUTPUT_PATH} — {OUTPUT_PATH.stat().st_size:,} bytes]", flush=True)
+    print(
+        f"    [saved {OUTPUT_PATH} — {OUTPUT_PATH.stat().st_size:,} bytes]", flush=True
+    )
 
 
 def main():
     provider = sys.argv[1] if len(sys.argv) > 1 else "openrouter"
     model_id = sys.argv[2] if len(sys.argv) > 2 else "anthropic/claude-sonnet-4"
-    api_key = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("OPENROUTER_API_KEY", "")
+    api_key = (
+        sys.argv[3] if len(sys.argv) > 3 else os.environ.get("OPENROUTER_API_KEY", "")
+    )
 
     if not api_key:
         print("Error: no API key. Pass as arg or set OPENROUTER_API_KEY in .env")
@@ -197,10 +207,12 @@ def main():
                 if runs:
                     run_entry = runs[0]
                     final = run_entry.get("run", {}).get("final", {})
-                    print(f"    Done in {elapsed:.1f}s — answer={final.get('answer', '?')}, "
-                          f"correct={final.get('is_correct')}, "
-                          f"confidence={final.get('confidence', 0):.4f}, "
-                          f"tokens={run_entry.get('run', {}).get('tokens_used', '?')}")
+                    print(
+                        f"    Done in {elapsed:.1f}s — answer={final.get('answer', '?')}, "
+                        f"correct={final.get('is_correct')}, "
+                        f"confidence={final.get('confidence', 0):.4f}, "
+                        f"tokens={run_entry.get('run', {}).get('tokens_used', '?')}"
+                    )
                     all_strategy_runs.append(run_entry)
                 else:
                     print(f"    WARNING: no strategy runs in payload")
@@ -234,7 +246,11 @@ def main():
                         "api_key_masked": val.get("api_key_masked", "***"),
                     },
                     "strategy_count": len(set(r["strategy_id"] for r in ranked)),
-                    "scorer_count": len(set(r.get("scorer_id", "") for r in ranked if r.get("scorer_id"))),
+                    "scorer_count": len(
+                        set(
+                            r.get("scorer_id", "") for r in ranked if r.get("scorer_id")
+                        )
+                    ),
                     "run_count": len(ranked),
                 }
 
@@ -260,10 +276,11 @@ def main():
     print(f"Done! {OUTPUT_PATH} ({OUTPUT_PATH.stat().st_size:,} bytes)")
     print(f"Examples: {len(valid_examples)}")
     for ex in valid_examples:
-        n_runs = len(ex['payloads'][str(BUDGET)]['strategies'])
+        n_runs = len(ex["payloads"][str(BUDGET)]["strategies"])
         correct = sum(
-            1 for r in ex['payloads'][str(BUDGET)]['strategies']
-            if r.get('run', {}).get('final', {}).get('is_correct')
+            1
+            for r in ex["payloads"][str(BUDGET)]["strategies"]
+            if r.get("run", {}).get("final", {}).get("is_correct")
         )
         print(f"  {ex['id']}: {n_runs} runs, {correct} correct")
 
