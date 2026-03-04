@@ -322,7 +322,7 @@ def _handle_streaming(request: ChatCompletionRequest) -> StreamingResponse:
         yield f"data: {json.dumps({'type': 'started', 'request_id': request_id})}\n\n"
 
         last_sent: Optional[str] = None
-        deadline = asyncio.get_event_loop().time() + 300  # 5 min max
+        deadline = asyncio.get_event_loop().time() + 600  # 10 min max
         while asyncio.get_event_loop().time() < deadline:
             try:
                 event = result_q.get_nowait()
@@ -336,7 +336,7 @@ def _handle_streaming(request: ChatCompletionRequest) -> StreamingResponse:
                 yield f"data: {json.dumps({'type': 'progress', 'message': current})}\n\n"
             await asyncio.sleep(0.25)
         cancel_event.set()  # signal background thread to stop and clean up
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Strategy execution timed out (5 min)'})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Strategy execution timed out (10 min)'})}\n\n"
 
     return StreamingResponse(
         _event_stream(),
