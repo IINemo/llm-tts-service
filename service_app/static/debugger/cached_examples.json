@@ -43,7 +43,15 @@
               "requires_prefill": false
             }
           ],
-          "scorer_catalog": [],
+          "scorer_catalog": [
+            {
+              "id": "prm",
+              "name": "PRM",
+              "direction": "higher_better",
+              "summary": "Process Reward Model trajectory quality score.",
+              "requires_logprobs": false
+            }
+          ],
           "strategies": [
             {
               "id": "baseline",
