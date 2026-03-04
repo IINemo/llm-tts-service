@@ -23,10 +23,10 @@ jobs:
           pip install black isort flake8
 
       - name: Check formatting with black
-        run: black --check llm_tts scripts
+        run: black --check llm_tts scripts service_app
 
       - name: Check import sorting with isort
-        run: isort --check-only --profile black llm_tts scripts
+        run: isort --check-only --profile black llm_tts scripts service_app
 
       - name: Lint with flake8
-        run: flake8 llm_tts scripts
+        run: flake8 llm_tts scripts service_app

@@ -1,0 +1,73 @@
+# @package _global_
+# Run: python scripts/run_tts_eval.py --config-path=../config --config-name=experiments/online_best_of_n/aime2024/online_bon_openrouter_claude_sonnet_aime2024_prm
+# Online Best-of-N with OpenRouter Claude Sonnet 4 on AIME 2024
+# Uses PRM scorer for step evaluation
+
+defaults:
+  - /config
+  - /model/openrouter
+  - /generation/default
+  - /system/default
+  - /strategy/online_bon
+  - /scorer/prm
+  - /evaluation/default
+  - _self_
+
+# Run naming
+run_name: "online_bon_openrouter_claude_sonnet_aime2024_prm_seed${system.seed}_${now:%H-%M-%S}"
+
+# Main configuration
+verbose: true
+report_to: none
+wandb_project: llm-tts-eval-aime2024
+wandb_group: "online_bon_claude_sonnet_aime2024_prm"
+
+# Model configuration (OpenRouter API)
+model:
+  type: openai_api
+  provider: openrouter
+  model_path: "anthropic/claude-sonnet-4"
+  model_short_name: "openrouter_claude_sonnet"
+  api_key: null  # Set via OPENROUTER_API_KEY env var
+  supports_logprobs: false
+  prefill_mode: false
+
+# System configuration
+system:
+  device: cuda
+  seed: 42
+
+# Generation configuration
+generation:
+  max_new_tokens: 4096
+  temperature: 0.6
+  top_p: 0.95
+  batch_size: 1
+  max_length: 8192
+
+# Strategy - Online Best-of-N with thinking marker detector
+strategy:
+  max_steps: 250
+  detector_type: thinking_marker
+  use_structure: true
+  detector_answer_patterns:
+    - "<end of response>"
+
+# Scorer - PRM on GPU 1
+scorer:
+  device: "cuda:1"
+
+# Dataset configuration - AIME 2024
+dataset:
+  dataset_path: "test-time-compute/test_aime24"
+  dataset_config: null
+  dataset_split: "test"
+  subset: 30
+  offset: 0
+  question_field: "question"
+  answer_field: "answer"
+  answer_format: "numeric"
+  data_name: "aime24"
+  system_prompt: "Please reason step by step, and put your final answer within \\boxed{}."
+  prompt_template: "{question}"
+  prompt_file: null

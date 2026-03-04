@@ -14,7 +14,7 @@ from tqdm import tqdm
 from .grader import get_timeout_count, math_equal
 from .parser import STRIP_EXCEPTIONS, extract_answer, strip_string
 
-log = logging.getLogger()
+log = logging.getLogger(__name__)
 
 
 def _normalize_gold_answer(gold_answer: str, data_name: str) -> str:
@@ -156,11 +156,11 @@ class EvaluatorExactMatch:
             else:
                 pred = extract_answer(solution, data_name=self.data_name)
             gold = _normalize_gold_answer(gold_answer, self.data_name)
-            log.info(
+            log.debug(
                 f"_score_single BEFORE math_equal: pred={repr(pred)}, gold={repr(gold)}"
             )
             result = math_equal(pred, gold)
-            log.info(f"_score_single AFTER math_equal: result={result}")
+            log.debug(f"_score_single AFTER math_equal: result={result}")
             return 1.0 if result else 0.0
         except Exception as e:
             import traceback

@@ -158,6 +158,7 @@ Thumbs.db
 # Data files
 *.csv
 *.json
+!service_app/static/debugger/cached_examples.json
 *.jsonl
 *.parquet
 *.h5
@@ -190,3 +191,6 @@ lm-polygraph/
 # External Qwen repositories
 # Qwen2.5-Math/
 Qwen3/
+
+# Telegram bot logs
+telegram_bot_logs/

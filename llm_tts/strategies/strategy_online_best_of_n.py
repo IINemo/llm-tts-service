@@ -126,6 +126,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         trajectories: List[List[StepCandidate]] = [[] for _ in range(M)]
         selected_steps: List[List[StepCandidate]] = [[] for _ in range(M)]
         validity_scores: List[List[float]] = [[] for _ in range(M)]
+        step_candidate_history: List[List[Dict[str, Any]]] = [[] for _ in range(M)]
         completed: List[bool] = [False] * M
         needs_final_answer: List[bool] = [False] * M
         answer_steps: List[Optional[str]] = [None] * M
@@ -209,16 +210,43 @@ class StrategyOnlineBestOfN(StrategyBase):
                         flat_trajectories,
                         sample_ids=flat_sample_ids,
                     )
-                    flat_scores = [
-                        traj_scores[-1] if traj_scores else 0.0
-                        for traj_scores in all_traj_scores
-                    ]
+                    flat_scores = []
+                    for i, traj_scores in enumerate(all_traj_scores):
+                        score = traj_scores[-1] if traj_scores else None
+                        if score is None:
+                            batch_idx, cand_idx = candidate_map[i]
+                            n_steps = len(traj_scores) if traj_scores else 0
+                            n_null = (
+                                sum(1 for s in traj_scores if s is None)
+                                if traj_scores
+                                else 0
+                            )
+                            log.warning(
+                                f"PRM returned no valid score for "
+                                f"candidate {cand_idx} (batch {batch_idx}): "
+                                f"{n_null}/{n_steps} steps are null "
+                                f"(likely a very short candidate). "
+                                f"This candidate will be skipped "
+                                f"during selection."
+                            )
+                        flat_scores.append(score)
                 elif flat_trajectories:
                     # Fallback: score one by one
                     flat_scores = []
-                    for chat, traj in zip(flat_chats, flat_trajectories):
+                    for i, (chat, traj) in enumerate(
+                        zip(flat_chats, flat_trajectories)
+                    ):
                         score_list = self.scorer.score_trajectory(chat, traj)
-                        flat_scores.append(score_list[-1] if score_list else 0.0)
+                        score = score_list[-1] if score_list else None
+                        if score is None:
+                            batch_idx, cand_idx = candidate_map[i]
+                            log.warning(
+                                f"PRM returned no valid score for "
+                                f"candidate {cand_idx} (batch {batch_idx}). "
+                                f"This candidate will be skipped "
+                                f"during selection."
+                            )
+                        flat_scores.append(score)
                 else:
                     flat_scores = []
 
@@ -265,7 +293,15 @@ class StrategyOnlineBestOfN(StrategyBase):
                     needs_final_answer[sample_id] = True
                     continue
 
-                best_idx = max(range(len(scores)), key=lambda i: scores[i])
+                valid_indices = [i for i, s in enumerate(scores) if s is not None]
+                if not valid_indices:
+                    log.warning(
+                        f"Sample {sample_indices[sample_id]}: All scores are None "
+                        f"for {len(candidates)} candidates, selecting index 0"
+                    )
+                    best_idx = 0
+                else:
+                    best_idx = max(valid_indices, key=lambda i: scores[i])
                 selected = candidates[best_idx]
 
                 # Additional completion checks (matching beam search):
@@ -305,11 +341,42 @@ class StrategyOnlineBestOfN(StrategyBase):
                     )
 
                 all_scores_str = ", ".join(
-                    f"c{i}={s:.3f}" for i, s in enumerate(scores)
+                    f"c{i}={s:.3f}" if s is not None else f"c{i}=None"
+                    for i, s in enumerate(scores)
+                )
+                _best_s = (
+                    f"{scores[best_idx]:.3f}"
+                    if scores[best_idx] is not None
+                    else "None"
                 )
                 log.info(
                     f"Sample {sample_indices[sample_id]}: Selected candidate {best_idx} "
-                    f"(score={scores[best_idx]:.3f}), all scores=[{all_scores_str}]"
+                    f"(score={_best_s}), all scores=[{all_scores_str}]"
+                )
+                history_step_index = len(step_candidate_history[sample_id]) + 1
+                step_candidate_history[sample_id].append(
+                    {
+                        "step": history_step_index,
+                        "stage": "candidate_generation",
+                        "selected_index": best_idx,
+                        "candidates": [
+                            {
+                                "id": f"s{sample_id}_step{history_step_index}_c{cand_idx + 1}",
+                                "label": f"Candidate {cand_idx + 1}",
+                                "text": cand.raw_text or cand.text,
+                                "score": (
+                                    float(scores[cand_idx])
+                                    if scores[cand_idx] is not None
+                                    else 0.0
+                                ),
+                                "status": (
+                                    "selected" if cand_idx == best_idx else "pruned"
+                                ),
+                                "selected": cand_idx == best_idx,
+                            }
+                            for cand_idx, cand in enumerate(candidates)
+                        ],
+                    }
                 )
 
                 # Track token count
@@ -440,11 +507,49 @@ class StrategyOnlineBestOfN(StrategyBase):
                         f"{len(a_cands)} final answer candidates, skipping"
                     )
                     continue
-                best_idx = max(range(len(a_scores)), key=lambda i: a_scores[i])
+                valid_a_indices = [i for i, s in enumerate(a_scores) if s is not None]
+                if not valid_a_indices:
+                    log.warning(
+                        f"Sample {sample_indices[sample_id]}: All final answer "
+                        f"scores are None, selecting index 0"
+                    )
+                    best_idx = 0
+                else:
+                    best_idx = max(valid_a_indices, key=lambda i: a_scores[i])
+                history_step_index = len(step_candidate_history[sample_id]) + 1
+                step_candidate_history[sample_id].append(
+                    {
+                        "step": history_step_index,
+                        "stage": "answer_selection",
+                        "selected_index": best_idx,
+                        "candidates": [
+                            {
+                                "id": f"s{sample_id}_answer{history_step_index}_c{cand_idx + 1}",
+                                "label": f"Answer {cand_idx + 1}",
+                                "text": cand.raw_text or cand.text,
+                                "score": (
+                                    float(a_scores[cand_idx])
+                                    if a_scores[cand_idx] is not None
+                                    else 0.0
+                                ),
+                                "status": (
+                                    "selected" if cand_idx == best_idx else "pruned"
+                                ),
+                                "selected": cand_idx == best_idx,
+                            }
+                            for cand_idx, cand in enumerate(a_cands)
+                        ],
+                    }
+                )
 
+                score_str = (
+                    f"{a_scores[best_idx]:.3f}"
+                    if a_scores[best_idx] is not None
+                    else "None"
+                )
                 log.info(
                     f"Sample {sample_indices[sample_id]}: Final answer selected "
-                    f"(score={a_scores[best_idx]:.3f})"
+                    f"(score={score_str})"
                 )
 
                 trajectories[sample_id].append(a_cands[best_idx])
@@ -516,7 +621,9 @@ class StrategyOnlineBestOfN(StrategyBase):
                     prm_tflops = 0
                 token_stats["tflops"] = gen_tflops + prm_tflops
 
-            scores_str = ", ".join(f"{s:.3f}" for s in validity_scores[idx])
+            scores_str = ", ".join(
+                f"{s:.3f}" if s is not None else "None" for s in validity_scores[idx]
+            )
             log.info(
                 f"Sample {sample_indices[idx]}: "
                 f"{len(selected_steps[idx])} steps "
@@ -531,7 +638,8 @@ class StrategyOnlineBestOfN(StrategyBase):
                     if step_idx < len(validity_scores[idx])
                     else 0.0
                 )
-                log.info(f"  Step {step_idx + 1} (score={score:.3f}):\n{step.text}")
+                _s = f"{score:.3f}" if score is not None else "None"
+                log.info(f"  Step {step_idx + 1} (score={_s}):\n{step.text}")
 
             result = {
                 "trajectory": final_trajectory,
@@ -540,6 +648,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                 "answer_step": answer_steps[idx],
                 "reasoning_steps": reasoning_steps,
                 "validity_scores": validity_scores[idx],
+                "step_candidates": step_candidate_history[idx],
                 "completed": bool(selected_steps[idx])
                 and selected_steps[idx][-1].is_trajectory_complete,
                 "token_stats": token_stats,
@@ -623,6 +732,7 @@ class StrategyOnlineBestOfN(StrategyBase):
                         "steps": [],
                         "reasoning_steps": 0,
                         "validity_scores": [],
+                        "step_candidates": [],
                         "completed": False,
                         "token_stats": self.step_generator.get_sample_stats_for(sid),
                         **get_completion_info([]),
@@ -703,6 +813,7 @@ class StrategyOnlineBestOfN(StrategyBase):
         trajectory: List[StepCandidate] = []
         selected_steps: List[StepCandidate] = []
         validity_scores: List[float] = []
+        step_candidate_history: List[Dict[str, Any]] = []
         total_toks = 0
         needs_thinking_answer = False
 
@@ -793,6 +904,25 @@ class StrategyOnlineBestOfN(StrategyBase):
             log.info(
                 f"Sample {sample_idx}: Selected candidate {best_idx} "
                 f"(score={scores[best_idx]:.3f}), all scores=[{all_scores_str}]"
+            )
+            history_step_index = len(step_candidate_history) + 1
+            step_candidate_history.append(
+                {
+                    "step": history_step_index,
+                    "stage": "candidate_generation",
+                    "selected_index": best_idx,
+                    "candidates": [
+                        {
+                            "id": f"s{sample_id}_step{history_step_index}_c{cand_idx + 1}",
+                            "label": f"Candidate {cand_idx + 1}",
+                            "text": cand.raw_text or cand.text,
+                            "score": float(scores[cand_idx]),
+                            "status": "selected" if cand_idx == best_idx else "pruned",
+                            "selected": cand_idx == best_idx,
+                        }
+                        for cand_idx, cand in enumerate(candidates)
+                    ],
+                }
             )
 
             new_tokens = len(selected.token_ids) if selected.token_ids else 0
@@ -905,6 +1035,27 @@ class StrategyOnlineBestOfN(StrategyBase):
                     )
                 else:
                     best_a = max(range(len(a_scores)), key=lambda i: a_scores[i])
+                    history_step_index = len(step_candidate_history) + 1
+                    step_candidate_history.append(
+                        {
+                            "step": history_step_index,
+                            "stage": "answer_selection",
+                            "selected_index": best_a,
+                            "candidates": [
+                                {
+                                    "id": f"s{sample_id}_answer{history_step_index}_c{cand_idx + 1}",
+                                    "label": f"Answer {cand_idx + 1}",
+                                    "text": cand.raw_text or cand.text,
+                                    "score": float(a_scores[cand_idx]),
+                                    "status": (
+                                        "selected" if cand_idx == best_a else "pruned"
+                                    ),
+                                    "selected": cand_idx == best_a,
+                                }
+                                for cand_idx, cand in enumerate(answer_cands)
+                            ],
+                        }
+                    )
 
                     log.info(
                         f"Sample {sample_idx}: Final answer selected "
@@ -932,6 +1083,7 @@ class StrategyOnlineBestOfN(StrategyBase):
             "answer_step": answer_text,
             "reasoning_steps": reasoning_steps,
             "validity_scores": validity_scores,
+            "step_candidates": step_candidate_history,
             "completed": bool(selected_steps)
             and selected_steps[-1].is_trajectory_complete,
             "token_stats": token_stats,

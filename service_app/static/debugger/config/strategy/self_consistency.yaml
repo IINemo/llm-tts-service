@@ -1,0 +1,23 @@
+# Standalone strategy config: Self-Consistency
+
+type: self_consistency
+min_step_tokens: 50
+num_paths: 8
+max_new_tokens: 4096
+temperature: 0.7
+use_sequence: true
+use_conclusion: true
+use_thinking: true
+use_verification: true
+use_structure: true
+use_reasoning: true
+use_correction: false
+generation_batch_size: 5
+n_threads: 8
+scorer:
+  type: chain_majority_voting
+  answer_extraction_patterns:
+    - "Answer:\\s*(.+?)(?:\\n|\\.|\\$)"
+    - "The answer is\\s*(.+?)(?:\\n|\\.|\\$)"
+    - "Therefore,?\\s*(.+?)(?:\\n|\\.|\\$)"
+    - "<Answer>:\\s*(.+?)(?:\\n|$)"

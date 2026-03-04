@@ -1,0 +1,21 @@
+# Standalone strategy config: Adaptive Best-of-N
+
+type: adaptive
+candidates_per_step: 8
+max_steps: 8
+scaling_rate: 0.9
+momentum_rate: 0.9
+adaptive_scaling_method: momentum
+batch_size: 1000
+min_step_tokens: 50
+stop_token_ids:
+  - 151645
+  - 151643
+max_step_tokens: 1024
+use_sequence: true
+use_conclusion: true
+use_thinking: true
+use_verification: true
+use_structure: false
+use_reasoning: true
+use_correction: false
