@@ -415,6 +415,7 @@ class StrategySelfConsistency(StrategyBase):
             stop_tokens.append("</think>")
 
         # Reset per-sample tracking and generate all M×N trajectories
+        self._check_cancelled()
         self.step_generator.reset_per_sample_stats()
         batch_results = self.step_generator.generate_step_candidates_batch(
             requests=requests,
@@ -440,6 +441,7 @@ class StrategySelfConsistency(StrategyBase):
             paths = self._complete_thinking_paths(requests[idx], candidates)
 
             # Do majority voting for this sample
+            self._check_cancelled()
             result = self.select_best_answer(paths)
 
             # Token stats from generator's per-sample tracking

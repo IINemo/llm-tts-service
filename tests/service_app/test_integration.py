@@ -6,8 +6,11 @@ These tests are excluded from normal pytest runs via the `integration` marker
     OPENROUTER_API_KEY=sk-... pytest tests/service_app/test_integration.py -m integration -v
 """
 
+import json
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -174,3 +177,75 @@ class TestInvalidAPIKeyReturnsError:
         body = _chat_body(tts_api_key="sk-invalid-key-for-testing")
         resp = real_client.post("/v1/chat/completions", json=body)
         assert resp.status_code >= 400
+
+
+# ---------------------------------------------------------------------------
+# SSE helpers
+# ---------------------------------------------------------------------------
+def _parse_sse_events(text: str) -> list:
+    """Parse SSE formatted text into a list of dicts."""
+    events = []
+    for line in text.strip().split("\n\n"):
+        for part in line.strip().split("\n"):
+            if part.startswith("data: "):
+                events.append(json.loads(part[6:]))
+    return events
+
+
+CANCEL_QUESTION = (
+    "How many integers between 1 and 1000 are divisible by 3 "
+    "but not by 5, and have a digit sum greater than 15?"
+)
+CANCEL_MESSAGES = [{"role": "user", "content": CANCEL_QUESTION}]
+
+
+class TestCancelOnlineBonE2E:
+    """Test server-side cancellation of a streaming online_bon request."""
+
+    def test_cancel_online_bon_after_2s(self, real_client):
+        """Start online_bon streaming, cancel after 2s, expect 'cancelled' SSE event."""
+        from service_app.api.routes.chat import _active_requests
+
+        body = _chat_body(
+            tts_strategy="online_bon",
+            tts_scorer="entropy",
+            stream=True,
+            num_paths=4,
+            tts_max_steps=10,
+            tts_candidates_per_step=3,
+            messages=CANCEL_MESSAGES,
+        )
+
+        response_holder = {}
+
+        def do_request():
+            response_holder["resp"] = real_client.post(
+                "/v1/chat/completions", json=body,
+            )
+
+        def cancel_after_2s():
+            time.sleep(2)
+            for event in list(_active_requests.values()):
+                event.set()
+
+        req_thread = threading.Thread(target=do_request)
+        cancel_thread = threading.Thread(target=cancel_after_2s, daemon=True)
+
+        cancel_thread.start()
+        req_thread.start()
+        req_thread.join(timeout=60)
+
+        resp = response_holder.get("resp")
+        assert resp is not None, "Request thread did not finish in time"
+
+        events = _parse_sse_events(resp.text)
+        event_types = [e.get("type") for e in events]
+
+        started = [e for e in events if e.get("type") == "started"]
+        cancelled = [e for e in events if e.get("type") == "cancelled"]
+
+        assert len(started) == 1, f"Expected 'started' event, got: {event_types}"
+        assert "request_id" in started[0]
+        assert len(cancelled) == 1, (
+            f"Expected 'cancelled' event after 2s cancel, got: {event_types}"
+        )

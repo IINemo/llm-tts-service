@@ -31,6 +31,7 @@ from service_app.core.debugger_events import (
     StrategyProgressHandler,
     convert_strategy_result_to_debugger_run,
 )
+from llm_tts.strategies.strategy_base import StrategyCancelled
 from service_app.core.strategy_manager import strategy_manager
 from service_app.core.visual_debugger_demo import (
     SUPPORTED_SCORERS,
@@ -40,6 +41,9 @@ from service_app.core.visual_debugger_demo import (
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Active streaming requests: request_id → cancel Event
+_active_requests: Dict[str, threading.Event] = {}
 
 _VALID_STRATEGIES = {"self_consistency", "offline_bon", "online_bon", "beam_search"}
 _VALID_SCORERS = {"entropy", "perplexity", "sequence_prob", "prm"}
@@ -173,6 +177,22 @@ async def create_chat_completion(
 
 
 # ------------------------------------------------------------------
+# Cancel endpoint
+# ------------------------------------------------------------------
+
+
+@router.post("/v1/chat/cancel/{request_id}")
+async def cancel_chat_completion(request_id: str):
+    """Cancel an in-progress streaming chat completion."""
+    event = _active_requests.get(request_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Request not found or already finished")
+    event.set()
+    log.info(f"Cancel requested for {request_id}")
+    return {"status": "cancelled", "request_id": request_id}
+
+
+# ------------------------------------------------------------------
 # Synchronous (non-streaming) path
 # ------------------------------------------------------------------
 
@@ -219,6 +239,10 @@ def _handle_sync(request: ChatCompletionRequest) -> ChatCompletionResponse:
 
 def _handle_streaming(request: ChatCompletionRequest) -> StreamingResponse:
     """Run strategy in a thread, stream progress events via SSE."""
+    request_id = uuid.uuid4().hex[:16]
+    cancel_event = threading.Event()
+    _active_requests[request_id] = cancel_event
+
     result_q: queue.Queue = queue.Queue()
     progress_state: Dict[str, Any] = {"message": None}
 
@@ -233,16 +257,23 @@ def _handle_streaming(request: ChatCompletionRequest) -> StreamingResponse:
     strategy_config = _build_strategy_config(request)
 
     def _run() -> None:
-        logger = logging.getLogger("llm_tts.strategies")
-        prev_level = logger.level
-        logger.setLevel(logging.DEBUG)
+        # Attach progress handler to strategy + PRM loggers
+        loggers_to_monitor = [
+            logging.getLogger("llm_tts.strategies"),
+            logging.getLogger("service_app.core.prm_scorer_factory"),
+        ]
         handler = StrategyProgressHandler(_progress_callback)
-        logger.addHandler(handler)
+        prev_levels = {}
+        for lgr in loggers_to_monitor:
+            prev_levels[lgr.name] = lgr.level
+            lgr.setLevel(logging.DEBUG)
+            lgr.addHandler(handler)
         try:
             strategy = strategy_manager.create_strategy(
                 strategy_type=strategy_type,
                 model_name=request.model,
                 strategy_config=strategy_config,
+                cancel_event=cancel_event,
             )
 
             start_time = time.time()
@@ -263,17 +294,25 @@ def _handle_streaming(request: ChatCompletionRequest) -> StreamingResponse:
                 "type": "complete",
                 "data": response.model_dump(mode="json"),
             })
+        except StrategyCancelled:
+            log.info(f"Strategy cancelled for request {request_id}")
+            result_q.put({"type": "cancelled"})
         except Exception as exc:
             log.error(f"Strategy streaming error: {exc}", exc_info=True)
             result_q.put({"type": "error", "message": str(exc)})
         finally:
-            logger.removeHandler(handler)
-            logger.setLevel(prev_level)
+            _active_requests.pop(request_id, None)
+            for lgr in loggers_to_monitor:
+                lgr.removeHandler(handler)
+                lgr.setLevel(prev_levels[lgr.name])
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
 
     async def _event_stream():
+        # Emit request_id so the client can cancel this request
+        yield f"data: {json.dumps({'type': 'started', 'request_id': request_id})}\n\n"
+
         last_sent: Optional[str] = None
         deadline = asyncio.get_event_loop().time() + 300  # 5 min max
         while asyncio.get_event_loop().time() < deadline:
@@ -309,9 +348,19 @@ def _build_strategy_config(request: ChatCompletionRequest) -> Dict[str, Any]:
     strategy_type = request.tts_strategy or "self_consistency"
     is_vllm_strategy = strategy_type in ("offline_bon", "online_bon", "beam_search")
 
+    # When an API key is provided the request goes through the API backend,
+    # not local vLLM, so default to openrouter (not vllm).
+    if request.provider:
+        provider = request.provider
+    elif request.tts_api_key or request.model_base_url:
+        provider = "openrouter"
+    elif is_vllm_strategy:
+        provider = "vllm"
+    else:
+        provider = "openrouter"
+
     return {
-        "provider": request.provider
-        or ("vllm" if is_vllm_strategy else "openrouter"),
+        "provider": provider,
         "model_base_url": request.model_base_url,
         "tts_api_key": request.tts_api_key,
         "temperature": request.temperature,

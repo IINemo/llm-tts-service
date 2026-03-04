@@ -497,6 +497,7 @@ class StrategyOfflineBestOfN(StrategyBase):
         )
 
         # Reset per-sample tracking and generate all M×N trajectories
+        self._check_cancelled()
         self.step_generator.reset_per_sample_stats()
         if hasattr(self.scorer, "reset_prm_stats"):
             self.scorer.reset_prm_stats()
@@ -611,6 +612,7 @@ class StrategyOfflineBestOfN(StrategyBase):
 
         # Phase 2: Batch score ALL trajectories in single call
         # Skip if using uncertainty wrapper (scores already computed during generation)
+        self._check_cancelled()
         if use_uncertainty_wrapper:
             log.info(
                 "Skipping batch scoring - using uncertainty scores "

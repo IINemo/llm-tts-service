@@ -8,6 +8,7 @@ Supports two backends:
 """
 
 import logging
+import threading
 from typing import Any, Dict, Optional
 
 from openai import OpenAI
@@ -95,6 +96,7 @@ class StrategyManager:
     _VALID_SCORER_TYPES = {"entropy", "perplexity", "sequence_prob", "prm"}
 
     def _get_scorer(self, scorer_type: str):
+        """Get scorer for vLLM-backed strategies (needs logprobs for non-PRM)."""
         if scorer_type not in self._VALID_SCORER_TYPES:
             raise ValueError(
                 f"Unknown scorer type: {scorer_type!r}. "
@@ -106,6 +108,20 @@ class StrategyManager:
             if self._confidence_scorer is None:
                 self._init_vllm_backend()
             return self._confidence_scorer
+
+    def _get_api_scorer(self, scorer_type: str):
+        """Get scorer for API-backed strategies.
+
+        PRM works standalone (separate model). Other scorers (entropy etc.)
+        need logprobs from vLLM, so fall back to StepScorerConfidence when
+        running via external API.
+        """
+        if scorer_type == "prm":
+            return prm_scorer_factory.get_scorer()
+
+        from llm_tts.scorers.step_scorer_confidence import StepScorerConfidence
+
+        return StepScorerConfidence()
 
     # ------------------------------------------------------------------
     # Client helpers
@@ -168,6 +184,7 @@ class StrategyManager:
         strategy_type: str,
         model_name: str,
         strategy_config: Optional[Dict[str, Any]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ):
         """
         Create a TTS strategy instance.
@@ -185,18 +202,22 @@ class StrategyManager:
         )
 
         if use_api_backend:
-            return self._create_api_strategy(strategy_type, model_name, strategy_config)
-
-        if strategy_type == "self_consistency":
-            return self._create_self_consistency_simple(model_name, strategy_config)
+            strategy = self._create_api_strategy(strategy_type, model_name, strategy_config)
+        elif strategy_type == "self_consistency":
+            strategy = self._create_self_consistency_simple(model_name, strategy_config)
         elif strategy_type in ("offline_bon", "online_bon", "beam_search"):
-            return self._create_vllm_strategy(strategy_type, strategy_config)
+            strategy = self._create_vllm_strategy(strategy_type, strategy_config)
         else:
             raise ValueError(
                 f"Unknown strategy type: {strategy_type}. "
                 f"Available strategies: self_consistency, offline_bon, "
                 f"online_bon, beam_search"
             )
+
+        if cancel_event is not None:
+            strategy.set_cancel_event(cancel_event)
+
+        return strategy
 
     # ------------------------------------------------------------------
     # API-based strategies (library classes via BlackboxModelWithStreaming)
@@ -286,21 +307,24 @@ class StrategyManager:
             max_concurrent_requests=128,
         )
 
+        # Resolve scorer for API-backed strategies
+        scorer = self._get_api_scorer(config.get("scorer_type", "entropy"))
+
         if strategy_type == "self_consistency":
             strategy = self._build_self_consistency(
                 step_generator, config, budget,
             )
         elif strategy_type == "offline_bon":
             strategy = self._build_offline_bon(
-                step_generator, config, budget,
+                step_generator, config, budget, scorer=scorer,
             )
         elif strategy_type == "online_bon":
             strategy = self._build_online_bon(
-                step_generator, config, budget,
+                step_generator, config, budget, scorer=scorer,
             )
         elif strategy_type == "beam_search":
             strategy = self._build_beam_search(
-                step_generator, config, budget,
+                step_generator, config, budget, scorer=scorer,
             )
         else:
             raise ValueError(f"Unknown strategy type: {strategy_type}")
@@ -333,11 +357,12 @@ class StrategyManager:
         )
 
     @staticmethod
-    def _build_offline_bon(step_generator, config, budget):
-        from llm_tts.scorers import StepScorerConfidence
+    def _build_offline_bon(step_generator, config, budget, scorer=None):
         from llm_tts.strategies import StrategyOfflineBestOfN
 
-        scorer = StepScorerConfidence()
+        if scorer is None:
+            from llm_tts.scorers import StepScorerConfidence
+            scorer = StepScorerConfidence()
         return StrategyOfflineBestOfN(
             scorer=scorer,
             num_trajectories=config.get("num_trajectories", max(4, budget)),
@@ -348,11 +373,12 @@ class StrategyManager:
         )
 
     @staticmethod
-    def _build_online_bon(step_generator, config, budget):
-        from llm_tts.scorers import StepScorerConfidence
+    def _build_online_bon(step_generator, config, budget, scorer=None):
         from llm_tts.strategies import StrategyOnlineBestOfN
 
-        scorer = StepScorerConfidence()
+        if scorer is None:
+            from llm_tts.scorers import StepScorerConfidence
+            scorer = StepScorerConfidence()
         return StrategyOnlineBestOfN(
             step_generator=step_generator,
             scorer=scorer,
@@ -362,11 +388,12 @@ class StrategyManager:
         )
 
     @staticmethod
-    def _build_beam_search(step_generator, config, budget):
-        from llm_tts.scorers import StepScorerConfidence
+    def _build_beam_search(step_generator, config, budget, scorer=None):
         from llm_tts.strategies import StrategyBeamSearch
 
-        scorer = StepScorerConfidence()
+        if scorer is None:
+            from llm_tts.scorers import StepScorerConfidence
+            scorer = StepScorerConfidence()
         return StrategyBeamSearch(
             step_generator=step_generator,
             scorer=scorer,

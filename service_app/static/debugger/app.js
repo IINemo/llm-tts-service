@@ -39,6 +39,8 @@ const state = {
   advancedConfigTemplateKey: null,
   advancedConfigDirty: false,
   isRunInProgress: false,
+  runAbortController: null,
+  activeRequestId: null,
 };
 
 const elements = {
@@ -74,6 +76,7 @@ const elements = {
   advancedConfigStatus: document.getElementById("advancedConfigStatus"),
   singleQuestionInput: document.getElementById("singleQuestionInput"),
   runCustomButton: document.getElementById("runCustomButton"),
+  stopRunButton: document.getElementById("stopRunButton"),
   resetDemoButton: document.getElementById("resetDemoButton"),
   customStatus: document.getElementById("customStatus"),
   modelSuggestions: document.getElementById("modelSuggestions"),
@@ -1096,6 +1099,8 @@ function setRunButtonLoading(isLoading, progressMessage) {
     state.isRunInProgress ? "true" : "false",
   );
 
+  elements.stopRunButton.style.display = state.isRunInProgress ? "" : "none";
+
   updateRunButtonEnabled();
 }
 
@@ -1496,9 +1501,11 @@ async function runCustomInput() {
         openrouter: "https://openrouter.ai/api/v1",
       };
 
+      state.runAbortController = new AbortController();
       const response = await fetch(apiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: state.runAbortController.signal,
         body: JSON.stringify({
           model: modelId,
           messages: chatMessages,
@@ -1531,14 +1538,22 @@ async function runCustomInput() {
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           const event = JSON.parse(line.slice(6));
-          if (event.type === "progress") {
+          if (event.type === "started") {
+            state.activeRequestId = event.request_id;
+          } else if (event.type === "progress") {
             setRunButtonLoading(true, event.message);
           } else if (event.type === "complete") {
             apiResponse = event.data;
+          } else if (event.type === "cancelled") {
+            streamError = "__cancelled__";
           } else if (event.type === "error") {
             streamError = event.message;
           }
         }
+      }
+      if (streamError === "__cancelled__") {
+        setStatus("Run stopped.", false);
+        return;
       }
       if (streamError) throw new Error(streamError);
       if (!apiResponse) throw new Error("Stream ended without result");
@@ -1549,6 +1564,10 @@ async function runCustomInput() {
         provider, modelId, budget,
       );
     } catch (error) {
+      if (error.name === "AbortError") {
+        setStatus("Run stopped.", false);
+        return;
+      }
       let hint = "";
       if (/max_tokens is too large/i.test(error.message)) {
         hint =
@@ -1609,6 +1628,8 @@ async function runCustomInput() {
       false,
     );
   } finally {
+    state.runAbortController = null;
+    state.activeRequestId = null;
     setRunButtonLoading(false);
   }
 }
@@ -2717,9 +2738,28 @@ function bindHandlers() {
     await runCustomInput();
   });
 
+  elements.stopRunButton.addEventListener("click", () => {
+    if (state.activeRequestId) {
+      fetch(`/v1/chat/cancel/${state.activeRequestId}`, { method: "POST" }).catch(() => {});
+    }
+    if (state.runAbortController) {
+      state.runAbortController.abort();
+    }
+  });
+
   elements.resetDemoButton.addEventListener("click", async () => {
     await restoreDemoData();
   });
+}
+
+async function checkApiHealth() {
+  try {
+    const resp = await fetch("/health");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function init() {
@@ -2731,6 +2771,17 @@ async function init() {
   invalidateModelValidation(
     "Validate a model first to unlock compatible strategy/scorer options.",
   );
+
+  const apiAlive = await checkApiHealth();
+  if (!apiAlive) {
+    setStatus(
+      "Service API is not reachable. Make sure the server is running (python service_app/main.py).",
+      true,
+    );
+    elements.strategyGrid.innerHTML =
+      '<p class="tree-empty">Cannot connect to the service API.</p>';
+    return;
+  }
 
   state.catalog = await loadCatalog();
 

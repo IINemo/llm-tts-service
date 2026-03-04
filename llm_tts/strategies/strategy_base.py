@@ -1,6 +1,7 @@
 import logging
+import threading
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, Dict, List
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from llm_tts.utils.parallel import parallel_execute
 
@@ -8,6 +9,11 @@ if TYPE_CHECKING:
     from llm_tts.generators import StepCandidate
 
 log = logging.getLogger(__name__)
+
+
+class StrategyCancelled(Exception):
+    """Raised when a strategy execution is cancelled via cancel_event."""
+    pass
 
 
 def count_reasoning_steps(steps: list, thinking_mode: bool) -> int:
@@ -36,6 +42,18 @@ class StrategyBase(ABC):
     batch processing. Single-sample calls via generate_trajectory() are
     automatically wrapped to use the batch method.
     """
+
+    cancel_event: Optional[threading.Event] = None
+
+    def set_cancel_event(self, event: threading.Event) -> None:
+        """Attach a cancel event that strategies check between steps."""
+        self.cancel_event = event
+
+    def _check_cancelled(self) -> None:
+        """Raise StrategyCancelled if the cancel event has been set."""
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            log.info("Strategy cancelled by client request")
+            raise StrategyCancelled("Strategy execution cancelled")
 
     @abstractmethod
     def generate_trajectories_batch(
