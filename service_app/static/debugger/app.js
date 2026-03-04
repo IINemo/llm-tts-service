@@ -843,6 +843,8 @@ function deriveOptionsFromPayload(payload) {
         id: item?.strategy_id || item?.run?.strategy?.id,
         name: item?.run?.strategy?.name || item?.strategy_id,
         family: item?.family || item?.run?.strategy?.family,
+        ...(item?.requires_scorer != null && { requires_scorer: item.requires_scorer }),
+        ...(item?.builtin_scorer && { builtin_scorer: item.builtin_scorer }),
       }))
     : [];
 
