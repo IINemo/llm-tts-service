@@ -133,6 +133,8 @@ class StrategyOnlineBestOfN(StrategyBase):
         total_tokens: List[int] = [0] * M
 
         for step_num in range(self.max_steps):
+            self._check_cancelled()
+
             # 1. Collect active sample indices
             active_sample_ids = [i for i in range(M) if not completed[i]]
             if not active_sample_ids:
@@ -818,6 +820,8 @@ class StrategyOnlineBestOfN(StrategyBase):
         needs_thinking_answer = False
 
         for step_num in range(self.max_steps):
+            self._check_cancelled()
+
             # Context limit pre-check
             if total_toks >= max_trajectory_tokens - 200:
                 log.info(

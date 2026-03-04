@@ -236,6 +236,8 @@ class StrategyBeamSearch(StrategyBase):
         ) and not getattr(self.step_generator, "disable_thinking_mode", True)
 
         for step_num in range(self.max_steps):
+            self._check_cancelled()
+
             if not active_samples:
                 log.info(f"All samples completed at step {step_num}")
                 break
@@ -570,7 +572,8 @@ class StrategyBeamSearch(StrategyBase):
                 step_candidates = []
                 for idx, beam in enumerate(beams):
                     last_step = beam["steps"][-1] if beam.get("steps") else None
-                    step_score = beam["scores"][-1] if beam.get("scores") else 0.0
+                    raw_score = beam["scores"][-1] if beam.get("scores") else None
+                    step_score = float(raw_score) if raw_score is not None else 0.0
                     beam_uid = beam.get("unique_id", idx)
                     if beam_uid == best_id:
                         status = "selected"
@@ -589,7 +592,7 @@ class StrategyBeamSearch(StrategyBase):
                                 if last_step is not None
                                 else ""
                             ),
-                            "score": float(step_score),
+                            "score": step_score,
                             "status": status,
                             "selected": status == "selected",
                             "beam_unique_id": beam_uid,

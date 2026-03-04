@@ -47,6 +47,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
     "black>=24.0.0",
     "isort==7.0.0",
     "flake8>=7.0.0",
@@ -146,17 +147,22 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "integration: tests requiring real API calls and keys",
+]
 addopts = [
     "--strict-markers",
     "--strict-config",
+    "-m", "not integration",
     "--cov=llm_tts",
+    "--cov=service_app",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
 ]
 
 [tool.coverage.run]
-source = ["llm_tts"]
+source = ["llm_tts", "service_app"]
 omit = [
     "*/tests/*",
     "*/test_*",

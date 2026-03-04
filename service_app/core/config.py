@@ -33,14 +33,8 @@ class Settings(BaseSettings):
 
     # Model Settings
     default_model: str = "openai/gpt-4o-mini"
-    default_strategy: str = "deepconf"
+    default_strategy: str = "self_consistency"
     model_cache_dir: str = os.path.expanduser("~/.cache/llm_tts_service")
-
-    # DeepConf Defaults
-    deepconf_budget: int = 8
-    deepconf_window_size: int = 2048
-    deepconf_filter_method: str = "top5"
-    deepconf_temperature: float = 0.7
 
     # vLLM backend config
     vllm_model_path: Optional[str] = None  # e.g. "Qwen/Qwen2.5-Coder-7B-Instruct"
@@ -61,7 +55,7 @@ class Settings(BaseSettings):
     prm_batch_size: int = 8
     prm_torch_dtype: str = "bfloat16"
     prm_use_vllm: bool = True
-    prm_gpu_memory_utilization: float = 0.3  # Lower default to fit alongside main model
+    prm_gpu_memory_utilization: float = 0.8
 
     # Logging
     log_dir: str = "logs"

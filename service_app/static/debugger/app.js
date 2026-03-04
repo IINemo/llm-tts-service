@@ -39,6 +39,8 @@ const state = {
   advancedConfigTemplateKey: null,
   advancedConfigDirty: false,
   isRunInProgress: false,
+  runAbortController: null,
+  activeRequestId: null,
 };
 
 const elements = {
@@ -74,6 +76,7 @@ const elements = {
   advancedConfigStatus: document.getElementById("advancedConfigStatus"),
   singleQuestionInput: document.getElementById("singleQuestionInput"),
   runCustomButton: document.getElementById("runCustomButton"),
+  stopRunButton: document.getElementById("stopRunButton"),
   resetDemoButton: document.getElementById("resetDemoButton"),
   customStatus: document.getElementById("customStatus"),
   modelSuggestions: document.getElementById("modelSuggestions"),
@@ -1096,6 +1099,9 @@ function setRunButtonLoading(isLoading, progressMessage) {
     state.isRunInProgress ? "true" : "false",
   );
 
+  elements.stopRunButton.style.display = state.isRunInProgress ? "" : "none";
+  elements.resetDemoButton.style.display = state.isRunInProgress ? "none" : "";
+
   updateRunButtonEnabled();
 }
 
@@ -1256,6 +1262,141 @@ function buildRunPayloadFromCachedSource(basePayload, strategyId, scorerId) {
   return payload;
 }
 
+/**
+ * Transform an API /v1/chat/completions response (with tts_verbose=true)
+ * into the debugger payload format that render() expects.
+ */
+function _apiResponseToDebuggerPayload(
+  apiResponse, strategyId, scorerId, question, sharedPrompt,
+  provider, modelId, budget,
+) {
+  const choice = apiResponse?.choices?.[0] ?? {};
+  const meta = choice.tts_metadata ?? {};
+  const run = meta.debugger_run;
+
+  if (!run) {
+    // Fallback: no debugger_run in metadata — build a minimal payload
+    const trajectory = choice.message?.content || "";
+    return {
+      scenario: {
+        id: "custom_1",
+        title: "Single Example",
+        description: "Custom single-sample run.",
+        prompt: question,
+        question: question,
+        ground_truth: null,
+        shared_prompt: sharedPrompt,
+        input_source: "custom_single",
+        model_config: { provider, model_id: modelId },
+        strategy_count: 1,
+        scorer_count: scorerId ? 1 : 0,
+        run_count: 1,
+        selected_strategy_id: strategyId,
+        selected_scorer_id: scorerId || null,
+        has_gold_answer: false,
+      },
+      available_budgets: [budget],
+      selected_budget: budget,
+      strategy_catalog: [{ id: strategyId, name: strategyId, family: "unknown" }],
+      scorer_catalog: [],
+      strategies: [
+        {
+          id: strategyId,
+          strategy_id: strategyId,
+          scorer_id: scorerId || null,
+          name: strategyId,
+          family: "unknown",
+          summary: "",
+          run: {
+            budget,
+            budget_unit: "steps",
+            used_budget: 1,
+            tokens_used: apiResponse?.usage?.completion_tokens || 0,
+            latency_ms: Math.round((meta.elapsed_time || 0) * 1000),
+            provider,
+            model_id: modelId,
+            strategy: { id: strategyId, name: strategyId, family: "unknown" },
+            scorer: null,
+            final: {
+              confidence: 0,
+              score_label: "confidence",
+              selected_trajectory: trajectory,
+              selection_reason: "Single trajectory.",
+            },
+            config: { generation: {}, strategy: {}, scorer: null },
+            events: [
+              {
+                step: 1,
+                title: "Single-pass generation",
+                stage: "generation",
+                decision: { action: "stop", reason: "Single trajectory." },
+                signals: [{ name: "confidence", value: 0, direction: "higher_better" }],
+                candidates: [
+                  {
+                    id: `${strategyId}_confidence_s1_c1`,
+                    label: "Step 1",
+                    text: trajectory,
+                    status: "selected",
+                    selected: true,
+                    signals: { confidence: 0 },
+                  },
+                ],
+              },
+            ],
+          },
+          comparison_rank: 1,
+        },
+      ],
+    };
+  }
+
+  // Build full debugger payload from the run data
+  const runId = scorerId
+    ? `${strategyId}__${scorerId}`
+    : strategyId;
+  const strategyName = run.strategy?.name || strategyId;
+  const scorerName = run.scorer?.name || scorerId || "";
+  const runName = scorerId
+    ? `${strategyName} · ${scorerName}`
+    : strategyName;
+
+  return {
+    scenario: {
+      id: "custom_1",
+      title: "Single Example",
+      description: "Custom single-sample run with selected strategy and optional scorer.",
+      prompt: sharedPrompt ? `${sharedPrompt}\n\nQuestion: ${question}` : question,
+      question,
+      ground_truth: null,
+      shared_prompt: sharedPrompt,
+      input_source: "custom_single",
+      model_config: { provider, model_id: modelId, api_key_masked: "***" },
+      strategy_count: 1,
+      scorer_count: scorerId ? 1 : 0,
+      run_count: 1,
+      selected_strategy_id: strategyId,
+      selected_scorer_id: scorerId || null,
+      has_gold_answer: false,
+    },
+    available_budgets: [budget],
+    selected_budget: budget,
+    strategy_catalog: [run.strategy || { id: strategyId, name: strategyId, family: "unknown" }],
+    scorer_catalog: run.scorer ? [run.scorer] : [],
+    strategies: [
+      {
+        id: runId,
+        strategy_id: strategyId,
+        scorer_id: scorerId || null,
+        name: runName,
+        family: run.strategy?.family || "unknown",
+        summary: "",
+        run,
+        comparison_rank: 1,
+      },
+    ],
+  };
+}
+
 async function runCustomInput() {
   const strategyId = elements.strategySelect.value.trim();
   const selectedStrategy = getSelectedValidatedStrategy();
@@ -1329,28 +1470,66 @@ async function runCustomInput() {
 
     let payload;
     try {
-      const response = await fetch("/v1/debugger/demo/run-single-stream", {
+      // Map debugger strategy IDs → API strategy types for URL
+      const STRATEGY_ID_TO_API = {
+        online_best_of_n: "online_bon",
+        offline_best_of_n: "offline_bon",
+        beam_search: "beam_search",
+        self_consistency: "self_consistency",
+        baseline: "self_consistency",
+        adaptive: "online_bon",
+      };
+      const apiStrategy = STRATEGY_ID_TO_API[strategyId] || strategyId;
+
+      // Build the API URL: /v1/{strategy}/{scorer}/chat/completions
+      let apiUrl = `/v1/${apiStrategy}`;
+      if (scorerRequired && scorerId) {
+        apiUrl += `/${scorerId}`;
+      }
+      apiUrl += "/chat/completions";
+
+      // Build system prompt from advanced config
+      const systemPrompt = String(elements.advancedPromptInput?.value || "").trim();
+      const chatMessages = [];
+      if (systemPrompt) {
+        chatMessages.push({ role: "system", content: systemPrompt });
+      }
+      chatMessages.push({ role: "user", content: question });
+
+      // Determine base_url from provider
+      const PROVIDER_BASE_URLS = {
+        openai: null,
+        openrouter: "https://openrouter.ai/api/v1",
+      };
+
+      state.runAbortController = new AbortController();
+      const response = await fetch(apiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: state.runAbortController.signal,
         body: JSON.stringify({
-          question,
-          budget,
-          provider,
-          model_id: modelId,
-          api_key: apiKey,
-          strategy_id: strategyId,
-          scorer_id: scorerRequired ? scorerId : null,
-          advanced_config_yaml: advancedConfigYaml,
+          model: modelId,
+          messages: chatMessages,
+          stream: true,
+          temperature: 0.7,
+          num_paths: budget,
+          tts_verbose: true,
+          tts_api_key: apiKey,
+          model_base_url: PROVIDER_BASE_URLS[provider] ?? null,
+          provider: provider,
         }),
       });
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(extractResponseError(response.status, errorText));
       }
+
+      // Read SSE stream
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
       let streamError = null;
+      let apiResponse = null;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -1360,18 +1539,36 @@ async function runCustomInput() {
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           const event = JSON.parse(line.slice(6));
-          if (event.type === "progress") {
+          if (event.type === "started") {
+            state.activeRequestId = event.request_id;
+          } else if (event.type === "progress") {
             setRunButtonLoading(true, event.message);
           } else if (event.type === "complete") {
-            payload = event.payload;
+            apiResponse = event.data;
+          } else if (event.type === "cancelled") {
+            streamError = "__cancelled__";
           } else if (event.type === "error") {
             streamError = event.message;
           }
         }
       }
+      if (streamError === "__cancelled__") {
+        setStatus("Run stopped.", false);
+        return;
+      }
       if (streamError) throw new Error(streamError);
-      if (!payload) throw new Error("Stream ended without result");
+      if (!apiResponse) throw new Error("Stream ended without result");
+
+      // Transform API response into debugger payload format
+      payload = _apiResponseToDebuggerPayload(
+        apiResponse, strategyId, scorerId, question, systemPrompt,
+        provider, modelId, budget,
+      );
     } catch (error) {
+      if (error.name === "AbortError") {
+        setStatus("Run stopped.", false);
+        return;
+      }
       let hint = "";
       if (/max_tokens is too large/i.test(error.message)) {
         hint =
@@ -1432,6 +1629,8 @@ async function runCustomInput() {
       false,
     );
   } finally {
+    state.runAbortController = null;
+    state.activeRequestId = null;
     setRunButtonLoading(false);
   }
 }
@@ -2540,9 +2739,28 @@ function bindHandlers() {
     await runCustomInput();
   });
 
+  elements.stopRunButton.addEventListener("click", () => {
+    if (state.activeRequestId) {
+      fetch(`/v1/chat/cancel/${state.activeRequestId}`, { method: "POST" }).catch(() => {});
+    }
+    if (state.runAbortController) {
+      state.runAbortController.abort();
+    }
+  });
+
   elements.resetDemoButton.addEventListener("click", async () => {
     await restoreDemoData();
   });
+}
+
+async function checkApiHealth() {
+  try {
+    const resp = await fetch("/health");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function init() {
@@ -2554,6 +2772,17 @@ async function init() {
   invalidateModelValidation(
     "Validate a model first to unlock compatible strategy/scorer options.",
   );
+
+  const apiAlive = await checkApiHealth();
+  if (!apiAlive) {
+    setStatus(
+      "Service API is not reachable. Make sure the server is running (python service_app/main.py).",
+      true,
+    );
+    elements.strategyGrid.innerHTML =
+      '<p class="tree-empty">Cannot connect to the service API.</p>';
+    return;
+  }
 
   state.catalog = await loadCatalog();
 

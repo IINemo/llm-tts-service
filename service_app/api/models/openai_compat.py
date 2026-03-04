@@ -51,8 +51,16 @@ class ChatCompletionRequest(BaseModel):
 
     # Provider selection
     provider: Optional[str] = Field(
-        default="openrouter",
-        description="API provider: openrouter, openai, or vllm",
+        default=None,
+        description="API provider: openrouter, openai, or vllm. "
+        "Defaults to 'openrouter' for self_consistency and 'vllm' for offline_bon/online_bon/beam_search.",
+    )
+
+    # Custom model endpoint
+    model_base_url: Optional[str] = Field(
+        default=None,
+        description="Custom base URL for the underlying model (e.g. remote vLLM server, "
+        "Gemini API). Overrides the provider's default URL.",
     )
 
     # vLLM TTS strategy parameters (passed via extra_body)
@@ -81,6 +89,16 @@ class ChatCompletionRequest(BaseModel):
     )
     tts_window_size: Optional[int] = Field(
         default=None, description="Window size for scoring (1-N steps)", ge=1, le=50
+    )
+
+    # Debugger / verbose mode
+    tts_verbose: Optional[bool] = Field(
+        default=False,
+        description="Return debugger-level events/tree in tts_metadata",
+    )
+    tts_api_key: Optional[str] = Field(
+        default=None,
+        description="Per-request API key for remote model (overrides server-side key)",
     )
 
     class Config:
