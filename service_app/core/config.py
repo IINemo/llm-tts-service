@@ -63,7 +63,7 @@ class Settings(BaseSettings):
 
     # Service Limits
     max_concurrent_requests: int = 10
-    request_timeout: int = 300  # seconds
+    request_timeout: int = 600  # seconds
 
     class Config:
         env_file = ".env"
