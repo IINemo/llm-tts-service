@@ -114,9 +114,7 @@ def save_progress(examples, adv_templates):
 def main():
     provider = sys.argv[1] if len(sys.argv) > 1 else "openrouter"
     model_id = sys.argv[2] if len(sys.argv) > 2 else "anthropic/claude-sonnet-4"
-    api_key = (
-        sys.argv[3] if len(sys.argv) > 3 else os.environ.get("OPENROUTER_API_KEY", "")
-    )
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
 
     if not api_key:
         print("Error: no API key. Pass as arg or set OPENROUTER_API_KEY in .env")
