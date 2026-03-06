@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     vllm_gpu_memory_utilization: float = 0.9
     vllm_tensor_parallel_size: int = 1
     vllm_seed: int = 42
+    vllm_quantization: Optional[str] = None  # e.g. "awq", "gptq", "squeezellm", etc.
 
     # Default TTS params
     default_scorer: str = "entropy"

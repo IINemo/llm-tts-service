@@ -55,6 +55,30 @@ class ChatCompletionRequest(BaseModel):
         description="API provider: openrouter, openai, or vllm",
     )
 
+    # vLLM model quantization
+    quantization: Optional[str] = Field(
+        default=None,
+        description="vLLM quantization: awq, gptq, squeezellm, etc.",
+    )
+
+    # vLLM KV cache dtype
+    kv_cache_dtype: Optional[str] = Field(
+        default=None,
+        description="vLLM KV cache dtype: fp8, fp8_e4m3, fp8_e5m2, etc.",
+    )
+
+    # Reasoning effort for models that support it
+    reasoning_effort: Optional[str] = Field(
+        default="low",
+        description="Reasoning effort level: low, medium, high",
+    )
+
+    # Random seed for reproducibility
+    seed: Optional[int] = Field(
+        default=None,
+        description="Random seed for reproducible generation",
+    )
+
     # vLLM TTS strategy parameters (passed via extra_body)
     tts_scorer: Optional[str] = Field(
         default="entropy",

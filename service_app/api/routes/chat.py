@@ -99,6 +99,10 @@ async def create_chat_completion(request: ChatCompletionRequest):
             "temperature": request.temperature,
             "max_tokens": request.max_tokens or 4096,
             "num_paths": request.num_paths or 5,
+            "quantization": request.quantization,
+            "kv_cache_dtype": request.kv_cache_dtype,
+            "reasoning_effort": request.reasoning_effort,
+            "seed": request.seed,
             # vLLM TTS params
             "scorer_type": request.tts_scorer or "entropy",
             "num_trajectories": request.tts_num_trajectories,

@@ -83,6 +83,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         disable_thinking_mode: If set (not None), controls whether to pass enable_thinking
                                to the chat template. True = enable_thinking=False, False = enable_thinking=True.
                                If None, enable_thinking is not passed at all.
+        reasoning_effort: Optional reasoning effort level (e.g., "low", "medium", "high").
+                         Passed to chat template for models that support it.
     """
 
     def __init__(
@@ -100,6 +102,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         max_context_budget: int = 32768,
         flop_calculator: Optional["FLOPCalculator"] = None,
         disable_thinking_mode: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
+        seed: Optional[int] = None,
     ):
         super().__init__(generation_batch_size=1024, flop_calculator=flop_calculator)
 
@@ -120,6 +124,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         self.top_k = top_k
         self.presence_penalty = presence_penalty
         self.context_budget = max_context_budget
+        self.seed = seed
+        self.reasoning_effort = reasoning_effort
 
         # Stop token IDs (e.g., [151645, 151643] for Qwen EOS)
         self.stop_token_ids = list(stop_token_ids) if stop_token_ids else None
@@ -141,7 +147,8 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             f"top_p={self.top_p}, top_k={self.top_k}, "
             f"presence_penalty={self.presence_penalty}, "
             f"generation_limit={self.generation_limit}, "
-            f"context_budget={self.context_budget}"
+            f"context_budget={self.context_budget}, "
+            f"seed={self.seed}"
         )
 
     def _init_detector(self, detector: Optional[ThinkingMarkerDetector]):
@@ -368,6 +375,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         n: int = 1,
         max_tokens: Optional[int] = None,
         min_tokens: int = 0,
+        seed: Optional[int] = None,
     ) -> SamplingParams:
         """Create SamplingParams with specified stop tokens."""
         return SamplingParams(
@@ -381,6 +389,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             stop=stop_tokens,
             stop_token_ids=self.stop_token_ids,
             presence_penalty=self.presence_penalty,
+            seed=seed,
         )
 
     # =========================================================================
@@ -400,38 +409,25 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         tokenizer_signature = inspect.signature(self.tokenizer.apply_chat_template)
         has_enable_thinking = "enable_thinking" in tokenizer_signature.parameters
 
+        # Build template kwargs dynamically
+        template_kwargs = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+
+        if has_enable_thinking:
+            template_kwargs["enable_thinking"] = True
+
+        # Pass reasoning_effort if set (for models that support it)
+        if self.reasoning_effort is not None:
+            template_kwargs["reasoning_effort"] = self.reasoning_effort
+
         # For FIRST generation (no trajectory): use apply_chat_template normally
         if not trajectory:
-            if has_enable_thinking:
-                prompt = self.tokenizer.apply_chat_template(
-                    request,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                    enable_thinking=True,
-                )
-            else:
-                prompt = self.tokenizer.apply_chat_template(
-                    request,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-            return prompt
+            return self.tokenizer.apply_chat_template(request, **template_kwargs)
 
         # For CONTINUATION (has trajectory): build base prompt then append trajectory
-        if has_enable_thinking:
-            base_prompt = self.tokenizer.apply_chat_template(
-                request,
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=True,
-            )
-        else:
-            base_prompt = self.tokenizer.apply_chat_template(
-                request,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-
+        base_prompt = self.tokenizer.apply_chat_template(request, **template_kwargs)
         trajectory_text = convert_trajectory_to_string(trajectory)
         return base_prompt + trajectory_text
 
@@ -441,7 +437,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         enable_thinking: bool = True,
     ) -> str:
         """
-        Apply chat template to request with enable_thinking support.
+        Apply chat template to request with enable_thinking and reasoning_effort support.
 
         Args:
             request: Chat messages in OpenAI format
@@ -450,23 +446,22 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
         Returns:
             Formatted prompt string
         """
+        # Build template kwargs dynamically based on what's available
+        template_kwargs = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+
         # Only pass enable_thinking if disable_thinking_mode is explicitly set (not None)
         # This avoids issues with models that don't expect this parameter
         if self.disable_thinking_mode is not None:
-            # Pass enable_thinking = not disable_thinking_mode
-            result = self.tokenizer.apply_chat_template(
-                request,
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=not self.disable_thinking_mode,
-            )
-        else:
-            # Default: don't pass enable_thinking parameter
-            result = self.tokenizer.apply_chat_template(
-                request,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
+            template_kwargs["enable_thinking"] = not self.disable_thinking_mode
+
+        # Pass reasoning_effort if set (for models that support it)
+        if self.reasoning_effort is not None:
+            template_kwargs["reasoning_effort"] = self.reasoning_effort
+
+        result = self.tokenizer.apply_chat_template(request, **template_kwargs)
 
         return result
 
@@ -734,6 +729,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             n=candidates_per_step,
             max_tokens=max_tokens,
             min_tokens=self.min_step_tokens,
+            seed=self.seed,
         )
 
         for traj_i, traj in enumerate(trajectories):
@@ -1024,6 +1020,7 @@ class VLLMStepGenerator(StepCandidateGeneratorBase):
             n=num_candidates,
             max_tokens=max_tokens,
             min_tokens=0,
+            seed=self.seed,
         )
 
         outputs = self.model.generate([prompt], sampling_params)
